@@ -1,0 +1,678 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CC-on-Bedrock ECS DevEnv Stack - Cluster, Task Definitions, EFS, ALB, CloudFront, DLP SGs.
+  Equivalent to cdk/lib/04-ecs-devenv-stack.ts and terraform/modules/ecs-devenv.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  VpcCidr:
+    Type: String
+  PublicSubnetAId:
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnetCId:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnetAId:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnetCId:
+    Type: AWS::EC2::Subnet::Id
+  IsolatedSubnetAId:
+    Type: AWS::EC2::Subnet::Id
+  IsolatedSubnetCId:
+    Type: AWS::EC2::Subnet::Id
+  KmsKeyArn:
+    Type: String
+  LitellmAlbDns:
+    Type: String
+  DevEnvCertificateArn:
+    Type: String
+  HostedZoneId:
+    Type: String
+  DomainName:
+    Type: String
+  DevSubdomain:
+    Type: String
+    Default: dev
+  CloudFrontSecretArn:
+    Type: String
+  EcsHostInstanceType:
+    Type: String
+    Default: m7g.4xlarge
+  CloudFrontPrefixListId:
+    Type: String
+    Default: pl-22a6434b
+    Description: CloudFront managed prefix list ID for the region
+
+Resources:
+  # ---------- IAM: ECS Task Role -----------------------------------------------
+  EcsTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cc-on-bedrock-ecs-task
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bedrock-invoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+
+  # ---------- IAM: ECS Task Execution Role -------------------------------------
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cc-on-bedrock-ecs-task-execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+        - PolicyName: secrets-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cc-on-bedrock/*'
+
+  # ---------- ECR Repository ---------------------------------------------------
+  DevenvEcrRepo:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: cc-on-bedrock/devenv
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: KMS
+        KmsKey: !Ref KmsKeyArn
+
+  # ---------- EFS File System --------------------------------------------------
+  DevenvEfs:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Encrypted: true
+      KmsKeyId: !Ref KmsKeyArn
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+      FileSystemTags:
+        - Key: Name
+          Value: cc-on-bedrock-devenv
+
+  # ---------- DLP Security Groups ----------------------------------------------
+  DlpOpenSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'DLP: Open - all outbound'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: cc-devenv-sg-open
+
+  DlpRestrictedSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'DLP: Restricted - whitelist outbound'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: !Ref VpcCidr
+          Description: Allow VPC internal
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: Allow HTTPS for whitelisted domains
+      Tags:
+        - Key: Name
+          Value: cc-devenv-sg-restricted
+
+  DlpLockedSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'DLP: Locked - VPC only'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: !Ref VpcCidr
+          Description: Allow VPC internal only
+      Tags:
+        - Key: Name
+          Value: cc-devenv-sg-locked
+
+  # ---------- EFS Security Group (allow NFS from all DLP SGs) ------------------
+  EfsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow NFS from devenv DLP SGs
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref DlpOpenSg
+          Description: Allow EFS from devenv (open)
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref DlpRestrictedSg
+          Description: Allow EFS from devenv (restricted)
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref DlpLockedSg
+          Description: Allow EFS from devenv (locked)
+      Tags:
+        - Key: Name
+          Value: cc-devenv-efs-sg
+
+  # ---------- EFS Mount Targets ------------------------------------------------
+  EfsMountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref DevenvEfs
+      SubnetId: !Ref IsolatedSubnetAId
+      SecurityGroups:
+        - !Ref EfsSg
+
+  EfsMountTargetC:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref DevenvEfs
+      SubnetId: !Ref IsolatedSubnetCId
+      SecurityGroups:
+        - !Ref EfsSg
+
+  # ---------- ECS Cluster ------------------------------------------------------
+  DevenvCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: cc-on-bedrock-devenv
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # ---------- ECS Capacity Provider (ASG) --------------------------------------
+  EcsCapacityLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: cc-devenv-ecs-lt
+      LaunchTemplateData:
+        ImageId: !Sub '{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id}}'
+        InstanceType: !Ref EcsHostInstanceType
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo "ECS_CLUSTER=${DevenvCluster}" >> /etc/ecs/ecs.config
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: cc-devenv-ecs-host
+
+  EcsCapacityAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: cc-devenv-ecs-capacity
+      MinSize: '0'
+      MaxSize: '15'
+      DesiredCapacity: '0'
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetAId
+        - !Ref PrivateSubnetCId
+      NewInstancesProtectedFromScaleIn: false
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EcsCapacityLaunchTemplate
+        Version: !GetAtt EcsCapacityLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: cc-devenv-ecs-host
+          PropagateAtLaunch: true
+        - Key: AmazonECSManaged
+          Value: 'true'
+          PropagateAtLaunch: true
+
+  EcsCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      Name: cc-devenv-capacity-provider
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref EcsCapacityAsg
+        ManagedTerminationProtection: DISABLED
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 80
+          MinimumScalingStepSize: 1
+          MaximumScalingStepSize: 10
+
+  ClusterCapacityProviderAssoc:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref DevenvCluster
+      CapacityProviders:
+        - !Ref EcsCapacityProvider
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: !Ref EcsCapacityProvider
+          Weight: 1
+
+  # ---------- CloudWatch Log Group ---------------------------------------------
+  DevenvLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: /cc-on-bedrock/ecs/devenv
+      RetentionInDays: 30
+
+  # ---------- ECS Task Definitions (6 variants: 2 OS x 3 tiers) ---------------
+  # ubuntu-light
+  TaskDefUbuntuLight:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: devenv-ubuntu-light
+      NetworkMode: awsvpc
+      TaskRoleArn: !GetAtt EcsTaskRole.Arn
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: devenv
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cc-on-bedrock/devenv:ubuntu-latest'
+          Cpu: 1024
+          Memory: 4096
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: ANTHROPIC_BASE_URL
+              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: SECURITY_POLICY
+              Value: open
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DevenvLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ubuntu-light
+          MountPoints:
+            - SourceVolume: efs-workspace
+              ContainerPath: /home/coder
+              ReadOnly: false
+      Volumes:
+        - Name: efs-workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref DevenvEfs
+            TransitEncryption: ENABLED
+
+  # ubuntu-standard
+  TaskDefUbuntuStandard:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: devenv-ubuntu-standard
+      NetworkMode: awsvpc
+      TaskRoleArn: !GetAtt EcsTaskRole.Arn
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: devenv
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cc-on-bedrock/devenv:ubuntu-latest'
+          Cpu: 2048
+          Memory: 8192
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: ANTHROPIC_BASE_URL
+              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: SECURITY_POLICY
+              Value: open
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DevenvLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ubuntu-standard
+          MountPoints:
+            - SourceVolume: efs-workspace
+              ContainerPath: /home/coder
+              ReadOnly: false
+      Volumes:
+        - Name: efs-workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref DevenvEfs
+            TransitEncryption: ENABLED
+
+  # ubuntu-power
+  TaskDefUbuntuPower:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: devenv-ubuntu-power
+      NetworkMode: awsvpc
+      TaskRoleArn: !GetAtt EcsTaskRole.Arn
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: devenv
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cc-on-bedrock/devenv:ubuntu-latest'
+          Cpu: 4096
+          Memory: 12288
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: ANTHROPIC_BASE_URL
+              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: SECURITY_POLICY
+              Value: open
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DevenvLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ubuntu-power
+          MountPoints:
+            - SourceVolume: efs-workspace
+              ContainerPath: /home/coder
+              ReadOnly: false
+      Volumes:
+        - Name: efs-workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref DevenvEfs
+            TransitEncryption: ENABLED
+
+  # al2023-light
+  TaskDefAl2023Light:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: devenv-al2023-light
+      NetworkMode: awsvpc
+      TaskRoleArn: !GetAtt EcsTaskRole.Arn
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: devenv
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cc-on-bedrock/devenv:al2023-latest'
+          Cpu: 1024
+          Memory: 4096
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: ANTHROPIC_BASE_URL
+              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: SECURITY_POLICY
+              Value: open
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DevenvLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: al2023-light
+          MountPoints:
+            - SourceVolume: efs-workspace
+              ContainerPath: /home/coder
+              ReadOnly: false
+      Volumes:
+        - Name: efs-workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref DevenvEfs
+            TransitEncryption: ENABLED
+
+  # al2023-standard
+  TaskDefAl2023Standard:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: devenv-al2023-standard
+      NetworkMode: awsvpc
+      TaskRoleArn: !GetAtt EcsTaskRole.Arn
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: devenv
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cc-on-bedrock/devenv:al2023-latest'
+          Cpu: 2048
+          Memory: 8192
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: ANTHROPIC_BASE_URL
+              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: SECURITY_POLICY
+              Value: open
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DevenvLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: al2023-standard
+          MountPoints:
+            - SourceVolume: efs-workspace
+              ContainerPath: /home/coder
+              ReadOnly: false
+      Volumes:
+        - Name: efs-workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref DevenvEfs
+            TransitEncryption: ENABLED
+
+  # al2023-power
+  TaskDefAl2023Power:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: devenv-al2023-power
+      NetworkMode: awsvpc
+      TaskRoleArn: !GetAtt EcsTaskRole.Arn
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: devenv
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cc-on-bedrock/devenv:al2023-latest'
+          Cpu: 4096
+          Memory: 12288
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: ANTHROPIC_BASE_URL
+              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: SECURITY_POLICY
+              Value: open
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DevenvLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: al2023-power
+          MountPoints:
+            - SourceVolume: efs-workspace
+              ContainerPath: /home/coder
+              ReadOnly: false
+      Volumes:
+        - Name: efs-workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref DevenvEfs
+            TransitEncryption: ENABLED
+
+  # ---------- ALB for Dev Environment ------------------------------------------
+  DevenvAlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DevEnv ALB SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+          Description: Allow CloudFront
+      Tags:
+        - Key: Name
+          Value: cc-devenv-alb-sg
+
+  DevenvAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: cc-devenv-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref DevenvAlbSg
+      Subnets:
+        - !Ref PublicSubnetAId
+        - !Ref PublicSubnetCId
+      Tags:
+        - Key: Name
+          Value: cc-devenv-alb
+
+  DevenvHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref DevenvAlb
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref DevEnvCertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: text/plain
+            MessageBody: Forbidden
+            StatusCode: '403'
+
+  # ---------- CloudFront Distribution ------------------------------------------
+  DevenvCloudFront:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: CC-on-Bedrock Dev Environment
+        Enabled: true
+        Origins:
+          - Id: devenv-alb
+            DomainName: !GetAtt DevenvAlb.DNSName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+            OriginCustomHeaders:
+              - HeaderName: X-Custom-Secret
+                HeaderValue: !Sub '{{resolve:secretsmanager:${CloudFrontSecretArn}:SecretString}}'
+        DefaultCacheBehavior:
+          TargetOriginId: devenv-alb
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+      Tags:
+        - Key: Name
+          Value: cc-devenv-cloudfront
+
+  # ---------- Route 53 Wildcard Record -----------------------------------------
+  DevEnvWildcardRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '*.${DevSubdomain}.${DomainName}'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt DevenvCloudFront.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+Outputs:
+  ClusterName:
+    Description: ECS cluster name
+    Value: !Ref DevenvCluster
+    Export:
+      Name: cc-on-bedrock-ecs-cluster-name
+
+  ClusterArn:
+    Description: ECS cluster ARN
+    Value: !GetAtt DevenvCluster.Arn
+    Export:
+      Name: cc-on-bedrock-ecs-cluster-arn
+
+  EfsId:
+    Description: EFS file system ID
+    Value: !Ref DevenvEfs
+    Export:
+      Name: cc-on-bedrock-efs-id
+
+  DevenvCloudFrontDomain:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt DevenvCloudFront.DomainName
+    Export:
+      Name: cc-on-bedrock-devenv-cf-domain
+
+  DevenvEcrRepoUri:
+    Description: ECR repository URI for devenv
+    Value: !GetAtt DevenvEcrRepo.RepositoryUri
+    Export:
+      Name: cc-on-bedrock-devenv-ecr-uri
+
+  DlpOpenSgId:
+    Description: DLP Open security group ID
+    Value: !Ref DlpOpenSg
+    Export:
+      Name: cc-on-bedrock-dlp-open-sg-id
+
+  DlpRestrictedSgId:
+    Description: DLP Restricted security group ID
+    Value: !Ref DlpRestrictedSg
+    Export:
+      Name: cc-on-bedrock-dlp-restricted-sg-id
+
+  DlpLockedSgId:
+    Description: DLP Locked security group ID
+    Value: !Ref DlpLockedSg
+    Export:
+      Name: cc-on-bedrock-dlp-locked-sg-id
