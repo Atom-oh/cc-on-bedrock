@@ -1,0 +1,34 @@
+# Node
+node_modules/
+.next/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# CDK
+cdk/cdk.out/
+cdk/node_modules/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/.terraform.lock.hcl
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.env
+*.pem
+*.key
+
+# Docker
+docker/devenv/scripts/__pycache__/
