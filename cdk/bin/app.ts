@@ -2,6 +2,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { defaultConfig } from '../config/default';
 import { NetworkStack } from '../lib/01-network-stack';
+import { SecurityStack } from '../lib/02-security-stack';
 
 const app = new cdk.App();
 
@@ -30,5 +31,13 @@ const networkStack = new NetworkStack(app, 'CcOnBedrock-Network', {
   env, config,
   description: 'CC-on-Bedrock: VPC, Subnets, NAT, VPC Endpoints, Route 53',
 });
+
+// Stack 02: Security
+const securityStack = new SecurityStack(app, 'CcOnBedrock-Security', {
+  env, config,
+  hostedZone: networkStack.hostedZone,
+  description: 'CC-on-Bedrock: Cognito, ACM, KMS, Secrets Manager, IAM',
+});
+securityStack.addDependency(networkStack);
 
 console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));
