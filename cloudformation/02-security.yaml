@@ -1,0 +1,337 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CC-on-Bedrock Security Stack - Cognito, ACM, KMS, Secrets Manager, IAM.
+  Equivalent to cdk/lib/02-security-stack.ts and terraform/modules/security.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: example.com
+  DevSubdomain:
+    Type: String
+    Default: dev
+  HostedZoneId:
+    Type: String
+    Description: Route 53 Hosted Zone ID (from 01-network stack)
+
+Resources:
+  # ---------- KMS Encryption Key -----------------------------------------------
+  EncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CC-on-Bedrock encryption key for EBS, RDS, EFS
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableRootAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  EncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/cc-on-bedrock
+      TargetKeyId: !Ref EncryptionKey
+
+  # ---------- Cognito User Pool ------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: cc-on-bedrock-users
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: subdomain
+          AttributeDataType: String
+          Mutable: true
+        - Name: container_os
+          AttributeDataType: String
+          Mutable: true
+        - Name: resource_tier
+          AttributeDataType: String
+          Mutable: true
+        - Name: security_policy
+          AttributeDataType: String
+          Mutable: true
+        - Name: litellm_api_key
+          AttributeDataType: String
+          Mutable: true
+        - Name: container_id
+          AttributeDataType: String
+          Mutable: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: AppClient
+      UserPoolId: !Ref UserPool
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - !Sub 'https://dashboard.${DomainName}/api/auth/callback/cognito'
+      LogoutURLs:
+        - !Sub 'https://dashboard.${DomainName}'
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub 'cc-on-bedrock-${AWS::AccountId}'
+      UserPoolId: !Ref UserPool
+
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admin
+      UserPoolId: !Ref UserPool
+      Description: Dashboard administrators
+
+  UserGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: user
+      UserPoolId: !Ref UserPool
+      Description: Dev environment users
+
+  # ---------- ACM Certificates -------------------------------------------------
+  DevEnvCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '*.${DevSubdomain}.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub '*.${DevSubdomain}.${DomainName}'
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: cc-on-bedrock-devenv
+
+  DashboardCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub 'dashboard.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub 'dashboard.${DomainName}'
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: cc-on-bedrock-dashboard
+
+  # ---------- Secrets Manager --------------------------------------------------
+  LitellmMasterKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: cc-on-bedrock/litellm-master-key
+      GenerateSecretString:
+        ExcludePunctuation: true
+        PasswordLength: 32
+
+  CloudFrontSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: cc-on-bedrock/cloudfront-secret
+      GenerateSecretString:
+        ExcludePunctuation: true
+        PasswordLength: 32
+
+  ValkeyAuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: cc-on-bedrock/valkey-auth
+      GenerateSecretString:
+        ExcludePunctuation: true
+        PasswordLength: 32
+
+  # ---------- IAM Roles --------------------------------------------------------
+
+  # LiteLLM EC2 Role
+  LitellmEc2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cc-on-bedrock-litellm-ec2
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+        - PolicyName: bedrock-invoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+        - PolicyName: secrets-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cc-on-bedrock/*'
+
+  LitellmEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: cc-on-bedrock-litellm-ec2
+      Roles:
+        - !Ref LitellmEc2Role
+
+  # Dashboard EC2 Role
+  DashboardEc2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cc-on-bedrock-dashboard-ec2
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: cognito-admin
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminDeleteUser
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminUpdateUserAttributes
+                  - cognito-idp:ListUsers
+                Resource: !GetAtt UserPool.Arn
+        - PolicyName: ecs-manage
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                  - ecs:StopTask
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cc-on-bedrock-ecs-task'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cc-on-bedrock-ecs-task-execution'
+
+  DashboardEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: cc-on-bedrock-dashboard-ec2
+      Roles:
+        - !Ref DashboardEc2Role
+
+Outputs:
+  EncryptionKeyArn:
+    Description: KMS encryption key ARN
+    Value: !GetAtt EncryptionKey.Arn
+    Export:
+      Name: cc-on-bedrock-kms-key-arn
+
+  EncryptionKeyId:
+    Description: KMS encryption key ID
+    Value: !Ref EncryptionKey
+    Export:
+      Name: cc-on-bedrock-kms-key-id
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+    Export:
+      Name: cc-on-bedrock-user-pool-id
+
+  UserPoolArn:
+    Description: Cognito User Pool ARN
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: cc-on-bedrock-user-pool-arn
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref UserPoolClient
+    Export:
+      Name: cc-on-bedrock-user-pool-client-id
+
+  DevEnvCertificateArn:
+    Description: ACM Certificate ARN for DevEnv wildcard
+    Value: !Ref DevEnvCertificate
+    Export:
+      Name: cc-on-bedrock-devenv-cert-arn
+
+  DashboardCertificateArn:
+    Description: ACM Certificate ARN for Dashboard
+    Value: !Ref DashboardCertificate
+    Export:
+      Name: cc-on-bedrock-dashboard-cert-arn
+
+  LitellmMasterKeySecretArn:
+    Description: LiteLLM master key secret ARN
+    Value: !Ref LitellmMasterKeySecret
+    Export:
+      Name: cc-on-bedrock-litellm-master-key-arn
+
+  CloudFrontSecretArn:
+    Description: CloudFront secret ARN
+    Value: !Ref CloudFrontSecret
+    Export:
+      Name: cc-on-bedrock-cloudfront-secret-arn
+
+  ValkeyAuthSecretArn:
+    Description: Valkey auth secret ARN
+    Value: !Ref ValkeyAuthSecret
+    Export:
+      Name: cc-on-bedrock-valkey-auth-secret-arn
+
+  LitellmEc2InstanceProfileName:
+    Description: LiteLLM EC2 instance profile name
+    Value: !Ref LitellmEc2InstanceProfile
+    Export:
+      Name: cc-on-bedrock-litellm-ec2-instance-profile
+
+  DashboardEc2InstanceProfileName:
+    Description: Dashboard EC2 instance profile name
+    Value: !Ref DashboardEc2InstanceProfile
+    Export:
+      Name: cc-on-bedrock-dashboard-ec2-instance-profile
