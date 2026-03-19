@@ -50,7 +50,6 @@ const litellmStack = new LitellmStack(app, 'CcOnBedrock-LiteLLM', {
   encryptionKey: securityStack.encryptionKey,
   litellmEc2Role: securityStack.litellmEc2Role,
   litellmMasterKeySecret: securityStack.litellmMasterKeySecret,
-  rdsCredentialsSecret: securityStack.rdsCredentialsSecret,
   valkeyAuthSecret: securityStack.valkeyAuthSecret,
   description: 'CC-on-Bedrock: LiteLLM Proxy, RDS, Serverless Valkey',
 });
@@ -61,8 +60,6 @@ const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   env, config,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
-  ecsTaskRole: securityStack.ecsTaskRole,
-  ecsTaskExecutionRole: securityStack.ecsTaskExecutionRole,
   litellmAlbDns: litellmStack.internalAlb.loadBalancerDnsName,
   devEnvCertificate: securityStack.devEnvCertificate,
   hostedZone: networkStack.hostedZone,

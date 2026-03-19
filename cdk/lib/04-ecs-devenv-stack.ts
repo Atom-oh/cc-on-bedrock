@@ -21,8 +21,6 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
-  ecsTaskRole: iam.Role;
-  ecsTaskExecutionRole: iam.Role;
   litellmAlbDns: string;
   devEnvCertificate: acm.Certificate;
   hostedZone: route53.IHostedZone;
@@ -37,8 +35,32 @@ export class EcsDevenvStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
 
-    const { config, vpc, encryptionKey, ecsTaskRole, ecsTaskExecutionRole,
+    const { config, vpc, encryptionKey,
             litellmAlbDns, devEnvCertificate, hostedZone, cloudfrontSecret } = props;
+
+    // ECS Task Role (created in this stack to avoid cross-stack cyclic references)
+    const ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
+      roleName: 'cc-on-bedrock-ecs-task',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+    ecsTaskRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
+
+    // ECS Task Execution Role
+    const ecsTaskExecutionRole = new iam.Role(this, 'EcsTaskExecutionRole', {
+      roleName: 'cc-on-bedrock-ecs-task-execution',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'),
+      ],
+    });
+    ecsTaskExecutionRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
+    }));
 
     // ECR Repository
     this.ecrRepo = new ecr.Repository(this, 'DevenvRepo', {
@@ -133,7 +155,11 @@ export class EcsDevenvStack extends cdk.Stack {
         });
 
         const container = taskDef.addContainer('devenv', {
-          image: ecs.ContainerImage.fromEcrRepository(this.ecrRepo, `${os}-latest`),
+          // Use fromRegistry to avoid cross-stack grantPull cyclic reference
+          // ECR pull permission is handled via AmazonECSTaskExecutionRolePolicy managed policy
+          image: ecs.ContainerImage.fromRegistry(
+            `${cdk.Aws.ACCOUNT_ID}.dkr.ecr.${cdk.Aws.REGION}.amazonaws.com/cc-on-bedrock/devenv:${os}-latest`
+          ),
           cpu: tier.cpu,
           memoryLimitMiB: tier.memory,
           essential: true,

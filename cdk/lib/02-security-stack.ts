@@ -20,12 +20,10 @@ export class SecurityStack extends cdk.Stack {
   public readonly dashboardCertificate: acm.Certificate;
   public readonly encryptionKey: kms.Key;
   public readonly litellmMasterKeySecret: secretsmanager.Secret;
-  public readonly rdsCredentialsSecret: secretsmanager.Secret;
+
   public readonly cloudfrontSecret: secretsmanager.Secret;
   public readonly valkeyAuthSecret: secretsmanager.Secret;
   public readonly litellmEc2Role: iam.Role;
-  public readonly ecsTaskRole: iam.Role;
-  public readonly ecsTaskExecutionRole: iam.Role;
   public readonly dashboardEc2Role: iam.Role;
 
   constructor(scope: Construct, id: string, props: SecurityStackProps) {
@@ -107,15 +105,7 @@ export class SecurityStack extends cdk.Stack {
       generateSecretString: { excludePunctuation: true, passwordLength: 32 },
     });
 
-    this.rdsCredentialsSecret = new secretsmanager.Secret(this, 'RdsCredentials', {
-      secretName: 'cc-on-bedrock/rds-credentials',
-      generateSecretString: {
-        secretStringTemplate: JSON.stringify({ username: 'litellm_admin' }),
-        generateStringKey: 'password',
-        excludePunctuation: true,
-        passwordLength: 24,
-      },
-    });
+    // Note: RDS credentials are created in the LiteLLM stack to avoid cyclic cross-stack references
 
     this.cloudfrontSecret = new secretsmanager.Secret(this, 'CloudFrontSecret', {
       secretName: 'cc-on-bedrock/cloudfront-secret',
@@ -143,26 +133,14 @@ export class SecurityStack extends cdk.Stack {
       ],
     });
     this.litellmEc2Role.addToPolicy(bedrockPolicy);
-    this.litellmMasterKeySecret.grantRead(this.litellmEc2Role);
-    this.rdsCredentialsSecret.grantRead(this.litellmEc2Role);
-    this.valkeyAuthSecret.grantRead(this.litellmEc2Role);
+    // Broad secret access for all cc-on-bedrock secrets (avoids cross-stack cyclic references)
+    this.litellmEc2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
+    }));
 
-    // ECS Task Role
-    this.ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
-      roleName: 'cc-on-bedrock-ecs-task',
-      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-    });
-    this.ecsTaskRole.addToPolicy(bedrockPolicy);
-
-    // ECS Task Execution Role
-    this.ecsTaskExecutionRole = new iam.Role(this, 'EcsTaskExecutionRole', {
-      roleName: 'cc-on-bedrock-ecs-task-execution',
-      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
-      ],
-    });
-    this.litellmMasterKeySecret.grantRead(this.ecsTaskExecutionRole);
+    // Note: ECS Task and Execution roles are created in the EcsDevenv stack
+    // to avoid cross-stack cyclic references with ECR/EFS/CloudWatch
 
     // Dashboard EC2 Role
     this.dashboardEc2Role = new iam.Role(this, 'DashboardEc2Role', {
@@ -186,7 +164,11 @@ export class SecurityStack extends cdk.Stack {
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: ['iam:PassRole'],
-      resources: [this.ecsTaskRole.roleArn, this.ecsTaskExecutionRole.roleArn],
+      // ECS role ARNs use a pattern since roles are in another stack
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task-execution`,
+      ],
     }));
 
     // Outputs

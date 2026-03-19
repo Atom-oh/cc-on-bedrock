@@ -17,7 +17,6 @@ export interface LitellmStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   litellmEc2Role: iam.Role;
   litellmMasterKeySecret: secretsmanager.Secret;
-  rdsCredentialsSecret: secretsmanager.Secret;
   valkeyAuthSecret: secretsmanager.Secret;
 }
 
@@ -29,7 +28,19 @@ export class LitellmStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey, litellmEc2Role,
-            litellmMasterKeySecret, rdsCredentialsSecret, valkeyAuthSecret } = props;
+            litellmMasterKeySecret, valkeyAuthSecret } = props;
+
+    // RDS Credentials (created in this stack to avoid cross-stack cyclic reference)
+    const rdsCredentialsSecret = new secretsmanager.Secret(this, 'RdsCredentials', {
+      secretName: 'cc-on-bedrock/rds-credentials',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ username: 'litellm_admin' }),
+        generateStringKey: 'password',
+        excludePunctuation: true,
+        passwordLength: 24,
+      },
+    });
+    // Note: litellmEc2Role has broad cc-on-bedrock/* secrets access from Security stack
 
     // ECR Repository
     this.ecrRepo = new ecr.Repository(this, 'LitellmRepo', {
