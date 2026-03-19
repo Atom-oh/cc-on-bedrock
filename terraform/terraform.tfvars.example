@@ -1,0 +1,28 @@
+# Copy this file to terraform.tfvars and customise.
+# Values below match the CDK defaults in cdk/config/default.ts.
+
+aws_region = "ap-northeast-2"
+
+# Network
+vpc_name              = "cc-on-bedrock-vpc"
+vpc_cidr              = "10.0.0.0/16"
+public_subnet_cidr_a  = "10.0.1.0/24"
+public_subnet_cidr_c  = "10.0.2.0/24"
+private_subnet_cidr_a = "10.0.16.0/20"
+private_subnet_cidr_c = "10.0.32.0/20"
+isolated_subnet_cidr_a = "10.0.100.0/23"
+isolated_subnet_cidr_c = "10.0.102.0/23"
+
+# Domain
+domain_name   = "example.com"
+dev_subdomain = "dev"
+
+# Models
+opus_model_id   = "global.anthropic.claude-opus-4-6-v1[1m]"
+sonnet_model_id = "global.anthropic.claude-sonnet-4-6[1m]"
+
+# Compute
+litellm_instance_type   = "t4g.xlarge"
+ecs_host_instance_type  = "m7g.4xlarge"
+dashboard_instance_type = "t4g.xlarge"
+rds_instance_type       = "db.t4g.medium"
