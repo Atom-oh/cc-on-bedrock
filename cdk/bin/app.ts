@@ -4,6 +4,7 @@ import { defaultConfig } from '../config/default';
 import { NetworkStack } from '../lib/01-network-stack';
 import { SecurityStack } from '../lib/02-security-stack';
 import { LitellmStack } from '../lib/03-litellm-stack';
+import { EcsDevenvStack } from '../lib/04-ecs-devenv-stack';
 
 const app = new cdk.App();
 
@@ -53,5 +54,20 @@ const litellmStack = new LitellmStack(app, 'CcOnBedrock-LiteLLM', {
   description: 'CC-on-Bedrock: LiteLLM Proxy, RDS, Serverless Valkey',
 });
 litellmStack.addDependency(securityStack);
+
+// Stack 04: ECS Dev Environment
+const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
+  env, config,
+  vpc: networkStack.vpc,
+  encryptionKey: securityStack.encryptionKey,
+  ecsTaskRole: securityStack.ecsTaskRole,
+  ecsTaskExecutionRole: securityStack.ecsTaskExecutionRole,
+  litellmAlbDns: litellmStack.internalAlb.loadBalancerDnsName,
+  devEnvCertificate: securityStack.devEnvCertificate,
+  hostedZone: networkStack.hostedZone,
+  cloudfrontSecret: securityStack.cloudfrontSecret,
+  description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
+});
+ecsDevenvStack.addDependency(litellmStack);
 
 console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));
