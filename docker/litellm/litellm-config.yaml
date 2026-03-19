@@ -1,0 +1,29 @@
+model_list:
+  - model_name: "claude-opus-4-6"
+    litellm_params:
+      model: "bedrock/global.anthropic.claude-opus-4-6-v1[1m]"
+      aws_region_name: "ap-northeast-2"
+  - model_name: "claude-sonnet-4-6"
+    litellm_params:
+      model: "bedrock/global.anthropic.claude-sonnet-4-6[1m]"
+      aws_region_name: "ap-northeast-2"
+
+router_settings:
+  redis_host: "${REDIS_HOST}"
+  redis_port: 6380
+  redis_password: "${REDIS_PASSWORD}"
+  redis_ssl: true
+
+general_settings:
+  master_key: "${LITELLM_MASTER_KEY}"
+  database_url: "${DATABASE_URL}"
+  use_redis_transaction_buffer: true
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: "${REDIS_HOST}"
+    port: 6380
+    ssl: true
+  drop_params: true
