@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { defaultConfig } from '../config/default';
+import { NetworkStack } from '../lib/01-network-stack';
 
 const app = new cdk.App();
 
@@ -25,11 +25,10 @@ const env = {
   region: process.env.CDK_DEFAULT_REGION ?? 'ap-northeast-2',
 };
 
-// Stacks will be added as they are implemented
-// import { NetworkStack } from '../lib/01-network-stack';
-// import { SecurityStack } from '../lib/02-security-stack';
-// import { LitellmStack } from '../lib/03-litellm-stack';
-// import { EcsDevenvStack } from '../lib/04-ecs-devenv-stack';
-// import { DashboardStack } from '../lib/05-dashboard-stack';
+// Stack 01: Network
+const networkStack = new NetworkStack(app, 'CcOnBedrock-Network', {
+  env, config,
+  description: 'CC-on-Bedrock: VPC, Subnets, NAT, VPC Endpoints, Route 53',
+});
 
 console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));
