@@ -19,7 +19,7 @@ export interface DashboardStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
   dashboardEc2Role: iam.Role;
-  dashboardCertificate: acm.Certificate;
+  dashboardCertificateArn?: string;
   hostedZone: route53.IHostedZone;
   cloudfrontSecret: secretsmanager.Secret;
   userPool: cognito.UserPool;
@@ -32,7 +32,7 @@ export class DashboardStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey, dashboardEc2Role,
-            dashboardCertificate, hostedZone, cloudfrontSecret,
+            dashboardCertificateArn, hostedZone, cloudfrontSecret,
             userPool, userPoolClient, litellmAlbDns } = props;
 
     // Security Group
@@ -55,19 +55,16 @@ export class DashboardStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // EC2 ASG
-    const asg = new autoscaling.AutoScalingGroup(this, 'DashboardAsg', {
-      vpc,
+    // EC2 ASG with Launch Template (Launch Configuration not available in this account)
+    const dashboardLaunchTemplate = new ec2.LaunchTemplate(this, 'DashboardLaunchTemplate', {
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.XLARGE),
       machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
       role: dashboardEc2Role,
-      minCapacity: 1,
-      maxCapacity: 2,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroup: ec2Sg,
       blockDevices: [{
         deviceName: '/dev/xvda',
-        volume: autoscaling.BlockDeviceVolume.ebs(30, {
-          volumeType: autoscaling.EbsDeviceVolumeType.GP3,
+        volume: ec2.BlockDeviceVolume.ebs(30, {
+          volumeType: ec2.EbsDeviceVolumeType.GP3,
           encrypted: true,
         }),
       }],
@@ -106,6 +103,14 @@ pm2 save
 `),
     });
 
+    const asg = new autoscaling.AutoScalingGroup(this, 'DashboardAsg', {
+      vpc,
+      launchTemplate: dashboardLaunchTemplate,
+      minCapacity: 1,
+      maxCapacity: 2,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    });
+
     // ALB Listener + Target Group
     const targetGroup = new elbv2.ApplicationTargetGroup(this, 'DashboardTg', {
       vpc,
@@ -118,18 +123,28 @@ pm2 save
       },
     });
 
-    alb.addListener('HttpsListener', {
-      port: 443,
-      protocol: elbv2.ApplicationProtocol.HTTPS,
-      certificates: [dashboardCertificate],
-      defaultTargetGroups: [targetGroup],
-    });
+    if (dashboardCertificateArn) {
+      alb.addListener('HttpsListener', {
+        port: 443,
+        protocol: elbv2.ApplicationProtocol.HTTPS,
+        certificates: [elbv2.ListenerCertificate.fromArn(dashboardCertificateArn)],
+        defaultTargetGroups: [targetGroup],
+      });
+    } else {
+      alb.addListener('HttpListener', {
+        port: 80,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        defaultTargetGroups: [targetGroup],
+      });
+    }
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DashboardCf', {
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(alb, {
-          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+          protocolPolicy: dashboardCertificateArn
+            ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
+            : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           customHeaders: {
             'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
           },

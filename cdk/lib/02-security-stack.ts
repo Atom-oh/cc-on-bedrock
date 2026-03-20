@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -16,8 +16,6 @@ export interface SecurityStackProps extends cdk.StackProps {
 export class SecurityStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
-  public readonly devEnvCertificate: acm.Certificate;
-  public readonly dashboardCertificate: acm.Certificate;
   public readonly encryptionKey: kms.Key;
   public readonly litellmMasterKeySecret: secretsmanager.Secret;
 
@@ -84,20 +82,9 @@ export class SecurityStack extends cdk.Stack {
       description: 'Dev environment users',
     });
 
-    // ACM Certificates (ap-northeast-2 for ALB)
-    this.devEnvCertificate = new acm.Certificate(this, 'DevEnvCert', {
-      domainName: devDomain,
-      validation: acm.CertificateValidation.fromDns(hostedZone),
-    });
-
-    this.dashboardCertificate = new acm.Certificate(this, 'DashboardCert', {
-      domainName: dashboardDomain,
-      validation: acm.CertificateValidation.fromDns(hostedZone),
-    });
-
-    // Note: CloudFront certificates must be in us-east-1.
-    // For cross-region cert, use a separate stack or manual creation.
-    // This is documented as a TODO for production deployment.
+    // ACM Certificates are created separately after DNS is configured.
+    // Once validated, pass certificate ARNs via CDK context:
+    //   cdk deploy -c devEnvCertArn=arn:aws:acm:... -c dashboardCertArn=arn:aws:acm:...
 
     // Secrets Manager
     this.litellmMasterKeySecret = new secretsmanager.Secret(this, 'LitellmMasterKey', {

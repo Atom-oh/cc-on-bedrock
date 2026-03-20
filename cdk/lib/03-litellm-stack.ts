@@ -132,7 +132,7 @@ export class LitellmStack extends cdk.Stack {
         volume: ec2.BlockDeviceVolume.ebs(50, {
           volumeType: ec2.EbsDeviceVolumeType.GP3,
           encrypted: true,
-          kmsKey: encryptionKey,
+          // Use default AWS managed key (aws/ebs) to avoid cross-stack KMS grant issues
         }),
       }],
       userData: ec2.UserData.custom(`#!/bin/bash

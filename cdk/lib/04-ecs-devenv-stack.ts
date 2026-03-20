@@ -22,7 +22,7 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
   litellmAlbDns: string;
-  devEnvCertificate: acm.Certificate;
+  devEnvCertificateArn?: string;
   hostedZone: route53.IHostedZone;
   cloudfrontSecret: secretsmanager.Secret;
 }
@@ -36,7 +36,7 @@ export class EcsDevenvStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey,
-            litellmAlbDns, devEnvCertificate, hostedZone, cloudfrontSecret } = props;
+            litellmAlbDns, devEnvCertificateArn, hostedZone, cloudfrontSecret } = props;
 
     // ECS Task Role (created in this stack to avoid cross-stack cyclic references)
     const ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
@@ -110,11 +110,38 @@ export class EcsDevenvStack extends cdk.Stack {
       containerInsights: true,
     });
 
-    // ECS Capacity Provider (m7g.4xlarge ASG)
-    const capacityAsg = new autoscaling.AutoScalingGroup(this, 'EcsCapacityAsg', {
-      vpc,
+    // ECS Capacity Provider (m7g.4xlarge ASG with Launch Template)
+    const ecsInstanceRole = new iam.Role(this, 'EcsInstanceRole', {
+      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonEC2ContainerServiceforEC2Role'),
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+      ],
+    });
+
+    const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.M7G, ec2.InstanceSize.XLARGE4),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
+      role: ecsInstanceRole,
+      securityGroup: sgOpen,
+      blockDevices: [{
+        deviceName: '/dev/xvda',
+        volume: ec2.BlockDeviceVolume.ebs(100, {
+          volumeType: ec2.EbsDeviceVolumeType.GP3,
+          encrypted: true,
+        }),
+      }],
+      userData: ec2.UserData.forLinux(),
+    });
+    // Add ECS cluster name to user data
+    ecsLaunchTemplate.userData!.addCommands(
+      `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
+      'echo ECS_ENABLE_TASK_ENI=true >> /etc/ecs/ecs.config',
+    );
+
+    const capacityAsg = new autoscaling.AutoScalingGroup(this, 'EcsCapacityAsg', {
+      vpc,
+      launchTemplate: ecsLaunchTemplate,
       minCapacity: 0,
       maxCapacity: 15,
       desiredCapacity: 0,
@@ -207,16 +234,27 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // HTTPS Listener
-    this.alb.addListener('HttpsListener', {
-      port: 443,
-      protocol: elbv2.ApplicationProtocol.HTTPS,
-      certificates: [devEnvCertificate],
-      defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-        contentType: 'text/plain',
-        messageBody: 'Forbidden',
-      }),
-    });
+    // Listener - HTTPS if certificate provided, otherwise HTTP
+    if (devEnvCertificateArn) {
+      this.alb.addListener('HttpsListener', {
+        port: 443,
+        protocol: elbv2.ApplicationProtocol.HTTPS,
+        certificates: [elbv2.ListenerCertificate.fromArn(devEnvCertificateArn)],
+        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+          contentType: 'text/plain',
+          messageBody: 'Forbidden',
+        }),
+      });
+    } else {
+      this.alb.addListener('HttpListener', {
+        port: 80,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+          contentType: 'text/plain',
+          messageBody: 'Forbidden - ACM certificate not yet configured',
+        }),
+      });
+    }
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
