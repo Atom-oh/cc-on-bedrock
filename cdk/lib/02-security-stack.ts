@@ -29,7 +29,7 @@ export class SecurityStack extends cdk.Stack {
 
     const { config, hostedZone } = props;
     const devDomain = `*.${config.devSubdomain}.${config.domainName}`;
-    const dashboardDomain = `dashboard.${config.domainName}`;
+    const dashboardDomain = `cconbedrock-dashboard.${config.domainName}`;
 
     // KMS Encryption Key
     this.encryptionKey = new kms.Key(this, 'EncryptionKey', {

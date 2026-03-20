@@ -160,13 +160,13 @@ pm2 save
     // Route 53 Record
     new route53.ARecord(this, 'DashboardRecord', {
       zone: hostedZone,
-      recordName: 'dashboard',
+      recordName: 'cconbedrock-dashboard',
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
     });
 
     // Outputs
     new cdk.CfnOutput(this, 'DashboardUrl', {
-      value: `https://dashboard.${config.domainName}`,
+      value: `https://cconbedrock-dashboard.${config.domainName}`,
       exportName: 'cc-dashboard-url',
     });
     new cdk.CfnOutput(this, 'CloudFrontDomain', {
