@@ -68,39 +68,52 @@ export class DashboardStack extends cdk.Stack {
           encrypted: true,
         }),
       }],
-      userData: ec2.UserData.custom(`#!/bin/bash
-set -euo pipefail
-
-# Install Node.js 20
-curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-yum install -y nodejs
-
-# Install PM2
-npm install -g pm2
-
-# TODO: Deploy Next.js app from S3/CodeDeploy
-# For now, create placeholder
-mkdir -p /opt/dashboard
-cd /opt/dashboard
-
-cat > server.js << 'INNEREOF'
-const http = require('http');
-const server = http.createServer((req, res) => {
-  if (req.url === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>CC-on-Bedrock Dashboard</h1><p>Next.js app will be deployed here.</p>');
-  }
-});
-server.listen(3000, () => console.log('Dashboard running on port 3000'));
-INNEREOF
-
-pm2 start server.js --name dashboard
-pm2 startup
-pm2 save
-`),
+      userData: ec2.UserData.custom([
+        '#!/bin/bash',
+        'set -euo pipefail',
+        '',
+        '# Install Node.js 20 (direct binary)',
+        'ARCH=$(uname -m)',
+        'if [ "$ARCH" = "aarch64" ]; then NODE_ARCH="arm64"; else NODE_ARCH="x64"; fi',
+        'curl -fsSL "https://nodejs.org/dist/v20.18.3/node-v20.18.3-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz',
+        'tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1',
+        'rm /tmp/node.tar.gz',
+        '',
+        '# Install PM2',
+        'npm install -g pm2',
+        '',
+        '# Deploy Next.js app from S3',
+        'mkdir -p /opt/dashboard',
+        'aws s3 cp s3://cc-on-bedrock-deploy-061525506239/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ap-northeast-2',
+        'tar xzf /tmp/dashboard-app.tar.gz -C /opt/dashboard',
+        'rm /tmp/dashboard-app.tar.gz',
+        '',
+        '# Fetch LiteLLM master key from Secrets Manager',
+        `LITELLM_KEY=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/litellm-master-key --region ap-northeast-2 --query SecretString --output text 2>/dev/null || echo "")`,
+        '',
+        '# Environment config',
+        'cat > /opt/dashboard/.env << ENVEOF',
+        `NEXTAUTH_URL=https://ccbaedrock-dashboard.${config.domainName}`,
+        'NEXTAUTH_SECRET=$(openssl rand -hex 32)',
+        `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
+        `COGNITO_ISSUER=https://cognito-idp.ap-northeast-2.amazonaws.com/${userPool.userPoolId}`,
+        `LITELLM_API_URL=http://${litellmAlbDns}:4000`,
+        'LITELLM_MASTER_KEY=$LITELLM_KEY',
+        'AWS_REGION=ap-northeast-2',
+        'ECS_CLUSTER_NAME=cc-on-bedrock-devenv',
+        `COGNITO_USER_POOL_ID=${userPool.userPoolId}`,
+        `DOMAIN_NAME=${config.domainName}`,
+        `DEV_SUBDOMAIN=${config.devSubdomain}`,
+        'PORT=3000',
+        'HOSTNAME=0.0.0.0',
+        'ENVEOF',
+        '',
+        '# Start Next.js',
+        'cd /opt/dashboard',
+        'pm2 start server.js --name dashboard --env production',
+        'pm2 startup',
+        'pm2 save',
+      ].join('\n')),
     });
 
     const asg = new autoscaling.AutoScalingGroup(this, 'DashboardAsg', {

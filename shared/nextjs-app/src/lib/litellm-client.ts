@@ -35,7 +35,12 @@ async function litellmFetch<T>(
 // ─── Health ───
 
 export async function getProxyHealth(): Promise<ProxyHealth> {
-  return litellmFetch<ProxyHealth>("/health/liveliness");
+  const url = `${LITELLM_API_URL}/health/liveness`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (res.ok) {
+    return { status: "connected" };
+  }
+  return { status: `error: ${res.status}` };
 }
 
 // ─── Keys ───
