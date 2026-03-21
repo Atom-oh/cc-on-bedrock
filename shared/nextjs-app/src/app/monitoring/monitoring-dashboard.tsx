@@ -6,7 +6,15 @@ import StatCard from "@/components/cards/stat-card";
 import ContainersTable from "@/components/tables/containers-table";
 import type { HealthStatus, ContainerInfo, ApiResponse } from "@/lib/types";
 
-export default function MonitoringDashboard() {
+interface MonitoringDashboardProps {
+  domainName?: string;
+  devSubdomain?: string;
+}
+
+export default function MonitoringDashboard({
+  domainName = "example.com",
+  devSubdomain = "dev",
+}: MonitoringDashboardProps) {
   const [healthStatuses, setHealthStatuses] = useState<HealthStatus[]>([]);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -135,6 +143,8 @@ export default function MonitoringDashboard() {
         <ContainersTable
           containers={containers}
           onStop={handleStopContainer}
+          domainName={domainName}
+          devSubdomain={devSubdomain}
         />
       </section>
     </div>

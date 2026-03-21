@@ -18,7 +18,10 @@ export default async function MonitoringPage() {
           Proxy health, ECS status, active sessions, and error rates
         </p>
       </div>
-      <MonitoringDashboard />
+      <MonitoringDashboard
+        domainName={process.env.DOMAIN_NAME ?? "example.com"}
+        devSubdomain={process.env.DEV_SUBDOMAIN ?? "dev"}
+      />
     </div>
   );
 }

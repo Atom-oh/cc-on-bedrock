@@ -10,7 +10,15 @@ import type {
   ApiResponse,
 } from "@/lib/types";
 
-export default function ContainerManagement() {
+interface ContainerManagementProps {
+  domainName?: string;
+  devSubdomain?: string;
+}
+
+export default function ContainerManagement({
+  domainName = "example.com",
+  devSubdomain = "dev",
+}: ContainerManagementProps) {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [users, setUsers] = useState<CognitoUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -244,7 +252,7 @@ export default function ContainerManagement() {
       )}
 
       {/* Containers table */}
-      <ContainersTable containers={containers} onStop={handleStop} />
+      <ContainersTable containers={containers} onStop={handleStop} domainName={domainName} devSubdomain={devSubdomain} />
     </div>
   );
 }

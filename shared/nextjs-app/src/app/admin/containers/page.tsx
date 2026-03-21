@@ -18,7 +18,10 @@ export default async function ContainersPage() {
           Start, stop, and manage ECS dev environment containers
         </p>
       </div>
-      <ContainerManagement />
+      <ContainerManagement
+        domainName={process.env.DOMAIN_NAME ?? "example.com"}
+        devSubdomain={process.env.DEV_SUBDOMAIN ?? "dev"}
+      />
     </div>
   );
 }
