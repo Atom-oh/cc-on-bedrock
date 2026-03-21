@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useI18n } from "@/lib/i18n";
 import LeaderboardChart from "@/components/charts/leaderboard-chart";
 import AreaTrendChart from "@/components/charts/area-trend-chart";
 import MultiLineChart from "@/components/charts/multi-line-chart";
@@ -215,6 +216,7 @@ const USER_COLORS = [
 export default function AnalyticsDashboard({
   isAdmin,
 }: AnalyticsDashboardProps) {
+  const { t } = useI18n();
   const [timeRange, setTimeRange] = useState<TimeRange>("1d");
   const [logs, setLogs] = useState<SpendLog[]>([]);
   const [modelMetrics, setModelMetrics] = useState<ModelMetrics[]>([]);
@@ -373,11 +375,11 @@ export default function AnalyticsDashboard({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-bold text-white">Claude Code Usage</h2>
+          <h2 className="text-lg font-bold text-white">{t("analytics.title")}</h2>
           <p className="text-xs text-gray-500">
             {lastUpdated
-              ? `Last updated: ${lastUpdated.toLocaleTimeString()}`
-              : "Loading..."}
+              ? `${t("analytics.lastUpdated")}: ${lastUpdated.toLocaleTimeString()}`
+              : t("analytics.loading")}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -392,44 +394,44 @@ export default function AnalyticsDashboard({
               }`}
             >
               {range === "1d"
-                ? "Past 1 Day"
+                ? t("analytics.past1d")
                 : range === "7d"
-                ? "Past 7 Days"
-                : "Past 30 Days"}
+                ? t("analytics.past7d")
+                : t("analytics.past30d")}
             </button>
           ))}
           <button
             onClick={() => void fetchData()}
             className="px-3 py-1.5 text-xs font-medium rounded bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200 transition-colors"
           >
-            ↻ Refresh
+            {t("analytics.refresh")}
           </button>
         </div>
       </div>
 
       {loading && logs.length === 0 ? (
         <div className="flex items-center justify-center h-64">
-          <div className="text-sm text-gray-500">Loading analytics...</div>
+          <div className="text-sm text-gray-500">{t("analytics.loading")}</div>
         </div>
       ) : (
         <>
           {/* Section 1: Overview */}
-          <Section title="Overview">
+          <Section title={t("overview.title")}>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <DarkStatCard
-                title="총 비용 (USD)"
+                title={t("overview.totalCost")}
                 value={formatCost(totalSpend)}
               />
               <DarkStatCard
-                title="총 API 요청 수"
+                title={t("overview.totalRequests")}
                 value={formatNumber(totalRequests)}
               />
               <DarkStatCard
-                title="활성 사용자 수"
+                title={t("overview.activeUsers")}
                 value={String(activeUsers)}
               />
               <DarkStatCard
-                title="평균 응답시간 (ms)"
+                title={t("overview.avgLatency")}
                 value={formatNumber(avgLatency)}
               />
             </div>
@@ -437,47 +439,47 @@ export default function AnalyticsDashboard({
 
           {/* Section: Insights */}
           {isAdmin && (
-            <Section title="Insights & 비용 분석">
+            <Section title={t("insights.title")}>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                 <DarkStatCard
-                  title="일일 Burn Rate"
+                  title={t("insights.dailyBurn")}
                   value={formatCost(dailyBurnRate)}
-                  subtitle="현재 기간 일평균"
+                  subtitle={t("insights.dailyBurnDesc")}
                 />
                 <DarkStatCard
-                  title="월간 비용 예측"
+                  title={t("insights.monthlyProjection")}
                   value={formatCost(projectedMonthly)}
-                  subtitle="현재 속도 기준"
+                  subtitle={t("insights.monthlyProjectionDesc")}
                 />
                 <DarkStatCard
-                  title="요청당 평균 비용"
+                  title={t("insights.avgCostPerReq")}
                   value={`$${avgCostPerReq.toFixed(6)}`}
-                  subtitle="API 호출 단가"
+                  subtitle={t("insights.avgCostPerReqDesc")}
                 />
                 <DarkStatCard
-                  title="요청당 평균 토큰"
+                  title={t("insights.avgTokensPerReq")}
                   value={formatNumber(avgTokensPerReq)}
-                  subtitle="Input + Output"
+                  subtitle={t("insights.avgTokensPerReqDesc")}
                 />
               </div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <DarkStatCard
-                  title="총 Input 토큰"
+                  title={t("insights.totalInput")}
                   value={formatNumber(totalInputTokens)}
                   subtitle={`${(100 - outputRatio).toFixed(1)}% of total`}
                 />
                 <DarkStatCard
-                  title="총 Output 토큰"
+                  title={t("insights.totalOutput")}
                   value={formatNumber(totalOutputTokens)}
                   subtitle={`${outputRatio.toFixed(1)}% of total`}
                 />
                 <DarkStatCard
-                  title="예산 사용률"
+                  title={t("insights.budgetUtil")}
                   value={`${budgetUtilization.toFixed(1)}%`}
                   subtitle={`$${totalKeySpend.toFixed(4)} / $${totalBudget.toFixed(0)}`}
                 />
                 <DarkStatCard
-                  title="등록 모델 수"
+                  title={t("insights.modelCount")}
                   value={String(systemHealth?.model_count ?? modelMetrics.length)}
                   subtitle={systemHealth?.litellm_version ? `LiteLLM v${systemHealth.litellm_version}` : ""}
                 />
@@ -487,31 +489,31 @@ export default function AnalyticsDashboard({
 
           {/* Section: System Health */}
           {isAdmin && systemHealth && (
-            <Section title="시스템 상태" defaultOpen={false}>
+            <Section title={t("system.title")} defaultOpen={false}>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="bg-[#161b22] rounded-lg border border-gray-800 p-4">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Proxy Status</p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{t("system.proxyStatus")}</p>
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${systemHealth.status === "healthy" ? "bg-green-400 animate-pulse" : "bg-red-400"}`} />
                     <span className="text-sm font-medium text-gray-200">{systemHealth.status}</span>
                   </div>
                 </div>
                 <div className="bg-[#161b22] rounded-lg border border-gray-800 p-4">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Database</p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{t("system.database")}</p>
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${systemHealth.db === "connected" ? "bg-green-400" : "bg-red-400"}`} />
                     <span className="text-sm font-medium text-gray-200">{systemHealth.db}</span>
                   </div>
                 </div>
                 <div className="bg-[#161b22] rounded-lg border border-gray-800 p-4">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Cache (Valkey)</p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{t("system.cache")}</p>
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${systemHealth.cache === "redis" ? "bg-green-400" : "bg-yellow-400"}`} />
                     <span className="text-sm font-medium text-gray-200">{systemHealth.cache}</span>
                   </div>
                 </div>
                 <div className="bg-[#161b22] rounded-lg border border-gray-800 p-4">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">LiteLLM Version</p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{t("system.version")}</p>
                   <span className="text-sm font-medium text-gray-200">v{systemHealth.litellm_version}</span>
                 </div>
               </div>
@@ -520,16 +522,16 @@ export default function AnalyticsDashboard({
 
           {/* Section: API Key Budget */}
           {isAdmin && keyBudgetData.length > 0 && (
-            <Section title="API Key 예산 관리" defaultOpen={false}>
+            <Section title={t("keyBudget.title")} defaultOpen={false}>
               <div className="bg-[#161b22] rounded-lg border border-gray-800 overflow-hidden">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-gray-800 bg-[#0d1117]">
-                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Key Alias</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">사용량</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">한도</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">사용률</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">마지막 활동</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{t("keyBudget.alias")}</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{t("keyBudget.spend")}</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{t("keyBudget.limit")}</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{t("keyBudget.usage")}</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{t("keyBudget.lastActive")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-800/50">
@@ -563,17 +565,17 @@ export default function AnalyticsDashboard({
 
           {/* Section: Bedrock Model Details */}
           {isAdmin && modelRequestData.length > 0 && (
-            <Section title="Bedrock 모델 상세">
+            <Section title={t("bedrockModel.title")}>
               <div className="bg-[#161b22] rounded-lg border border-gray-800 overflow-hidden">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-gray-800 bg-[#0d1117]">
-                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Model</th>
-                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Requests</th>
-                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Total Tokens</th>
-                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Spend (USD)</th>
-                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Avg Latency</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">비율</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{t("bedrockModel.model")}</th>
+                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">{t("bedrockModel.requests")}</th>
+                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">{t("bedrockModel.tokens")}</th>
+                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">{t("bedrockModel.spend")}</th>
+                      <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">{t("bedrockModel.latency")}</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{t("bedrockModel.ratio")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-800/50">
@@ -608,22 +610,22 @@ export default function AnalyticsDashboard({
 
           {/* Section 2: Leaderboard */}
           {isAdmin && userAggs.length > 0 && (
-            <Section title="Leaderboard - 토큰 사용량 TOP">
+            <Section title={t("leaderboard.title")}>
               <div className="bg-gray-900 rounded-lg border border-gray-700 p-4">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   <LeaderboardChart
                     data={byTotal}
-                    title="총 토큰 사용량 TOP 10"
+                    title={t("leaderboard.totalTokens")}
                     color="#3b82f6"
                   />
                   <LeaderboardChart
                     data={byInput}
-                    title="Input 토큰 TOP 10"
+                    title={t("leaderboard.inputTokens")}
                     color="#3b82f6"
                   />
                   <LeaderboardChart
                     data={byOutput}
-                    title="Output 토큰 TOP 10"
+                    title={t("leaderboard.outputTokens")}
                     color="#3b82f6"
                   />
                 </div>
@@ -632,7 +634,7 @@ export default function AnalyticsDashboard({
           )}
 
           {/* Section 3: Token Usage Trends */}
-          <Section title="토큰 사용량 (추이)">
+          <Section title={t("tokenTrends.title")}>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <AreaTrendChart
                 data={dateAggs}
@@ -648,13 +650,13 @@ export default function AnalyticsDashboard({
                     color: "#8b5cf6",
                   },
                 ]}
-                title="토큰 유형별 사용 추이"
+                title={t("tokenTrends.byType")}
               />
               {isAdmin && top5Users.length > 0 ? (
                 <MultiLineChart
                   data={userTrendData}
                   series={userTrendSeries}
-                  title="사용자별 토큰 추이 (TOP 5)"
+                  title={t("tokenTrends.byUser")}
                 />
               ) : (
                 <AreaTrendChart
@@ -666,24 +668,24 @@ export default function AnalyticsDashboard({
                       color: "#10b981",
                     },
                   ]}
-                  title="일별 요청 수 추이"
+                  title={t("tokenTrends.dailyRequests")}
                 />
               )}
             </div>
           </Section>
 
           {/* Section 4: Usage Patterns */}
-          <Section title="사용 패턴">
+          <Section title={t("usagePatterns.title")}>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <HorizontalBarChart
                 data={userSessionData}
-                title="사용자별 API 요청 수"
+                title={t("usagePatterns.userRequests")}
                 color="#3b82f6"
               />
               {isAdmin && modelCostData.length > 0 ? (
                 <HorizontalBarChart
                   data={modelCostData}
-                  title="모델별 비용 (USD)"
+                  title={t("usagePatterns.modelCost")}
                   color="#3b82f6"
                   valueFormatter={(v) => `$${v.toFixed(2)}`}
                 />
@@ -695,7 +697,7 @@ export default function AnalyticsDashboard({
                       name: d.date,
                       value: d.spend,
                     }))}
-                  title="일별 비용 (USD)"
+                  title={t("usagePatterns.dailyCost")}
                   color="#10b981"
                   valueFormatter={(v) => `$${v.toFixed(4)}`}
                 />
@@ -705,17 +707,17 @@ export default function AnalyticsDashboard({
 
           {/* Section 5: Model Performance */}
           {isAdmin && modelMetrics.length > 0 && (
-            <Section title="모델 성능">
+            <Section title={t("modelPerf.title")}>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <HorizontalBarChart
                   data={modelLatencyData}
-                  title="모델별 평균 응답시간 (ms)"
+                  title={t("modelPerf.latency")}
                   color="#f59e0b"
                   valueFormatter={(v) => `${v}ms`}
                 />
                 <HorizontalBarChart
                   data={userCostData}
-                  title="사용자별 비용 TOP 10 (USD)"
+                  title={t("modelPerf.userCost")}
                   color="#ef4444"
                   valueFormatter={(v) => `$${v.toFixed(4)}`}
                 />

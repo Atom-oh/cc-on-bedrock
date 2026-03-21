@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useI18n } from "@/lib/i18n";
 import ContainersTable from "@/components/tables/containers-table";
 import StatCard from "@/components/cards/stat-card";
 import type {
@@ -19,6 +20,7 @@ export default function ContainerManagement({
   domainName = "example.com",
   devSubdomain = "dev",
 }: ContainerManagementProps) {
+  const { t } = useI18n();
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [users, setUsers] = useState<CognitoUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -141,27 +143,27 @@ export default function ContainerManagement({
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
-          title="Running"
+          title={t("containers.running")}
           value={runningContainers.length}
-          description="Active containers"
+          description={t("common.active")}
         />
         <StatCard
-          title="Pending"
+          title={t("containers.pending")}
           value={pendingContainers.length}
-          description="Starting up"
+          description={t("common.startingUp")}
         />
         <StatCard
-          title="Total Users"
+          title={t("containers.totalUsers")}
           value={users.length}
-          description="Registered"
+          description={t("users.registered")}
         />
         <StatCard
-          title="Available"
+          title={t("containers.available")}
           value={availableUsers.length}
-          description="Can start container"
+          description={t("common.canStart")}
         />
         <StatCard
-          title="Utilization"
+          title={t("containers.utilization")}
           value={users.length > 0 ? `${Math.round(((runningContainers.length + pendingContainers.length) / users.length) * 100)}%` : "0%"}
           description="Containers / Users"
         />
@@ -178,10 +180,10 @@ export default function ContainerManagement({
         const total = runningContainers.length + pendingContainers.length;
         return (
           <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-            <h3 className="text-sm font-medium text-gray-300 mb-3">Active Container Breakdown</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-3">{t("containers.breakdown")}</h3>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <p className="text-[10px] text-gray-500 uppercase">By OS</p>
+                <p className="text-[10px] text-gray-500 uppercase">{t("containers.byOs")}</p>
                 {Object.entries(osCounts).map(([os, count]) => (
                   <div key={os} className="flex items-center gap-2">
                     <span className="text-xs text-gray-400 w-14">{os === "al2023" ? "AL2023" : "Ubuntu"}</span>
@@ -193,7 +195,7 @@ export default function ContainerManagement({
                 ))}
               </div>
               <div className="space-y-2">
-                <p className="text-[10px] text-gray-500 uppercase">By Tier</p>
+                <p className="text-[10px] text-gray-500 uppercase">{t("containers.byTier")}</p>
                 {Object.entries(tierCounts).map(([tier, count]) => {
                   const color = tier === "light" ? "bg-gray-500" : tier === "standard" ? "bg-blue-500" : "bg-purple-500";
                   return (
@@ -226,7 +228,7 @@ export default function ContainerManagement({
             onClick={() => setShowStartForm(!showStartForm)}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
           >
-            {showStartForm ? "Cancel" : "Start Container"}
+            {showStartForm ? t("containers.cancel") : t("containers.startContainer")}
           </button>
         </div>
       </div>
@@ -294,7 +296,7 @@ export default function ContainerManagement({
                 disabled={starting || !selectedUser}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {starting ? "Starting..." : "Start Container"}
+                {starting ? "Starting..." : t("containers.startContainer")}
               </button>
             </div>
           </form>

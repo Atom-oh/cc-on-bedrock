@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useI18n } from "@/lib/i18n";
 import UsersTable from "@/components/tables/users-table";
 import StatCard from "@/components/cards/stat-card";
 import type { CognitoUser, CreateUserInput, ApiResponse } from "@/lib/types";
 
 export default function UserManagement() {
+  const { t } = useI18n();
   const [users, setUsers] = useState<CognitoUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -117,17 +119,17 @@ export default function UserManagement() {
     <div className="space-y-6">
       {/* User Insights */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <StatCard title="Total Users" value={users.length} description="Registered" />
-        <StatCard title="Active" value={activeUsers.length} description={`${users.length > 0 ? ((activeUsers.length / users.length) * 100).toFixed(0) : 0}% enabled`} />
-        <StatCard title="With API Key" value={withApiKey.length} description="Can use Claude Code" />
-        <StatCard title="OS Split" value={`${osCounts.ubuntu}/${osCounts.al2023}`} description="Ubuntu / AL2023" />
-        <StatCard title="Tier Split" value={`${tierCounts.light}/${tierCounts.standard}/${tierCounts.power}`} description="L / S / P" />
+        <StatCard title={t("users.totalUsers")} value={users.length} description={t("users.registered")} />
+        <StatCard title={t("users.active")} value={activeUsers.length} description={`${users.length > 0 ? ((activeUsers.length / users.length) * 100).toFixed(0) : 0}% ${t("users.enabled")}`} />
+        <StatCard title={t("users.withApiKey")} value={withApiKey.length} description={t("users.canUseCC")} />
+        <StatCard title={t("users.osSplit")} value={`${osCounts.ubuntu}/${osCounts.al2023}`} description="Ubuntu / AL2023" />
+        <StatCard title={t("users.tierSplit")} value={`${tierCounts.light}/${tierCounts.standard}/${tierCounts.power}`} description="L / S / P" />
       </div>
 
       {/* Security Policy Distribution */}
       {users.length > 0 && (
         <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Security Policy 분포</h3>
+          <h3 className="text-sm font-medium text-gray-300 mb-3">{t("users.securityDist")}</h3>
           <div className="flex gap-6">
             {Object.entries(policyCounts).filter(([, v]) => v > 0).map(([policy, count]) => {
               const pct = (count / users.length) * 100;
@@ -153,7 +155,7 @@ export default function UserManagement() {
           onClick={() => setShowCreateForm(!showCreateForm)}
           className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
         >
-          {showCreateForm ? "Cancel" : "Create User"}
+          {showCreateForm ? t("containers.cancel") : t("users.createUser")}
         </button>
       </div>
 
@@ -244,7 +246,7 @@ export default function UserManagement() {
                 disabled={creating}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {creating ? "Creating..." : "Create User"}
+                {creating ? "Creating..." : t("users.createUser")}
               </button>
             </div>
           </form>

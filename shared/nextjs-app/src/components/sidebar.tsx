@@ -3,29 +3,20 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
+import { useI18n } from "@/lib/i18n";
 
 interface NavItem {
   href: string;
-  label: string;
+  labelKey: string;
   icon: string;
   adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { href: "/analytics", label: "Analytics", icon: "chart-bar" },
-  {
-    href: "/monitoring",
-    label: "Monitoring",
-    icon: "activity",
-    adminOnly: true,
-  },
-  { href: "/admin", label: "Users", icon: "users", adminOnly: true },
-  {
-    href: "/admin/containers",
-    label: "Containers",
-    icon: "server",
-    adminOnly: true,
-  },
+  { href: "/analytics", labelKey: "nav.analytics", icon: "chart-bar" },
+  { href: "/monitoring", labelKey: "nav.monitoring", icon: "activity", adminOnly: true },
+  { href: "/admin", labelKey: "nav.users", icon: "users", adminOnly: true },
+  { href: "/admin/containers", labelKey: "nav.containers", icon: "server", adminOnly: true },
 ];
 
 function NavIcon({ icon }: { icon: string }) {
@@ -66,6 +57,7 @@ function NavIcon({ icon }: { icon: string }) {
 export default function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const { locale, setLocale, t } = useI18n();
   const isAdmin = session?.user?.isAdmin ?? false;
 
   const filteredItems = navItems.filter(
@@ -101,11 +93,37 @@ export default function Sidebar() {
               }`}
             >
               <NavIcon icon={item.icon} />
-              {item.label}
+              {t(item.labelKey)}
             </Link>
           );
         })}
       </nav>
+
+      {/* Language Toggle */}
+      <div className="px-4 py-2">
+        <div className="flex items-center bg-[#0d1117] rounded-lg border border-gray-800 p-0.5">
+          <button
+            onClick={() => setLocale("ko")}
+            className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              locale === "ko"
+                ? "bg-blue-600 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            한국어
+          </button>
+          <button
+            onClick={() => setLocale("en")}
+            className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              locale === "en"
+                ? "bg-blue-600 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            English
+          </button>
+        </div>
+      </div>
 
       {/* User info */}
       <div className="px-4 py-4 border-t border-gray-800">
@@ -118,13 +136,13 @@ export default function Sidebar() {
               {session?.user?.email ?? "Unknown"}
             </p>
             <p className="text-[10px] text-gray-500">
-              {isAdmin ? "Admin" : "User"}
+              {isAdmin ? t("nav.admin") : t("nav.user")}
             </p>
           </div>
           <button
             onClick={() => signOut()}
             className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded-lg transition-colors"
-            title="Sign out"
+            title={t("nav.signout")}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}

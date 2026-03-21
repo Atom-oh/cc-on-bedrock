@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useI18n } from "@/lib/i18n";
 import HealthCard from "@/components/cards/health-card";
 import StatCard from "@/components/cards/stat-card";
 import ContainersTable from "@/components/tables/containers-table";
@@ -23,6 +24,7 @@ export default function MonitoringDashboard({
   domainName = "example.com",
   devSubdomain = "dev",
 }: MonitoringDashboardProps) {
+  const { t } = useI18n();
   const [healthStatuses, setHealthStatuses] = useState<HealthStatus[]>([]);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
@@ -123,12 +125,12 @@ export default function MonitoringDashboard({
           <div className="flex items-center gap-2">
             <span className={`w-2.5 h-2.5 rounded-full ${healthyServices === totalServices ? "bg-green-400 animate-pulse" : "bg-yellow-400"}`} />
             <span className="text-sm text-gray-300">
-              {healthyServices}/{totalServices} Services Healthy
+              {healthyServices}/{totalServices} {t("monitoring.servicesHealthy")}
             </span>
           </div>
           <span className="text-gray-700">|</span>
           <span className="text-sm text-gray-400">
-            {runningContainers.length} containers running
+            {runningContainers.length} {t("monitoring.containersRunning")}
           </span>
           {lastRefresh && (
             <>
@@ -149,7 +151,7 @@ export default function MonitoringDashboard({
 
       {/* Service Health */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-100 mb-4">Service Health</h2>
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.serviceHealth")}</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {healthStatuses.map((hs) => (
             <HealthCard key={hs.service} {...hs} />
@@ -171,7 +173,7 @@ export default function MonitoringDashboard({
                   DB: {systemHealth.db} · Cache: {systemHealth.cache} · v{systemHealth.litellm_version}
                 </p>
                 <p className="mt-1 text-xs text-gray-600">
-                  {systemHealth.model_count} models configured
+                  {systemHealth.model_count} {t("monitoring.modelsConfigured")}
                 </p>
               </div>
             </>
@@ -181,32 +183,32 @@ export default function MonitoringDashboard({
 
       {/* Resource Insights */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-100 mb-4">Resource Insights</h2>
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.resourceInsights")}</h2>
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <StatCard
-            title="Running"
+            title={t("monitoring.running")}
             value={runningContainers.length}
-            description="Active containers"
+            description={t("monitoring.allContainers")}
           />
           <StatCard
-            title="Pending"
+            title={t("monitoring.pending")}
             value={pendingContainers.length}
-            description="Starting up"
+            description={t("monitoring.allContainers")}
           />
           <StatCard
-            title="Total vCPU"
+            title={t("monitoring.totalVcpu")}
             value={totalCpu > 0 ? `${(totalCpu / 1024).toFixed(0)}` : String(runningContainers.length)}
-            description="Allocated CPU"
+            description={t("monitoring.allocatedCpu")}
           />
           <StatCard
-            title="Total Memory"
+            title={t("monitoring.totalMemory")}
             value={totalMem > 0 ? `${(totalMem / 1024).toFixed(1)} GiB` : "-"}
-            description="Allocated RAM"
+            description={t("monitoring.allocatedRam")}
           />
           <StatCard
-            title="All Containers"
+            title={t("monitoring.allContainers")}
             value={containers.length}
-            description="All states"
+            description={t("monitoring.allStates")}
           />
         </div>
       </section>
@@ -214,11 +216,11 @@ export default function MonitoringDashboard({
       {/* Container Distribution */}
       {runningContainers.length > 0 && (
         <section>
-          <h2 className="text-lg font-semibold text-gray-100 mb-4">Container Distribution</h2>
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.containerDist")}</h2>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* OS Distribution */}
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-              <h3 className="text-sm font-medium text-gray-300 mb-3">OS 분포</h3>
+              <h3 className="text-sm font-medium text-gray-300 mb-3">{t("monitoring.osDist")}</h3>
               <div className="space-y-3">
                 {Object.entries(osCounts).filter(([, v]) => v > 0).map(([os, count]) => {
                   const pct = (count / runningContainers.length) * 100;
@@ -236,7 +238,7 @@ export default function MonitoringDashboard({
             </div>
             {/* Tier Distribution */}
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-              <h3 className="text-sm font-medium text-gray-300 mb-3">리소스 Tier 분포</h3>
+              <h3 className="text-sm font-medium text-gray-300 mb-3">{t("monitoring.tierDist")}</h3>
               <div className="space-y-3">
                 {Object.entries(tierCounts).filter(([, v]) => v > 0).map(([tier, count]) => {
                   const pct = (count / runningContainers.length) * 100;
@@ -259,7 +261,7 @@ export default function MonitoringDashboard({
 
       {/* Active Sessions */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-100 mb-4">Active Sessions</h2>
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.activeSessions")}</h2>
         <ContainersTable
           containers={containers}
           onStop={handleStopContainer}
