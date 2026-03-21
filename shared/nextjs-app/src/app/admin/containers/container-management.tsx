@@ -164,17 +164,17 @@ export default function ContainerManagement({
 
       {/* Actions */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Containers</h2>
+        <h2 className="text-lg font-semibold text-gray-100">Containers</h2>
         <div className="flex gap-2">
           <button
             onClick={() => void fetchData()}
-            className="px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+            className="px-3 py-2 text-sm font-medium text-gray-300 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700"
           >
             Refresh
           </button>
           <button
             onClick={() => setShowStartForm(!showStartForm)}
-            className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700"
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
           >
             {showStartForm ? "Cancel" : "Start Container"}
           </button>
@@ -183,24 +183,24 @@ export default function ContainerManagement({
 
       {/* Start container form */}
       {showStartForm && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6 shadow-sm">
+          <h3 className="text-lg font-semibold text-gray-100 mb-4">
             Start Container for User
           </h3>
           {error && (
-            <div className="mb-4 p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+            <div className="mb-4 p-3 text-sm text-red-400 bg-red-900/20 border border-red-800 rounded-lg">
               {error}
             </div>
           )}
           <form onSubmit={(e) => void handleStart(e)} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-400 mb-1">
                 Select User
               </label>
               <select
                 value={selectedUser}
                 onChange={(e) => setSelectedUser(e.target.value)}
-                className="w-full max-w-md px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                className="w-full max-w-md px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 required
               >
                 <option value="">Choose a user...</option>
@@ -215,23 +215,23 @@ export default function ContainerManagement({
               const user = users.find((u) => u.username === selectedUser);
               if (!user) return null;
               return (
-                <div className="bg-gray-50 rounded-lg p-4 text-sm">
-                  <h4 className="font-medium text-gray-900 mb-2">Container Config</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-gray-600">
+                <div className="bg-[#0d1117] rounded-lg p-4 text-sm">
+                  <h4 className="font-medium text-gray-300 mb-2">Container Config</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-gray-400">
                     <div>
-                      <span className="text-gray-400">OS:</span>{" "}
+                      <span className="text-gray-500">OS:</span>{" "}
                       {user.containerOs === "al2023" ? "Amazon Linux 2023" : "Ubuntu 24.04"}
                     </div>
                     <div>
-                      <span className="text-gray-400">Tier:</span>{" "}
+                      <span className="text-gray-500">Tier:</span>{" "}
                       {user.resourceTier}
                     </div>
                     <div>
-                      <span className="text-gray-400">Security:</span>{" "}
+                      <span className="text-gray-500">Security:</span>{" "}
                       {user.securityPolicy}
                     </div>
                     <div>
-                      <span className="text-gray-400">Subdomain:</span>{" "}
+                      <span className="text-gray-500">Subdomain:</span>{" "}
                       {user.subdomain}
                     </div>
                   </div>
@@ -242,7 +242,7 @@ export default function ContainerManagement({
               <button
                 type="submit"
                 disabled={starting || !selectedUser}
-                className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {starting ? "Starting..." : "Start Container"}
               </button>

@@ -93,7 +93,7 @@ export default function MonitoringDashboard({
     <div className="space-y-8">
       {/* Service Health */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">
           Service Health
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -105,7 +105,7 @@ export default function MonitoringDashboard({
 
       {/* Container Stats */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">
           Container Overview
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -130,12 +130,12 @@ export default function MonitoringDashboard({
       {/* Active Sessions */}
       <section>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">
+          <h2 className="text-lg font-semibold text-gray-100">
             Active Sessions
           </h2>
           <button
             onClick={() => void fetchData()}
-            className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+            className="px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700"
           >
             Refresh
           </button>

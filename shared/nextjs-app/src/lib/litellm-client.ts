@@ -142,3 +142,53 @@ export async function getTotalSpend(): Promise<{
 }> {
   return litellmFetch("/global/spend");
 }
+
+// ─── Admin: Key Budget Tracking ───
+
+export interface KeySpendInfo {
+  key_alias: string;
+  key_name: string;
+  spend: number;
+  max_budget: number | null;
+  last_active: string | null;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export async function getKeySpendList(): Promise<KeySpendInfo[]> {
+  const result = await litellmFetch<KeySpendInfo[]>("/spend/keys");
+  return result ?? [];
+}
+
+// ─── Admin: System Health Detail ───
+
+export interface SystemHealthDetail {
+  status: string;
+  db: string;
+  cache: string;
+  litellm_version: string;
+  model_count?: number;
+}
+
+export async function getSystemHealth(): Promise<SystemHealthDetail> {
+  const url = `${LITELLM_API_URL}/health/readiness`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${LITELLM_MASTER_KEY}` },
+    cache: "no-store",
+  });
+  if (!res.ok) return { status: "error", db: "unknown", cache: "unknown", litellm_version: "unknown" };
+  const data = await res.json();
+  return {
+    status: data.status ?? "unknown",
+    db: data.db ?? "unknown",
+    cache: data.cache ?? "none",
+    litellm_version: data.litellm_version ?? "unknown",
+  };
+}
+
+// ─── Admin: Model Info ───
+
+export async function getModelCount(): Promise<number> {
+  const result = await litellmFetch<{ data: unknown[] }>("/model/info");
+  return result.data?.length ?? 0;
+}

@@ -10,6 +10,9 @@ import {
   listKeys,
   deleteKey,
   updateKey,
+  getKeySpendList,
+  getSystemHealth,
+  getModelCount,
 } from "@/lib/litellm-client";
 
 export async function GET(req: NextRequest) {
@@ -85,6 +88,34 @@ export async function GET(req: NextRequest) {
         }
         const keys = await listKeys();
         return NextResponse.json({ success: true, data: keys });
+      }
+
+      case "key_spend_list": {
+        if (!session.user.isAdmin) {
+          return NextResponse.json(
+            { error: "Admin access required" },
+            { status: 403 }
+          );
+        }
+        const keySpend = await getKeySpendList();
+        return NextResponse.json({ success: true, data: keySpend });
+      }
+
+      case "system_health": {
+        if (!session.user.isAdmin) {
+          return NextResponse.json(
+            { error: "Admin access required" },
+            { status: 403 }
+          );
+        }
+        const [health, modelCount] = await Promise.all([
+          getSystemHealth(),
+          getModelCount(),
+        ]);
+        return NextResponse.json({
+          success: true,
+          data: { ...health, model_count: modelCount },
+        });
       }
 
       default:
