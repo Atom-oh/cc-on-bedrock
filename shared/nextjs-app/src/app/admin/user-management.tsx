@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import UsersTable from "@/components/tables/users-table";
+import StatCard from "@/components/cards/stat-card";
 import type { CognitoUser, CreateUserInput, ApiResponse } from "@/lib/types";
 
 export default function UserManagement() {
@@ -100,8 +101,49 @@ export default function UserManagement() {
     }
   };
 
+  // User insights
+  const activeUsers = users.filter((u) => u.enabled);
+  const withApiKey = users.filter((u) => u.litellmApiKey);
+  const osCounts = { ubuntu: 0, al2023: 0 };
+  const tierCounts = { light: 0, standard: 0, power: 0 };
+  const policyCounts = { open: 0, restricted: 0, locked: 0 };
+  for (const u of users) {
+    osCounts[u.containerOs] = (osCounts[u.containerOs] ?? 0) + 1;
+    tierCounts[u.resourceTier] = (tierCounts[u.resourceTier] ?? 0) + 1;
+    policyCounts[u.securityPolicy] = (policyCounts[u.securityPolicy] ?? 0) + 1;
+  }
+
   return (
     <div className="space-y-6">
+      {/* User Insights */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <StatCard title="Total Users" value={users.length} description="Registered" />
+        <StatCard title="Active" value={activeUsers.length} description={`${users.length > 0 ? ((activeUsers.length / users.length) * 100).toFixed(0) : 0}% enabled`} />
+        <StatCard title="With API Key" value={withApiKey.length} description="Can use Claude Code" />
+        <StatCard title="OS Split" value={`${osCounts.ubuntu}/${osCounts.al2023}`} description="Ubuntu / AL2023" />
+        <StatCard title="Tier Split" value={`${tierCounts.light}/${tierCounts.standard}/${tierCounts.power}`} description="L / S / P" />
+      </div>
+
+      {/* Security Policy Distribution */}
+      {users.length > 0 && (
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+          <h3 className="text-sm font-medium text-gray-300 mb-3">Security Policy 분포</h3>
+          <div className="flex gap-6">
+            {Object.entries(policyCounts).filter(([, v]) => v > 0).map(([policy, count]) => {
+              const pct = (count / users.length) * 100;
+              const color = policy === "open" ? "bg-green-500" : policy === "restricted" ? "bg-yellow-500" : "bg-red-500";
+              return (
+                <div key={policy} className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${color}`} />
+                  <span className="text-xs text-gray-400 capitalize">{policy}</span>
+                  <span className="text-xs text-gray-600">{count} ({pct.toFixed(0)}%)</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Action bar */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">

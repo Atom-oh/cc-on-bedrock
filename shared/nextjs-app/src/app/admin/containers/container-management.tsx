@@ -139,7 +139,7 @@ export default function ContainerManagement({
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           title="Running"
           value={runningContainers.length}
@@ -160,7 +160,57 @@ export default function ContainerManagement({
           value={availableUsers.length}
           description="Can start container"
         />
+        <StatCard
+          title="Utilization"
+          value={users.length > 0 ? `${Math.round(((runningContainers.length + pendingContainers.length) / users.length) * 100)}%` : "0%"}
+          description="Containers / Users"
+        />
       </div>
+
+      {/* Container Insights */}
+      {containers.length > 0 && (() => {
+        const osCounts: Record<string, number> = {};
+        const tierCounts: Record<string, number> = {};
+        for (const c of containers.filter((c) => c.status === "RUNNING" || c.status === "PENDING")) {
+          osCounts[c.containerOs] = (osCounts[c.containerOs] ?? 0) + 1;
+          tierCounts[c.resourceTier] = (tierCounts[c.resourceTier] ?? 0) + 1;
+        }
+        const total = runningContainers.length + pendingContainers.length;
+        return (
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <h3 className="text-sm font-medium text-gray-300 mb-3">Active Container Breakdown</h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <p className="text-[10px] text-gray-500 uppercase">By OS</p>
+                {Object.entries(osCounts).map(([os, count]) => (
+                  <div key={os} className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-14">{os === "al2023" ? "AL2023" : "Ubuntu"}</span>
+                    <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden max-w-[150px]">
+                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${total > 0 ? (count / total) * 100 : 0}%` }} />
+                    </div>
+                    <span className="text-[10px] text-gray-500">{count}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <p className="text-[10px] text-gray-500 uppercase">By Tier</p>
+                {Object.entries(tierCounts).map(([tier, count]) => {
+                  const color = tier === "light" ? "bg-gray-500" : tier === "standard" ? "bg-blue-500" : "bg-purple-500";
+                  return (
+                    <div key={tier} className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400 w-14 capitalize">{tier}</span>
+                      <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden max-w-[150px]">
+                        <div className={`h-full rounded-full ${color}`} style={{ width: `${total > 0 ? (count / total) * 100 : 0}%` }} />
+                      </div>
+                      <span className="text-[10px] text-gray-500">{count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Actions */}
       <div className="flex items-center justify-between">
