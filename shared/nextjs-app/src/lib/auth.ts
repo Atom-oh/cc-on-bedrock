@@ -81,10 +81,6 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  pages: {
-    signIn: "/api/auth/signin",
-    error: "/api/auth/error",
-  },
   session: {
     strategy: "jwt",
     maxAge: 8 * 60 * 60, // 8 hours
