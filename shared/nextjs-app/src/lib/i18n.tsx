@@ -54,6 +54,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 const ko: Record<string, string> = {
   // Sidebar
   "nav.home": "홈",
+  "nav.ai": "AI 어시스턴트",
   "nav.analytics": "분석",
   "nav.monitoring": "모니터링",
   "nav.users": "사용자",
@@ -189,6 +190,20 @@ const ko: Record<string, string> = {
   "containers.startContainer": "컨테이너 시작",
   "containers.cancel": "취소",
 
+  // User Model Insights
+  "userModel.title": "사용자별 모델 사용 인사이트",
+  "userModel.matrix": "사용자 × 모델 매트릭스",
+  "userModel.preference": "모델 선호도 분포",
+  "userModel.topByModel": "모델별 Top 사용자",
+  "userModel.costByModel": "사용자별 모델 비용",
+  "userModel.tokenEfficiency": "사용자별 토큰 효율",
+  "userModel.user": "사용자",
+  "userModel.requests": "요청",
+  "userModel.tokens": "토큰",
+  "userModel.spend": "비용",
+  "userModel.avgTokens": "평균 토큰",
+  "userModel.primaryModel": "주 모델",
+
   // Home
   "home.title": "CC-on-Bedrock",
   "home.subtitle": "AWS Bedrock 기반 멀티유저 Claude Code 개발환경",
@@ -219,6 +234,7 @@ const ko: Record<string, string> = {
 const en: Record<string, string> = {
   // Sidebar
   "nav.home": "Home",
+  "nav.ai": "AI Assistant",
   "nav.analytics": "Analytics",
   "nav.monitoring": "Monitoring",
   "nav.users": "Users",
@@ -353,6 +369,20 @@ const en: Record<string, string> = {
   "containers.byTier": "By Tier",
   "containers.startContainer": "Start Container",
   "containers.cancel": "Cancel",
+
+  // User Model Insights
+  "userModel.title": "User × Model Usage Insights",
+  "userModel.matrix": "User × Model Matrix",
+  "userModel.preference": "Model Preference Distribution",
+  "userModel.topByModel": "Top Users by Model",
+  "userModel.costByModel": "Cost by User & Model",
+  "userModel.tokenEfficiency": "Token Efficiency by User",
+  "userModel.user": "User",
+  "userModel.requests": "Requests",
+  "userModel.tokens": "Tokens",
+  "userModel.spend": "Spend",
+  "userModel.avgTokens": "Avg Tokens",
+  "userModel.primaryModel": "Primary Model",
 
   // Home
   "home.title": "CC-on-Bedrock",

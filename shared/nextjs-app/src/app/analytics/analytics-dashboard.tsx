@@ -29,16 +29,17 @@ type TimeRange = "1d" | "7d" | "30d";
 
 function getDateRange(range: TimeRange): { start: string; end: string } {
   const end = new Date();
+  end.setDate(end.getDate() + 1); // include today's data
   const start = new Date();
   switch (range) {
     case "1d":
-      start.setDate(end.getDate() - 1);
+      start.setDate(start.getDate() - 1);
       break;
     case "7d":
-      start.setDate(end.getDate() - 7);
+      start.setDate(start.getDate() - 7);
       break;
     case "30d":
-      start.setDate(end.getDate() - 30);
+      start.setDate(start.getDate() - 30);
       break;
   }
   return {
@@ -58,8 +59,11 @@ function formatCost(v: number): string {
   return `$${v.toFixed(4)}`;
 }
 
-function maskName(email: string): string {
-  const local = email.split("@")[0] ?? email;
+function maskName(name: string): string {
+  // If it's a resolved alias (admin01, test01, etc.), show as-is
+  if (/^(admin|test|user)\d+$/i.test(name)) return name;
+  // Email: mask
+  const local = name.split("@")[0] ?? name;
   if (local.length <= 2) return local + "*";
   return local.slice(0, 2) + "*".repeat(Math.min(local.length - 2, 3));
 }
@@ -131,10 +135,24 @@ interface DateAgg {
   [key: string]: string | number;
 }
 
-function aggregateByUser(logs: SpendLog[]): UserAgg[] {
+// Build token_hash_tail → user_alias map from keySpendList
+function buildKeyAliasMap(keys: KeySpendInfo[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const k of keys) {
+    const tokenTail = (k.token ?? "").slice(-8);
+    const alias = (k.metadata as Record<string, string>)?.user
+      ?? k.key_alias?.replace("-key", "")
+      ?? k.key_name ?? "";
+    if (tokenTail) map.set(tokenTail, alias);
+  }
+  return map;
+}
+
+function aggregateByUser(logs: SpendLog[], aliasMap?: Map<string, string>): UserAgg[] {
   const map = new Map<string, UserAgg>();
   for (const log of logs) {
-    const key = log.user || log.api_key?.slice(-8) || "unknown";
+    const rawKey = log.user || log.api_key?.slice(-8) || "unknown";
+    const key = (rawKey && aliasMap?.get(rawKey)) ?? rawKey;
     const existing = map.get(key) ?? {
       email: key,
       totalTokens: 0,
@@ -178,12 +196,14 @@ function aggregateByDate(logs: SpendLog[]): DateAgg[] {
 
 function aggregateByDateAndUser(
   logs: SpendLog[],
-  topUsers: string[]
+  topUsers: string[],
+  aliasMap?: Map<string, string>
 ): DateAgg[] {
   const map = new Map<string, DateAgg>();
   for (const log of logs) {
     const date = log.startTime?.split("T")[0] ?? "unknown";
-    const user = log.user || log.api_key?.slice(-8) || "unknown";
+    const rawUser = log.user || log.api_key?.slice(-8) || "unknown";
+    const user = (rawUser && aliasMap?.get(rawUser)) ?? rawUser;
     const existing = map.get(date) ?? ({
       date,
       inputTokens: 0,
@@ -275,7 +295,8 @@ export default function AnalyticsDashboard({
   }, [fetchData]);
 
   // Computed data
-  const userAggs = aggregateByUser(logs);
+  const keyAlias = buildKeyAliasMap(keySpendList);
+  const userAggs = aggregateByUser(logs, keyAlias);
   const dateAggs = aggregateByDate(logs);
   const totalSpend = logs.reduce((s, l) => s + l.spend, 0);
   const totalRequests = logs.length;
@@ -302,7 +323,7 @@ export default function AnalyticsDashboard({
     .sort((a, b) => b.totalTokens - a.totalTokens)
     .slice(0, 5)
     .map((u) => u.email);
-  const userTrendData = aggregateByDateAndUser(logs, top5Users);
+  const userTrendData = aggregateByDateAndUser(logs, top5Users, keyAlias);
   const userTrendSeries = top5Users.map((u, i) => ({
     key: u,
     name: maskName(u),
@@ -336,6 +357,43 @@ export default function AnalyticsDashboard({
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 10)
     .map((u) => ({ name: maskName(u.email), value: u.spend }));
+
+  // --- User × Model cross analysis ---
+  interface UserModelAgg {
+    user: string;
+    model: string;
+    requests: number;
+    tokens: number;
+    spend: number;
+  }
+  const userModelMap = new Map<string, UserModelAgg>();
+  for (const log of logs) {
+    const rawUser = log.user || log.api_key?.slice(-8) || "unknown";
+    const user = (rawUser && keyAlias.get(rawUser)) ?? rawUser;
+    const model = (log.model ?? "unknown").replace("bedrock/", "").replace("global.anthropic.", "").replace("apac.anthropic.", "");
+    const key = `${user}::${model}`;
+    const existing = userModelMap.get(key) ?? { user, model, requests: 0, tokens: 0, spend: 0 };
+    existing.requests += 1;
+    existing.tokens += log.total_tokens ?? 0;
+    existing.spend += log.spend ?? 0;
+    userModelMap.set(key, existing);
+  }
+  const userModelAggs = Array.from(userModelMap.values());
+
+  // All unique models used
+  const allModels = [...new Set(userModelAggs.map((a) => a.model))].sort();
+
+  // Per-user summary with primary model
+  const userSummaries = userAggs.map((u) => {
+    const userModels = userModelAggs.filter((a) => a.user === u.email);
+    const primary = userModels.sort((a, b) => b.requests - a.requests)[0];
+    return {
+      ...u,
+      models: userModels,
+      primaryModel: primary?.model ?? "-",
+      modelCount: userModels.length,
+    };
+  }).sort((a, b) => b.spend - a.spend);
 
   // --- Insights ---
   const totalTokens = logs.reduce((s, l) => s + l.total_tokens, 0);
@@ -721,6 +779,153 @@ export default function AnalyticsDashboard({
                   color="#ef4444"
                   valueFormatter={(v) => `$${v.toFixed(4)}`}
                 />
+              </div>
+            </Section>
+          )}
+
+          {/* Section 6: User × Model Insights */}
+          {isAdmin && userModelAggs.length > 0 && (
+            <Section title={t("userModel.title")}>
+              {/* User-Model Matrix Table */}
+              <div className="bg-[#161b22] rounded-lg border border-gray-800 overflow-hidden mb-4">
+                <div className="px-4 py-3 border-b border-gray-800">
+                  <h4 className="text-xs font-medium text-gray-300">{t("userModel.matrix")}</h4>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-800 bg-[#0d1117]">
+                        <th className="px-3 py-2 text-left text-[10px] font-medium text-gray-500 uppercase sticky left-0 bg-[#0d1117] z-10">{t("userModel.user")}</th>
+                        {allModels.map((m) => (
+                          <th key={m} className="px-3 py-2 text-center text-[10px] font-medium text-gray-500 uppercase whitespace-nowrap">
+                            {m.split("-").slice(0, 2).join("-")}
+                          </th>
+                        ))}
+                        <th className="px-3 py-2 text-right text-[10px] font-medium text-gray-500 uppercase">{t("userModel.spend")}</th>
+                        <th className="px-3 py-2 text-center text-[10px] font-medium text-gray-500 uppercase">{t("userModel.primaryModel")}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-800/50">
+                      {userSummaries.slice(0, 12).map((u) => (
+                        <tr key={u.email} className="hover:bg-gray-800/30 transition-colors">
+                          <td className="px-3 py-2 text-xs text-gray-300 font-medium sticky left-0 bg-[#161b22] z-10">{maskName(u.email)}</td>
+                          {allModels.map((model) => {
+                            const cell = u.models.find((m) => m.model === model);
+                            if (!cell || cell.requests === 0) {
+                              return <td key={model} className="px-3 py-2 text-center text-[10px] text-gray-700">-</td>;
+                            }
+                            const maxReqs = Math.max(...userModelAggs.map((a) => a.requests));
+                            const intensity = Math.min(cell.requests / maxReqs, 1);
+                            return (
+                              <td key={model} className="px-3 py-2 text-center">
+                                <div
+                                  className="inline-flex items-center justify-center min-w-[32px] px-1.5 py-0.5 rounded text-[10px] font-medium"
+                                  style={{
+                                    backgroundColor: `rgba(59, 130, 246, ${0.1 + intensity * 0.5})`,
+                                    color: intensity > 0.3 ? "#93c5fd" : "#6b7280",
+                                  }}
+                                  title={`${cell.requests} req · ${cell.tokens} tokens · $${cell.spend.toFixed(4)}`}
+                                >
+                                  {cell.requests}
+                                </div>
+                              </td>
+                            );
+                          })}
+                          <td className="px-3 py-2 text-right text-[10px] text-gray-400">${u.spend.toFixed(4)}</td>
+                          <td className="px-3 py-2 text-center">
+                            <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-cyan-900/30 text-cyan-400">
+                              {u.primaryModel.split("-").slice(0, 2).join("-")}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Model Preference Distribution (per user) */}
+                <div className="bg-[#161b22] rounded-lg border border-gray-800 p-4">
+                  <h4 className="text-xs font-medium text-gray-300 mb-3">{t("userModel.preference")}</h4>
+                  <div className="space-y-2.5">
+                    {userSummaries.slice(0, 8).map((u) => {
+                      const total = u.requests;
+                      return (
+                        <div key={u.email}>
+                          <div className="flex justify-between text-[10px] mb-1">
+                            <span className="text-gray-400">{maskName(u.email)}</span>
+                            <span className="text-gray-600">{total} req</span>
+                          </div>
+                          <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+                            {u.models.sort((a, b) => b.requests - a.requests).map((m, i) => {
+                              const pct = total > 0 ? (m.requests / total) * 100 : 0;
+                              const colors = ["#3b82f6", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444", "#10b981"];
+                              return (
+                                <div
+                                  key={m.model}
+                                  className="h-full transition-all"
+                                  style={{ width: `${pct}%`, backgroundColor: colors[i % colors.length] }}
+                                  title={`${m.model}: ${m.requests} req (${pct.toFixed(0)}%)`}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* Legend */}
+                    <div className="flex flex-wrap gap-3 pt-2 border-t border-gray-800">
+                      {allModels.map((m, i) => {
+                        const colors = ["#3b82f6", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444", "#10b981"];
+                        return (
+                          <div key={m} className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: colors[i % colors.length] }} />
+                            <span className="text-[9px] text-gray-500">{m.split("-").slice(0, 2).join("-")}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Token Efficiency per User */}
+                <div className="bg-[#161b22] rounded-lg border border-gray-800 p-4">
+                  <h4 className="text-xs font-medium text-gray-300 mb-3">{t("userModel.tokenEfficiency")}</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-gray-800">
+                          <th className="pb-2 text-left text-[10px] font-medium text-gray-500">{t("userModel.user")}</th>
+                          <th className="pb-2 text-right text-[10px] font-medium text-gray-500">{t("userModel.requests")}</th>
+                          <th className="pb-2 text-right text-[10px] font-medium text-gray-500">{t("userModel.avgTokens")}</th>
+                          <th className="pb-2 text-right text-[10px] font-medium text-gray-500">$/req</th>
+                          <th className="pb-2 text-right text-[10px] font-medium text-gray-500">Out%</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800/50">
+                        {userSummaries.slice(0, 10).map((u) => {
+                          const avgTokens = u.requests > 0 ? u.totalTokens / u.requests : 0;
+                          const costPerReq = u.requests > 0 ? u.spend / u.requests : 0;
+                          const outPct = u.totalTokens > 0 ? (u.outputTokens / u.totalTokens) * 100 : 0;
+                          return (
+                            <tr key={u.email} className="hover:bg-gray-800/20">
+                              <td className="py-1.5 text-[11px] text-gray-300">{maskName(u.email)}</td>
+                              <td className="py-1.5 text-right text-[11px] text-gray-400">{u.requests}</td>
+                              <td className="py-1.5 text-right text-[11px] text-gray-400">{avgTokens.toFixed(0)}</td>
+                              <td className="py-1.5 text-right text-[11px] text-gray-400">${costPerReq.toFixed(5)}</td>
+                              <td className="py-1.5 text-right">
+                                <span className={`text-[11px] ${outPct > 70 ? "text-purple-400" : "text-gray-400"}`}>
+                                  {outPct.toFixed(0)}%
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </Section>
           )}

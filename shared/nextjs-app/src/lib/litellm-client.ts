@@ -95,14 +95,26 @@ export async function getSpendLogs(params?: {
   end_date?: string;
   api_key?: string;
 }): Promise<SpendLog[]> {
+  // LiteLLM quirk: /spend/logs with start_date/end_date returns aggregated data.
+  // Without date params (or with api_key), it returns individual log entries.
+  // So we fetch all logs and filter by date client-side.
   const searchParams = new URLSearchParams();
-  if (params?.user_id) searchParams.set("user_id", params.user_id);
-  if (params?.start_date) searchParams.set("start_date", params.start_date);
-  if (params?.end_date) searchParams.set("end_date", params.end_date);
   if (params?.api_key) searchParams.set("api_key", params.api_key);
+  if (params?.user_id) searchParams.set("user_id", params.user_id);
 
   const qs = searchParams.toString();
-  return litellmFetch<SpendLog[]>(`/spend/logs${qs ? `?${qs}` : ""}`);
+  const logs = await litellmFetch<SpendLog[]>(`/spend/logs${qs ? `?${qs}` : ""}`);
+
+  // Client-side date filtering
+  if (params?.start_date || params?.end_date) {
+    const start = params.start_date ?? "1970-01-01";
+    const end = params.end_date ?? "2099-12-31";
+    return (logs ?? []).filter((log) => {
+      const logDate = (log.startTime ?? "").split("T")[0];
+      return logDate >= start && logDate <= end;
+    });
+  }
+  return logs ?? [];
 }
 
 export async function getModelMetrics(params?: {
@@ -146,6 +158,7 @@ export async function getTotalSpend(): Promise<{
 // ─── Admin: Key Budget Tracking ───
 
 export interface KeySpendInfo {
+  token: string;
   key_alias: string;
   key_name: string;
   spend: number;
