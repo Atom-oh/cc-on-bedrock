@@ -5,6 +5,7 @@ import { useI18n } from "@/lib/i18n";
 import HealthCard from "@/components/cards/health-card";
 import StatCard from "@/components/cards/stat-card";
 import ContainersTable from "@/components/tables/containers-table";
+import AreaTrendChart from "@/components/charts/area-trend-chart";
 import type { HealthStatus, ContainerInfo, ApiResponse } from "@/lib/types";
 
 interface MonitoringDashboardProps {
@@ -20,6 +21,62 @@ interface SystemHealth {
   model_count: number;
 }
 
+interface ContainerMetrics {
+  cpuUtilized: number;
+  cpuReserved: number;
+  cpuUtilizationPct: number;
+  memoryUtilized: number;
+  memoryReserved: number;
+  memoryUtilizationPct: number;
+  networkRxBytes: number;
+  networkTxBytes: number;
+  storageReadBytes: number;
+  storageWriteBytes: number;
+  taskCount: number;
+  containerInstanceCount: number;
+}
+
+interface MetricsTimeSeries {
+  timestamps: string[];
+  cpuUtilized: number[];
+  memoryUtilized: number[];
+  networkRx: number[];
+  networkTx: number[];
+}
+
+interface TaskDefMetrics {
+  taskDefFamily: string;
+  cpuUtilized: number;
+  cpuReserved: number;
+  memoryUtilized: number;
+  memoryReserved: number;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GiB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KiB`;
+  return `${bytes} B`;
+}
+
+function UtilizationBar({ label, used, total, unit, color }: {
+  label: string; used: number; total: number; unit: string; color: string;
+}) {
+  const pct = total > 0 ? (used / total) * 100 : 0;
+  const barColor = pct > 80 ? "bg-red-500" : pct > 60 ? "bg-yellow-500" : color;
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-xs">
+        <span className="text-gray-400">{label}</span>
+        <span className="text-gray-300">{used.toFixed(0)} / {total.toFixed(0)} {unit} ({pct.toFixed(1)}%)</span>
+      </div>
+      <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+      </div>
+    </div>
+  );
+}
+
 export default function MonitoringDashboard({
   domainName = "example.com",
   devSubdomain = "dev",
@@ -28,16 +85,22 @@ export default function MonitoringDashboard({
   const [healthStatuses, setHealthStatuses] = useState<HealthStatus[]>([]);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
+  const [cwMetrics, setCwMetrics] = useState<ContainerMetrics | null>(null);
+  const [cwTimeSeries, setCwTimeSeries] = useState<MetricsTimeSeries | null>(null);
+  const [taskDefMetrics, setTaskDefMetrics] = useState<TaskDefMetrics[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [healthRes, containersRes, sysRes] = await Promise.all([
+      const [healthRes, containersRes, sysRes, cwRes, cwTsRes, tdRes] = await Promise.all([
         fetch("/api/health"),
         fetch("/api/containers"),
         fetch("/api/litellm?action=system_health"),
+        fetch("/api/container-metrics?action=current"),
+        fetch("/api/container-metrics?action=timeseries&hours=6"),
+        fetch("/api/container-metrics?action=taskdef"),
       ]);
 
       const healthJson = (await healthRes.json()) as {
@@ -60,6 +123,13 @@ export default function MonitoringDashboard({
 
       const sysJson = (await sysRes.json()) as ApiResponse<SystemHealth>;
       setSystemHealth(sysJson.data ?? null);
+
+      const cwJson = (await cwRes.json()) as ApiResponse<ContainerMetrics>;
+      setCwMetrics(cwJson.data ?? null);
+      const cwTsJson = (await cwTsRes.json()) as ApiResponse<MetricsTimeSeries>;
+      setCwTimeSeries(cwTsJson.data ?? null);
+      const tdJson = (await tdRes.json()) as ApiResponse<TaskDefMetrics[]>;
+      setTaskDefMetrics(tdJson.data ?? []);
 
       setLastRefresh(new Date());
     } catch (err) {
@@ -256,6 +326,131 @@ export default function MonitoringDashboard({
               </div>
             </div>
           </div>
+        </section>
+      )}
+
+      {/* Container Insights - Cluster Utilization */}
+      {cwMetrics && (
+        <section>
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">Container Insights</h2>
+
+          {/* Utilization Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">CPU Utilization</p>
+              <p className={`text-2xl font-bold ${cwMetrics.cpuUtilizationPct > 80 ? "text-red-400" : cwMetrics.cpuUtilizationPct > 60 ? "text-yellow-400" : "text-green-400"}`}>
+                {cwMetrics.cpuUtilizationPct.toFixed(1)}%
+              </p>
+              <p className="text-[10px] text-gray-600 mt-0.5">{cwMetrics.cpuUtilized.toFixed(0)} / {cwMetrics.cpuReserved.toFixed(0)} CPU units</p>
+            </div>
+            <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Memory Utilization</p>
+              <p className={`text-2xl font-bold ${cwMetrics.memoryUtilizationPct > 80 ? "text-red-400" : cwMetrics.memoryUtilizationPct > 60 ? "text-yellow-400" : "text-green-400"}`}>
+                {cwMetrics.memoryUtilizationPct.toFixed(1)}%
+              </p>
+              <p className="text-[10px] text-gray-600 mt-0.5">{cwMetrics.memoryUtilized.toFixed(0)} / {cwMetrics.memoryReserved.toFixed(0)} MiB</p>
+            </div>
+            <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Network I/O</p>
+              <p className="text-lg font-bold text-cyan-400">↓{formatBytes(cwMetrics.networkRxBytes)}</p>
+              <p className="text-lg font-bold text-purple-400">↑{formatBytes(cwMetrics.networkTxBytes)}</p>
+            </div>
+            <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Storage I/O</p>
+              <p className="text-lg font-bold text-blue-400">R: {formatBytes(cwMetrics.storageReadBytes)}</p>
+              <p className="text-lg font-bold text-amber-400">W: {formatBytes(cwMetrics.storageWriteBytes)}</p>
+            </div>
+          </div>
+
+          {/* Utilization Bars */}
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4 space-y-4">
+            <UtilizationBar label="CPU" used={cwMetrics.cpuUtilized} total={cwMetrics.cpuReserved} unit="units" color="bg-cyan-500" />
+            <UtilizationBar label="Memory" used={cwMetrics.memoryUtilized} total={cwMetrics.memoryReserved} unit="MiB" color="bg-purple-500" />
+          </div>
+
+          {/* Time Series Charts */}
+          {cwTimeSeries && cwTimeSeries.timestamps.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+              <AreaTrendChart
+                data={cwTimeSeries.timestamps.map((ts, i) => ({
+                  date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                  cpu: cwTimeSeries.cpuUtilized[i] ?? 0,
+                  memory: cwTimeSeries.memoryUtilized[i] ?? 0,
+                }))}
+                series={[
+                  { key: "cpu", name: "CPU (units)", color: "#06b6d4" },
+                  { key: "memory", name: "Memory (MiB)", color: "#a855f7" },
+                ]}
+                title="CPU & Memory (Last 6h)"
+                height={220}
+              />
+              <AreaTrendChart
+                data={cwTimeSeries.timestamps.map((ts, i) => ({
+                  date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                  rx: (cwTimeSeries.networkRx[i] ?? 0) / 1024,
+                  tx: (cwTimeSeries.networkTx[i] ?? 0) / 1024,
+                }))}
+                series={[
+                  { key: "rx", name: "Network Rx (KiB)", color: "#06b6d4" },
+                  { key: "tx", name: "Network Tx (KiB)", color: "#f59e0b" },
+                ]}
+                title="Network I/O (Last 6h)"
+                height={220}
+              />
+            </div>
+          )}
+
+          {/* Per-TaskDef Metrics */}
+          {taskDefMetrics.length > 0 && (
+            <div className="bg-[#161b22] rounded-xl border border-gray-800 overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-800 bg-[#0a0f1a]">
+                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Task Definition</th>
+                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">CPU Used</th>
+                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">CPU Reserved</th>
+                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">CPU %</th>
+                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Mem Used</th>
+                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Mem Reserved</th>
+                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Mem %</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/50">
+                  {taskDefMetrics.map((td) => {
+                    const cpuPct = td.cpuReserved > 0 ? (td.cpuUtilized / td.cpuReserved) * 100 : 0;
+                    const memPct = td.memoryReserved > 0 ? (td.memoryUtilized / td.memoryReserved) * 100 : 0;
+                    return (
+                      <tr key={td.taskDefFamily} className="hover:bg-gray-800/30 transition-colors">
+                        <td className="px-4 py-2.5 text-sm text-gray-200 font-medium">
+                          {td.taskDefFamily.replace("devenv-", "")}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.cpuUtilized.toFixed(1)}</td>
+                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.cpuReserved.toFixed(0)}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${cpuPct > 80 ? "bg-red-500" : "bg-cyan-500"}`} style={{ width: `${Math.min(cpuPct, 100)}%` }} />
+                            </div>
+                            <span className="text-[10px] text-gray-500">{cpuPct.toFixed(0)}%</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.memoryUtilized.toFixed(0)}</td>
+                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.memoryReserved.toFixed(0)}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${memPct > 80 ? "bg-red-500" : "bg-purple-500"}`} style={{ width: `${Math.min(memPct, 100)}%` }} />
+                            </div>
+                            <span className="text-[10px] text-gray-500">{memPct.toFixed(0)}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
 
