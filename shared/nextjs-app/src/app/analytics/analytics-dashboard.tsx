@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
+import FilterBar from "@/components/filter-bar";
 import LeaderboardChart from "@/components/charts/leaderboard-chart";
 import AreaTrendChart from "@/components/charts/area-trend-chart";
 import MultiLineChart from "@/components/charts/multi-line-chart";
@@ -236,8 +237,11 @@ const USER_COLORS = [
 export default function AnalyticsDashboard({
   isAdmin,
 }: AnalyticsDashboardProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [timeRange, setTimeRange] = useState<TimeRange>("1d");
+  const [filterUser, setFilterUser] = useState("all");
+  const [filterModel, setFilterModel] = useState("all");
+  const [searchText, setSearchText] = useState("");
   const [logs, setLogs] = useState<SpendLog[]>([]);
   const [modelMetrics, setModelMetrics] = useState<ModelMetrics[]>([]);
   const [keySpendList, setKeySpendList] = useState<KeySpendInfo[]>([]);
@@ -296,11 +300,30 @@ export default function AnalyticsDashboard({
 
   // Computed data
   const keyAlias = buildKeyAliasMap(keySpendList);
-  const userAggs = aggregateByUser(logs, keyAlias);
-  const dateAggs = aggregateByDate(logs);
-  const totalSpend = logs.reduce((s, l) => s + l.spend, 0);
-  const totalRequests = logs.length;
-  const activeUsers = new Set(logs.map((l) => l.user || l.api_key)).size;
+
+  // Build filter options from raw data
+  const allUsers = [...new Set(logs.map((l) => {
+    const raw = l.user || l.api_key?.slice(-8) || "unknown";
+    return keyAlias.get(raw) ?? raw;
+  }))].sort();
+  const allModels = [...new Set(logs.map((l) => (l.model ?? "").replace("bedrock/", "").replace("global.anthropic.", "").replace("apac.anthropic.", "")).filter(Boolean))].sort();
+
+  // Apply filters
+  const filteredLogs = logs.filter((l) => {
+    const raw = l.user || l.api_key?.slice(-8) || "unknown";
+    const userName = keyAlias.get(raw) ?? raw;
+    const model = (l.model ?? "").replace("bedrock/", "").replace("global.anthropic.", "").replace("apac.anthropic.", "");
+    if (filterUser !== "all" && userName !== filterUser) return false;
+    if (filterModel !== "all" && model !== filterModel) return false;
+    if (searchText && !userName.toLowerCase().includes(searchText.toLowerCase()) && !model.toLowerCase().includes(searchText.toLowerCase())) return false;
+    return true;
+  });
+
+  const userAggs = aggregateByUser(filteredLogs, keyAlias);
+  const dateAggs = aggregateByDate(filteredLogs);
+  const totalSpend = filteredLogs.reduce((s, l) => s + l.spend, 0);
+  const totalRequests = filteredLogs.length;
+  const activeUsers = new Set(filteredLogs.map((l) => l.user || l.api_key)).size;
   const avgLatency =
     modelMetrics.length > 0
       ? modelMetrics.reduce((s, m) => s + m.avg_latency_seconds * 1000, 0) /
@@ -323,7 +346,7 @@ export default function AnalyticsDashboard({
     .sort((a, b) => b.totalTokens - a.totalTokens)
     .slice(0, 5)
     .map((u) => u.email);
-  const userTrendData = aggregateByDateAndUser(logs, top5Users, keyAlias);
+  const userTrendData = aggregateByDateAndUser(filteredLogs, top5Users, keyAlias);
   const userTrendSeries = top5Users.map((u, i) => ({
     key: u,
     name: maskName(u),
@@ -367,7 +390,7 @@ export default function AnalyticsDashboard({
     spend: number;
   }
   const userModelMap = new Map<string, UserModelAgg>();
-  for (const log of logs) {
+  for (const log of filteredLogs) {
     const rawUser = log.user || log.api_key?.slice(-8) || "unknown";
     const user = (rawUser && keyAlias.get(rawUser)) ?? rawUser;
     const model = (log.model ?? "unknown").replace("bedrock/", "").replace("global.anthropic.", "").replace("apac.anthropic.", "");
@@ -380,8 +403,8 @@ export default function AnalyticsDashboard({
   }
   const userModelAggs = Array.from(userModelMap.values());
 
-  // All unique models used
-  const allModels = [...new Set(userModelAggs.map((a) => a.model))].sort();
+  // All unique models used in cross-analysis
+  const matrixModels = [...new Set(userModelAggs.map((a) => a.model))].sort();
 
   // Per-user summary with primary model
   const userSummaries = userAggs.map((u) => {
@@ -466,6 +489,37 @@ export default function AnalyticsDashboard({
           </button>
         </div>
       </div>
+
+      {/* Filters */}
+      {isAdmin && logs.length > 0 && (
+        <FilterBar
+          searchPlaceholder={t("analytics.title") + "..."}
+          searchValue={searchText}
+          onSearchChange={setSearchText}
+          filters={[
+            {
+              key: "user",
+              label: locale === "ko" ? "사용자" : "User",
+              value: filterUser,
+              onChange: setFilterUser,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All", count: allUsers.length },
+                ...allUsers.map((u) => ({ value: u, label: u })),
+              ],
+            },
+            {
+              key: "model",
+              label: locale === "ko" ? "모델" : "Model",
+              value: filterModel,
+              onChange: setFilterModel,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All", count: allModels.length },
+                ...allModels.map((m) => ({ value: m, label: m.split("-").slice(0, 3).join("-") })),
+              ],
+            },
+          ]}
+        />
+      )}
 
       {loading && logs.length === 0 ? (
         <div className="flex items-center justify-center h-64">
@@ -796,7 +850,7 @@ export default function AnalyticsDashboard({
                     <thead>
                       <tr className="border-b border-gray-800 bg-[#0d1117]">
                         <th className="px-3 py-2 text-left text-[10px] font-medium text-gray-500 uppercase sticky left-0 bg-[#0d1117] z-10">{t("userModel.user")}</th>
-                        {allModels.map((m) => (
+                        {matrixModels.map((m) => (
                           <th key={m} className="px-3 py-2 text-center text-[10px] font-medium text-gray-500 uppercase whitespace-nowrap">
                             {m.split("-").slice(0, 2).join("-")}
                           </th>
@@ -809,7 +863,7 @@ export default function AnalyticsDashboard({
                       {userSummaries.slice(0, 12).map((u) => (
                         <tr key={u.email} className="hover:bg-gray-800/30 transition-colors">
                           <td className="px-3 py-2 text-xs text-gray-300 font-medium sticky left-0 bg-[#161b22] z-10">{maskName(u.email)}</td>
-                          {allModels.map((model) => {
+                          {matrixModels.map((model) => {
                             const cell = u.models.find((m) => m.model === model);
                             if (!cell || cell.requests === 0) {
                               return <td key={model} className="px-3 py-2 text-center text-[10px] text-gray-700">-</td>;
@@ -876,7 +930,7 @@ export default function AnalyticsDashboard({
                     })}
                     {/* Legend */}
                     <div className="flex flex-wrap gap-3 pt-2 border-t border-gray-800">
-                      {allModels.map((m, i) => {
+                      {matrixModels.map((m, i) => {
                         const colors = ["#3b82f6", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444", "#10b981"];
                         return (
                           <div key={m} className="flex items-center gap-1">

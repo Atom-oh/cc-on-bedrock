@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
+import FilterBar from "@/components/filter-bar";
 import HealthCard from "@/components/cards/health-card";
 import StatCard from "@/components/cards/stat-card";
 import ContainersTable from "@/components/tables/containers-table";
@@ -81,8 +82,11 @@ export default function MonitoringDashboard({
   domainName = "example.com",
   devSubdomain = "dev",
 }: MonitoringDashboardProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [healthStatuses, setHealthStatuses] = useState<HealthStatus[]>([]);
+  const [filterUser, setFilterUser] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [searchText, setSearchText] = useState("");
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [cwMetrics, setCwMetrics] = useState<ContainerMetrics | null>(null);
@@ -231,6 +235,38 @@ export default function MonitoringDashboard({
           ↻ Refresh
         </button>
       </div>
+
+      {/* Filters */}
+      {containers.length > 0 && (
+        <FilterBar
+          searchPlaceholder={locale === "ko" ? "사용자, 컨테이너 검색..." : "Search users, containers..."}
+          searchValue={searchText}
+          onSearchChange={setSearchText}
+          filters={[
+            {
+              key: "user",
+              label: locale === "ko" ? "사용자" : "User",
+              value: filterUser,
+              onChange: setFilterUser,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All" },
+                ...[...new Set(containers.map((c) => c.username || c.subdomain).filter(Boolean))].sort().map((u) => ({ value: u, label: u })),
+              ],
+            },
+            {
+              key: "status",
+              label: locale === "ko" ? "상태" : "Status",
+              value: filterStatus,
+              onChange: setFilterStatus,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All", count: containers.length },
+                { value: "RUNNING", label: "RUNNING", count: runningContainers.length },
+                { value: "PENDING", label: "PENDING", count: pendingContainers.length },
+              ],
+            },
+          ]}
+        />
+      )}
 
       {/* Service Health */}
       <section>
@@ -471,7 +507,12 @@ export default function MonitoringDashboard({
       <section>
         <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.activeSessions")}</h2>
         <ContainersTable
-          containers={containers}
+          containers={containers.filter((c) => {
+            if (filterUser !== "all" && (c.username || c.subdomain) !== filterUser) return false;
+            if (filterStatus !== "all" && c.status !== filterStatus) return false;
+            if (searchText && !(c.username || "").toLowerCase().includes(searchText.toLowerCase()) && !(c.subdomain || "").toLowerCase().includes(searchText.toLowerCase())) return false;
+            return true;
+          })}
           onStop={handleStopContainer}
           domainName={domainName}
           devSubdomain={devSubdomain}
