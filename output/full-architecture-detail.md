@@ -4,7 +4,7 @@
 
 <a id="ko"></a>
 
-<a id="ko-section-1"></a>
+<a id="ko-system-overview"></a>
 
 # CC-on-Bedrock 전체 아키텍처 상세
 
@@ -59,7 +59,7 @@
 
 ---
 
-<a id="ko-section-2"></a>
+<a id="ko-network-architecture"></a>
 
 ## 2. 네트워크 아키텍처
 
@@ -103,7 +103,7 @@
 
 ---
 
-<a id="ko-section-3"></a>
+<a id="ko-ai-assistant-architecture"></a>
 
 ## 3. AI Assistant 하이브리드 아키텍처
 
@@ -184,7 +184,7 @@
 
 ---
 
-<a id="ko-section-4"></a>
+<a id="ko-usage-tracking-pipeline"></a>
 
 ## 4. 사용량 추적 파이프라인
 
@@ -214,7 +214,7 @@
 
 ---
 
-<a id="ko-section-5"></a>
+<a id="ko-auth-access-control"></a>
 
 ## 5. 인증 및 접근 제어
 
@@ -260,7 +260,7 @@
 
 ---
 
-<a id="ko-section-6"></a>
+<a id="ko-iam-role-mapping"></a>
 
 ## 6. IAM 역할 매핑
 
@@ -314,7 +314,7 @@
 
 ---
 
-<a id="ko-section-7"></a>
+<a id="ko-security-7layers"></a>
 
 ## 7. 보안 7계층
 
@@ -371,7 +371,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="ko-section-8"></a>
+<a id="ko-stack-dependencies"></a>
 
 ## 8. 스택 구성 및 의존성
 
@@ -434,7 +434,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="ko-section-9"></a>
+<a id="ko-container-lifecycle"></a>
 
 ## 9. 컨테이너 라이프사이클
 
@@ -479,7 +479,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="ko-section-10"></a>
+<a id="ko-deployment-pipeline"></a>
 
 ## 10. 배포 파이프라인
 
@@ -521,7 +521,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="ko-section-11"></a>
+<a id="ko-resource-ids"></a>
 
 ## 11. 주요 리소스 ID
 
@@ -546,11 +546,11 @@ Layer 7  ┌────────────────────▼─�
 
 <a id="en"></a>
 
-<a id="en-section-1"></a>
+<a id="en-system-overview"></a>
 
 # CC-on-Bedrock Full Architecture Detail
 
-## 1. Overall System Architecture
+## 1. Overall System Diagram
 
 ```
                                     ┌─────────────────────────────────────┐
@@ -601,7 +601,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-2"></a>
+<a id="en-network-architecture"></a>
 
 ## 2. Network Architecture
 
@@ -645,7 +645,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-3"></a>
+<a id="en-ai-assistant-architecture"></a>
 
 ## 3. AI Assistant Hybrid Architecture
 
@@ -726,7 +726,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-4"></a>
+<a id="en-usage-tracking-pipeline"></a>
 
 ## 4. Usage Tracking Pipeline
 
@@ -756,7 +756,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-5"></a>
+<a id="en-auth-access-control"></a>
 
 ## 5. Authentication and Access Control
 
@@ -802,7 +802,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-6"></a>
+<a id="en-iam-role-mapping"></a>
 
 ## 6. IAM Role Mapping
 
@@ -856,7 +856,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-7"></a>
+<a id="en-security-7layers"></a>
 
 ## 7. Security 7 Layers
 
@@ -913,7 +913,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-8"></a>
+<a id="en-stack-dependencies"></a>
 
 ## 8. Stack Structure and Dependencies
 
@@ -976,7 +976,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-9"></a>
+<a id="en-container-lifecycle"></a>
 
 ## 9. Container Lifecycle
 
@@ -1021,7 +1021,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-10"></a>
+<a id="en-deployment-pipeline"></a>
 
 ## 10. Deployment Pipeline
 
@@ -1063,7 +1063,7 @@ Layer 7  ┌────────────────────▼─�
 
 ---
 
-<a id="en-section-11"></a>
+<a id="en-resource-ids"></a>
 
 ## 11. Key Resource IDs
 
