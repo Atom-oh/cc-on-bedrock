@@ -1,11 +1,19 @@
+> **Language / 언어**: [한국어](#ko) | [English](#en)
+
+---
+
+<a id="ko"></a>
+
 # CC-on-Bedrock AI Assistant 아키텍처
 
+<a id="ko-overview"></a>
 ## 개요
 
 CC-on-Bedrock AI Assistant는 **Bedrock Converse API** + **Tool Use** + **AgentCore Memory**를 결합한 대화형 플랫폼 운영 도우미입니다. 관리자가 자연어로 플랫폼 상태를 질문하면 실시간 데이터를 조회하여 응답합니다.
 
 ---
 
+<a id="ko-overall-architecture"></a>
 ## 1. 전체 아키텍처
 
 ```
@@ -71,6 +79,7 @@ CC-on-Bedrock AI Assistant는 **Bedrock Converse API** + **Tool Use** + **AgentC
 
 ---
 
+<a id="ko-converse-api"></a>
 ## 2. Bedrock Converse API 흐름
 
 ### 2.1 요청-응답 사이클
@@ -158,6 +167,7 @@ Use markdown tables for comparisons. Format numbers clearly.
 
 ---
 
+<a id="ko-tool-use"></a>
 ## 3. Tool Use (함수 호출)
 
 ### 3.1 등록된 Tools
@@ -242,6 +252,7 @@ Next.js 실행:
 
 ---
 
+<a id="ko-sse"></a>
 ## 4. Server-Sent Events (SSE) 스트리밍
 
 ### 4.1 SSE 프로토콜
@@ -291,6 +302,7 @@ while (true) {
 
 ---
 
+<a id="ko-agentcore-memory"></a>
 ## 5. AgentCore Memory (대화 기억)
 
 ### 5.1 Memory 구조
@@ -395,6 +407,7 @@ Dashboard "대화 히스토리" 섹션에 표시
 
 ---
 
+<a id="ko-voice-input"></a>
 ## 6. 음성 입력 (Web Speech API)
 
 ### 6.1 STT (Speech-to-Text) 흐름
@@ -405,7 +418,7 @@ Dashboard "대화 히스토리" 섹션에 표시
 │  (React)  │                    │  (브라우저 내장)  │
 └─────┬─────┘                    └────────┬────────┘
       │                                   │
-      │ 🎤 마이크 버튼 클릭                │
+      │ 마이크 버튼 클릭                    │
       ├──────────────────────────────────>│
       │                                   │
       │               음성 인식 시작        │
@@ -428,6 +441,7 @@ Dashboard "대화 히스토리" 섹션에 표시
 
 ---
 
+<a id="ko-rendering"></a>
 ## 7. 응답 렌더링
 
 ### 7.1 Markdown 렌더링
@@ -455,10 +469,10 @@ Claude 응답 (raw):
 │  | admin01 | Ubuntu | Power | RUNNING |              │
 │                                                      │
 │──────────────────────────────────────────────────────│
-│  🔧 get_container_status                             │
-│  📊 In: 1,200 · Out: 800 tokens                     │
-│  ⏱ 2.5s                                              │
-│  via Bedrock Converse + Tool Use (Direct)    📋 복사  │
+│  get_container_status                                │
+│  In: 1,200 · Out: 800 tokens                        │
+│  2.5s                                                │
+│  via Bedrock Converse + Tool Use (Direct)    Copy    │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -467,12 +481,13 @@ Claude 응답 (raw):
 ```
 "복사" 버튼 클릭
   → navigator.clipboard.writeText(msg.content)
-  → 2초간 "✓ 복사됨" 표시
-  → 원래 "📋 복사" 아이콘으로 복귀
+  → 2초간 "Copied" 표시
+  → 원래 "Copy" 아이콘으로 복귀
 ```
 
 ---
 
+<a id="ko-error-handling"></a>
 ## 8. 에러 처리
 
 | 상황 | 처리 |
@@ -486,6 +501,7 @@ Claude 응답 (raw):
 
 ---
 
+<a id="ko-performance"></a>
 ## 9. 성능 특성
 
 | 항목 | 값 | 비고 |
@@ -499,6 +515,7 @@ Claude 응답 (raw):
 
 ---
 
+<a id="ko-file-structure"></a>
 ## 10. 관련 파일 구조
 
 ```
@@ -520,6 +537,7 @@ shared/nextjs-app/src/
 
 ---
 
+<a id="ko-agentcore-resources"></a>
 ## 11. AgentCore 리소스 정보
 
 | 리소스 | ID/ARN | 용도 |
@@ -528,3 +546,550 @@ shared/nextjs-app/src/
 | **AgentCore Memory** | `cconbedrock_memory-pHqYq73dKd` | 대화 기억 저장소 |
 | **ECR Repository** | `cc-on-bedrock/agent` | AgentCore 에이전트 Docker 이미지 |
 | **IAM Role** | `AWSopsAgentCoreRole` | AgentCore 서비스 실행 권한 |
+
+---
+
+<a id="en"></a>
+
+# CC-on-Bedrock AI Assistant Architecture
+
+<a id="en-overview"></a>
+## Overview
+
+The CC-on-Bedrock AI Assistant is a conversational platform operations assistant that combines **Bedrock Converse API** + **Tool Use** + **AgentCore Memory**. When administrators ask platform status questions in natural language, it queries real-time data to respond.
+
+---
+
+<a id="en-overall-architecture"></a>
+## 1. Overall Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Browser (AI Assistant Page)                                      │
+│                                                                  │
+│  ┌────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
+│  │ Text Input  │  │  Voice Input  │  │  Chat History (Memory)   │  │
+│  │ (textarea)  │  │ (Web Speech  │  │  Loaded from AgentCore   │  │
+│  │             │  │  STT API)    │  │                          │  │
+│  └──────┬──────┘  └──────┬───────┘  └──────────────────────────┘  │
+│         │                │                                        │
+│         └────────┬───────┘                                        │
+│                  ▼                                                │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  POST /api/ai                                            │    │
+│  │  (Server-Sent Events streaming)                           │    │
+│  └──────────────────────────┬───────────────────────────────┘    │
+│                              │                                    │
+└──────────────────────────────┼────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Next.js API Route (/api/ai/route.ts)                            │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  Bedrock Converse API (ConverseStreamCommand)              │  │
+│  │  Model: claude-sonnet-4-6 (global)                         │  │
+│  │                                                            │  │
+│  │  System Prompt + User Message + Tool Config                │  │
+│  │           │                                                │  │
+│  │           ▼                                                │  │
+│  │  ┌─────────────────────────────────────────────┐           │  │
+│  │  │  Claude Sonnet 4.6 Response                  │           │  │
+│  │  │                                             │           │  │
+│  │  │  Text Response  or  Tool Use Request         │           │  │
+│  │  │  (streaming)        (tool_use stop reason)   │           │  │
+│  │  └────────┬──────────────────┬──────────────────┘           │  │
+│  │           │                  │                              │  │
+│  │           │            ┌─────▼──────────────┐               │  │
+│  │           │            │  Tool Execution     │               │  │
+│  │           │            │  → ECS API call     │               │  │
+│  │           │            │  → CloudWatch query │               │  │
+│  │           │            │  → Add result to    │               │  │
+│  │           │            │    messages & retry  │               │  │
+│  │           │            └─────┬──────────────┘               │  │
+│  │           │                  │                              │  │
+│  │           │            (max 5 iterations)                   │  │
+│  │           │                  │                              │  │
+│  │           ▼                  ▼                              │  │
+│  │  ┌─────────────────────────────────────────────┐           │  │
+│  │  │  Final Text Response (streaming → Browser)   │           │  │
+│  │  └─────────────────────────────────────────────┘           │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  AgentCore Memory (/api/ai/memory)                         │  │
+│  │  After response → Save Q&A to Memory (async)               │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+<a id="en-converse-api"></a>
+## 2. Bedrock Converse API Flow
+
+### 2.1 Request-Response Cycle
+
+```
+┌──────────┐                    ┌──────────────┐                ┌───────────┐
+│  Browser  │                    │  Next.js API │                │  Bedrock  │
+│           │                    │  /api/ai     │                │  Sonnet   │
+└─────┬─────┘                    └──────┬───────┘                └─────┬─────┘
+      │                                 │                              │
+      │ POST /api/ai                    │                              │
+      │ {messages, lang}                │                              │
+      ├────────────────────────────────>│                              │
+      │                                 │                              │
+      │                                 │ ConverseStreamCommand        │
+      │                                 │ {modelId, system, messages,  │
+      │                                 │  toolConfig, inferenceConfig}│
+      │                                 ├─────────────────────────────>│
+      │                                 │                              │
+      │  SSE: data: {"status":"..."}    │                              │
+      │<────────────────────────────────│                              │
+      │                                 │                              │
+      │                                 │  Stream: contentBlockDelta   │
+      │                                 │  (text fragment)             │
+      │                                 │<─────────────────────────────│
+      │  SSE: data: {"text":"Hello"}    │                              │
+      │<────────────────────────────────│                              │
+      │                                 │                              │
+      │                                 │  Stream: contentBlockStart   │
+      │                                 │  (toolUse: get_container_    │
+      │                                 │   status)                    │
+      │                                 │<─────────────────────────────│
+      │                                 │                              │
+      │  SSE: data: {"status":          │                              │
+      │    "tool: get_container_status"} │                              │
+      │<────────────────────────────────│                              │
+      │                                 │                              │
+      │                                 │  Stream: messageStop         │
+      │                                 │  (stopReason: "tool_use")    │
+      │                                 │<─────────────────────────────│
+      │                                 │                              │
+      │                                 │── Tool Execution ──          │
+      │                                 │ listContainers() → ECS API  │
+      │                                 │                              │
+      │                                 │ Add result as toolResult     │
+      │                                 │ → 2nd ConverseStream call    │
+      │                                 ├─────────────────────────────>│
+      │                                 │                              │
+      │                                 │  Stream: final text response │
+      │                                 │<─────────────────────────────│
+      │                                 │                              │
+      │  SSE: data: {"text":"Currently  │                              │
+      │    6 containers running..."}    │                              │
+      │<────────────────────────────────│                              │
+      │                                 │                              │
+      │  SSE: data: {"done":true,       │                              │
+      │    "via":"Bedrock Converse"}     │                              │
+      │<────────────────────────────────│                              │
+      │                                 │                              │
+```
+
+### 2.2 System Prompt
+
+```
+You are CC-on-Bedrock AI Assistant. You manage a multi-user Claude Code
+platform on AWS Bedrock.
+
+Architecture: Users run Claude Code in ECS containers with direct Bedrock
+access via Task Roles. No proxy.
+
+Use tools to get current data before answering.
+Respond in Korean. (or English)
+Use markdown tables for comparisons. Format numbers clearly.
+```
+
+### 2.3 Model Configuration
+
+| Setting | Value |
+|---------|-------|
+| **Model ID** | `global.anthropic.claude-sonnet-4-6` |
+| **Max Tokens** | 4,096 |
+| **Streaming** | ConverseStreamCommand (SSE) |
+| **Tool Use** | Max 5 iterations (tool_use → execute → re-invoke) |
+| **Context Window** | Only last 8 messages sent (cost control) |
+
+---
+
+<a id="en-tool-use"></a>
+## 3. Tool Use (Function Calling)
+
+### 3.1 Registered Tools
+
+| Tool Name | Description | Data Source |
+|-----------|-------------|------------|
+| `get_container_status` | ECS container status, user allocation, OS/Tier distribution | ECS `ListTasks` + `DescribeTasks` API |
+| `get_container_metrics` | CloudWatch CPU/Memory/Network cluster metrics | CloudWatch `GetMetricData` API |
+| `get_platform_summary` | Architecture, container status, cluster health overview | ECS + CloudWatch combined |
+
+### 3.2 Tool Execution Flow
+
+```
+When Claude receives "Tell me the current container status":
+
+1. Claude decides: Need to call get_container_status Tool
+   └─ stopReason: "tool_use"
+   └─ toolUse: { name: "get_container_status", toolUseId: "abc123" }
+
+2. Next.js executes the Tool:
+   └─ executeTool("get_container_status")
+   └─ Calls ECS listContainers()
+   └─ Generates result JSON:
+      {
+        "total": 8,
+        "running": 6,
+        "osDist": { "ubuntu": 4, "al2023": 2 },
+        "tierDist": { "standard": 3, "power": 2, "light": 1 },
+        "containers": [
+          { "user": "admin01", "status": "RUNNING", "os": "ubuntu", "tier": "power", ... },
+          ...
+        ]
+      }
+
+3. Add result as toolResult message:
+   messages.push({
+     role: "user",
+     content: [{ toolResult: { toolUseId: "abc123", content: [{ text: JSONresult }] } }]
+   })
+
+4. 2nd ConverseStream call to Bedrock
+   └─ Claude organizes Tool results into natural language response
+```
+
+### 3.3 Multi-Tool Invocation
+
+Claude can **request multiple Tools simultaneously** in a single response:
+
+```
+User: "Show me container status and CPU usage together"
+
+Claude response (iteration 1):
+  ├─ toolUse: get_container_status  (id: "abc")
+  └─ toolUse: get_container_metrics (id: "def")
+
+Next.js execution:
+  ├─ executeTool("get_container_status")  → container info
+  └─ executeTool("get_container_metrics") → CPU/Memory metrics
+
+2nd call: Include both results as toolResult
+  → Claude integrates and generates final response
+```
+
+### 3.4 Tool Iteration Limit
+
+```
+Max iterations: 5 (for loop iteration < 5)
+
+Typical pattern:
+  Iteration 0: User question → Claude decides Tool call (tool_use)
+  Iteration 1: Tool result provided → Claude gives final response (end_turn)
+  → Completed in 2 iterations
+
+Complex questions:
+  Iteration 0: Call Tool A
+  Iteration 1: Tool A result → Additional Tool B call
+  Iteration 2: Tool B result → Final response
+  → 3 iterations total
+
+Over 5 iterations: Force stop (prevent infinite loops)
+```
+
+---
+
+<a id="en-sse"></a>
+## 4. Server-Sent Events (SSE) Streaming
+
+### 4.1 SSE Protocol
+
+```
+Response Headers:
+  Content-Type: text/event-stream
+  Cache-Control: no-cache
+  Connection: keep-alive
+
+Event format:
+  data: {"key": "value"}\n\n
+```
+
+### 4.2 SSE Event Types
+
+| Event | Format | Description |
+|-------|--------|-------------|
+| **status** | `{"status": "Analyzing..."}` | Progress indicator (loading, Tool executing) |
+| **text** | `{"text": "response chunk"}` | Text streaming (character-level) |
+| **usage** | `{"usage": {"inputTokens": 500, "outputTokens": 200}}` | Token usage |
+| **done** | `{"done": true, "via": "Bedrock Converse"}` | Response complete |
+
+### 4.3 Client Handling (ai-assistant.tsx)
+
+```typescript
+// Reading SSE stream
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+
+  const text = decoder.decode(value);
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const data = JSON.parse(line.slice(6));
+
+    if (data.text)   → Display text in real-time (typing effect)
+    if (data.status) → Show status ("tool: get_container_status")
+    if (data.usage)  → Record token count
+    if (data.done)   → Complete processing, save to Memory
+  }
+}
+```
+
+---
+
+<a id="en-agentcore-memory"></a>
+## 5. AgentCore Memory (Conversation Memory)
+
+### 5.1 Memory Structure
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Amazon Bedrock AgentCore Memory                         │
+│                                                          │
+│  Memory ID: cconbedrock_memory-pHqYq73dKd                │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Session: session_admin01_whchoi_net               │  │
+│  │  Actor:   admin01_whchoi_net                       │  │
+│  │                                                    │  │
+│  │  Event 1: 2026-03-24T10:00:00Z                    │  │
+│  │  ├─ USER: "Tell me the current container status"   │  │
+│  │  └─ ASSISTANT: "Currently 6 containers are..."     │  │
+│  │     [tools:get_container_status]                   │  │
+│  │     [in:1200][out:800][time:2500]                  │  │
+│  │                                                    │  │
+│  │  Event 2: 2026-03-24T10:05:00Z                    │  │
+│  │  ├─ USER: "What's the CPU usage?"                  │  │
+│  │  └─ ASSISTANT: "Cluster CPU usage is 45.2%..."     │  │
+│  │     [tools:get_container_metrics]                  │  │
+│  │     [in:1500][out:600][time:1800]                  │  │
+│  │                                                    │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Session: session_ds-01_whchoi_net                 │  │
+│  │  (Another user's conversation history)              │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Memory Save Flow
+
+```
+[AI Response Complete]
+      │
+      ▼
+POST /api/ai/memory
+{
+  question: "Tell me the current container status",
+  answer: "Currently 6 containers are running...",
+  tools: ["get_container_status"],
+  inputTokens: 1200,
+  outputTokens: 800,
+  responseTime: 2500
+}
+      │
+      ▼
+AgentCore CreateEventCommand
+{
+  memoryId: "cconbedrock_memory-pHqYq73dKd",
+  sessionId: "session_admin01_whchoi_net",
+  actorId: "admin01_whchoi_net",
+  payload: [
+    { conversational: { role: "USER", content: { text: "question" } } },
+    { conversational: { role: "ASSISTANT", content: { text: "response\n\n---\n[metadata]" } } }
+  ]
+}
+```
+
+### 5.3 Memory Query (History)
+
+```
+GET /api/ai/memory?limit=20
+      │
+      ▼
+AgentCore ListEventsCommand
+{
+  memoryId: "cconbedrock_memory-pHqYq73dKd",
+  sessionId: "session_admin01_whchoi_net",
+  actorId: "admin01_whchoi_net",
+  includePayloads: true,
+  pageSize: 20
+}
+      │
+      ▼
+Response parsing:
+  - Extract USER/ASSISTANT text from payload
+  - Parse metadata from ASSISTANT text:
+    [tools:get_container_status]  → Tools used
+    [in:1200]                     → Input tokens
+    [out:800]                     → Output tokens
+    [time:2500]                   → Response time (ms)
+      │
+      ▼
+Displayed in Dashboard "Chat History" section
+```
+
+### 5.4 Per-User Isolation
+
+| Item | Value | Description |
+|------|-------|-------------|
+| **Memory ID** | Shared globally | One AgentCore Memory instance |
+| **Session ID** | `session_{sanitized_email}` | Session separation based on user email |
+| **Actor ID** | `{sanitized_email}` | User identification |
+| **Isolation Level** | Session level | Cannot query other users' conversations |
+
+---
+
+<a id="en-voice-input"></a>
+## 6. Voice Input (Web Speech API)
+
+### 6.1 STT (Speech-to-Text) Flow
+
+```
+┌──────────┐                    ┌─────────────────┐
+│  Browser  │                    │  Web Speech API  │
+│  (React)  │                    │  (built-in)      │
+└─────┬─────┘                    └────────┬────────┘
+      │                                   │
+      │ Click microphone button           │
+      ├──────────────────────────────────>│
+      │                                   │
+      │         Speech recognition start   │
+      │         (Korean or English)        │
+      │                                   │
+      │ onresult: recognized text          │
+      │<──────────────────────────────────│
+      │                                   │
+      │ Auto-call sendMessage()            │
+      │ (on recognition complete)          │
+      │                                   │
+```
+
+### 6.2 Supported Languages
+
+| Setting | Language Code | Behavior |
+|---------|-------------|----------|
+| Korean mode | `ko-KR` | Korean speech recognition → Korean response |
+| English mode | `en-US` | English speech recognition → English response |
+
+---
+
+<a id="en-rendering"></a>
+## 7. Response Rendering
+
+### 7.1 Markdown Rendering
+
+```
+Claude response (raw):
+  ## Container Status
+  | User | OS | Tier | Status |
+  |------|-----|------|--------|
+  | admin01 | Ubuntu | Power | RUNNING |
+
+  → Rendered with react-markdown + remark-gfm
+  → Supports tables, code blocks, headers, etc.
+```
+
+### 7.2 Response Metadata Display
+
+```
+┌──────────────────────────────────────────────────────┐
+│  (AI Response Markdown content)                       │
+│                                                      │
+│  Currently 6 containers are running...                │
+│  | User | OS | Tier | Status |                       │
+│  |------|-----|------|--------|                       │
+│  | admin01 | Ubuntu | Power | RUNNING |              │
+│                                                      │
+│──────────────────────────────────────────────────────│
+│  get_container_status                                │
+│  In: 1,200 · Out: 800 tokens                        │
+│  2.5s                                                │
+│  via Bedrock Converse + Tool Use (Direct)    Copy    │
+└──────────────────────────────────────────────────────┘
+```
+
+### 7.3 Copy Feature
+
+```
+Click "Copy" button
+  → navigator.clipboard.writeText(msg.content)
+  → Show "Copied" for 2 seconds
+  → Revert to "Copy" icon
+```
+
+---
+
+<a id="en-error-handling"></a>
+## 8. Error Handling
+
+| Scenario | Handling |
+|----------|----------|
+| Bedrock API error | Send error message via SSE → Display in UI |
+| Tool execution failure | Return `{"error": "..."}` JSON → Claude provides error guidance |
+| Over 5 iterations | Loop terminates, return last response |
+| SSE connection lost | `controllerClosed` flag prevents double writes |
+| Memory save failure | Ignored (catch → empty handler, conversation completes normally) |
+| Auth failure | 403 Forbidden (admin group only) |
+
+---
+
+<a id="en-performance"></a>
+## 9. Performance Characteristics
+
+| Item | Value | Notes |
+|------|-------|-------|
+| **Model** | Sonnet 4.6 | 1/5 cost of Opus, 2-3x faster |
+| **First Token Latency** | ~1 second | Perceived speed improved via SSE streaming |
+| **Average Response Time** | 2~5 seconds | +1~2 seconds with Tool use |
+| **Context Limit** | Last 8 messages | Token cost control |
+| **Memory Save** | Async | Background after response completes |
+| **Access Control** | Admin only | Regular users get 403 |
+
+---
+
+<a id="en-file-structure"></a>
+## 10. Related File Structure
+
+```
+shared/nextjs-app/src/
+├── app/
+│   ├── ai/
+│   │   └── ai-assistant.tsx       ← Frontend (React, SSE client, voice input)
+│   └── api/
+│       └── ai/
+│           ├── route.ts           ← Bedrock Converse API + Tool Use handler
+│           └── memory/
+│               └── route.ts       ← AgentCore Memory CRUD (GET/POST)
+├── lib/
+│   ├── aws-clients.ts             ← listContainers() (ECS SDK)
+│   └── cloudwatch-client.ts       ← getContainerMetrics() (CloudWatch SDK)
+└── components/
+    └── markdown-text.tsx          ← react-markdown renderer (remark-gfm)
+```
+
+---
+
+<a id="en-agentcore-resources"></a>
+## 11. AgentCore Resource Information
+
+| Resource | ID/ARN | Purpose |
+|----------|--------|---------|
+| **AgentCore Runtime** | `cconbedrock_agent-xcceE4DydC` | AgentCore agent (ECR-based) |
+| **AgentCore Memory** | `cconbedrock_memory-pHqYq73dKd` | Conversation memory store |
+| **ECR Repository** | `cc-on-bedrock/agent` | AgentCore agent Docker image |
+| **IAM Role** | `AWSopsAgentCoreRole` | AgentCore service execution permissions |
