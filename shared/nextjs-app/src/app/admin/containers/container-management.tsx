@@ -28,21 +28,25 @@ export default function ContainerManagement({
   const [starting, setStarting] = useState(false);
   const [selectedUser, setSelectedUser] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [efsInfo, setEfsInfo] = useState<{ sizeBytes: number; sizeStandard: number; sizeIA: number; state: string; numberOfMountTargets: number } | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [containersRes, usersRes] = await Promise.all([
+      const [containersRes, usersRes, efsRes] = await Promise.all([
         fetch("/api/containers"),
         fetch("/api/users"),
+        fetch("/api/containers?action=efs"),
       ]);
       const containersJson = (await containersRes.json()) as ApiResponse<
         ContainerInfo[]
       >;
       const usersJson = (await usersRes.json()) as ApiResponse<CognitoUser[]>;
+      const efsJson = (await efsRes.json()) as ApiResponse<{ sizeBytes: number; sizeStandard: number; sizeIA: number; state: string; numberOfMountTargets: number }>;
 
       setContainers(containersJson.data ?? []);
       setUsers(usersJson.data ?? []);
+      setEfsInfo(efsJson.data ?? null);
     } catch (err) {
       console.error("Failed to fetch data:", err);
     } finally {
@@ -136,7 +140,7 @@ export default function ContainerManagement({
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
         <StatCard
           title={t("containers.running")}
           value={runningContainers.length}
@@ -162,7 +166,38 @@ export default function ContainerManagement({
           value={users.length > 0 ? `${Math.round(((runningContainers.length + pendingContainers.length) / users.length) * 100)}%` : "0%"}
           description="Containers / Users"
         />
+        <StatCard
+          title="EFS Storage"
+          value={efsInfo ? `${(efsInfo.sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GiB` : "-"}
+          description={efsInfo ? `${efsInfo.numberOfMountTargets} mounts · ${efsInfo.state}` : "Loading..."}
+        />
       </div>
+
+      {/* EFS Detail */}
+      {efsInfo && (
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+          <h3 className="text-sm font-medium text-gray-300 mb-3">EFS Shared Storage</h3>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <p className="text-[10px] text-gray-500 uppercase">Total Size</p>
+              <p className="text-lg font-bold text-white">{(efsInfo.sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-gray-500 uppercase">Standard Storage</p>
+              <p className="text-lg font-bold text-blue-400">{(efsInfo.sizeStandard / (1024 * 1024 * 1024)).toFixed(2)} GiB</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-gray-500 uppercase">Infrequent Access</p>
+              <p className="text-lg font-bold text-gray-400">{(efsInfo.sizeIA / (1024 * 1024 * 1024)).toFixed(2)} GiB</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-gray-500 uppercase">Connected Containers</p>
+              <p className="text-lg font-bold text-green-400">{runningContainers.length} <span className="text-[10px] text-gray-500 font-normal">/ {efsInfo.numberOfMountTargets} mount targets</span></p>
+            </div>
+          </div>
+          <p className="mt-3 text-[10px] text-gray-600">Path: /home/coder/users/&#123;subdomain&#125;/ · Per-user isolation enabled · Transit encryption: ON</p>
+        </div>
+      )}
 
       {/* Container Insights */}
       {containers.length > 0 && (() => {

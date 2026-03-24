@@ -9,7 +9,11 @@ import {
   registerContainerInAlb,
   deregisterContainerFromAlb,
 } from "@/lib/aws-clients";
+import { EFSClient, DescribeFileSystemsCommand } from "@aws-sdk/client-efs";
 import type { StartContainerInput, StopContainerInput } from "@/lib/types";
+
+const efsClient = new EFSClient({ region: process.env.AWS_REGION ?? "ap-northeast-2" });
+const EFS_ID = process.env.EFS_FILE_SYSTEM_ID ?? "fs-09ba32e6a7788fc79";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -21,6 +25,25 @@ export async function GET(req: NextRequest) {
   const taskArn = searchParams.get("taskArn");
 
   try {
+    const action = searchParams.get("action");
+
+    // EFS metrics endpoint
+    if (action === "efs") {
+      const efs = await efsClient.send(new DescribeFileSystemsCommand({ FileSystemId: EFS_ID }));
+      const fs = efs.FileSystems?.[0];
+      return NextResponse.json({
+        success: true,
+        data: {
+          fileSystemId: EFS_ID,
+          sizeBytes: fs?.SizeInBytes?.Value ?? 0,
+          sizeStandard: fs?.SizeInBytes?.ValueInStandard ?? 0,
+          sizeIA: fs?.SizeInBytes?.ValueInIA ?? 0,
+          state: fs?.LifeCycleState ?? "unknown",
+          numberOfMountTargets: fs?.NumberOfMountTargets ?? 0,
+        },
+      });
+    }
+
     if (taskArn) {
       const container = await describeContainer(taskArn);
       if (!container) {
