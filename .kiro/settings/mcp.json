@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "awslabs-core-mcp-server": {
+      "command": "/home/ec2-user/.local/bin/uvx",
+      "args": ["awslabs.core-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "aws-foundation": "true",
+        "solutions-architect": "true"
+      },
+      "disabled": false,
+      "_description": "AWS API, Cost Explorer, 다이어그램, 가격 분석"
+    },
+    "aws-knowledge-mcp-server": {
+      "url": "https://knowledge-mcp.global.api.aws",
+      "type": "http",
+      "disabled": false,
+      "_description": "AWS 문서, API 레퍼런스, 리전 가용성, SOP"
+    }
+  }
+}
