@@ -27,24 +27,7 @@ module "security" {
   hosted_zone_id = module.network.hosted_zone_id
 }
 
-# ---- 03 LiteLLM --------------------------------------------------------------
-module "litellm" {
-  source = "./modules/litellm"
-
-  vpc_id                            = module.network.vpc_id
-  vpc_cidr                          = module.network.vpc_cidr
-  private_subnet_ids                = module.network.private_subnet_ids
-  isolated_subnet_ids               = module.network.isolated_subnet_ids
-  kms_key_arn                       = module.security.kms_key_arn
-  kms_key_id                        = module.security.kms_key_id
-  litellm_ec2_instance_profile_name = module.security.litellm_ec2_instance_profile_name
-  litellm_master_key_secret_arn     = module.security.litellm_master_key_secret_arn
-  valkey_auth_secret_arn            = module.security.valkey_auth_secret_arn
-  instance_type                     = var.litellm_instance_type
-  rds_instance_type                 = var.rds_instance_type
-}
-
-# ---- 04 ECS Dev Environment --------------------------------------------------
+# ---- 03 ECS Dev Environment --------------------------------------------------
 module "ecs_devenv" {
   source = "./modules/ecs-devenv"
 
@@ -55,7 +38,6 @@ module "ecs_devenv" {
   isolated_subnet_ids     = module.network.isolated_subnet_ids
   kms_key_arn             = module.security.kms_key_arn
   kms_key_id              = module.security.kms_key_id
-  litellm_alb_dns         = module.litellm.internal_alb_dns
   devenv_certificate_arn  = module.security.devenv_certificate_arn
   hosted_zone_id          = module.network.hosted_zone_id
   domain_name             = var.domain_name

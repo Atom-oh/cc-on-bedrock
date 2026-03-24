@@ -21,7 +21,6 @@ done
 STACKS=(
   "${STACK_PREFIX}-dashboard"
   "${STACK_PREFIX}-ecs-devenv"
-  "${STACK_PREFIX}-litellm"
   "${STACK_PREFIX}-security"
   "${STACK_PREFIX}-network"
 )
@@ -83,7 +82,6 @@ echo "  Teardown complete!"
 echo "============================================================"
 echo ""
 echo "NOTE: The following resources may still exist (DeletionPolicy Retain):"
-echo "  - ECR repositories: cc-on-bedrock/litellm, cc-on-bedrock/devenv"
+echo "  - ECR repository: cc-on-bedrock/devenv"
 echo "  - EFS file system"
-echo "  - RDS final snapshot: cc-litellm-final-snapshot"
 echo ""

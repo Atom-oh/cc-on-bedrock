@@ -32,8 +32,6 @@ Parameters:
     Type: String
   UserPoolClientId:
     Type: String
-  LitellmAlbDns:
-    Type: String
   InstanceType:
     Type: String
     Default: t4g.xlarge

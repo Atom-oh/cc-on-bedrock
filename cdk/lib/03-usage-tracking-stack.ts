@@ -5,6 +5,8 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
@@ -13,6 +15,7 @@ import * as path from 'path';
 export interface UsageTrackingStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   encryptionKey: kms.Key;
+  userPool: cognito.UserPool;
 }
 
 export class UsageTrackingStack extends cdk.Stack {
@@ -21,7 +24,13 @@ export class UsageTrackingStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: UsageTrackingStackProps) {
     super(scope, id, props);
 
-    const { encryptionKey } = props;
+    const { encryptionKey, userPool } = props;
+
+    // SNS Topic for budget alerts
+    const alertTopic = new sns.Topic(this, 'BudgetAlertTopic', {
+      topicName: 'cc-on-bedrock-budget-alerts',
+      displayName: 'CC-on-Bedrock Budget Alerts',
+    });
 
     // DynamoDB Table for usage tracking
     this.usageTable = new dynamodb.Table(this, 'UsageTable', {
@@ -98,7 +107,8 @@ export class UsageTrackingStack extends cdk.Stack {
         USAGE_TABLE_NAME: this.usageTable.tableName,
         ECS_CLUSTER_NAME: 'cc-on-bedrock-devenv',
         DAILY_BUDGET_USD: '50',
-        SNS_TOPIC_ARN: '', // TODO: Add SNS topic for alerts
+        SNS_TOPIC_ARN: alertTopic.topicArn,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
     });
@@ -109,16 +119,13 @@ export class UsageTrackingStack extends cdk.Stack {
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks', 'ecs:StopTask'],
       resources: ['*'],
     }));
-    // Cognito: set budget_exceeded flag
+    // Cognito: set budget_exceeded flag (specific user pool, not wildcard)
     budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminUpdateUserAttributes'],
-      resources: [`arn:aws:cognito-idp:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:userpool/*`],
+      resources: [userPool.userPoolArn],
     }));
-    // SNS: send alerts
-    budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['sns:Publish'],
-      resources: ['*'],
-    }));
+    // SNS: send budget alerts
+    alertTopic.grantPublish(budgetCheckLambda);
 
     // Schedule: every 5 minutes
     new events.Rule(this, 'BudgetCheckSchedule', {

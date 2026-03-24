@@ -24,22 +24,6 @@ output "user_pool_client_id" {
   value       = module.security.user_pool_client_id
 }
 
-# LiteLLM
-output "litellm_alb_dns" {
-  description = "LiteLLM internal ALB DNS name"
-  value       = module.litellm.internal_alb_dns
-}
-
-output "rds_endpoint" {
-  description = "RDS PostgreSQL endpoint"
-  value       = module.litellm.rds_endpoint
-}
-
-output "litellm_ecr_url" {
-  description = "LiteLLM ECR repository URL"
-  value       = module.litellm.ecr_repository_url
-}
-
 # ECS DevEnv
 output "ecs_cluster_name" {
   description = "ECS cluster name"

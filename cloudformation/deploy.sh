@@ -42,8 +42,7 @@ if [[ -f "$PARAMS_FILE" ]]; then
   ISOLATED_SUBNET_CIDR_C=$(jq -r '.IsolatedSubnetCidrC // "10.0.102.0/23"' "$PARAMS_FILE")
   DOMAIN_NAME=$(jq -r '.DomainName // "example.com"' "$PARAMS_FILE")
   DEV_SUBDOMAIN=$(jq -r '.DevSubdomain // "dev"' "$PARAMS_FILE")
-  LITELLM_INSTANCE_TYPE=$(jq -r '.LitellmInstanceType // "t4g.xlarge"' "$PARAMS_FILE")
-  RDS_INSTANCE_TYPE=$(jq -r '.RdsInstanceType // "db.t4g.medium"' "$PARAMS_FILE")
+  # LiteLLM removed - Bedrock direct mode
   ECS_HOST_INSTANCE_TYPE=$(jq -r '.EcsHostInstanceType // "m7g.4xlarge"' "$PARAMS_FILE")
   DASHBOARD_INSTANCE_TYPE=$(jq -r '.DashboardInstanceType // "t4g.xlarge"' "$PARAMS_FILE")
   CLOUDFRONT_PREFIX_LIST_ID=$(jq -r '.CloudFrontPrefixListId // "pl-22a6434b"' "$PARAMS_FILE")
@@ -59,8 +58,7 @@ else
   ISOLATED_SUBNET_CIDR_C="10.0.102.0/23"
   DOMAIN_NAME="example.com"
   DEV_SUBDOMAIN="dev"
-  LITELLM_INSTANCE_TYPE="t4g.xlarge"
-  RDS_INSTANCE_TYPE="db.t4g.medium"
+  # LiteLLM removed - Bedrock direct mode
   ECS_HOST_INSTANCE_TYPE="m7g.4xlarge"
   DASHBOARD_INSTANCE_TYPE="t4g.xlarge"
   CLOUDFRONT_PREFIX_LIST_ID="pl-22a6434b"
@@ -93,7 +91,7 @@ echo ""
 # ===========================================================================
 # Stack 01 - Network
 # ===========================================================================
-echo "[1/5] Deploying ${STACK_PREFIX}-network..."
+echo "[1/4] Deploying ${STACK_PREFIX}-network..."
 aws cloudformation deploy \
   --stack-name "${STACK_PREFIX}-network" \
   --template-file "${SCRIPT_DIR}/01-network.yaml" \
@@ -126,7 +124,7 @@ echo ""
 # ===========================================================================
 # Stack 02 - Security
 # ===========================================================================
-echo "[2/5] Deploying ${STACK_PREFIX}-security..."
+echo "[2/4] Deploying ${STACK_PREFIX}-security..."
 aws cloudformation deploy \
   --stack-name "${STACK_PREFIX}-security" \
   --template-file "${SCRIPT_DIR}/02-security.yaml" \
@@ -146,48 +144,15 @@ USER_POOL_ID=$(get_output "${STACK_PREFIX}-security" "UserPoolId")
 USER_POOL_CLIENT_ID=$(get_output "${STACK_PREFIX}-security" "UserPoolClientId")
 DEVENV_CERT_ARN=$(get_output "${STACK_PREFIX}-security" "DevEnvCertificateArn")
 DASHBOARD_CERT_ARN=$(get_output "${STACK_PREFIX}-security" "DashboardCertificateArn")
-LITELLM_MASTER_KEY_ARN=$(get_output "${STACK_PREFIX}-security" "LitellmMasterKeySecretArn")
 CLOUDFRONT_SECRET_ARN=$(get_output "${STACK_PREFIX}-security" "CloudFrontSecretArn")
-VALKEY_AUTH_SECRET_ARN=$(get_output "${STACK_PREFIX}-security" "ValkeyAuthSecretArn")
-LITELLM_EC2_INSTANCE_PROFILE=$(get_output "${STACK_PREFIX}-security" "LitellmEc2InstanceProfileName")
 DASHBOARD_EC2_INSTANCE_PROFILE=$(get_output "${STACK_PREFIX}-security" "DashboardEc2InstanceProfileName")
 
 echo ""
 
 # ===========================================================================
-# Stack 03 - LiteLLM
+# Stack 03 - ECS DevEnv
 # ===========================================================================
-echo "[3/5] Deploying ${STACK_PREFIX}-litellm..."
-aws cloudformation deploy \
-  --stack-name "${STACK_PREFIX}-litellm" \
-  --template-file "${SCRIPT_DIR}/03-litellm.yaml" \
-  --parameter-overrides \
-    VpcId="${VPC_ID}" \
-    VpcCidr="${VPC_CIDR}" \
-    PrivateSubnetAId="${PRIVATE_SUBNET_A_ID}" \
-    PrivateSubnetCId="${PRIVATE_SUBNET_C_ID}" \
-    IsolatedSubnetAId="${ISOLATED_SUBNET_A_ID}" \
-    IsolatedSubnetCId="${ISOLATED_SUBNET_C_ID}" \
-    KmsKeyArn="${KMS_KEY_ARN}" \
-    KmsKeyId="${KMS_KEY_ID}" \
-    LitellmEc2InstanceProfileName="${LITELLM_EC2_INSTANCE_PROFILE}" \
-    LitellmMasterKeySecretArn="${LITELLM_MASTER_KEY_ARN}" \
-    ValkeyAuthSecretArn="${VALKEY_AUTH_SECRET_ARN}" \
-    InstanceType="${LITELLM_INSTANCE_TYPE}" \
-    RdsInstanceType="${RDS_INSTANCE_TYPE}" \
-  --no-fail-on-empty-changeset \
-  --region "$REGION"
-echo "  [OK] LiteLLM stack deployed."
-
-# Retrieve outputs
-LITELLM_ALB_DNS=$(get_output "${STACK_PREFIX}-litellm" "InternalAlbDns")
-
-echo ""
-
-# ===========================================================================
-# Stack 04 - ECS DevEnv
-# ===========================================================================
-echo "[4/5] Deploying ${STACK_PREFIX}-ecs-devenv..."
+echo "[3/4] Deploying ${STACK_PREFIX}-ecs-devenv..."
 aws cloudformation deploy \
   --stack-name "${STACK_PREFIX}-ecs-devenv" \
   --template-file "${SCRIPT_DIR}/04-ecs-devenv.yaml" \
@@ -201,7 +166,6 @@ aws cloudformation deploy \
     IsolatedSubnetAId="${ISOLATED_SUBNET_A_ID}" \
     IsolatedSubnetCId="${ISOLATED_SUBNET_C_ID}" \
     KmsKeyArn="${KMS_KEY_ARN}" \
-    LitellmAlbDns="${LITELLM_ALB_DNS}" \
     DevEnvCertificateArn="${DEVENV_CERT_ARN}" \
     HostedZoneId="${HOSTED_ZONE_ID}" \
     DomainName="${DOMAIN_NAME}" \
@@ -217,9 +181,9 @@ echo "  [OK] ECS DevEnv stack deployed."
 echo ""
 
 # ===========================================================================
-# Stack 05 - Dashboard
+# Stack 04 - Dashboard
 # ===========================================================================
-echo "[5/5] Deploying ${STACK_PREFIX}-dashboard..."
+echo "[4/4] Deploying ${STACK_PREFIX}-dashboard..."
 aws cloudformation deploy \
   --stack-name "${STACK_PREFIX}-dashboard" \
   --template-file "${SCRIPT_DIR}/05-dashboard.yaml" \
@@ -238,7 +202,6 @@ aws cloudformation deploy \
     CloudFrontSecretArn="${CLOUDFRONT_SECRET_ARN}" \
     UserPoolId="${USER_POOL_ID}" \
     UserPoolClientId="${USER_POOL_CLIENT_ID}" \
-    LitellmAlbDns="${LITELLM_ALB_DNS}" \
     InstanceType="${DASHBOARD_INSTANCE_TYPE}" \
     CloudFrontPrefixListId="${CLOUDFRONT_PREFIX_LIST_ID}" \
   --no-fail-on-empty-changeset \
@@ -253,5 +216,4 @@ echo ""
 echo "  Dashboard URL:    https://dashboard.${DOMAIN_NAME}"
 echo "  Cognito Pool ID:  ${USER_POOL_ID}"
 echo "  ECS Cluster:      $(get_output "${STACK_PREFIX}-ecs-devenv" "ClusterName")"
-echo "  LiteLLM ALB:      ${LITELLM_ALB_DNS}"
 echo ""

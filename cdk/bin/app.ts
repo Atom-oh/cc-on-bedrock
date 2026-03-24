@@ -47,6 +47,7 @@ securityStack.addDependency(networkStack);
 const usageTrackingStack = new UsageTrackingStack(app, 'CcOnBedrock-UsageTracking', {
   env, config,
   encryptionKey: securityStack.encryptionKey,
+  userPool: securityStack.userPool,
   description: 'CC-on-Bedrock: DynamoDB usage tracking, EventBridge, Lambda',
 });
 usageTrackingStack.addDependency(securityStack);

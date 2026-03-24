@@ -76,11 +76,6 @@ variable "sonnet_model_id" {
 }
 
 # ---- Compute -----------------------------------------------------------------
-variable "litellm_instance_type" {
-  type    = string
-  default = "t4g.xlarge"
-}
-
 variable "ecs_host_instance_type" {
   type    = string
   default = "m7g.4xlarge"
@@ -89,9 +84,4 @@ variable "ecs_host_instance_type" {
 variable "dashboard_instance_type" {
   type    = string
   default = "t4g.xlarge"
-}
-
-variable "rds_instance_type" {
-  type    = string
-  default = "db.t4g.medium"
 }

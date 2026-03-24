@@ -58,8 +58,9 @@ export class SecurityStack extends cdk.Stack {
         container_os: new cognito.StringAttribute({ mutable: true }),
         resource_tier: new cognito.StringAttribute({ mutable: true }),
         security_policy: new cognito.StringAttribute({ mutable: true }),
-        litellm_api_key: new cognito.StringAttribute({ mutable: true }),
         container_id: new cognito.StringAttribute({ mutable: true }),
+        department: new cognito.StringAttribute({ mutable: true }),
+        budget_exceeded: new cognito.StringAttribute({ mutable: true }),
       },
     });
 

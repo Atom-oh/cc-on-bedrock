@@ -22,8 +22,6 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   KmsKeyArn:
     Type: String
-  LitellmAlbDns:
-    Type: String
   DevEnvCertificateArn:
     Type: String
   HostedZoneId:
@@ -308,8 +306,8 @@ Resources:
           PortMappings:
             - ContainerPort: 8080
           Environment:
-            - Name: ANTHROPIC_BASE_URL
-              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: CLAUDE_CODE_USE_BEDROCK
+              Value: '1'
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: SECURITY_POLICY
@@ -347,8 +345,8 @@ Resources:
           PortMappings:
             - ContainerPort: 8080
           Environment:
-            - Name: ANTHROPIC_BASE_URL
-              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: CLAUDE_CODE_USE_BEDROCK
+              Value: '1'
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: SECURITY_POLICY
@@ -386,8 +384,8 @@ Resources:
           PortMappings:
             - ContainerPort: 8080
           Environment:
-            - Name: ANTHROPIC_BASE_URL
-              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: CLAUDE_CODE_USE_BEDROCK
+              Value: '1'
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: SECURITY_POLICY
@@ -425,8 +423,8 @@ Resources:
           PortMappings:
             - ContainerPort: 8080
           Environment:
-            - Name: ANTHROPIC_BASE_URL
-              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: CLAUDE_CODE_USE_BEDROCK
+              Value: '1'
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: SECURITY_POLICY
@@ -464,8 +462,8 @@ Resources:
           PortMappings:
             - ContainerPort: 8080
           Environment:
-            - Name: ANTHROPIC_BASE_URL
-              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: CLAUDE_CODE_USE_BEDROCK
+              Value: '1'
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: SECURITY_POLICY
@@ -503,8 +501,8 @@ Resources:
           PortMappings:
             - ContainerPort: 8080
           Environment:
-            - Name: ANTHROPIC_BASE_URL
-              Value: !Sub 'http://${LitellmAlbDns}:4000'
+            - Name: CLAUDE_CODE_USE_BEDROCK
+              Value: '1'
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: SECURITY_POLICY
