@@ -25,6 +25,7 @@ import {
   CreateRuleCommand,
   DeleteRuleCommand,
   DescribeTargetGroupsCommand,
+  DescribeTargetHealthCommand,
   DescribeRulesCommand,
   DeleteTargetGroupCommand,
 } from "@aws-sdk/client-elastic-load-balancing-v2";
@@ -485,6 +486,24 @@ export async function registerContainerInAlb(
         Actions: [{ Type: "forward", TargetGroupArn: tgArn }],
       })
     );
+  }
+
+  // Deregister stale targets before registering new IP
+  try {
+    const health = await elbv2Client.send(
+      new DescribeTargetHealthCommand({ TargetGroupArn: tgArn })
+    );
+    const staleTargets = (health.TargetHealthDescriptions ?? [])
+      .filter((t) => t.Target?.Id !== privateIp)
+      .map((t) => ({ Id: t.Target!.Id!, Port: t.Target!.Port! }));
+    if (staleTargets.length > 0) {
+      await elbv2Client.send(
+        new DeregisterTargetsCommand({ TargetGroupArn: tgArn, Targets: staleTargets })
+      );
+      console.log(`[ALB] Deregistered ${staleTargets.length} stale target(s) from ${subdomain}`);
+    }
+  } catch (err) {
+    console.warn(`[ALB] Stale target cleanup for ${subdomain}:`, err);
   }
 
   // Register the container IP
