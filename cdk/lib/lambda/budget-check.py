@@ -1,7 +1,10 @@
 """
 Budget Check Lambda (runs every 5 minutes)
 Checks DynamoDB for users exceeding daily budget.
-Actions: 1) SNS alert at 80%, 2) ECS StopTask + Cognito flag at 100%
+Actions:
+  80%: SNS warning alert
+  100%: Attach IAM Deny Policy to per-user Task Role + Cognito flag + SNS alert
+  Next day: Remove Deny Policy automatically
 """
 import os
 import json
@@ -13,10 +16,12 @@ ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
 DAILY_BUDGET = float(os.environ.get("DAILY_BUDGET_USD", "50"))
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+TASK_ROLE_PREFIX = "cc-on-bedrock-task"
+DENY_POLICY_NAME = "BudgetExceededDeny"
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
-ecs_client = boto3.client("ecs")
+iam_client = boto3.client("iam")
 cognito_client = boto3.client("cognito-idp")
 sns_client = boto3.client("sns")
 
@@ -40,26 +45,64 @@ def get_today_usage():
     return user_spend
 
 
-def stop_user_container(username: str):
-    """Find and stop the user's ECS task."""
+def attach_deny_policy(subdomain: str):
+    """Attach IAM Deny Policy to user's per-user Task Role."""
+    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
+    deny_policy = json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Sid": "BudgetExceededDenyBedrock",
+            "Effect": "Deny",
+            "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+                "bedrock:Converse",
+                "bedrock:ConverseStream",
+            ],
+            "Resource": "*",
+        }],
+    })
     try:
-        task_arns = ecs_client.list_tasks(cluster=ECS_CLUSTER)["taskArns"]
-        if not task_arns:
-            return
-        tasks = ecs_client.describe_tasks(
-            cluster=ECS_CLUSTER, tasks=task_arns, include=["TAGS"]
-        )["tasks"]
-        for task in tasks:
-            tags = {t["key"]: t["value"] for t in task.get("tags", [])}
-            if tags.get("username") == username and task.get("lastStatus") == "RUNNING":
-                ecs_client.stop_task(
-                    cluster=ECS_CLUSTER,
-                    task=task["taskArn"],
-                    reason=f"Daily budget exceeded (${DAILY_BUDGET})",
-                )
-                print(f"Stopped task for {username}: {task['taskArn']}")
+        iam_client.put_role_policy(
+            RoleName=role_name,
+            PolicyName=DENY_POLICY_NAME,
+            PolicyDocument=deny_policy,
+        )
+        print(f"[DENY] Attached to {role_name}")
+        return True
     except Exception as e:
-        print(f"Failed to stop container for {username}: {e}")
+        print(f"[DENY] Failed for {role_name}: {e}")
+        return False
+
+
+def remove_deny_policy(subdomain: str):
+    """Remove IAM Deny Policy from user's Task Role (next-day reset)."""
+    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
+    try:
+        iam_client.delete_role_policy(
+            RoleName=role_name,
+            PolicyName=DENY_POLICY_NAME,
+        )
+        print(f"[ALLOW] Removed deny from {role_name}")
+        return True
+    except iam_client.exceptions.NoSuchEntityException:
+        return False  # No deny policy exists
+    except Exception as e:
+        print(f"[ALLOW] Failed for {role_name}: {e}")
+        return False
+
+
+def check_deny_exists(subdomain: str) -> bool:
+    """Check if Deny Policy already exists on user's role."""
+    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
+    try:
+        iam_client.get_role_policy(
+            RoleName=role_name,
+            PolicyName=DENY_POLICY_NAME,
+        )
+        return True
+    except:
+        return False
 
 
 def set_cognito_budget_flag(username: str, exceeded: bool):
@@ -67,7 +110,6 @@ def set_cognito_budget_flag(username: str, exceeded: bool):
     if not USER_POOL_ID:
         return
     try:
-        # Find user by username (which is the subdomain)
         result = cognito_client.list_users(
             UserPoolId=USER_POOL_ID,
             Filter=f'custom:subdomain = "{username}"',
@@ -82,16 +124,18 @@ def set_cognito_budget_flag(username: str, exceeded: bool):
                     {"Name": "custom:budget_exceeded", "Value": str(exceeded).lower()},
                 ],
             )
-            print(f"Cognito flag set for {username}: budget_exceeded={exceeded}")
     except Exception as e:
         print(f"Cognito update failed for {username}: {e}")
 
 
 def handler(event, context):
-    """Check budgets and enforce limits."""
+    """Check budgets and enforce limits via per-user IAM Deny Policy."""
     user_spend = get_today_usage()
+    all_known_users = set(user_spend.keys())
     over_budget = []
     warnings = []
+    denied = 0
+    released = 0
 
     for user, data in user_spend.items():
         pct = (data["cost"] / DAILY_BUDGET) * 100 if DAILY_BUDGET > 0 else 0
@@ -115,40 +159,43 @@ def handler(event, context):
             for w in warnings
         )
         try:
-            sns_client.publish(
-                TopicArn=SNS_TOPIC_ARN,
-                Subject="[CC-on-Bedrock] Budget Warning",
-                Message=msg,
-            )
+            sns_client.publish(TopicArn=SNS_TOPIC_ARN, Subject="[CC-on-Bedrock] Budget Warning", Message=msg)
         except Exception as e:
             print(f"SNS warning failed: {e}")
 
-    # 100%: Stop container + set Cognito flag + alert
+    # 100%: Attach IAM Deny Policy + Cognito flag
     for item in over_budget:
-        print(f"OVER BUDGET: {item['user']} ({item['department']}) "
-              f"${item['cost']:.4f} ({item['pct']:.1f}%)")
-        stop_user_container(item["user"])
-        set_cognito_budget_flag(item["user"], True)
+        user = item["user"]
+        print(f"OVER BUDGET: {user} ({item['department']}) ${item['cost']:.4f} ({item['pct']:.1f}%)")
+
+        if attach_deny_policy(user):
+            denied += 1
+        set_cognito_budget_flag(user, True)
 
     if over_budget and SNS_TOPIC_ARN:
-        msg = f"CC-on-Bedrock Budget EXCEEDED - Containers Stopped:\n\n"
+        msg = f"CC-on-Bedrock Budget EXCEEDED - Bedrock Access Denied:\n\n"
         msg += "\n".join(
-            f"- {o['user']} ({o['department']}): ${o['cost']:.4f} "
-            f"({o['pct']:.1f}% of ${DAILY_BUDGET})"
+            f"- {o['user']} ({o['department']}): ${o['cost']:.4f} ({o['pct']:.1f}% of ${DAILY_BUDGET})"
             for o in over_budget
         )
         try:
-            sns_client.publish(
-                TopicArn=SNS_TOPIC_ARN,
-                Subject="[CC-on-Bedrock] Budget Exceeded - Action Taken",
-                Message=msg,
-            )
+            sns_client.publish(TopicArn=SNS_TOPIC_ARN, Subject="[CC-on-Bedrock] Budget Exceeded - Access Denied", Message=msg)
         except Exception as e:
             print(f"SNS alert failed: {e}")
+
+    # Release users who are NOT over budget but still have Deny Policy
+    over_budget_users = {o["user"] for o in over_budget}
+    for user in all_known_users:
+        if user not in over_budget_users:
+            if remove_deny_policy(user):
+                released += 1
+                set_cognito_budget_flag(user, False)
 
     return {
         "checked": len(user_spend),
         "over_budget": len(over_budget),
+        "denied": denied,
+        "released": released,
         "warnings": len(warnings),
         "daily_budget_usd": DAILY_BUDGET,
         "timestamp": datetime.utcnow().isoformat(),

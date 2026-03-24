@@ -124,6 +124,11 @@ export class UsageTrackingStack extends cdk.Stack {
       actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminUpdateUserAttributes'],
       resources: [userPool.userPoolArn],
     }));
+    // IAM: Attach/Remove Deny Policy on per-user Task Roles
+    budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:GetRolePolicy'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+    }));
     // SNS: send budget alerts
     alertTopic.grantPublish(budgetCheckLambda);
 

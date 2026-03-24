@@ -37,16 +37,25 @@ import type {
   StartContainerInput,
   StopContainerInput,
 } from "./types";
+import {
+  IAMClient,
+  CreateRoleCommand,
+  PutRolePolicyCommand,
+  GetRoleCommand,
+} from "@aws-sdk/client-iam";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
 const ecsCluster = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-cluster";
 const domainName = process.env.DOMAIN_NAME ?? "example.com";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
+const accountId = process.env.AWS_ACCOUNT_ID ?? "061525506239";
+const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
 const elbv2Client = new ElasticLoadBalancingV2Client({ region });
+const iamClient = new IAMClient({ region });
 
 const devenvAlbListenerArn = process.env.DEVENV_ALB_LISTENER_ARN ?? "";
 const vpcId = process.env.VPC_ID ?? "";
@@ -228,6 +237,76 @@ const TASK_DEFINITION_MAP: Record<string, string> = {
   "al2023-power": "devenv-al2023-power",
 };
 
+// ─── Per-user IAM Role for budget control ───
+
+async function ensureUserTaskRole(subdomain: string): Promise<string> {
+  const roleName = `${TASK_ROLE_PREFIX}-${subdomain}`;
+  const roleArn = `arn:aws:iam::${accountId}:role/${roleName}`;
+
+  try {
+    await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
+    return roleArn; // Already exists
+  } catch {
+    // Create new per-user role
+  }
+
+  try {
+    await iamClient.send(new CreateRoleCommand({
+      RoleName: roleName,
+      AssumeRolePolicyDocument: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [{
+          Effect: "Allow",
+          Principal: { Service: "ecs-tasks.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        }],
+      }),
+      Description: `Per-user ECS Task Role for ${subdomain}`,
+      Tags: [{ Key: "cc-on-bedrock", Value: "user-task-role" }, { Key: "subdomain", Value: subdomain }],
+    }));
+
+    // Attach Bedrock + basic permissions
+    await iamClient.send(new PutRolePolicyCommand({
+      RoleName: roleName,
+      PolicyName: "BedrockAccess",
+      PolicyDocument: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
+            Resource: "*",
+          },
+          {
+            Effect: "Allow",
+            Action: ["s3:GetObject", "s3:PutObject"],
+            Resource: `arn:aws:s3:::cc-on-bedrock-*/*`,
+          },
+          {
+            Effect: "Allow",
+            Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            Resource: "*",
+          },
+          {
+            Effect: "Allow",
+            Action: ["ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
+            Resource: "*",
+          },
+        ],
+      }),
+    }));
+
+    console.log(`[IAM] Created per-user role: ${roleName}`);
+    // Wait for IAM propagation
+    await new Promise((r) => setTimeout(r, 3000));
+    return roleArn;
+  } catch (err) {
+    console.error(`[IAM] Failed to create role ${roleName}:`, err);
+    // Fallback to shared role
+    return `arn:aws:iam::${accountId}:role/cc-on-bedrock-ecs-task`;
+  }
+}
+
 const SECURITY_GROUP_MAP: Record<string, string> = {
   open: process.env.SG_DEVENV_OPEN ?? "",
   restricted: process.env.SG_DEVENV_RESTRICTED ?? "",
@@ -258,6 +337,9 @@ export async function startContainer(
 
   const securityGroup = SECURITY_GROUP_MAP[input.securityPolicy];
 
+  // Create or get per-user IAM Task Role for budget control
+  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
+
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
@@ -273,6 +355,8 @@ export async function startContainer(
         },
       },
       overrides: {
+        // Per-user Task Role for individual budget control
+        taskRoleArn: userTaskRoleArn,
         containerOverrides: [
           {
             name: "devenv",
