@@ -1,19 +1,20 @@
 # Terraform Module
 
 ## Role
-Terraform HCL로 전체 인프라 배포. 5개 모듈.
+Terraform HCL로 전체 인프라 배포. 5개 모듈 (LiteLLM 모듈은 제거 예정).
 
 ## Key Files
-- `main.tf` - Root module, 5개 모듈 호출 및 연결
+- `main.tf` - Root module, 모듈 호출 및 연결
 - `variables.tf` - 입력 변수 (CDK config와 동일)
 - `outputs.tf` - 주요 리소스 ID/ARN 출력
 - `providers.tf` - AWS provider (ap-northeast-2)
 - `terraform.tfvars.example` - 예제 변수 값
 - `modules/network/` - VPC, Subnets, NAT, VPC Endpoints, Route 53
-- `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM
-- `modules/litellm/` - Internal ALB, ASG, RDS, Valkey, ECR
+- `modules/security/` - Cognito (Hosted UI), ACM, KMS, Secrets Manager, IAM
+- `modules/litellm/` - **deprecated** (Bedrock Direct 전환으로 제거 예정)
 - `modules/ecs-devenv/` - ECS Cluster, Task Defs, EFS, ALB, CloudFront
 - `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront
+- ※ Usage Tracking (DynamoDB, Lambda, EventBridge) 모듈 추가 필요
 
 ## Rules
 - `terraform fmt -recursive` 후 커밋
