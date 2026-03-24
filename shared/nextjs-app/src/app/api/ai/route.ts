@@ -75,22 +75,44 @@ export async function POST(req: NextRequest) {
         const resp = await getClient().send(cmd);
 
         // Read response from Runtime
+        // SDK v3 returns response as StreamingBody (Blob/ReadableStream/Uint8Array)
         const responseBody = resp.response;
         let resultText = "";
 
-        if (responseBody && typeof responseBody === "object" && "read" in responseBody) {
-          const raw = await (responseBody as { read: () => Promise<Uint8Array> }).read();
-          resultText = new TextDecoder().decode(raw);
-        } else if (typeof responseBody === "string") {
+        if (typeof responseBody === "string") {
           resultText = responseBody;
+        } else if (responseBody instanceof Uint8Array || responseBody instanceof Buffer) {
+          resultText = new TextDecoder().decode(responseBody);
+        } else if (responseBody && typeof responseBody === "object") {
+          // StreamingBody: try transformToString first (SDK v3), then transformToByteArray, then read
+          const body = responseBody as unknown as Record<string, unknown>;
+          if (typeof body.transformToString === "function") {
+            resultText = await (body.transformToString as () => Promise<string>)();
+          } else if (typeof body.transformToByteArray === "function") {
+            const bytes = await (body.transformToByteArray as () => Promise<Uint8Array>)();
+            resultText = new TextDecoder().decode(bytes);
+          } else if (typeof body.text === "function") {
+            resultText = await (body.text as () => Promise<string>)();
+          } else {
+            // Collect chunks from async iterator
+            const chunks: Buffer[] = [];
+            if (Symbol.asyncIterator in body) {
+              for await (const chunk of body as AsyncIterable<Buffer>) {
+                chunks.push(Buffer.from(chunk));
+              }
+              resultText = Buffer.concat(chunks).toString("utf-8");
+            } else {
+              resultText = JSON.stringify(body);
+            }
+          }
         } else {
           resultText = String(responseBody ?? "No response from Runtime");
         }
 
-        // Clean JSON string wrapping if present
+        // Clean JSON string wrapping if present (Runtime wraps in quotes)
         if (resultText.startsWith('"') && resultText.endsWith('"')) {
           try {
-            resultText = JSON.parse(resultText);
+            resultText = JSON.parse(resultText) as string;
           } catch {
             // Keep as is
           }
