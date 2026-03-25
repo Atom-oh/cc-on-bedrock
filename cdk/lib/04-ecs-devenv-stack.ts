@@ -129,7 +129,7 @@ export class EcsDevenvStack extends cdk.Stack {
     // ECS Cluster
     this.cluster = new ecs.Cluster(this, 'DevenvCluster', {
       vpc,
-      clusterName: 'cc-on-bedrock-devenv',
+      clusterName: config.ecsClusterName,
       containerInsights: true,
     });
 
@@ -148,7 +148,13 @@ export class EcsDevenvStack extends cdk.Stack {
     }));
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.M7G, ec2.InstanceSize.XLARGE4),
+      instanceType: (() => {
+        const [instanceClass, instanceSize] = config.ecsHostInstanceType.split('.');
+        return ec2.InstanceType.of(
+          instanceClass.toUpperCase() as unknown as ec2.InstanceClass,
+          instanceSize.toUpperCase() as unknown as ec2.InstanceSize,
+        );
+      })(),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
       role: ecsInstanceRole,
       securityGroup: sgOpen,
@@ -222,8 +228,8 @@ export class EcsDevenvStack extends cdk.Stack {
           }),
           environment: {
             // Direct Bedrock access (LiteLLM proxy removed)
-            AWS_DEFAULT_REGION: 'ap-northeast-2',
-            AWS_REGION: 'ap-northeast-2',
+            AWS_DEFAULT_REGION: cdk.Aws.REGION,
+            AWS_REGION: cdk.Aws.REGION,
             SECURITY_POLICY: 'open',  // Overridden at RunTask time
           },
           portMappings: [{ containerPort: 8080 }],
@@ -258,7 +264,7 @@ export class EcsDevenvStack extends cdk.Stack {
       vpc, description: 'DevEnv ALB SG', allowAllOutbound: true,
     });
     // CloudFront Prefix List - allow only CloudFront IPs
-    albSg.addIngressRule(ec2.Peer.prefixList('pl-22a6434b'), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
+    albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
     albSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP (CloudFront http-only origin)');
 
     // Allow ALB → DevEnv containers on port 8080

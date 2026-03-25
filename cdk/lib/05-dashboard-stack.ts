@@ -74,8 +74,8 @@ export class DashboardStack extends cdk.Stack {
     const albSg = new ec2.SecurityGroup(this, 'DashboardAlbSg', {
       vpc, description: 'Dashboard ALB SG', allowAllOutbound: true,
     });
-    // Note: pl-22a6434b is the CloudFront managed prefix list for ap-northeast-2
-    albSg.addIngressRule(ec2.Peer.prefixList('pl-22a6434b'), ec2.Port.tcp(443), 'Allow CloudFront');
+    // CloudFront managed prefix list (region-specific, from config)
+    albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront');
 
     const ec2Sg = new ec2.SecurityGroup(this, 'DashboardEc2Sg', {
       vpc, description: 'Dashboard EC2 SG', allowAllOutbound: true,
@@ -110,7 +110,7 @@ export class DashboardStack extends cdk.Stack {
         '# Install Node.js 20 (direct binary)',
         'ARCH=$(uname -m)',
         'if [ "$ARCH" = "aarch64" ]; then NODE_ARCH="arm64"; else NODE_ARCH="x64"; fi',
-        'curl -fsSL "https://nodejs.org/dist/v20.18.3/node-v20.18.3-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz',
+        `curl -fsSL "https://nodejs.org/dist/${config.nodeVersion}/node-${config.nodeVersion}-linux-\${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz`,
         'tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1',
         'rm /tmp/node.tar.gz',
         '',
@@ -119,21 +119,21 @@ export class DashboardStack extends cdk.Stack {
         '',
         '# Deploy Next.js app from S3',
         'mkdir -p /opt/dashboard',
-        'aws s3 cp s3://cc-on-bedrock-deploy-061525506239/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ap-northeast-2',
+        `aws s3 cp s3://cc-on-bedrock-deploy-${cdk.Aws.ACCOUNT_ID}/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ${cdk.Aws.REGION}`,
         'tar xzf /tmp/dashboard-app.tar.gz -C /opt/dashboard',
         'rm /tmp/dashboard-app.tar.gz',
         '',
         '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
-        'NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ap-northeast-2 --query SecretString --output text 2>/dev/null || openssl rand -hex 32)',
+        `NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ${cdk.Aws.REGION} --query SecretString --output text 2>/dev/null || openssl rand -hex 32)`,
         '',
         '# Environment config',
         'cat > /opt/dashboard/.env << ENVEOF',
-        `NEXTAUTH_URL=https://cconbedrock-dashboard.${config.domainName}`,
+        `NEXTAUTH_URL=https://${config.dashboardSubdomain}.${config.domainName}`,
         'NEXTAUTH_SECRET=$NEXTAUTH_SECRET_VAL',
         `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
-        `COGNITO_ISSUER=https://cognito-idp.ap-northeast-2.amazonaws.com/${userPool.userPoolId}`,
-        'AWS_REGION=ap-northeast-2',
-        'ECS_CLUSTER_NAME=cc-on-bedrock-devenv',
+        `COGNITO_ISSUER=https://cognito-idp.${cdk.Aws.REGION}.amazonaws.com/${userPool.userPoolId}`,
+        `AWS_REGION=${cdk.Aws.REGION}`,
+        `ECS_CLUSTER_NAME=${config.ecsClusterName}`,
         `COGNITO_USER_POOL_ID=${userPool.userPoolId}`,
         `DOMAIN_NAME=${config.domainName}`,
         `DEV_SUBDOMAIN=${config.devSubdomain}`,
@@ -207,13 +207,13 @@ export class DashboardStack extends cdk.Stack {
     // Route 53 Record
     new route53.ARecord(this, 'DashboardRecord', {
       zone: hostedZone,
-      recordName: 'cconbedrock-dashboard',
+      recordName: config.dashboardSubdomain,
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
     });
 
     // Outputs
     new cdk.CfnOutput(this, 'DashboardUrl', {
-      value: `https://cconbedrock-dashboard.${config.domainName}`,
+      value: `https://${config.dashboardSubdomain}.${config.domainName}`,
       exportName: 'cc-dashboard-url',
     });
     new cdk.CfnOutput(this, 'CloudFrontDomain', {
