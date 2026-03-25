@@ -49,7 +49,7 @@ const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
 const ecsCluster = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-cluster";
 const domainName = process.env.DOMAIN_NAME ?? "example.com";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
-const accountId = process.env.AWS_ACCOUNT_ID ?? "061525506239";
+const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });

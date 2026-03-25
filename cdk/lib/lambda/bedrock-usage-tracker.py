@@ -56,7 +56,8 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
     # If session name looks like an ECS task ID (32 hex chars), look up tags
     if len(session_name) == 32 and all(c in "0123456789abcdef" for c in session_name):
         try:
-            task_arn = f"arn:aws:ecs:ap-northeast-2:{identity_arn.split(':')[4]}:task/{ECS_CLUSTER}/{session_name}"
+            region = os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2")
+            task_arn = f"arn:aws:ecs:{region}:{identity_arn.split(':')[4]}:task/{ECS_CLUSTER}/{session_name}"
             tasks = ecs_client.describe_tasks(
                 cluster=ECS_CLUSTER, tasks=[task_arn], include=["TAGS"]
             )["tasks"]

@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from collections import defaultdict
 
-TABLE_NAME = "cc-on-bedrock-usage"
-REGION = "ap-northeast-2"
+TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
+REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2"))
 
 
 def lambda_handler(event, context):

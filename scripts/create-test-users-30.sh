@@ -4,8 +4,9 @@
 
 set -euo pipefail
 
-REGION="ap-northeast-2"
-DASHBOARD_URL="https://cconbedrock-dashboard.whchoi.net"
+REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
+DOMAIN="${DOMAIN_NAME:-whchoi.net}"
+DASHBOARD_URL="https://cconbedrock-dashboard.${DOMAIN}"
 API_COOKIE="" # Will need auth cookie
 
 # Department configuration: name, user_count, default_os, default_tier
@@ -30,7 +31,7 @@ for dept_config in "${DEPARTMENTS[@]}"; do
   for i in $(seq 1 "$count"); do
     padded=$(printf "%02d" $USER_NUM)
     username="${dept}-${padded}"
-    email="${username}@whchoi.net"
+    email="${username}@${DOMAIN}"
     subdomain="${dept}${padded}"
 
     # Vary OS and tier within department

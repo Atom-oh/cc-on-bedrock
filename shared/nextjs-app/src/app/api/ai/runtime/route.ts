@@ -12,10 +12,8 @@ import {
 } from "@aws-sdk/client-bedrock-agentcore";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const RUNTIME_ARN = process.env.AGENTCORE_RUNTIME_ARN
-  ?? "arn:aws:bedrock-agentcore:ap-northeast-2:061525506239:runtime/cconbedrock_assistant_v2-Rpg8UUGdQt";
-const GATEWAY_URL = process.env.AGENTCORE_GATEWAY_URL
-  ?? "https://cconbedrock-gateway-u1p3qlbsz6.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp";
+const RUNTIME_ARN = process.env.AGENTCORE_RUNTIME_ARN ?? "";
+const GATEWAY_URL = process.env.AGENTCORE_GATEWAY_URL ?? "";
 
 function getClient() {
   return new BedrockAgentCoreClient({ region });
