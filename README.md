@@ -1,390 +1,337 @@
+> **Language / 언어**: [English](#en) | [한국어](#ko)
+
+---
+
+<a id="en"></a>
+
 # CC-on-Bedrock
 
-AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼.
+**Multi-user Claude Code Development Platform on AWS Bedrock**
 
-CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 3가지 IaC로 동일 아키텍처를 구현하며, 교육/워크숍/프로덕션 환경에서 활용할 수 있습니다.
+A fully managed, multi-user development platform that provides each developer with an isolated Claude Code + Kiro environment running on Amazon ECS, with centralized management through a Next.js dashboard. Infrastructure is implemented in three IaC tools: CDK (TypeScript), Terraform (HCL), and CloudFormation (YAML).
 
-## Architecture Overview
+## Architecture
 
-5개의 독립적인 스택/모듈로 구성된 멀티유저 개발 플랫폼입니다.
+![CC-on-Bedrock Architecture](img/cconbedrock_arch.png)
 
-```
-Users (Browser)
-  │
-  ├── Dashboard (CloudFront → ALB → Next.js)
-  │     ├── Cognito 인증 (OAuth2 + OIDC)
-  │     ├── Analytics Dashboard (비용/토큰/사용자 분석)
-  │     ├── AI Assistant (AgentCore Runtime + Gateway)
-  │     ├── Monitoring (Container Insights + CloudWatch)
-  │     └── Container/User 관리
-  │
-  └── DevEnv (CloudFront → ALB → ECS Task per user)
-        ├── code-server (VS Code Web)
-        ├── Claude Code CLI → Bedrock (직접 호출)
-        ├── Kiro CLI
-        └── EFS (영구 스토리지)
+### Key Design Principles
 
-Internal:
-  LiteLLM Proxy (ALB:4000) → Bedrock Models
-  ├── 17 model aliases (global/apac/us prefix 매핑)
-  ├── Serverless Valkey (TLS, 캐시)
-  ├── RDS PostgreSQL (사용량 DB)
-  └── API Key 예산 관리
-```
+- **Bedrock Direct Mode** — Claude Code calls Bedrock directly via ECS Task Role (no proxy)
+- **Per-user IAM Roles** — Individual budget control with dynamic IAM Deny Policy
+- **Hybrid AI** — Dashboard uses Converse API (fast streaming), Slack uses AgentCore Runtime (shared)
+- **7-Layer Security** — CloudFront → ALB → Cognito → Security Groups → VPC Endpoints → DNS Firewall → IAM/DLP
+- **Serverless Tracking** — CloudTrail → EventBridge → Lambda → DynamoDB (~$5/month vs $370 with LiteLLM)
 
-| Stack | 설명 | 주요 리소스 |
-|-------|------|-------------|
-| 01 Network | 네트워크 기반 | VPC (3-tier), NAT GW x2, VPC Endpoints x8, Route 53 |
-| 02 Security | 인증/보안 | Cognito, ACM, KMS, Secrets Manager, IAM, DLP 정책 |
-| 03 LiteLLM | AI 프록시 | EC2 ASG x2, Internal ALB, RDS PostgreSQL, Serverless Valkey |
-| 04 ECS DevEnv | 개발환경 | ECS Cluster (EC2), 6 Task Defs, EFS, ALB, CloudFront |
-| 05 Dashboard | 관리 대시보드 | Next.js 14, EC2 ASG, ALB, CloudFront |
+### Infrastructure Stacks (5)
 
-### Models (Bedrock Inference Profiles)
+| Stack | Resources |
+|-------|-----------|
+| **01-Network** | VPC (10.100.0.0/16), Public/Private Subnets (2 AZ), NAT Gateway x2, VPC Endpoints x8, DNS Firewall |
+| **02-Security** | Cognito (Hosted UI + OAuth 2.0), ACM, KMS, Secrets Manager, IAM Roles, SNS |
+| **03-Usage Tracking** | DynamoDB, Lambda (usage-tracker + budget-check), EventBridge, CloudTrail |
+| **04-ECS DevEnv** | ECS Cluster (EC2 mode x8), 6 Task Definitions, EFS, ALB, CloudFront |
+| **05-Dashboard** | Next.js Standalone, EC2 ASG, ALB, CloudFront, S3 Deploy Bucket |
 
-| Model | Inference Profile ID | 용도 |
-|-------|---------------------|------|
-| Claude Sonnet 4.6 | `global.anthropic.claude-sonnet-4-6` | Claude Code 기본 모델 |
-| Claude Opus 4.6 | `global.anthropic.claude-opus-4-6-v1` | 고성능 작업 |
-| Claude Haiku 4.5 | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | 빠른 응답 |
+### AgentCore (Outside CDK)
 
-### Bedrock Access Architecture
+| Resource | ID | Purpose |
+|----------|-----|---------|
+| **Runtime** | cconbedrock_assistant_v2 | Strands Agent (PUBLIC mode) |
+| **Gateway** | cconbedrock-gateway | MCP protocol, 3 Lambda targets |
+| **Memory** | cconbedrock_memory | Per-user conversation history |
+| **Lambda Tools** | 3 functions, 8 MCP tools | ECS, CloudWatch, DynamoDB |
+
+## AI Assistant — Hybrid Architecture
 
 ```
-컨테이너 (Claude Code CLI)
-  │ ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6
-  │ (ECS Instance Role → Bedrock 직접 호출)
-  ▼
-Bedrock API (global inference profiles)
+Dashboard (fast, real-time streaming):
+  Browser → /api/ai → Bedrock Converse API (direct)
+  → Token-level SSE streaming, 1~5 sec, 3 inline tools
 
-Dashboard (LiteLLM 경유)
-  │ LiteLLM API Key (sk-xxx)
-  │ 17 model aliases + budget tracking
-  ▼
-LiteLLM Proxy → Bedrock API
+Slack/External (shared, multi-client):
+  Slack Bot → /api/ai/runtime → AgentCore Runtime → Gateway (MCP) → Lambda
+  → Full response after processing, 10~20 sec, 8 tools
+
+Both share: AgentCore Memory (per-user session isolation)
 ```
 
-### AI Assistant (AgentCore Runtime)
+## Container Architecture
+
+Each user gets:
+- **1 ECS Task** — Isolated container (code-server + Claude Code + Kiro)
+- **1 ENI** — Unique Private IP (awsvpc network mode)
+- **1 IAM Role** — Per-user (`cc-on-bedrock-task-{subdomain}`) for budget control
+- **1 ALB Target Group** — Host-based routing (`{subdomain}.dev.whchoi.net`)
+- **1 EFS Directory** — Per-user isolation (`/users/{subdomain}/`)
+
+### Task Definition Specifications
+
+| Task Definition | OS | vCPU | Memory | Use Case |
+|----------------|-----|------|--------|----------|
+| devenv-ubuntu-light | Ubuntu 24.04 | 1 | 4 GiB | Lightweight, docs |
+| devenv-ubuntu-standard | Ubuntu 24.04 | 2 | 8 GiB | General dev (default) |
+| devenv-ubuntu-power | Ubuntu 24.04 | 4 | 12 GiB | Large builds, ML |
+| devenv-al2023-light | Amazon Linux 2023 | 1 | 4 GiB | AWS-native lightweight |
+| devenv-al2023-standard | Amazon Linux 2023 | 2 | 8 GiB | AWS-native general |
+| devenv-al2023-power | Amazon Linux 2023 | 4 | 12 GiB | AWS-native large |
+
+## Security — 7 Layers
+
+| Layer | Component | Protection |
+|-------|-----------|------------|
+| L1 | CloudFront | HTTPS (TLS 1.2+), AWS Shield DDoS |
+| L2 | ALB | CloudFront Prefix List + X-Custom-Secret header |
+| L3 | Cognito | OAuth 2.0, admin/user group-based access |
+| L4 | Security Groups | 3-tier DLP (Open / Restricted / Locked) |
+| L5 | VPC Endpoints | Private Link (no internet transit) |
+| L6 | DNS Firewall | 5 AWS threat lists + custom block |
+| L7 | IAM + DLP | Per-model access control, budget Deny Policy, file restrictions |
+
+## Budget Control Flow
 
 ```
-Dashboard (/ai) → InvokeAgentRuntimeCommand
-  ▼
-AgentCore Runtime (cconbedrock_agent)
-  ├── Strands Agent (Claude Sonnet 4.6)
-  │     ├── get_spend_summary (LiteLLM)
-  │     ├── get_api_key_budgets (LiteLLM)
-  │     ├── get_system_health (LiteLLM)
-  │     ├── get_container_status (ECS)
-  │     └── get_container_metrics (CloudWatch)
-  └── Gateway (cconbedrock-analytics-gateway, MCP)
+ECS Task (Claude Code) → Bedrock API call
+  → CloudTrail (auto-logged)
+  → EventBridge Rule (match bedrock:InvokeModel)
+  → Lambda: usage-tracker → DynamoDB (per-user cost)
+
+Every 5 min: Lambda: budget-check
+  → DynamoDB Scan (today's cost per user)
+  → 80%: SNS warning alert
+  → 100%: IAM Deny Policy on user's Task Role + Cognito flag
+  → Next day: auto-release Deny Policy
 ```
 
----
+## Dashboard (7 Pages)
 
-## Dashboard Features
-
-### Home (`/`)
-- **Hero Cards**: 총 비용, 요청수, 사용자, 컨테이너 (AWSops-style 6열 그리드)
-- **Cost & Token Insights**: Monthly Est, Avg Cost/Req, Budget 사용률
-- **Infrastructure**: Proxy/DB/Cache/모델 상태, API Key 수
-- **Container Insights**: CPU/Memory/Network from CloudWatch
-- **System Status**: 5개 서비스 dot indicators
-- **Quick Actions**: 각 페이지 바로가기
-
-### AI Assistant (`/ai`)
-- **AgentCore Runtime** 기반 자연어 분석
-- 6개 프리셋 질문 (비용 분석, 시스템 상태, 예산 관리 등)
-- SSE 스트리밍 응답 + 마크다운 렌더링
-- Tool 호출 상태 실시간 표시
-
-### Analytics (`/analytics`)
-- **Overview**: 총 비용/요청/사용자/응답시간
-- **Insights**: 일일 Burn Rate, 월간 예측, 요청당 비용, 예산 사용률
-- **System Health**: Proxy, DB, Cache, LiteLLM 버전
-- **API Key Budget**: 키별 사용률 progress bar
-- **Bedrock Model**: 모델별 요청/토큰/비용/지연시간
-- **Leaderboard**: 사용자 TOP 10 (총/Input/Output 토큰)
-- **User × Model Matrix**: 히트맵 + 모델 선호도 + 토큰 효율
-- **Token Trends**: Area/Line 차트
-- **Usage Patterns**: 사용자별 요청, 모델별 비용
-
-### Monitoring (`/monitoring`)
-- **Service Health**: Proxy/DB/Cache 상태 카드
-- **Container Insights**: CPU/Memory utilization + Network I/O (CloudWatch)
-- **6시간 시계열**: Area 차트 (CPU+Memory, Network Rx/Tx)
-- **Per-TaskDef**: 각 Task Definition별 리소스 사용량
-- **Container Distribution**: OS/Tier 분포 바
-
-### User Management (`/admin`)
-- User CRUD (Cognito)
-- 인사이트: 활성 사용자, API Key 보유, OS/Tier/Security Policy 분포
-
-### Container Management (`/admin/containers`)
-- 컨테이너 시작/중지
-- 인사이트: 사용률, OS/Tier breakdown
-- 서브도메인별 ALB 라우팅
-
-### 공통 기능
-- **다크 테마**: AWSops-style 네이비 (#0a0f1a)
-- **한/영 토글**: 사이드바 상단, ~130 번역 키
-- **30초 자동 새로고침**
-- **접이식 섹션**
-
----
-
-## Quick Start
-
-### 1. Prerequisites
-
-```bash
-aws --version          # AWS CLI v2.15+
-docker --version       # Docker 24+
-node --version         # Node.js 20+
-```
-
-### 2. Docker Images
-
-```bash
-# ECR 리포지토리 생성
-bash scripts/create-ecr-repos.sh
-
-# 모든 이미지 빌드 + 푸시 (ARM64)
-cd docker && bash build.sh all all
-```
-
-### 3. Deploy Infrastructure
-
-3가지 IaC 도구 중 하나를 선택합니다:
-
-#### CDK (TypeScript) — 추천
-```bash
-cd cdk
-npm install
-npx cdk bootstrap aws://<ACCOUNT_ID>/ap-northeast-2
-npx cdk deploy --all
-```
-
-#### Terraform (HCL)
-```bash
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-terraform init && terraform apply
-```
-
-#### CloudFormation (YAML)
-```bash
-cd cloudformation
-bash deploy.sh
-```
-
-### 4. Post-Deploy
-
-```bash
-# 배포 검증 (23개 항목 체크)
-bash scripts/verify-deployment.sh your-domain.com
-
-# Dashboard 접속
-open https://<cloudfront-domain>
-```
-
-### 5. 사용자 생성 & 컨테이너 시작
-
-1. Dashboard → Admin → Users → Create User
-2. Dashboard → Admin → Containers → Start Container
-3. 사용자가 `https://<subdomain>.dev.your-domain.com` 접속
-4. code-server 비밀번호 입력 → Claude Code 사용
-
----
+| Page | Access | Features |
+|------|--------|----------|
+| Home | All | Cost/token/user summary, cluster metrics |
+| AI Assistant | All | Bedrock Converse + Tool Use, AgentCore Memory, copy, voice |
+| Analytics | All | Model/department/user cost trends, leaderboard |
+| Monitoring | Admin | Container Insights (CPU/Memory/Network), ECS status |
+| Security | Admin | IAM, DLP, DNS Firewall, CloudTrail audit, checklist |
+| Users | Admin | Cognito CRUD, sort/filter (OS, Tier, Security, Status) |
+| Containers | Admin | ECS start/stop, sort/filter, EFS panel, duplicate prevention |
 
 ## Project Structure
 
 ```
-cc-on-bedrock/
-├── agent/                          # AgentCore Runtime Agent
-│   ├── agent.py                    #   Strands Agent + 5 tools
-│   ├── Dockerfile                  #   Python 3.11 container
-│   └── requirements.txt            #   bedrock-agentcore, strands-agents
-│
-├── docker/                         # Docker images
-│   ├── devenv/                     #   code-server + Claude Code + Kiro
-│   │   ├── Dockerfile.ubuntu       #     Ubuntu 24.04 ARM64
-│   │   ├── Dockerfile.al2023       #     Amazon Linux 2023 ARM64
-│   │   └── scripts/                #     Setup & entrypoint (DLP 정책)
-│   └── litellm/                    #   LiteLLM proxy
-│       ├── Dockerfile              #     python:3.11-slim
-│       ├── litellm-config.yaml     #     17 model aliases
-│       └── scripts/entrypoint.sh   #     Secrets Manager → envsubst
-│
-├── cdk/                            # AWS CDK (TypeScript)
-│   ├── bin/app.ts                  #   Stack composition + dependencies
-│   ├── config/default.ts           #   Typed configuration
-│   └── lib/                        #   5 Stacks (01-Network ~ 05-Dashboard)
-│
-├── terraform/                      # Terraform (HCL)
-│   ├── main.tf                     #   Root module wiring
-│   ├── variables.tf / outputs.tf
-│   └── modules/                    #   5 modules
-│
-├── cloudformation/                 # CloudFormation (YAML)
-│   ├── 01-network.yaml ~ 05-dashboard.yaml
-│   ├── deploy.sh / destroy.sh
-│   └── params/default.json
-│
-├── shared/nextjs-app/              # Next.js 14 Dashboard
-│   ├── src/app/                    #   App Router pages
-│   │   ├── page.tsx                #     Home (AWSops-style cards)
-│   │   ├── ai/                     #     AI Assistant (AgentCore)
-│   │   ├── analytics/              #     Analytics (9 sections)
-│   │   ├── monitoring/             #     Monitoring (Container Insights)
-│   │   ├── admin/                  #     Users + Containers
-│   │   └── api/                    #     API routes (litellm, containers, ai, health)
-│   ├── src/components/             #   Charts, Tables, Cards, Sidebar
-│   └── src/lib/                    #   Auth, AWS clients, LiteLLM, CloudWatch, i18n
-│
-├── scripts/                        # Utility scripts
-│   ├── create-ecr-repos.sh
-│   └── verify-deployment.sh        #   23-item health check
-│
-├── tests/                          # Tests
-│   ├── docker/                     #   Container tests
-│   └── integration/                #   E2E tests
-│
-└── docs/                           # Documentation
-    ├── deployment-guide.md
-    ├── iac-comparison.md
-    ├── architecture.md
-    └── decisions/                   #   ADR templates
+docs/              Architecture, specs, plans, deployment guide
+.claude/           Claude Code settings, hooks, skills
+.kiro/             Kiro agent settings, steering docs
+tools/             Scripts, prompts
+docker/            Docker images (devenv Ubuntu/AL2023)
+cdk/               AWS CDK TypeScript (5 active stacks)
+terraform/         Terraform HCL (4 modules)
+cloudformation/    CloudFormation YAML (4 templates) + deploy.sh
+shared/nextjs-app/ Next.js dashboard (7 pages, 8 API routes)
+agent/             AgentCore agent (Strands + MCP Gateway)
+scripts/           ECR repos, deployment verification, test users
+tests/             Container integration tests, E2E tests
+output/            Architecture docs (bilingual ko/en)
+img/               Architecture diagrams
 ```
 
----
-
-## Key Design Decisions
-
-| 결정 | 이유 |
-|------|------|
-| **서브도메인 라우팅** (`user01.dev.example.com`) | 포트 기반보다 직관적, CloudFront + ALB Host-header 규칙 |
-| **Claude Code → Bedrock 직접** | ECS 환경에서 `ANTHROPIC_BASE_URL` 무시됨, Instance Role 활용 |
-| **LiteLLM → Dashboard API 추적** | 사용자별 예산/토큰 관리, 17개 모델 alias 매핑 |
-| **6 Task Definitions** | Ubuntu/AL2023 × Light/Standard/Power = 6 조합 |
-| **EFS → `/home/coder`** | 컨테이너 재시작 시 작업 파일 보존 |
-| **Serverless Valkey** | ~$8/month, TLS 기본, LiteLLM 캐시 |
-| **DLP 4-layer** | code-server flags → SG → DNS Firewall → Extension |
-| **ECS Exec 활성화** | 관리자 컨테이너 직접 접속 (`initProcessEnabled: true`) |
-| **AgentCore Runtime** | AI 분석 에이전트, Tool Use 기반 실시간 데이터 조회 |
-
----
-
-## Security
-
-### DLP (Data Loss Prevention) Policies
-
-| Policy | 설명 | 구현 |
-|--------|------|------|
-| **open** | 모든 아웃바운드 허용 | SG: 0.0.0.0/0 |
-| **restricted** | 화이트리스트만 허용 | SG: AWS 서비스 + 특정 IP |
-| **locked** | VPC 내부만 허용 | SG: VPC CIDR only |
-
-### Authentication Flow
-
-```
-Browser → CloudFront → Dashboard → NextAuth.js → Cognito (OAuth2 code flow)
-                                                    ↓
-                                              Hosted UI 로그인
-                                                    ↓
-                                              Callback → JWT 세션
-```
-
----
-
-## Cost Estimate
-
-### Education (20 users, Seoul Region)
-
-| Resource | Spec | Monthly |
-|----------|------|---------|
-| EC2 - LiteLLM x2 | t4g.xlarge | ~$290 |
-| EC2 - ECS Host (avg ~1.5) | m7g.4xlarge | ~$700 |
-| EC2 - Dashboard | t4g.xlarge | ~$145 |
-| RDS PostgreSQL | db.t4g.medium | ~$80 |
-| Serverless Valkey | min 100MB | ~$8 |
-| EFS | 20 users x 10GB | ~$20-40 |
-| NAT Gateway x2 | | ~$90 |
-| ALB x3 | 2 external + 1 internal | ~$60 |
-| CloudFront x2 | Dashboard + DevEnv | ~$2-7 |
-| VPC Endpoints x7 | Interface type | ~$102 |
-| Route 53 + ACM + ECR | | ~$5 |
-| AgentCore Runtime | Serverless | ~$5-10 |
-| **Total (excl. Bedrock)** | | **~$1,510-1,540/month** |
-
-> Bedrock 비용은 사용량에 따라 별도 과금됩니다.
-> ECS ASG Min:0 설정으로 비활동 시 ECS Host 비용을 55-65% 절감할 수 있습니다.
-
-### Production (100 users)
-
-| Change | Estimated Total |
-|--------|:---:|
-| ECS Host ~15x m7g.4xlarge, Multi-AZ RDS | **~$10,200-10,500/month** |
-
----
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Deployment Guide](docs/deployment-guide.md) | 전체 배포 가이드 |
-| [IaC Comparison](docs/iac-comparison.md) | CDK / Terraform / CloudFormation 비교 |
-| [Architecture Diagrams](docs/architecture.md) | Mermaid 아키텍처 다이어그램 |
-
----
-
-## Testing
+## Quick Start
 
 ```bash
-# E2E 통합 테스트 (IaC + Docker + Next.js)
-bash tests/integration/test-e2e.sh
+# CDK Deploy
+cd cdk && npm install && npx cdk deploy --all
 
-# Docker 컨테이너 테스트만
-bash tests/integration/test-e2e.sh --only-iac
+# Terraform Deploy
+cd terraform && terraform init && terraform apply
 
-# 배포 후 검증 (23개 항목)
-bash scripts/verify-deployment.sh your-domain.com
+# CloudFormation Deploy
+cd cloudformation && bash deploy.sh
+
+# Docker Images
+cd docker && bash build.sh build all
+
+# Dashboard Dev
+cd shared/nextjs-app && npm install && npm run dev
+
+# AgentCore Lambda + Gateway
+ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
 ```
-
----
 
 ## Tech Stack
 
-| Category | Technology |
-|----------|-----------|
-| **IaC** | CDK v2 (TypeScript), Terraform ≥1.5, CloudFormation (YAML) |
-| **Container** | Docker (Ubuntu 24.04 / AL2023, ARM64) |
-| **Frontend** | Next.js 14 (App Router), Tailwind CSS, Recharts |
-| **Auth** | Amazon Cognito + NextAuth.js |
-| **AI** | Bedrock Claude (Opus 4.6, Sonnet 4.6, Haiku 4.5) |
-| **Agent** | AgentCore Runtime + Gateway, Strands SDK |
-| **Proxy** | LiteLLM (17 model aliases, budget tracking) |
-| **Dev Tools** | code-server, Claude Code CLI, Kiro CLI |
-| **AWS Services** | ECS (EC2), ALB, CloudFront, RDS, ElastiCache Valkey, EFS, Route 53, KMS, Secrets Manager, CloudWatch |
-| **Region** | ap-northeast-2 (Seoul) |
+- **IaC**: AWS CDK v2, Terraform >= 1.5, CloudFormation
+- **Container**: Docker (Ubuntu 24.04 / Amazon Linux 2023, ARM64)
+- **Frontend**: Next.js 14+ (App Router), Tailwind CSS, Recharts
+- **Auth**: Amazon Cognito (OAuth 2.0 + OIDC) + NextAuth.js
+- **AI Models**: Bedrock Opus 4.6, Sonnet 4.6, Haiku 4.5
+- **AI Framework**: Strands Agents, MCP Protocol, AgentCore Runtime/Gateway/Memory
+- **Backend**: DynamoDB, Lambda, EventBridge, EFS, ECS (EC2 mode)
+- **Networking**: CloudFront, ALB, VPC Endpoints, DNS Firewall, NAT Gateway
+- **Security**: KMS, Secrets Manager, IAM (per-user roles), Security Groups (3-tier DLP)
+- **Region**: ap-northeast-2 (Seoul)
 
 ---
 
-## Contributing
+<a id="ko"></a>
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feat/your-feature`
-3. Follow code conventions:
-   - CDK: TypeScript, 5 Stack classes
-   - Terraform: HCL, module-per-stack
-   - CloudFormation: YAML, one template per stack
-   - Docker: ARM64 (Graviton)
-   - Dashboard: Next.js 14, Tailwind dark theme
-4. Run tests: `bash tests/integration/test-e2e.sh`
-5. Commit: conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`)
-6. Submit a Pull Request
+# CC-on-Bedrock
 
----
+**AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼**
 
-## License
+개발자마다 격리된 Claude Code + Kiro 환경을 Amazon ECS에서 제공하고, Next.js 대시보드로 중앙 관리하는 완전 관리형 멀티유저 개발 플랫폼입니다. CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 3가지 IaC로 동일 인프라를 구현합니다.
 
-MIT
+## 아키텍처
+
+![CC-on-Bedrock Architecture](img/cconbedrock_arch.png)
+
+### 핵심 설계 원칙
+
+- **Bedrock Direct Mode** — Claude Code가 ECS Task Role로 Bedrock 직접 호출 (프록시 없음)
+- **사용자별 IAM Role** — 동적 IAM Deny Policy로 개별 예산 제어
+- **하이브리드 AI** — Dashboard는 Converse API (빠른 스트리밍), Slack은 AgentCore Runtime (공유)
+- **7계층 보안** — CloudFront → ALB → Cognito → Security Groups → VPC Endpoints → DNS Firewall → IAM/DLP
+- **서버리스 추적** — CloudTrail → EventBridge → Lambda → DynamoDB (월 ~$5, LiteLLM 대비 $370 절감)
+
+### 인프라 스택 (5개)
+
+| 스택 | 리소스 |
+|------|--------|
+| **01-Network** | VPC (10.100.0.0/16), Public/Private Subnet (2 AZ), NAT Gateway x2, VPC Endpoint x8, DNS Firewall |
+| **02-Security** | Cognito (Hosted UI + OAuth 2.0), ACM, KMS, Secrets Manager, IAM Roles, SNS |
+| **03-Usage Tracking** | DynamoDB, Lambda (usage-tracker + budget-check), EventBridge, CloudTrail |
+| **04-ECS DevEnv** | ECS Cluster (EC2 모드 x8), Task Definition 6종, EFS, ALB, CloudFront |
+| **05-Dashboard** | Next.js Standalone, EC2 ASG, ALB, CloudFront, S3 Deploy Bucket |
+
+### AgentCore (CDK 외부 관리)
+
+| 리소스 | ID | 용도 |
+|--------|-----|------|
+| **Runtime** | cconbedrock_assistant_v2 | Strands Agent (PUBLIC 모드) |
+| **Gateway** | cconbedrock-gateway | MCP 프로토콜, Lambda 타겟 3개 |
+| **Memory** | cconbedrock_memory | 사용자별 대화 기억 |
+| **Lambda Tools** | 3개 함수, 8개 MCP Tool | ECS, CloudWatch, DynamoDB |
+
+## AI Assistant — 하이브리드 구조
+
+```
+Dashboard (빠른 실시간 스트리밍):
+  Browser → /api/ai → Bedrock Converse API (직접)
+  → 토큰 단위 SSE 스트리밍, 1~5초, 인라인 Tool 3개
+
+Slack/외부 (멀티 클라이언트 공유):
+  Slack Bot → /api/ai/runtime → AgentCore Runtime → Gateway (MCP) → Lambda
+  → 전체 응답 후 반환, 10~20초, 8개 Tool
+
+양쪽 공유: AgentCore Memory (사용자별 세션 격리)
+```
+
+## 컨테이너 구조
+
+각 사용자에게 할당:
+- **ECS Task 1개** — 격리된 컨테이너 (code-server + Claude Code + Kiro)
+- **ENI 1개** — 고유 Private IP (awsvpc 네트워크 모드)
+- **IAM Role 1개** — 사용자별 (`cc-on-bedrock-task-{subdomain}`) 예산 제어
+- **ALB Target Group 1개** — Host 기반 라우팅 (`{subdomain}.dev.whchoi.net`)
+- **EFS 디렉토리 1개** — 사용자별 격리 (`/users/{subdomain}/`)
+
+### Task Definition 사양
+
+| Task Definition | OS | vCPU | Memory | 용도 |
+|----------------|-----|------|--------|------|
+| devenv-ubuntu-light | Ubuntu 24.04 | 1 | 4 GiB | 경량 작업, 문서 |
+| devenv-ubuntu-standard | Ubuntu 24.04 | 2 | 8 GiB | 일반 개발 (기본) |
+| devenv-ubuntu-power | Ubuntu 24.04 | 4 | 12 GiB | 대규모 빌드, ML |
+| devenv-al2023-light | Amazon Linux 2023 | 1 | 4 GiB | AWS 네이티브 경량 |
+| devenv-al2023-standard | Amazon Linux 2023 | 2 | 8 GiB | AWS 네이티브 일반 |
+| devenv-al2023-power | Amazon Linux 2023 | 4 | 12 GiB | AWS 네이티브 대규모 |
+
+## 보안 — 7계층
+
+| 계층 | 컴포넌트 | 보호 |
+|------|----------|------|
+| L1 | CloudFront | HTTPS (TLS 1.2+), AWS Shield DDoS 방어 |
+| L2 | ALB | CloudFront Prefix List + X-Custom-Secret 헤더 검증 |
+| L3 | Cognito | OAuth 2.0, admin/user 그룹 기반 접근 제어 |
+| L4 | Security Groups | 3-tier DLP (Open / Restricted / Locked) |
+| L5 | VPC Endpoints | Private Link (인터넷 경유 없음) |
+| L6 | DNS Firewall | 5개 AWS 위협 리스트 + 커스텀 차단 |
+| L7 | IAM + DLP | 모델별 접근 제어, 예산 Deny Policy, 파일 제한 |
+
+## 예산 제어 흐름
+
+```
+ECS Task (Claude Code) → Bedrock API 호출
+  → CloudTrail (자동 기록)
+  → EventBridge Rule (bedrock:InvokeModel 매칭)
+  → Lambda: usage-tracker → DynamoDB (사용자별 비용)
+
+5분마다: Lambda: budget-check
+  → DynamoDB Scan (오늘 사용자별 비용)
+  → 80%: SNS 경고 알림
+  → 100%: 사용자 Task Role에 IAM Deny Policy 부착 + Cognito 플래그
+  → 다음 날: Deny Policy 자동 해제
+```
+
+## Dashboard (7 페이지)
+
+| 페이지 | 접근 | 기능 |
+|--------|------|------|
+| Home | 전체 | 비용/토큰/사용자 요약, 클러스터 메트릭 |
+| AI Assistant | 전체 | Bedrock Converse + Tool Use, AgentCore Memory, 복사, 음성 |
+| Analytics | 전체 | 모델/부서/사용자 비용 트렌드, 리더보드 |
+| Monitoring | Admin | Container Insights (CPU/Memory/Network), ECS 상태 |
+| Security | Admin | IAM, DLP, DNS Firewall, CloudTrail 감사, 체크리스트 |
+| Users | Admin | Cognito CRUD, 소팅/필터 (OS, Tier, Security, Status) |
+| Containers | Admin | ECS 시작/중지, 소팅/필터, EFS 패널, 중복 방지 |
+
+## 프로젝트 구조
+
+```
+docs/              아키텍처, 스펙, 계획, 배포 가이드
+.claude/           Claude Code 설정, hooks, skills
+.kiro/             Kiro 에이전트 설정, steering 문서
+tools/             스크립트, 프롬프트
+docker/            Docker 이미지 (devenv Ubuntu/AL2023)
+cdk/               AWS CDK TypeScript (5 active stacks)
+terraform/         Terraform HCL (4 modules)
+cloudformation/    CloudFormation YAML (4 templates) + deploy.sh
+shared/nextjs-app/ Next.js 대시보드 (7 pages, 8 API routes)
+agent/             AgentCore 에이전트 (Strands + MCP Gateway)
+scripts/           ECR repos, 배포 검증, 테스트 유저
+tests/             컨테이너 통합 테스트, E2E 테스트
+output/            아키텍처 문서 (한/영 번역)
+img/               아키텍처 다이어그램
+```
+
+## 빠른 시작
+
+```bash
+# CDK 배포
+cd cdk && npm install && npx cdk deploy --all
+
+# Terraform 배포
+cd terraform && terraform init && terraform apply
+
+# CloudFormation 배포
+cd cloudformation && bash deploy.sh
+
+# Docker 이미지 빌드
+cd docker && bash build.sh build all
+
+# Dashboard 개발 서버
+cd shared/nextjs-app && npm install && npm run dev
+
+# AgentCore Lambda + Gateway 배포
+ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
+```
+
+## 기술 스택
+
+- **IaC**: AWS CDK v2, Terraform >= 1.5, CloudFormation
+- **컨테이너**: Docker (Ubuntu 24.04 / Amazon Linux 2023, ARM64)
+- **프론트엔드**: Next.js 14+ (App Router), Tailwind CSS, Recharts
+- **인증**: Amazon Cognito (OAuth 2.0 + OIDC) + NextAuth.js
+- **AI 모델**: Bedrock Opus 4.6, Sonnet 4.6, Haiku 4.5
+- **AI 프레임워크**: Strands Agents, MCP Protocol, AgentCore Runtime/Gateway/Memory
+- **백엔드**: DynamoDB, Lambda, EventBridge, EFS, ECS (EC2 mode)
+- **네트워킹**: CloudFront, ALB, VPC Endpoints, DNS Firewall, NAT Gateway
+- **보안**: KMS, Secrets Manager, IAM (사용자별 Role), Security Groups (3-tier DLP)
+- **리전**: ap-northeast-2 (Seoul)
