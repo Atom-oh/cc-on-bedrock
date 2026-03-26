@@ -15,10 +15,10 @@ import io
 import time
 
 REGION = os.environ.get("REGION", "ap-northeast-2")
-ACCOUNT_ID = os.environ.get("ACCOUNT_ID")
+ACCOUNT_ID = os.environ.get("ACCOUNT_ID", "")
 if not ACCOUNT_ID:
-    print("ERROR: ACCOUNT_ID environment variable is required")
-    sys.exit(1)
+    import boto3
+    ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 LAMBDA_ROLE = os.environ.get("LAMBDA_ROLE", f"arn:aws:iam::{ACCOUNT_ID}:role/cc-on-bedrock-agentcore-lambda")
 GATEWAY_ROLE = os.environ.get("GATEWAY_ROLE", f"arn:aws:iam::{ACCOUNT_ID}:role/cc-on-bedrock-agentcore-gateway")
 PREFIX = "cconbedrock"

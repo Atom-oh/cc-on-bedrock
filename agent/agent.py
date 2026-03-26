@@ -22,14 +22,14 @@ logging.basicConfig(format="%(levelname)s | %(name)s | %(message)s", handlers=[l
 app = BedrockAgentCoreApp()
 
 # Gateway URL (단일 Gateway, 향후 역할별 분리 가능)
-GATEWAY_URL = os.environ.get("GATEWAY_URL", "https://cconbedrock-gateway-u1p3qlbsz6.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp")
-GATEWAY_REGION = "ap-northeast-2"
+GATEWAY_URL = os.environ.get("GATEWAY_URL", "")
+GATEWAY_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2"))
 SERVICE = "bedrock-agentcore"
 
 # Bedrock Model
 model = BedrockModel(
-    model_id="global.anthropic.claude-sonnet-4-6",
-    region_name="ap-northeast-2",
+    model_id=os.environ.get("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+    region_name=GATEWAY_REGION,
 )
 
 # ============================================================================

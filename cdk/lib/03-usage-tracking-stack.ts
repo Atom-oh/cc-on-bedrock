@@ -24,7 +24,7 @@ export class UsageTrackingStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: UsageTrackingStackProps) {
     super(scope, id, props);
 
-    const { encryptionKey, userPool } = props;
+    const { config, encryptionKey, userPool } = props;
 
     // SNS Topic for budget alerts
     const alertTopic = new sns.Topic(this, 'BudgetAlertTopic', {
@@ -63,7 +63,7 @@ export class UsageTrackingStack extends cdk.Stack {
       memorySize: 256,
       environment: {
         USAGE_TABLE_NAME: this.usageTable.tableName,
-        ECS_CLUSTER_NAME: 'cc-on-bedrock-devenv',
+        ECS_CLUSTER_NAME: config.ecsClusterName,
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
     });
@@ -106,8 +106,8 @@ export class UsageTrackingStack extends cdk.Stack {
       environment: {
         USAGE_TABLE_NAME: this.usageTable.tableName,
         DEPT_BUDGETS_TABLE: 'cc-department-budgets',
-        ECS_CLUSTER_NAME: 'cc-on-bedrock-devenv',
-        DAILY_BUDGET_USD: '50',
+        ECS_CLUSTER_NAME: config.ecsClusterName,
+        DAILY_BUDGET_USD: String(config.dailyBudgetUsd),
         SNS_TOPIC_ARN: alertTopic.topicArn,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
       },

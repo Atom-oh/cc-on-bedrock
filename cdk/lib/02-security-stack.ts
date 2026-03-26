@@ -32,7 +32,7 @@ export class SecurityStack extends cdk.Stack {
 
     const { config, hostedZone } = props;
     const devDomain = `*.${config.devSubdomain}.${config.domainName}`;
-    const dashboardDomain = `cconbedrock-dashboard.${config.domainName}`;
+    const dashboardDomain = `${config.dashboardSubdomain}.${config.domainName}`;
 
     // KMS Encryption Key
     this.encryptionKey = new kms.Key(this, 'EncryptionKey', {
@@ -66,10 +66,10 @@ export class SecurityStack extends cdk.Stack {
 
     // Cognito Hosted UI domain for OAuth login
     this.userPool.addDomain('CognitoDomain', {
-      cognitoDomain: { domainPrefix: 'cc-on-bedrock' },
+      cognitoDomain: { domainPrefix: config.cognitoDomainPrefix },
     });
 
-    const dashboardUrl = `https://cconbedrock-dashboard.${config.domainName}`;
+    const dashboardUrl = `https://${dashboardDomain}`;
     this.userPoolClient = this.userPool.addClient('AppClient', {
       authFlows: { userPassword: true, userSrp: true },
       oAuth: {

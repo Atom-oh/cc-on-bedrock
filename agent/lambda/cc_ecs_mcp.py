@@ -3,10 +3,11 @@ CC-on-Bedrock ECS MCP Lambda - container status, EFS info
 컨테이너 상태 조회, EFS 정보 제공
 """
 import json
+import os
 import boto3
 
-CLUSTER = "cc-on-bedrock-devenv"
-EFS_ID = "fs-09ba32e6a7788fc79"
+CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
+EFS_ID = os.environ.get("EFS_FILE_SYSTEM_ID", "")
 
 
 def lambda_handler(event, context):

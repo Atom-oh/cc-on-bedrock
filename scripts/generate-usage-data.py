@@ -7,13 +7,14 @@ Models: Opus 4.6, Sonnet 4.6, Haiku 4.5, Sonnet 4.5, Opus 4.5
 Departments: engineering(8), data-science(6), product(6), devops(5), research(5)
 Period: last 30 days
 """
+import os
 import boto3
 import random
 import math
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-REGION = "ap-northeast-2"
+REGION = os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2")
 TABLE_NAME = "cc-on-bedrock-usage"
 NUM_DAYS = 30
 

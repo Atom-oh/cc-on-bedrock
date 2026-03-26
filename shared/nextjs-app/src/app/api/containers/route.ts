@@ -16,7 +16,7 @@ import type { StartContainerInput, StopContainerInput } from "@/lib/types";
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const efsClient = new EFSClient({ region });
 const ecsExecClient = new ECSClient({ region });
-const EFS_ID = process.env.EFS_FILE_SYSTEM_ID ?? "fs-09ba32e6a7788fc79";
+const EFS_ID = process.env.EFS_FILE_SYSTEM_ID ?? "";
 const ECS_CLUSTER = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-devenv";
 
 // Cache EFS per-user data (expensive operation via ECS Exec)
