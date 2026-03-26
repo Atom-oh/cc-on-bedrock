@@ -117,6 +117,25 @@ done
 # --- Start idle monitor in background ---
 /opt/devenv/scripts/idle-monitor.sh &
 
+# --- Enterprise: Proxy Configuration ---
+if [ -n "${HTTP_PROXY:-}" ]; then
+  echo "Configuring proxy: $HTTP_PROXY"
+  cat > /etc/profile.d/proxy-env.sh << PROXYEOF
+export HTTP_PROXY="${HTTP_PROXY}"
+export HTTPS_PROXY="${HTTPS_PROXY:-$HTTP_PROXY}"
+export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,169.254.169.254,.amazonaws.com}"
+export http_proxy="${HTTP_PROXY}"
+export https_proxy="${HTTPS_PROXY:-$HTTP_PROXY}"
+export no_proxy="${NO_PROXY:-localhost,127.0.0.1,169.254.169.254,.amazonaws.com}"
+PROXYEOF
+  chmod 644 /etc/profile.d/proxy-env.sh
+  # Apply to current shell for S3 sync
+  source /etc/profile.d/proxy-env.sh
+  # Configure npm proxy
+  sudo -u coder npm config set proxy "$HTTP_PROXY" 2>/dev/null || true
+  sudo -u coder npm config set https-proxy "${HTTPS_PROXY:-$HTTP_PROXY}" 2>/dev/null || true
+fi
+
 # --- S3 Data Restore (if S3_SYNC_BUCKET is set) ---
 if [ -n "${S3_SYNC_BUCKET:-}" ]; then
   echo "Restoring workspace from S3..."
