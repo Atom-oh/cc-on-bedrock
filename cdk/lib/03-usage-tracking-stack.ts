@@ -139,6 +139,17 @@ export class UsageTrackingStack extends cdk.Stack {
       targets: [new targets.LambdaFunction(budgetCheckLambda)],
     });
 
+    // DynamoDB Table for department budgets
+    const departmentBudgetsTable = new dynamodb.Table(this, 'DepartmentBudgetsTable', {
+      tableName: 'cc-department-budgets',
+      partitionKey: { name: 'dept_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     // Outputs
     new cdk.CfnOutput(this, 'UsageTableName', {
       value: this.usageTable.tableName,
@@ -147,6 +158,10 @@ export class UsageTrackingStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UsageTableArn', {
       value: this.usageTable.tableArn,
       exportName: 'cc-usage-table-arn',
+    });
+    new cdk.CfnOutput(this, 'DepartmentBudgetsTableName', {
+      value: departmentBudgetsTable.tableName,
+      exportName: 'cc-department-budgets-table-name',
     });
   }
 }

@@ -3,6 +3,10 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as efs from 'aws-cdk-lib/aws-efs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as path from 'path';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
@@ -105,6 +109,49 @@ export class EcsDevenvStack extends cdk.Stack {
       throughputMode: efs.ThroughputMode.ELASTIC,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+
+    // S3 Bucket for user workspace data
+    const userDataBucket = new s3.Bucket(this, 'UserDataBucket', {
+      bucketName: `cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}`,
+      encryption: s3.BucketEncryption.KMS,
+      encryptionKey: encryptionKey,
+      versioned: true,
+      lifecycleRules: [{
+        noncurrentVersionExpiration: cdk.Duration.days(30),
+      }],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // DynamoDB Table for user volume tracking
+    const userVolumesTable = new dynamodb.Table(this, 'UserVolumesTable', {
+      tableName: 'cc-user-volumes',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Lambda Function for EBS lifecycle
+    const ebsLifecycleLambda = new lambda.Function(this, 'EbsLifecycleLambda', {
+      functionName: 'cc-on-bedrock-ebs-lifecycle',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'ebs-lifecycle.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.minutes(5),
+      environment: {
+        VOLUMES_TABLE: userVolumesTable.tableName,
+        REGION: cdk.Aws.REGION,
+      },
+    });
+    userVolumesTable.grantReadWriteData(ebsLifecycleLambda);
+    ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ec2:CreateVolume', 'ec2:DeleteVolume', 'ec2:AttachVolume', 'ec2:DetachVolume',
+                'ec2:CreateSnapshot', 'ec2:DeleteSnapshot', 'ec2:DescribeVolumes', 'ec2:DescribeSnapshots',
+                'ec2:CreateTags'],
+      resources: ['*'],
+    }));
 
     // DLP Security Groups
     const sgOpen = new ec2.SecurityGroup(this, 'DevenvSgOpen', {
@@ -328,5 +375,8 @@ export class EcsDevenvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SgOpen', { value: sgOpen.securityGroupId, exportName: 'cc-sg-devenv-open' });
     new cdk.CfnOutput(this, 'SgRestricted', { value: sgRestricted.securityGroupId, exportName: 'cc-sg-devenv-restricted' });
     new cdk.CfnOutput(this, 'SgLocked', { value: sgLocked.securityGroupId, exportName: 'cc-sg-devenv-locked' });
+    new cdk.CfnOutput(this, 'UserDataBucketName', { value: userDataBucket.bucketName });
+    new cdk.CfnOutput(this, 'UserVolumesTableName', { value: userVolumesTable.tableName });
+    new cdk.CfnOutput(this, 'EbsLifecycleLambdaArn', { value: ebsLifecycleLambda.functionArn });
   }
 }

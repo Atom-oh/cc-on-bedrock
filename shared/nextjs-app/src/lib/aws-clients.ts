@@ -43,6 +43,10 @@ import {
   PutRolePolicyCommand,
   GetRoleCommand,
 } from "@aws-sdk/client-iam";
+import {
+  LambdaClient,
+  InvokeCommand,
+} from "@aws-sdk/client-lambda";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
@@ -51,6 +55,9 @@ const domainName = process.env.DOMAIN_NAME ?? "example.com";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
 const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
+const lambdaClient = new LambdaClient({ region });
+const s3SyncBucket = process.env.S3_SYNC_BUCKET ?? "";
+const ebsLifecycleLambda = process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle";
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
@@ -366,6 +373,7 @@ export async function startContainer(
               { name: "USER_SUBDOMAIN", value: input.subdomain },
               { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? require("crypto").randomBytes(16).toString("hex") },
               { name: "AWS_DEFAULT_REGION", value: region },
+              ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
             ],
           },
         ],

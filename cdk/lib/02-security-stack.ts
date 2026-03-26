@@ -91,6 +91,12 @@ export class SecurityStack extends cdk.Stack {
       groupName: 'user',
       description: 'Dev environment users',
     });
+    new cognito.CfnUserPoolGroup(this, 'DeptManagerGroup', {
+      userPoolId: this.userPool.userPoolId,
+      groupName: 'dept-manager',
+      description: 'Department managers who can approve users and manage department budgets',
+      precedence: 5,
+    });
 
     // ACM Certificates are created separately after DNS is configured.
     // Once validated, pass certificate ARNs via CDK context:

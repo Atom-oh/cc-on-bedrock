@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# --- Graceful shutdown: sync to S3 before exit ---
+cleanup() {
+  echo "Container stopping - running final S3 sync..."
+  if [ -n "${S3_SYNC_BUCKET:-}" ]; then
+    /opt/devenv/scripts/s3-sync.sh full-backup || true
+  fi
+  exit 0
+}
+trap cleanup SIGTERM SIGINT
+
 echo "=== CC-on-Bedrock Devenv Container Starting ==="
 
 USER_HOME="/home/coder"
@@ -106,6 +116,16 @@ done
 
 # --- Start idle monitor in background ---
 /opt/devenv/scripts/idle-monitor.sh &
+
+# --- S3 Data Restore (if S3_SYNC_BUCKET is set) ---
+if [ -n "${S3_SYNC_BUCKET:-}" ]; then
+  echo "Restoring workspace from S3..."
+  /opt/devenv/scripts/s3-sync.sh restore || echo "S3 restore failed, continuing with empty workspace"
+  # Setup periodic sync cron (every 5 minutes)
+  echo "*/5 * * * * /opt/devenv/scripts/s3-sync.sh sync >> /var/log/s3-sync.log 2>&1" | crontab -u coder -
+  crond || cron || echo "Cron daemon not available"  # Start cron daemon (works on both AL2023 and Ubuntu)
+  echo "S3 sync configured: restore complete, cron scheduled"
+fi
 
 # --- Start code-server ---
 # Claude Code: Bedrock mode via Task Role
