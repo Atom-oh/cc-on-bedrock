@@ -546,6 +546,7 @@ export async function registerContainerInAlb(
         HealthCheckIntervalSeconds: 30,
         HealthyThresholdCount: 2,
         UnhealthyThresholdCount: 3,
+        Matcher: { HttpCode: "200-399" },
       })
     );
     tgArn = createResult.TargetGroups?.[0]?.TargetGroupArn;
