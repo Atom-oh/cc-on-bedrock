@@ -87,12 +87,15 @@ def get_model_pricing(model_id: str) -> dict:
 
 def normalize_model(model_id: str) -> str:
     """Normalize model ID to short form."""
-    return (model_id
-            .replace("global.anthropic.", "")
-            .replace("apac.anthropic.", "")
-            .replace("anthropic.", "")
-            .split(":")[0]
-            .rstrip("[1m]"))
+    result = (model_id
+              .replace("global.anthropic.", "")
+              .replace("apac.anthropic.", "")
+              .replace("anthropic.", "")
+              .split(":")[0])
+    # Remove version suffix like [1m] (rstrip would strip individual chars)
+    if result.endswith("[1m]"):
+        result = result[:-4]
+    return result
 
 
 def estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:

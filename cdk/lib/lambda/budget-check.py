@@ -35,21 +35,29 @@ sns_client = boto3.client("sns")
 
 
 def get_today_usage():
-    """Scan DynamoDB for all USER# entries today."""
+    """Scan DynamoDB for all USER# entries today (with pagination)."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    result = table.scan(
-        FilterExpression="begins_with(PK, :prefix) AND begins_with(SK, :today)",
-        ExpressionAttributeValues={":prefix": "USER#", ":today": today},
-    )
     user_spend = {}
-    for item in result.get("Items", []):
-        user = item["PK"].replace("USER#", "")
-        cost = float(item.get("estimatedCost", 0))
-        dept = item.get("department", "default")
-        if user in user_spend:
-            user_spend[user]["cost"] += cost
-        else:
-            user_spend[user] = {"cost": cost, "department": dept}
+    last_key = None
+    while True:
+        params = {
+            "FilterExpression": "begins_with(PK, :prefix) AND begins_with(SK, :today)",
+            "ExpressionAttributeValues": {":prefix": "USER#", ":today": today},
+        }
+        if last_key:
+            params["ExclusiveStartKey"] = last_key
+        result = table.scan(**params)
+        for item in result.get("Items", []):
+            user = item["PK"].replace("USER#", "")
+            cost = float(item.get("estimatedCost", 0))
+            dept = item.get("department", "default")
+            if user in user_spend:
+                user_spend[user]["cost"] += cost
+            else:
+                user_spend[user] = {"cost": cost, "department": dept}
+        last_key = result.get("LastEvaluatedKey")
+        if not last_key:
+            break
     return user_spend
 
 
@@ -213,7 +221,7 @@ def check_deny_exists(subdomain: str) -> bool:
             PolicyName=DENY_POLICY_NAME,
         )
         return True
-    except:
+    except Exception:
         return False
 
 

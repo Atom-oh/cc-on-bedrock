@@ -46,8 +46,13 @@ export async function POST(req: NextRequest) {
     const cognitoUser = await createCognitoUser(body);
     return NextResponse.json({ success: true, data: cognitoUser });
   } catch (err) {
-    console.error("[users] POST", err instanceof Error ? err.message : err);
-    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
+    const message = err instanceof Error ? err.message : "Internal server error";
+    console.error("[users] POST", message);
+    const isUserExists = message.includes("already exists") || message.includes("UsernameExists");
+    return NextResponse.json(
+      { success: false, error: isUserExists ? "User account already exists" : message },
+      { status: isUserExists ? 409 : 500 }
+    );
   }
 }
 

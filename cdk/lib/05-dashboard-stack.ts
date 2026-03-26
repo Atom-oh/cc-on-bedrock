@@ -140,7 +140,9 @@ export class DashboardStack extends cdk.Stack {
         'PORT=3000',
         'HOSTNAME=0.0.0.0',
         `VPC_ID=${vpc.vpcId}`,
+        `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
         'ENVEOF',
+        'chmod 600 /opt/dashboard/.env',
         '',
         '# Start Next.js',
         'cd /opt/dashboard',
@@ -171,17 +173,40 @@ export class DashboardStack extends cdk.Stack {
     });
 
     if (dashboardCertificateArn) {
-      alb.addListener('HttpsListener', {
+      const httpsListener = alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [elbv2.ListenerCertificate.fromArn(dashboardCertificateArn)],
-        defaultTargetGroups: [targetGroup],
+        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+          contentType: 'text/plain',
+          messageBody: 'Forbidden',
+        }),
+      });
+      // Only allow traffic with valid X-Custom-Secret header from CloudFront
+      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
+        listener: httpsListener,
+        priority: 1,
+        conditions: [
+          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
+        ],
+        targetGroups: [targetGroup],
       });
     } else {
-      alb.addListener('HttpListener', {
+      const httpListener = alb.addListener('HttpListener', {
         port: 80,
         protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultTargetGroups: [targetGroup],
+        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+          contentType: 'text/plain',
+          messageBody: 'Forbidden',
+        }),
+      });
+      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
+        listener: httpListener,
+        priority: 1,
+        conditions: [
+          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
+        ],
+        targetGroups: [targetGroup],
       });
     }
 

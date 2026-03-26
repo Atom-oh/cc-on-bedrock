@@ -1,23 +1,33 @@
 # Agent Module
 
 ## Role
-Bedrock AgentCore Runtime AI Assistant. Strands 프레임워크 기반.
+Bedrock AgentCore Runtime + MCP Gateway 기반 AI Assistant. Strands 프레임워크.
 
 ## Key Files
-- `agent.py` - Strands Agent + BedrockAgentCoreApp, 5개 @tool 정의
+- `agent.py` - Strands Agent + BedrockAgentCoreApp, @tool 정의
+- `streamable_http_sigv4.py` - SigV4 인증 HTTP 스트리밍
 - `Dockerfile` - Python 3.11 ARM64 컨테이너
-- `requirements.txt` - bedrock-agentcore, strands-agents, boto3, requests
+- `requirements.txt` - bedrock-agentcore, strands-agents, boto3
+- `lambda/cc_ecs_mcp.py` - ECS 컨테이너 관리 MCP tools
+- `lambda/cc_cloudwatch_mcp.py` - CloudWatch 메트릭 MCP tools
+- `lambda/cc_dynamodb_mcp.py` - DynamoDB 사용량 조회 MCP tools
+- `lambda/create_targets.py` - AgentCore Gateway Lambda 타겟 생성 스크립트
 
-## Tools
-| Tool | Data Source | Description |
-|------|-----------|-------------|
-| `get_spend_summary` | LiteLLM API | 사용자별 요청/토큰/비용 집계 |
-| `get_api_key_budgets` | LiteLLM API | API Key 예산/사용률 |
-| `get_system_health` | LiteLLM API | 시스템 상태 |
-| `get_container_status` | ECS API | 컨테이너 상태/사용자 할당 |
-| `get_container_metrics` | CloudWatch | CPU/Memory/Network 메트릭 |
+## AgentCore Resources
+| Resource | ID | Purpose |
+|----------|-----|---------|
+| Runtime | cconbedrock_assistant_v2 | Strands Agent (PUBLIC mode) |
+| Gateway | cconbedrock-gateway | MCP protocol, 3 Lambda targets |
+| Memory | cconbedrock_memory | Per-user conversation history |
+
+## MCP Tools (8)
+| Lambda | Tools | Description |
+|--------|-------|-------------|
+| cc_ecs_mcp | list_containers, start_container, stop_container | ECS 컨테이너 관리 |
+| cc_cloudwatch_mcp | get_container_metrics, get_cluster_metrics | CloudWatch 메트릭 |
+| cc_dynamodb_mcp | get_user_usage, get_cost_summary, get_budget_status | DynamoDB 사용량 |
 
 ## Rules
-- `ECS_CLUSTER_NAME` 환경변수 필요
 - `@app.entrypoint` 데코레이터로 AgentCore Runtime 서비스 계약 준수
 - `app.run()`으로 AgentCore가 실행 제어
+- Lambda 타겟 배포: `ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py`

@@ -45,7 +45,11 @@ install_packages() {
 # --- Create coder user ---
 create_user() {
   if ! id coder &>/dev/null; then
-    useradd -m -s /bin/bash -d /home/coder coder
+    # Force UID/GID 1001 for consistency across Ubuntu and AL2023
+    # Ubuntu has 'ubuntu' at UID 1000, so coder gets 1001 naturally
+    # AL2023 has no default user, so we must explicitly set 1001
+    groupadd -g 1001 coder 2>/dev/null || true
+    useradd -m -s /bin/bash -d /home/coder -u 1001 -g 1001 coder
     # Restricted sudo: coder can only run code-server as root (no iptables, no credential access)
     echo "coder ALL=(root) NOPASSWD: /usr/bin/code-server" > /etc/sudoers.d/coder
     chmod 0440 /etc/sudoers.d/coder

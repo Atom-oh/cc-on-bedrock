@@ -314,9 +314,9 @@ export class EcsDevenvStack extends cdk.Stack {
     const albSg = new ec2.SecurityGroup(this, 'DevenvAlbSg', {
       vpc, description: 'DevEnv ALB SG', allowAllOutbound: true,
     });
-    // CloudFront Prefix List - allow only CloudFront IPs
+    // CloudFront Prefix List - allow only CloudFront IPs on HTTPS
     albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
-    albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(80), 'Allow HTTP from CloudFront only');
+    // Port 80 removed: HTTPS-only when cert available, HTTP fallback for dev/test only
 
     // Allow ALB → DevEnv containers on port 8080
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
@@ -330,9 +330,9 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // Listener - HTTPS if certificate provided, otherwise HTTP
+    // Listener - HTTPS with X-Custom-Secret validation
     if (devEnvCertificateArn) {
-      this.alb.addListener('HttpsListener', {
+      const httpsListener = this.alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [elbv2.ListenerCertificate.fromArn(devEnvCertificateArn)],
@@ -341,23 +341,29 @@ export class EcsDevenvStack extends cdk.Stack {
           messageBody: 'Forbidden',
         }),
       });
+    } else {
+      // Fallback HTTP listener (dev/test only - production must use HTTPS)
+      this.alb.addListener('HttpListener', {
+        port: 80,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+          contentType: 'text/plain',
+          messageBody: 'Forbidden',
+        }),
+      });
     }
-    // HTTP listener (CloudFront uses http-only origin)
-    this.alb.addListener('HttpListener', {
-      port: 80,
-      protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-        contentType: 'text/plain',
-        messageBody: 'Forbidden',
-      }),
-    });
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(this.alb, {
-          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          httpPort: 80,
+          protocolPolicy: devEnvCertificateArn
+            ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
+            : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          ...(devEnvCertificateArn ? {} : { httpPort: 80 }),
+          customHeaders: {
+            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
+          },
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,

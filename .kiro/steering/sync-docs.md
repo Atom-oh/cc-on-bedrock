@@ -3,30 +3,10 @@
 Synchronize project documentation with current code state.
 
 ## Actions
-
-### 1. Quality Assessment
-Score each steering/doc file (0-100):
-- Commands/workflows (20), Architecture clarity (20), Non-obvious patterns (15)
-- Conciseness (15), Currency (15), Actionability (15)
-
-### 2. AGENT.md Sync
-Update Overview, Tech Stack, Conventions, Key Commands. Verify commands are copy-paste ready.
-
-### 3. Architecture Doc Sync
-Update `docs/architecture.md` to reflect current system structure.
-
-### 4. Module Steering Audit
-- Scan all directories under cdk/, terraform/, cloudformation/, docker/, shared/
-- Create steering doc for modules missing one
-- Update existing steering docs if out of date
-
-### 5. ADR Audit
-- Check recent commits (`git log --oneline -20`)
-- Suggest new ADRs for undocumented architectural decisions
-- ADR format: `docs/decisions/ADR-NNN-concise-title.md`
-
-### 6. README.md Sync
-Update project structure section to match actual directory layout.
-
-### 7. Report
-Output before/after quality scores and list of all changes.
+1. **Quality Assessment** - Score each doc (0-100): commands(20), architecture(20), patterns(15), conciseness(15), currency(15), actionability(15)
+2. **AGENT.md Sync** - Update Overview, Tech Stack, Conventions, Key Commands
+3. **Architecture Doc Sync** - Update `docs/architecture.md`
+4. **Module Steering Audit** - Scan cdk/, terraform/, cloudformation/, docker/, shared/, agent/; create/update steering docs
+5. **ADR Audit** - Check `git log --oneline -20`, suggest ADRs. Format: `docs/decisions/ADR-NNN-title.md`
+6. **README.md Sync** - Update project structure section
+7. **Report** - Before/after scores, list of changes

@@ -3,6 +3,7 @@ CC-on-Bedrock DynamoDB MCP Lambda - usage tracking, budget, system health
 사용량 조회, 예산 현황, 시스템 상태
 """
 import json
+import os
 import boto3
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -61,11 +62,21 @@ def scan_usage(start_date=None, end_date=None, user_id=None):
         filter_parts.append("PK = :userId")
         expr_values[":userId"] = f"USER#{user_id}"
 
-    resp = table.scan(
-        FilterExpression=" AND ".join(filter_parts),
-        ExpressionAttributeValues=expr_values,
-    )
-    return resp.get("Items", [])
+    items = []
+    last_key = None
+    while True:
+        params = {
+            "FilterExpression": " AND ".join(filter_parts),
+            "ExpressionAttributeValues": expr_values,
+        }
+        if last_key:
+            params["ExclusiveStartKey"] = last_key
+        resp = table.scan(**params)
+        items.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return items
 
 
 def handle_spend_summary(args):

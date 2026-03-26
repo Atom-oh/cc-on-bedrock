@@ -189,10 +189,11 @@ def handler(payload):
 
     except Exception as e:
         logging.error(f"Gateway MCP error: {e}")
-        # Fallback: Bedrock direct without tools
+        # Fallback: Bedrock direct without tools — warn about no real-time data
+        fallback_notice = "\n\n⚠ IMPORTANT: MCP Gateway connection failed. You cannot access real-time platform data. DO NOT fabricate data. Instead, inform the user that tool connectivity is unavailable and suggest retrying later."
         agent = Agent(
             model=model,
-            system_prompt=SKILL_PROMPT + COMMON_FOOTER,
+            system_prompt=SKILL_PROMPT + fallback_notice + COMMON_FOOTER,
             messages=history if history else None,
         )
         response = agent(user_input)
