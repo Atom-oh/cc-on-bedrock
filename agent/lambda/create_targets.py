@@ -1,6 +1,6 @@
 """
 Create CC-on-Bedrock Gateway + Lambda Targets
-Usage: ACCOUNT_ID=061525506239 python3 agent/lambda/create_targets.py
+Usage: ACCOUNT_ID=<your-account-id> python3 agent/lambda/create_targets.py
 
 1. Creates 3 Lambda functions (cc-ecs-mcp, cc-cloudwatch-mcp, cc-dynamodb-mcp)
 2. Creates Gateway (cconbedrock-gateway)
@@ -15,7 +15,10 @@ import io
 import time
 
 REGION = os.environ.get("REGION", "ap-northeast-2")
-ACCOUNT_ID = os.environ.get("ACCOUNT_ID", "061525506239")
+ACCOUNT_ID = os.environ.get("ACCOUNT_ID")
+if not ACCOUNT_ID:
+    print("ERROR: ACCOUNT_ID environment variable is required")
+    sys.exit(1)
 LAMBDA_ROLE = os.environ.get("LAMBDA_ROLE", f"arn:aws:iam::{ACCOUNT_ID}:role/cc-on-bedrock-agentcore-lambda")
 GATEWAY_ROLE = os.environ.get("GATEWAY_ROLE", f"arn:aws:iam::{ACCOUNT_ID}:role/cc-on-bedrock-agentcore-gateway")
 PREFIX = "cconbedrock"

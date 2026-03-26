@@ -100,9 +100,9 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       encrypted: true,
       kmsKey: encryptionKey,
-      lifecyclePolicy: efs.LifecyclePolicy.AFTER_30_DAYS,
+      lifecyclePolicy: efs.LifecyclePolicy.AFTER_14_DAYS,
       performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
-      throughputMode: efs.ThroughputMode.BURSTING,
+      throughputMode: efs.ThroughputMode.ELASTIC,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -144,7 +144,10 @@ export class EcsDevenvStack extends cdk.Stack {
     // Bedrock permissions for Claude Code in containers (uses Instance Role via IMDS)
     ecsInstanceRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
+      resources: [
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+      ],
     }));
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
@@ -180,7 +183,7 @@ export class EcsDevenvStack extends cdk.Stack {
     const capacityProvider = new ecs.AsgCapacityProvider(this, 'EcsCapacityProvider', {
       autoScalingGroup: capacityAsg,
       enableManagedScaling: true,
-      enableManagedTerminationProtection: false,
+      enableManagedTerminationProtection: true,
       targetCapacityPercent: 80,
     });
     this.cluster.addAsgCapacityProvider(capacityProvider);
@@ -222,8 +225,8 @@ export class EcsDevenvStack extends cdk.Stack {
           }),
           environment: {
             // Direct Bedrock access (LiteLLM proxy removed)
-            AWS_DEFAULT_REGION: 'ap-northeast-2',
-            AWS_REGION: 'ap-northeast-2',
+            AWS_DEFAULT_REGION: cdk.Aws.REGION,
+            AWS_REGION: cdk.Aws.REGION,
             SECURITY_POLICY: 'open',  // Overridden at RunTask time
           },
           portMappings: [{ containerPort: 8080 }],
@@ -259,7 +262,7 @@ export class EcsDevenvStack extends cdk.Stack {
     });
     // CloudFront Prefix List - allow only CloudFront IPs
     albSg.addIngressRule(ec2.Peer.prefixList('pl-22a6434b'), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
-    albSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP (CloudFront http-only origin)');
+    albSg.addIngressRule(ec2.Peer.prefixList('pl-22a6434b'), ec2.Port.tcp(80), 'Allow HTTP from CloudFront only');
 
     // Allow ALB → DevEnv containers on port 8080
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {

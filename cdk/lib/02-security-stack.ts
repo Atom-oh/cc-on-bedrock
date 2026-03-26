@@ -51,7 +51,7 @@ export class SecurityStack extends cdk.Stack {
         minLength: 8,
         requireUppercase: true,
         requireDigits: true,
-        requireSymbols: false,
+        requireSymbols: true,
       },
       customAttributes: {
         subdomain: new cognito.StringAttribute({ mutable: true }),
@@ -117,7 +117,10 @@ export class SecurityStack extends cdk.Stack {
     // IAM Roles
     const bedrockPolicy = new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
+      resources: [
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+      ],
     });
 
     // LiteLLM EC2 Role
@@ -159,7 +162,7 @@ export class SecurityStack extends cdk.Stack {
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:TagResource'],
-      resources: ['*'],
+      resources: [`arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'AlbManagement',
@@ -170,7 +173,7 @@ export class SecurityStack extends cdk.Stack {
         'elasticloadbalancing:CreateRule', 'elasticloadbalancing:DeleteRule',
         'elasticloadbalancing:DescribeRules',
       ],
-      resources: ['*'],
+      resources: [`arn:aws:elasticloadbalancing:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: ['iam:PassRole'],

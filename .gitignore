@@ -10,6 +10,7 @@ __pycache__/
 
 # CDK
 cdk/cdk.out/
+cdk/cdk.context.json
 cdk/node_modules/
 
 # Terraform
@@ -27,8 +28,14 @@ Thumbs.db
 
 # Secrets
 *.env
+.env
+.env.*
+!.env.example
 *.pem
 *.key
+
+# OMC
+.omc/
 
 # Docker
 docker/devenv/scripts/__pycache__/

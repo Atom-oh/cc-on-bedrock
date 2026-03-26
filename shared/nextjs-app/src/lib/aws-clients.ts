@@ -49,7 +49,7 @@ const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
 const ecsCluster = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-cluster";
 const domainName = process.env.DOMAIN_NAME ?? "example.com";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
-const accountId = process.env.AWS_ACCOUNT_ID ?? "061525506239";
+const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
@@ -364,7 +364,7 @@ export async function startContainer(
               // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
-              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? "CcOnBedrock2026!" },
+              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? require("crypto").randomBytes(16).toString("hex") },
               { name: "AWS_DEFAULT_REGION", value: region },
             ],
           },

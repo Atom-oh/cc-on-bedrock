@@ -85,10 +85,10 @@ resource "aws_efs_file_system" "this" {
   kms_key_id = var.kms_key_arn
 
   performance_mode = "generalPurpose"
-  throughput_mode  = "bursting"
+  throughput_mode  = "elastic"
 
   lifecycle_policy {
-    transition_to_ia = "AFTER_30_DAYS"
+    transition_to_ia = "AFTER_14_DAYS"
   }
 
   tags = { Name = "cc-on-bedrock-devenv" }
@@ -322,7 +322,7 @@ resource "aws_ecs_task_definition" "devenv" {
 
     environment = [
       { name = "ANTHROPIC_BASE_URL", value = "http://${var.litellm_alb_dns}:4000" },
-      { name = "AWS_DEFAULT_REGION", value = "ap-northeast-2" },
+      { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.name },
       { name = "SECURITY_POLICY", value = "open" },
     ]
 

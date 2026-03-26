@@ -53,7 +53,7 @@ Resources:
           MinimumLength: 8
           RequireUppercase: true
           RequireNumbers: true
-          RequireSymbols: false
+          RequireSymbols: true
           TemporaryPasswordValidityDays: 7
       Schema:
         - Name: subdomain

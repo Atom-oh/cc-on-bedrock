@@ -112,9 +112,9 @@ Resources:
       Encrypted: true
       KmsKeyId: !Ref KmsKeyArn
       PerformanceMode: generalPurpose
-      ThroughputMode: bursting
+      ThroughputMode: elastic
       LifecyclePolicies:
-        - TransitionToIA: AFTER_30_DAYS
+        - TransitionToIA: AFTER_14_DAYS
       FileSystemTags:
         - Key: Name
           Value: cc-on-bedrock-devenv

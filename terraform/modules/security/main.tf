@@ -32,7 +32,7 @@ resource "aws_cognito_user_pool" "this" {
     minimum_length                   = 8
     require_uppercase                = true
     require_numbers                  = true
-    require_symbols                  = false
+    require_symbols                  = true
     temporary_password_validity_days = 7
   }
 
@@ -232,7 +232,10 @@ resource "aws_secretsmanager_secret_version" "valkey_auth" {
 data "aws_iam_policy_document" "bedrock" {
   statement {
     actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-    resources = ["*"]
+    resources = [
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
+    ]
   }
 }
 

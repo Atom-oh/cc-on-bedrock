@@ -119,12 +119,12 @@ export class DashboardStack extends cdk.Stack {
         '',
         '# Deploy Next.js app from S3',
         'mkdir -p /opt/dashboard',
-        'aws s3 cp s3://cc-on-bedrock-deploy-061525506239/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ap-northeast-2',
+        `aws s3 cp s3://cc-on-bedrock-deploy-\$(aws sts get-caller-identity --query Account --output text)/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region \$(curl -s http://169.254.169.254/latest/meta-data/placement/region)`,
         'tar xzf /tmp/dashboard-app.tar.gz -C /opt/dashboard',
         'rm /tmp/dashboard-app.tar.gz',
         '',
         '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
-        'NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ap-northeast-2 --query SecretString --output text 2>/dev/null || openssl rand -hex 32)',
+        'NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region $(curl -s http://169.254.169.254/latest/meta-data/placement/region) --query SecretString --output text 2>/dev/null || openssl rand -hex 32)',
         '',
         '# Environment config',
         'cat > /opt/dashboard/.env << ENVEOF',
@@ -193,7 +193,7 @@ export class DashboardStack extends cdk.Stack {
             ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
             : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           customHeaders: {
-            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
+            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(), // CDK limitation: CloudFront origin custom headers require unsafeUnwrap()
           },
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
