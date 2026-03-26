@@ -37,3 +37,19 @@ output "dlp_sg_restricted_id" {
 output "dlp_sg_locked_id" {
   value = aws_security_group.dlp_locked.id
 }
+
+output "user_data_bucket_name" {
+  value = aws_s3_bucket.user_data.id
+}
+
+output "user_data_bucket_arn" {
+  value = aws_s3_bucket.user_data.arn
+}
+
+output "user_volumes_table_name" {
+  value = aws_dynamodb_table.user_volumes.name
+}
+
+output "user_volumes_table_arn" {
+  value = aws_dynamodb_table.user_volumes.arn
+}

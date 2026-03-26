@@ -150,18 +150,130 @@ export class UsageTrackingStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // ==================== Warm Stop Automation ====================
+
+    // DynamoDB Table for user volumes (used by warm-stop and EBS lifecycle)
+    const userVolumesTable = new dynamodb.Table(this, 'UserVolumesTable', {
+      tableName: 'cc-user-volumes',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Warm Stop Lambda
+    const warmStopLambda = new lambda.Function(this, 'WarmStopLambda', {
+      functionName: 'cc-on-bedrock-warm-stop',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'warm-stop.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 256,
+      environment: {
+        REGION: cdk.Aws.REGION,
+        ECS_CLUSTER: 'cc-on-bedrock-devenv',
+        VOLUMES_TABLE: userVolumesTable.tableName,
+        IDLE_THRESHOLD_MINUTES: '30',
+        SNS_TOPIC_ARN: alertTopic.topicArn,
+        EBS_LIFECYCLE_LAMBDA: 'cc-on-bedrock-ebs-lifecycle',
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    // Grant warm-stop Lambda permissions
+    userVolumesTable.grantReadWriteData(warmStopLambda);
+    alertTopic.grantPublish(warmStopLambda);
+
+    // ECS permissions: list, describe, stop tasks
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'ecs:ListTasks',
+        'ecs:DescribeTasks',
+        'ecs:StopTask',
+      ],
+      resources: ['*'],
+    }));
+
+    // CloudWatch permissions: read metrics
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'cloudwatch:GetMetricStatistics',
+        'cloudwatch:GetMetricData',
+      ],
+      resources: ['*'],
+    }));
+
+    // Lambda invoke: call EBS lifecycle Lambda and self-invoke for async warm-stop
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [
+        `arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`,
+      ],
+    }));
+
+    // EventBridge: Idle check every 5 minutes
+    const idleCheckRule = new events.Rule(this, 'IdleCheckRule', {
+      ruleName: 'cc-idle-check',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+    });
+    idleCheckRule.addTarget(new targets.LambdaFunction(warmStopLambda, {
+      event: events.RuleTargetInput.fromObject({ action: 'check_idle' }),
+    }));
+
+    // EventBridge: EOD batch shutdown (18:00 KST = 09:00 UTC)
+    const eodShutdownRule = new events.Rule(this, 'EodShutdownRule', {
+      ruleName: 'cc-eod-shutdown',
+      schedule: events.Schedule.cron({ hour: '9', minute: '0' }),
+    });
+    eodShutdownRule.addTarget(new targets.LambdaFunction(warmStopLambda, {
+      event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
+    }));
+
+    // Audit Logger Lambda
+    const auditLoggerLambda = new lambda.Function(this, 'AuditLoggerLambda', {
+      functionName: 'cc-on-bedrock-audit-logger',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'audit-logger.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        REGION: cdk.Aws.REGION,
+        AUDIT_TABLE: 'cc-prompt-audit',
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    // Audit DynamoDB Table
+    const auditTable = new dynamodb.Table(this, 'PromptAuditTable', {
+      tableName: 'cc-prompt-audit',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'timestamp', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    auditTable.grantWriteData(auditLoggerLambda);
+
+    // EventBridge rule for Bedrock invocations (from CloudTrail)
+    const bedrockAuditRule = new events.Rule(this, 'BedrockAuditRule', {
+      ruleName: 'cc-bedrock-audit',
+      eventPattern: {
+        source: ['aws.bedrock'],
+        detailType: ['AWS API Call via CloudTrail'],
+        detail: {
+          eventName: ['InvokeModel', 'InvokeModelWithResponseStream', 'Converse', 'ConverseStream'],
+        },
+      },
+    });
+    bedrockAuditRule.addTarget(new targets.LambdaFunction(auditLoggerLambda));
+
     // Outputs
-    new cdk.CfnOutput(this, 'UsageTableName', {
-      value: this.usageTable.tableName,
-      exportName: 'cc-usage-table-name',
-    });
-    new cdk.CfnOutput(this, 'UsageTableArn', {
-      value: this.usageTable.tableArn,
-      exportName: 'cc-usage-table-arn',
-    });
-    new cdk.CfnOutput(this, 'DepartmentBudgetsTableName', {
-      value: departmentBudgetsTable.tableName,
-      exportName: 'cc-department-budgets-table-name',
-    });
+    new cdk.CfnOutput(this, 'WarmStopLambdaArn', { value: warmStopLambda.functionArn });
+    new cdk.CfnOutput(this, 'AuditLoggerLambdaArn', { value: auditLoggerLambda.functionArn });
+    new cdk.CfnOutput(this, 'AuditTableName', { value: auditTable.tableName });
   }
 }

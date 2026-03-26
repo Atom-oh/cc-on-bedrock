@@ -28,13 +28,24 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(signInUrl);
   }
 
+  const groups = (token.groups as string[]) ?? [];
+
   // Admin-only routes
   if (path.startsWith("/admin") || path.startsWith("/monitoring")) {
-    const groups = (token.groups as string[]) ?? [];
     if (!groups.includes("admin")) {
       return NextResponse.redirect(new URL("/", req.url));
     }
   }
+
+  // Dept manager routes - require dept-manager or admin
+  if (path.startsWith("/dept")) {
+    if (!groups.includes("dept-manager") && !groups.includes("admin")) {
+      return NextResponse.redirect(new URL("/user", req.url));
+    }
+  }
+
+  // User routes - any authenticated user (already checked above)
+  // /user/* is accessible to all authenticated users
 
   return NextResponse.next();
 }
@@ -46,6 +57,8 @@ export const config = {
     "/admin/:path*",
     "/security/:path*",
     "/ai/:path*",
+    "/user/:path*",
+    "/dept/:path*",
     "/",
   ],
 };

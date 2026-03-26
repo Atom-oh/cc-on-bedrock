@@ -106,6 +106,56 @@ resource "aws_efs_mount_target" "isolated_c" {
   security_groups = [aws_security_group.efs.id]
 }
 
+# ---- S3 Bucket for User Workspace Data --------------------------------------
+resource "aws_s3_bucket" "user_data" {
+  bucket = "cc-on-bedrock-user-data-${data.aws_caller_identity.current.account_id}"
+  tags   = { Name = "cc-on-bedrock-user-data" }
+}
+
+resource "aws_s3_bucket_versioning" "user_data" {
+  bucket = aws_s3_bucket.user_data.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "user_data" {
+  bucket = aws_s3_bucket.user_data.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = var.kms_key_arn
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "user_data" {
+  bucket = aws_s3_bucket.user_data.id
+  rule {
+    id     = "noncurrent-cleanup"
+    status = "Enabled"
+    noncurrent_version_expiration { noncurrent_days = 30 }
+  }
+}
+
+# ---- DynamoDB Table for User Volumes ----------------------------------------
+resource "aws_dynamodb_table" "user_volumes" {
+  name         = "cc-user-volumes"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.kms_key_arn
+  }
+
+  point_in_time_recovery { enabled = true }
+  tags = { Name = "cc-user-volumes" }
+}
+
 # ---- DLP Security Groups ----------------------------------------------------
 resource "aws_security_group" "dlp_open" {
   name_prefix = "cc-devenv-open-"

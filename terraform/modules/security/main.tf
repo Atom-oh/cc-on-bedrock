@@ -118,6 +118,33 @@ resource "aws_cognito_user_group" "user" {
   description  = "Dev environment users"
 }
 
+resource "aws_cognito_user_group" "dept_manager" {
+  name         = "dept-manager"
+  user_pool_id = aws_cognito_user_pool.this.id
+  description  = "Department managers"
+  precedence   = 5
+}
+
+# ---- DynamoDB Table for Department Budgets ----------------------------------
+resource "aws_dynamodb_table" "department_budgets" {
+  name         = "cc-department-budgets"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "dept_id"
+
+  attribute {
+    name = "dept_id"
+    type = "S"
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.this.arn
+  }
+
+  point_in_time_recovery { enabled = true }
+  tags = { Name = "cc-department-budgets" }
+}
+
 # ---- ACM Certificates --------------------------------------------------------
 resource "aws_acm_certificate" "devenv" {
   domain_name       = local.dev_domain
@@ -231,7 +258,7 @@ resource "aws_secretsmanager_secret_version" "valkey_auth" {
 # Bedrock policy document (shared)
 data "aws_iam_policy_document" "bedrock" {
   statement {
-    actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
     resources = [
       "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",

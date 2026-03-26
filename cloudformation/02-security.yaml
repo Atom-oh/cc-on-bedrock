@@ -118,6 +118,38 @@ Resources:
       UserPoolId: !Ref UserPool
       Description: Dev environment users
 
+  DeptManagerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: dept-manager
+      UserPoolId: !Ref UserPool
+      Description: Department managers
+      Precedence: 5
+
+  # ---------- DynamoDB Table for Department Budgets ----------------------------
+  DepartmentBudgetsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: cc-department-budgets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dept_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dept_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !GetAtt EncryptionKey.Arn
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: cc-department-budgets
+
   # ---------- ACM Certificates -------------------------------------------------
   DevEnvCertificate:
     Type: AWS::CertificateManager::Certificate
@@ -335,3 +367,15 @@ Outputs:
     Value: !Ref DashboardEc2InstanceProfile
     Export:
       Name: cc-on-bedrock-dashboard-ec2-instance-profile
+
+  DepartmentBudgetsTableName:
+    Description: DynamoDB table name for department budgets
+    Value: !Ref DepartmentBudgetsTable
+    Export:
+      Name: cc-on-bedrock-department-budgets-table-name
+
+  DepartmentBudgetsTableArn:
+    Description: DynamoDB table ARN for department budgets
+    Value: !GetAtt DepartmentBudgetsTable.Arn
+    Export:
+      Name: cc-on-bedrock-department-budgets-table-arn

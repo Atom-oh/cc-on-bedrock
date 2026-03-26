@@ -207,6 +207,54 @@ Resources:
       SecurityGroups:
         - !Ref EfsSg
 
+  # ---------- S3 Bucket for User Workspace Data --------------------------------
+  UserDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'cc-on-bedrock-user-data-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref KmsKeyArn
+      LifecycleConfiguration:
+        Rules:
+          - Id: noncurrent-cleanup
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      Tags:
+        - Key: Name
+          Value: cc-on-bedrock-user-data
+
+  # ---------- DynamoDB Table for User Volumes ----------------------------------
+  UserVolumesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: cc-user-volumes
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref KmsKeyArn
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: cc-user-volumes
+
   # ---------- ECS Cluster ------------------------------------------------------
   DevenvCluster:
     Type: AWS::ECS::Cluster
@@ -674,3 +722,27 @@ Outputs:
     Value: !Ref DlpLockedSg
     Export:
       Name: cc-on-bedrock-dlp-locked-sg-id
+
+  UserDataBucketName:
+    Description: S3 bucket name for user workspace data
+    Value: !Ref UserDataBucket
+    Export:
+      Name: cc-on-bedrock-user-data-bucket-name
+
+  UserDataBucketArn:
+    Description: S3 bucket ARN for user workspace data
+    Value: !GetAtt UserDataBucket.Arn
+    Export:
+      Name: cc-on-bedrock-user-data-bucket-arn
+
+  UserVolumesTableName:
+    Description: DynamoDB table name for user volumes
+    Value: !Ref UserVolumesTable
+    Export:
+      Name: cc-on-bedrock-user-volumes-table-name
+
+  UserVolumesTableArn:
+    Description: DynamoDB table ARN for user volumes
+    Value: !GetAtt UserVolumesTable.Arn
+    Export:
+      Name: cc-on-bedrock-user-volumes-table-arn
