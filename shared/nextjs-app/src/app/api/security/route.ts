@@ -153,7 +153,7 @@ export async function GET(req: NextRequest) {
           securityPolicy: getAttr(u.Attributes, "custom:security_policy") ?? "open",
           containerOs: getAttr(u.Attributes, "custom:container_os") ?? "ubuntu",
           resourceTier: getAttr(u.Attributes, "custom:resource_tier") ?? "standard",
-          hasApiKey: !!getAttr(u.Attributes, "custom:litellm_api_key"),
+          hasContainer: !!getAttr(u.Attributes, "custom:container_id"),
           createdAt: u.UserCreateDate?.toISOString() ?? "",
         }));
         return NextResponse.json({ success: true, data: users });

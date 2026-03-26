@@ -10,7 +10,6 @@ export interface UserSession {
   containerOs?: "ubuntu" | "al2023";
   resourceTier?: "light" | "standard" | "power";
   securityPolicy?: "open" | "restricted" | "locked";
-  litellmApiKey?: string;
   containerId?: string;
 }
 
@@ -25,7 +24,6 @@ export interface CognitoUser {
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
-  litellmApiKey?: string;
   containerId?: string;
   groups: string[];
 }
@@ -46,7 +44,7 @@ export interface UpdateUserInput {
   securityPolicy?: "open" | "restricted" | "locked";
 }
 
-// ─── LiteLLM Types ───
+// ─── Usage Analytics Types (legacy LiteLLM format, used by analytics pages) ───
 
 export interface LiteLLMKey {
   key: string;

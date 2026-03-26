@@ -88,7 +88,6 @@ function toCognitoUser(user: {
     containerOs: (getAttr(attrs, "custom:container_os") as CognitoUser["containerOs"]) ?? "ubuntu",
     resourceTier: (getAttr(attrs, "custom:resource_tier") as CognitoUser["resourceTier"]) ?? "standard",
     securityPolicy: (getAttr(attrs, "custom:security_policy") as CognitoUser["securityPolicy"]) ?? "restricted",
-    litellmApiKey: getAttr(attrs, "custom:litellm_api_key"),
     containerId: getAttr(attrs, "custom:container_id"),
     groups: [],
   };
@@ -240,6 +239,9 @@ const TASK_DEFINITION_MAP: Record<string, string> = {
 // ─── Per-user IAM Role for budget control ───
 
 async function ensureUserTaskRole(subdomain: string): Promise<string> {
+  if (!accountId) {
+    throw new Error("AWS_ACCOUNT_ID environment variable is required for per-user IAM roles");
+  }
   const roleName = `${TASK_ROLE_PREFIX}-${subdomain}`;
   const roleArn = `arn:aws:iam::${accountId}:role/${roleName}`;
 
@@ -275,7 +277,10 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
           {
             Effect: "Allow",
             Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
-            Resource: "*",
+            Resource: [
+              "arn:aws:bedrock:*::foundation-model/anthropic.*",
+              `arn:aws:bedrock:*:${accountId}:inference-profile/*`,
+            ],
           },
           {
             Effect: "Allow",
@@ -302,7 +307,7 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
     return roleArn;
   } catch (err) {
     console.error(`[IAM] Failed to create role ${roleName}:`, err);
-    // Fallback to shared role
+    // Fallback to shared role (accountId already validated above)
     return `arn:aws:iam::${accountId}:role/cc-on-bedrock-ecs-task`;
   }
 }
@@ -364,7 +369,7 @@ export async function startContainer(
               // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
-              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? "CcOnBedrock2026!" },
+              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? crypto.randomUUID() },
               { name: "AWS_DEFAULT_REGION", value: region },
             ],
           },

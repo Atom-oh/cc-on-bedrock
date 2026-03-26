@@ -18,7 +18,6 @@ declare module "next-auth/jwt" {
     containerOs?: string;
     resourceTier?: string;
     securityPolicy?: string;
-    litellmApiKey?: string;
     containerId?: string;
   }
 }
@@ -56,8 +55,6 @@ export const authOptions: NextAuthOptions = {
         token.resourceTier = (p["custom:resource_tier"] as string) ?? undefined;
         token.securityPolicy =
           (p["custom:security_policy"] as string) ?? undefined;
-        token.litellmApiKey =
-          (p["custom:litellm_api_key"] as string) ?? undefined;
         token.containerId = (p["custom:container_id"] as string) ?? undefined;
       }
       return token;
@@ -74,7 +71,6 @@ export const authOptions: NextAuthOptions = {
         containerOs: token.containerOs as UserSession["containerOs"],
         resourceTier: token.resourceTier as UserSession["resourceTier"],
         securityPolicy: token.securityPolicy as UserSession["securityPolicy"],
-        litellmApiKey: token.litellmApiKey,
         containerId: token.containerId,
       };
       session.accessToken = token.accessToken;
@@ -85,32 +81,33 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
     maxAge: 8 * 60 * 60, // 8 hours
   },
-  // CloudFront → ALB (HTTP) 환경에서 __Secure- 접두어 쿠키 문제 해결
-  // ALB가 HTTP로 Next.js에 연결하므로 Secure 쿠키를 사용할 수 없음
+  // Custom cookie names (without __Secure- prefix) for CloudFront → ALB environment.
+  // secure: true — CloudFront always sends HTTPS to viewer, and ALB sets X-Forwarded-Proto.
+  // NextAuth reads X-Forwarded-Proto to determine if the original request was HTTPS.
   cookies: {
     sessionToken: {
       name: "next-auth.session-token",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: true },
     },
     callbackUrl: {
       name: "next-auth.callback-url",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: true },
     },
     csrfToken: {
       name: "next-auth.csrf-token",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: true },
     },
     pkceCodeVerifier: {
       name: "next-auth.pkce.code_verifier",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: true },
     },
     state: {
       name: "next-auth.state",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: true },
     },
     nonce: {
       name: "next-auth.nonce",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: true },
     },
   },
 };

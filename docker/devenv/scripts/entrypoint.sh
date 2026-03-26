@@ -7,6 +7,12 @@ USER_HOME="/home/coder"
 SECURITY_POLICY="${SECURITY_POLICY:-open}"
 SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 
+# Validate subdomain to prevent path traversal
+if [[ ! "$SUBDOMAIN" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "ERROR: Invalid subdomain: $SUBDOMAIN (must be lowercase alphanumeric with hyphens)"
+  exit 1
+fi
+
 # --- Per-user EFS directory isolation ---
 # EFS is mounted at /home/coder (shared root).
 # Each user gets their own subdirectory: /home/coder/users/{subdomain}/

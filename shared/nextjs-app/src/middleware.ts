@@ -21,8 +21,12 @@ export async function middleware(req: NextRequest) {
     cookieName: "next-auth.session-token",
   });
 
-  // Not authenticated → redirect to signin
+  // Not authenticated
   if (!token) {
+    // API routes: return 401 (don't redirect)
+    if (path.startsWith("/api/")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const signInUrl = new URL("/api/auth/signin", req.url);
     signInUrl.searchParams.set("callbackUrl", req.nextUrl.pathname);
     return NextResponse.redirect(signInUrl);
@@ -47,5 +51,6 @@ export const config = {
     "/security/:path*",
     "/ai/:path*",
     "/",
+    "/api/((?!health|auth|ai/runtime).*)",
   ],
 };

@@ -106,7 +106,7 @@ export default function UserManagement() {
 
   // User insights
   const activeUsers = users.filter((u) => u.enabled);
-  const withApiKey = users.filter((u) => u.litellmApiKey);
+  const withApiKey = users.filter((u) => u.containerId);
   const osCounts = { ubuntu: 0, al2023: 0 };
   const tierCounts = { light: 0, standard: 0, power: 0 };
   const policyCounts = { open: 0, restricted: 0, locked: 0 };
