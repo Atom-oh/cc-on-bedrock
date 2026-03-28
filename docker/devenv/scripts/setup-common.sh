@@ -72,13 +72,14 @@ install_nodejs() {
   echo "Node.js $(node --version) installed"
 }
 
-# --- Python uv ---
+# --- Python uv (pinned version) ---
 install_uv() {
   echo "Installing uv..."
-  curl -LsSf https://astral.sh/uv/install.sh | env CARGO_HOME=/usr/local sh
+  UV_VERSION="0.6.12"
+  curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env CARGO_HOME=/usr/local sh
   # Ensure uv is on PATH for all users
   ln -sf /root/.local/bin/uv /usr/local/bin/uv 2>/dev/null || true
-  echo "uv installed"
+  echo "uv $(uv --version) installed"
 }
 
 # --- AWS CLI v2 (ARM64) ---
@@ -96,10 +97,11 @@ install_awscli() {
   echo "AWS CLI $(aws --version) installed"
 }
 
-# --- code-server ---
+# --- code-server (pinned version) ---
 install_codeserver() {
   echo "Installing code-server..."
-  curl -fsSL https://code-server.dev/install.sh | sh
+  CODESERVER_VERSION="4.96.4"
+  curl -fsSL "https://code-server.dev/install.sh" | sh -s -- --version="${CODESERVER_VERSION}"
   echo "code-server $(code-server --version | head -1) installed"
 }
 

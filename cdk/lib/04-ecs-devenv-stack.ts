@@ -27,20 +27,28 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
   devEnvCertificateArn?: string;
-  hostedZone: route53.IHostedZone;
+  hostedZone?: route53.IHostedZone;
   cloudfrontSecret: secretsmanager.Secret;
 }
 
 export class EcsDevenvStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
-  public readonly ecrRepo: ecr.Repository;
+  public readonly ecrRepo: ecr.IRepository;
   public readonly alb: elbv2.ApplicationLoadBalancer;
 
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey,
-            devEnvCertificateArn, hostedZone, cloudfrontSecret } = props;
+            devEnvCertificateArn, cloudfrontSecret } = props;
+
+    // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
+    const hostedZone = config.hostedZoneId
+      ? route53.HostedZone.fromHostedZoneAttributes(this, 'ImportedHostedZone', {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.domainName,
+        })
+      : props.hostedZone!;
 
     // ECS Task Role (created in this stack to avoid cross-stack cyclic references)
     const ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
@@ -90,14 +98,8 @@ export class EcsDevenvStack extends cdk.Stack {
       resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
     }));
 
-    // ECR Repository
-    this.ecrRepo = new ecr.Repository(this, 'DevenvRepo', {
-      repositoryName: 'cc-on-bedrock/devenv',
-      imageScanOnPush: true,
-      encryption: ecr.RepositoryEncryption.KMS,
-      encryptionKey,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
+    // ECR Repository (import existing - was created with RETAIN policy)
+    this.ecrRepo = ecr.Repository.fromRepositoryName(this, 'DevenvRepo', 'cc-on-bedrock/devenv');
 
     // EFS File System
     const fileSystem = new efs.FileSystem(this, 'DevenvEfs', {
@@ -111,27 +113,16 @@ export class EcsDevenvStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // S3 Bucket for user workspace data
-    const userDataBucket = new s3.Bucket(this, 'UserDataBucket', {
+    // S3 Bucket for user workspace data (import existing - was created with RETAIN policy)
+    const userDataBucket = s3.Bucket.fromBucketAttributes(this, 'UserDataBucket', {
       bucketName: `cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}`,
-      encryption: s3.BucketEncryption.KMS,
-      encryptionKey: encryptionKey,
-      versioned: true,
-      lifecycleRules: [{
-        noncurrentVersionExpiration: cdk.Duration.days(30),
-      }],
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryptionKey,
     });
 
-    // DynamoDB Table for user volume tracking
-    const userVolumesTable = new dynamodb.Table(this, 'UserVolumesTable', {
+    // Reference user-volumes table (created in UsageTracking stack)
+    const userVolumesTable = dynamodb.Table.fromTableAttributes(this, 'UserVolumesTable', {
       tableName: 'cc-user-volumes',
-      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey,
-      pointInTimeRecovery: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     // Lambda Function for EBS lifecycle
@@ -142,7 +133,7 @@ export class EcsDevenvStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       timeout: cdk.Duration.minutes(5),
       environment: {
-        VOLUMES_TABLE: userVolumesTable.tableName,
+        VOLUMES_TABLE: 'cc-user-volumes',
         REGION: cdk.Aws.REGION,
       },
     });
@@ -189,23 +180,11 @@ export class EcsDevenvStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
-    // Bedrock permissions for Claude Code in containers (uses Instance Role via IMDS)
-    ecsInstanceRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: [
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
-      ],
-    }));
+    // Bedrock permissions are on the ECS Task Role only (not Instance Role)
+    // to enforce least-privilege: host cannot call Bedrock, only containers can.
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
-      instanceType: (() => {
-        const [instanceClass, instanceSize] = config.ecsHostInstanceType.split('.');
-        return ec2.InstanceType.of(
-          instanceClass.toUpperCase() as unknown as ec2.InstanceClass,
-          instanceSize.toUpperCase() as unknown as ec2.InstanceSize,
-        );
-      })(),
+      instanceType: new ec2.InstanceType(config.ecsHostInstanceType),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
       role: ecsInstanceRole,
       securityGroup: sgOpen,
@@ -432,7 +411,7 @@ export class EcsDevenvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SgRestricted', { value: sgRestricted.securityGroupId, exportName: 'cc-sg-devenv-restricted' });
     new cdk.CfnOutput(this, 'SgLocked', { value: sgLocked.securityGroupId, exportName: 'cc-sg-devenv-locked' });
     new cdk.CfnOutput(this, 'UserDataBucketName', { value: userDataBucket.bucketName });
-    new cdk.CfnOutput(this, 'UserVolumesTableName', { value: userVolumesTable.tableName });
+    // UserVolumesTable output is in UsageTracking stack
     new cdk.CfnOutput(this, 'EbsLifecycleLambdaArn', { value: ebsLifecycleLambda.functionArn });
 
     // NLB + Nginx routing outputs

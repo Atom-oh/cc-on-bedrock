@@ -9,6 +9,7 @@ import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
@@ -20,7 +21,8 @@ export interface DashboardStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   dashboardEc2Role: iam.Role;
   dashboardCertificateArn?: string;
-  hostedZone: route53.IHostedZone;
+  cloudfrontCertificateArn?: string;  // ACM cert in us-east-1 for CloudFront custom domain
+  hostedZone?: route53.IHostedZone;
   cloudfrontSecret: secretsmanager.Secret;
   userPool: cognito.UserPool;
   userPoolClient: cognito.UserPoolClient;
@@ -31,14 +33,46 @@ export class DashboardStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey, dashboardEc2Role,
-            dashboardCertificateArn, hostedZone, cloudfrontSecret,
-            userPool, userPoolClient } = props;
+            dashboardCertificateArn, cloudfrontCertificateArn,
+            cloudfrontSecret, userPool, userPoolClient } = props;
+
+    // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
+    const hostedZone = config.hostedZoneId
+      ? route53.HostedZone.fromHostedZoneAttributes(this, 'ImportedHostedZone', {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.domainName,
+        })
+      : props.hostedZone!;
+
+    // S3 Deploy Bucket for dashboard app artifacts
+    const deployBucketName = `${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}`;
+    const deployBucket = new s3.Bucket(this, 'DeployBucket', {
+      bucketName: deployBucketName,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    // Use deterministic ARN to avoid cross-stack cyclic reference (dashboardEc2Role is from Security stack)
+    const deployBucketArn = `arn:aws:s3:::${deployBucketName}`;
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'DeployBucketRead',
+      actions: ['s3:GetObject', 's3:ListBucket'],
+      resources: [deployBucketArn, `${deployBucketArn}/*`],
+    }));
 
     // Dashboard EC2 Role - additional permissions for all dashboard features
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockAccess',
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+        'bedrock:Converse',
+        'bedrock:ConverseStream',
+      ],
+      resources: [
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+      ],
     }));
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'AgentCoreAccess',
@@ -119,18 +153,24 @@ export class DashboardStack extends cdk.Stack {
         '',
         '# Deploy Next.js app from S3',
         'mkdir -p /opt/dashboard',
-        `aws s3 cp s3://cc-on-bedrock-deploy-${cdk.Aws.ACCOUNT_ID}/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ${cdk.Aws.REGION}`,
+        `aws s3 cp s3://${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ${cdk.Aws.REGION}`,
         'tar xzf /tmp/dashboard-app.tar.gz -C /opt/dashboard',
         'rm /tmp/dashboard-app.tar.gz',
         '',
+        '# Next.js standalone: server.js is in .next/standalone/',
+        '# Copy static assets into standalone .next dir for self-contained serving',
+        'cp -r /opt/dashboard/.next/static /opt/dashboard/.next/standalone/.next/static',
+        '',
         '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
         `NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ${cdk.Aws.REGION} --query SecretString --output text 2>/dev/null || openssl rand -hex 32)`,
+        `COGNITO_CLIENT_SECRET_VAL=$(aws cognito-idp describe-user-pool-client --user-pool-id ${userPool.userPoolId} --client-id ${userPoolClient.userPoolClientId} --region ${cdk.Aws.REGION} --query 'UserPoolClient.ClientSecret' --output text)`,
         '',
-        '# Environment config',
-        'cat > /opt/dashboard/.env << ENVEOF',
+        '# Environment config (written to standalone dir where server.js runs)',
+        'cat > /opt/dashboard/.next/standalone/.env << ENVEOF',
         `NEXTAUTH_URL=https://${config.dashboardSubdomain}.${config.domainName}`,
         'NEXTAUTH_SECRET=$NEXTAUTH_SECRET_VAL',
         `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
+        'COGNITO_CLIENT_SECRET=$COGNITO_CLIENT_SECRET_VAL',
         `COGNITO_ISSUER=https://cognito-idp.${cdk.Aws.REGION}.amazonaws.com/${userPool.userPoolId}`,
         `AWS_REGION=${cdk.Aws.REGION}`,
         `ECS_CLUSTER_NAME=${config.ecsClusterName}`,
@@ -142,10 +182,10 @@ export class DashboardStack extends cdk.Stack {
         `VPC_ID=${vpc.vpcId}`,
         `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
         'ENVEOF',
-        'chmod 600 /opt/dashboard/.env',
+        'chmod 600 /opt/dashboard/.next/standalone/.env',
         '',
-        '# Start Next.js',
-        'cd /opt/dashboard',
+        '# Start Next.js from standalone directory',
+        'cd /opt/dashboard/.next/standalone',
         'pm2 start server.js --name dashboard --env production',
         'pm2 startup',
         'pm2 save',
@@ -227,6 +267,10 @@ export class DashboardStack extends cdk.Stack {
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       },
       comment: 'CC-on-Bedrock Dashboard',
+      ...(cloudfrontCertificateArn ? {
+        domainNames: [`${config.dashboardSubdomain}.${config.domainName}`],
+        certificate: acm.Certificate.fromCertificateArn(this, 'CfCert', cloudfrontCertificateArn),
+      } : {}),
     });
 
     // Route 53 Record

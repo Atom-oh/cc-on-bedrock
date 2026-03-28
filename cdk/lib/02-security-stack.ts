@@ -71,6 +71,7 @@ export class SecurityStack extends cdk.Stack {
 
     const dashboardUrl = `https://${dashboardDomain}`;
     this.userPoolClient = this.userPool.addClient('AppClient', {
+      generateSecret: true,
       authFlows: { userPassword: true, userSrp: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
@@ -168,7 +169,11 @@ export class SecurityStack extends cdk.Stack {
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:TagResource'],
-      resources: [`arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task-definition/devenv-*`,
+      ],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'AlbManagement',

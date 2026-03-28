@@ -85,32 +85,19 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
     maxAge: 8 * 60 * 60, // 8 hours
   },
-  // CloudFront → ALB (HTTP) 환경에서 __Secure- 접두어 쿠키 문제 해결
-  // ALB가 HTTP로 Next.js에 연결하므로 Secure 쿠키를 사용할 수 없음
-  cookies: {
-    sessionToken: {
-      name: "next-auth.session-token",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
-    },
-    callbackUrl: {
-      name: "next-auth.callback-url",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
-    },
-    csrfToken: {
-      name: "next-auth.csrf-token",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
-    },
-    pkceCodeVerifier: {
-      name: "next-auth.pkce.code_verifier",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
-    },
-    state: {
-      name: "next-auth.state",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
-    },
-    nonce: {
-      name: "next-auth.nonce",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: false },
-    },
-  },
+  // Cookie security: secure=true when NEXTAUTH_URL is HTTPS (production behind CloudFront)
+  // secure=false only when ALB→App uses plain HTTP (no TLS termination at ALB)
+  cookies: (() => {
+    const useSecure = process.env.NEXTAUTH_URL?.startsWith("https") ?? false;
+    const opts = { httpOnly: true, sameSite: "lax" as const, path: "/", secure: useSecure };
+    const prefix = useSecure ? "__Secure-next-auth" : "next-auth";
+    return {
+      sessionToken: { name: `${prefix}.session-token`, options: opts },
+      callbackUrl: { name: `${prefix}.callback-url`, options: opts },
+      csrfToken: { name: `${prefix}.csrf-token`, options: opts },
+      pkceCodeVerifier: { name: `${prefix}.pkce.code_verifier`, options: opts },
+      state: { name: `${prefix}.state`, options: opts },
+      nonce: { name: `${prefix}.nonce`, options: opts },
+    };
+  })(),
 };
