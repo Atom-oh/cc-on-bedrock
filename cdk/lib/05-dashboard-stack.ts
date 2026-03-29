@@ -27,7 +27,6 @@ export interface DashboardStackProps extends cdk.StackProps {
   sgOpen: ec2.ISecurityGroup;
   sgRestricted: ec2.ISecurityGroup;
   sgLocked: ec2.ISecurityGroup;
-  devenvAlbListenerArn: string;
   efsFileSystemId: string;
   webAclArn?: string;
 }
@@ -201,7 +200,6 @@ export class DashboardStack extends cdk.Stack {
         `SG_DEVENV_OPEN=${props.sgOpen.securityGroupId}`,
         `SG_DEVENV_RESTRICTED=${props.sgRestricted.securityGroupId}`,
         `SG_DEVENV_LOCKED=${props.sgLocked.securityGroupId}`,
-        `DEVENV_ALB_LISTENER_ARN=${props.devenvAlbListenerArn}`,
         `S3_SYNC_BUCKET=${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
         `EFS_FILE_SYSTEM_ID=${props.efsFileSystemId}`,
         'ROUTING_TABLE=cc-routing-table',

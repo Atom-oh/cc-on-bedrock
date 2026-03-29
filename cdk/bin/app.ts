@@ -104,7 +104,6 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   sgOpen: ecsDevenvStack.sgOpen,
   sgRestricted: ecsDevenvStack.sgRestricted,
   sgLocked: ecsDevenvStack.sgLocked,
-  devenvAlbListenerArn: ecsDevenvStack.devenvAlbListenerArn,
   efsFileSystemId: ecsDevenvStack.efsFileSystemId,
   webAclArn: wafStack.webAclArn,
   description: 'CC-on-Bedrock: Next.js Dashboard, ALB, CloudFront',
