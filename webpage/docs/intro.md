@@ -1,8 +1,16 @@
 # 소개 (Introduction)
 
+import Screenshot from '@site/src/components/Screenshot';
+
 **CC-on-Bedrock**은 AWS Bedrock을 활용한 멀티유저 Claude Code 개발 플랫폼입니다.
 
 각 개발자에게 격리된 Claude Code + Kiro 환경을 Amazon ECS상에서 제공하며, Next.js 대시보드를 통해 중앙 집중식 관리가 가능합니다. 인프라는 CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 세 가지 IaC 도구로 구현되어 있습니다.
+
+<Screenshot 
+  src="/img/cconbedrock_arch.png" 
+  alt="CC-on-Bedrock Architecture" 
+  caption="시스템 전체 아키텍처: 사용자 접속부터 Bedrock API 호출까지의 전 과정" 
+/>
 
 ## 주요 특징
 
@@ -12,9 +20,7 @@
 - **7계층 보안**: CloudFront → ALB → Cognito → Security Groups → VPC Endpoints → DNS Firewall → IAM/DLP
 - **서버리스 트래킹**: CloudTrail → EventBridge → Lambda → DynamoDB를 활용한 저비용 사용량 추적
 
-## 시스템 아키텍처 요약
-
-![Architecture](/img/cconbedrock_arch.png)
+## 시스템 구성 요약
 
 시스템은 크게 5가지 스택으로 구성됩니다:
 

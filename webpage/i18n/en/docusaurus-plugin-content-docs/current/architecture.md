@@ -1,5 +1,7 @@
 # Architecture
 
+import Screenshot from '@site/src/components/Screenshot';
+
 CC-on-Bedrock's architecture is designed with high availability, security, and individual user isolation in mind.
 
 ## Infrastructure Stack Configuration
@@ -14,8 +16,22 @@ The system consists of 5 core stacks, each manageable and deployable independent
 | **04-ECS DevEnv** | ECS Cluster (EC2 mode), Task Definitions, EFS, ALB, CloudFront |
 | **05-Dashboard** | Next.js Standalone, EC2 ASG, ALB, CloudFront, S3 |
 
-## Container Architecture
+## Monitoring & Analytics
+The dashboard allows real-time monitoring of infrastructure health and usage analysis.
 
+<Screenshot 
+  src="/img/monitoring.png" 
+  alt="Monitoring" 
+  caption="Real-time Infrastructure Monitoring: ECS service status and container metrics" 
+/>
+
+<Screenshot 
+  src="/img/Analytics01.png" 
+  alt="Analytics" 
+  caption="Data Analytics: Visualizing cost and usage trends by model and department" 
+/>
+
+## Container Architecture
 Each user is assigned an independent ECS Task:
 
 - **1 ECS Task**: Isolated container environment (code-server + Claude Code + Kiro).
@@ -23,6 +39,12 @@ Each user is assigned an independent ECS Task:
 - **1 IAM Role**: User-specific role for individual budget control.
 - **1 ALB Target Group**: Host-based routing (`{subdomain}.dev.domain.com`).
 - **1 EFS Directory**: Per-user isolated file system storage.
+
+<Screenshot 
+  src="/img/containers.png" 
+  alt="Containers" 
+  caption="Container Management: Running and controlling independent developer environments" 
+/>
 
 ## Hybrid AI Architecture
 
@@ -35,5 +57,3 @@ The dashboard and external channels (like Slack) provide AI services through dif
 ### Slack/External Channels (Shared Runtime)
 - **Path**: Slack Bot → /api/ai/runtime → AgentCore Runtime → Gateway (MCP) → Lambda
 - **Features**: Response after full processing, 10-20 second response time, supports 8+ professional tools.
-
-Both paths share user session isolation and conversation history via **AgentCore Memory**.
