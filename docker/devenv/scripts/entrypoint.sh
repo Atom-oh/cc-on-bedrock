@@ -188,9 +188,18 @@ else
   RESOLVED_PASSWORD="${CODESERVER_PASSWORD:-}"
 fi
 
+# Force write config.yaml with resolved password (overrides stale EFS config)
+mkdir -p /home/coder/.config/code-server
+cat > /home/coder/.config/code-server/config.yaml << CFGEOF
+bind-addr: 0.0.0.0:8080
+auth: ${CODESERVER_AUTH:-password}
+password: ${RESOLVED_PASSWORD}
+cert: false
+CFGEOF
+chown coder:coder /home/coder/.config/code-server/config.yaml
+
 echo "Starting code-server for user: $SUBDOMAIN (Bedrock native mode)"
 exec sudo -u coder \
-  PASSWORD="$RESOLVED_PASSWORD" \
   code-server \
   --bind-addr 0.0.0.0:8080 \
   --auth "${CODESERVER_AUTH:-password}" \

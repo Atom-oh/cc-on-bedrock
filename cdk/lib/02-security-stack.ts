@@ -219,7 +219,7 @@ export class SecurityStack extends cdk.Stack {
         'cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser',
         'cognito-idp:AdminGetUser', 'cognito-idp:AdminUpdateUserAttributes',
         'cognito-idp:AdminDisableUser', 'cognito-idp:AdminEnableUser',
-        'cognito-idp:AdminAddUserToGroup',
+        'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminSetUserPassword',
         'cognito-idp:ListUsers',
         'cognito-idp:DescribeUserPoolClient',
       ],
