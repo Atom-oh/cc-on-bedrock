@@ -327,9 +327,18 @@ export class EcsDevenvStack extends cdk.Stack {
     albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
     // Port 80 removed: HTTPS-only when cert available, HTTP fallback for dev/test only
 
-    // Allow ALB → DevEnv containers on port 8080
+    // ─── Nginx Security Group (defined early for DevEnv SG ingress rules) ───
+    const nginxSg = new ec2.SecurityGroup(this, 'NginxSg', {
+      vpc,
+      description: 'Nginx reverse proxy SG',
+      allowAllOutbound: true,
+    });
+    nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
+
+    // Allow ALB + Nginx → DevEnv containers on port 8080
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
       sg.addIngressRule(albSg, ec2.Port.tcp(8080), 'Allow from DevEnv ALB');
+      sg.addIngressRule(nginxSg, ec2.Port.tcp(8080), 'Allow from Nginx proxy');
     });
 
     this.alb = new elbv2.ApplicationLoadBalancer(this, 'DevenvAlb', {
@@ -497,14 +506,6 @@ export class EcsDevenvStack extends cdk.Stack {
         retries: 3,
       },
     });
-
-    // ─── Nginx Security Group ───
-    const nginxSg = new ec2.SecurityGroup(this, 'NginxSg', {
-      vpc,
-      description: 'Nginx reverse proxy SG',
-      allowAllOutbound: true,
-    });
-    nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
 
     // ─── Nginx ECS Service ───
     const nginxService = new ecs.Ec2Service(this, 'NginxService', {
