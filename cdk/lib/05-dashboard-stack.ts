@@ -141,6 +141,7 @@ export class DashboardStack extends cdk.Stack {
         'HOSTNAME=0.0.0.0',
         `VPC_ID=${vpc.vpcId}`,
         `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
+        `CLOUDFRONT_SECRET=${cloudfrontSecret.secretValue.unsafeUnwrap()}`,
         'ENVEOF',
         'chmod 600 /opt/dashboard/.env',
         '',

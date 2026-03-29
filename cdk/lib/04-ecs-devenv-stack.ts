@@ -280,7 +280,7 @@ export class EcsDevenvStack extends cdk.Stack {
 
     // Listener - HTTPS with X-Custom-Secret validation
     if (devEnvCertificateArn) {
-      const httpsListener = this.alb.addListener('HttpsListener', {
+      this.alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [elbv2.ListenerCertificate.fromArn(devEnvCertificateArn)],

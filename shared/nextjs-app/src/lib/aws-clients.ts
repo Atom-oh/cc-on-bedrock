@@ -566,14 +566,22 @@ export async function registerContainerInAlb(
       .filter((p) => !isNaN(p));
     const nextPriority = Math.max(...usedPriorities, 0) + 1;
 
-    // Create listener rule
+    // Create listener rule with host-header + X-Custom-Secret validation
+    const conditions: Record<string, unknown>[] = [
+      { Field: "host-header", Values: [`${subdomain}.${devSubdomain}.${domainName}`] },
+    ];
+    const cfSecret = process.env.CLOUDFRONT_SECRET;
+    if (cfSecret) {
+      conditions.push({
+        Field: "http-header",
+        HttpHeaderConfig: { HttpHeaderName: "X-Custom-Secret", Values: [cfSecret] },
+      });
+    }
     await elbv2Client.send(
       new CreateRuleCommand({
         ListenerArn: devenvAlbListenerArn,
         Priority: nextPriority,
-        Conditions: [
-          { Field: "host-header", Values: [`${subdomain}.${devSubdomain}.${domainName}`] },
-        ],
+        Conditions: conditions,
         Actions: [{ Type: "forward", TargetGroupArn: tgArn }],
       })
     );

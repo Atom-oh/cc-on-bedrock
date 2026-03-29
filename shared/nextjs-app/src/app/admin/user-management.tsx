@@ -106,7 +106,7 @@ export default function UserManagement() {
 
   // User insights
   const activeUsers = users.filter((u) => u.enabled);
-  const withApiKey = users.filter((u) => u.containerId);
+  const withContainer = users.filter((u) => u.containerId);
   const osCounts = { ubuntu: 0, al2023: 0 };
   const tierCounts = { light: 0, standard: 0, power: 0 };
   const policyCounts = { open: 0, restricted: 0, locked: 0 };
@@ -122,7 +122,7 @@ export default function UserManagement() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard title={t("users.totalUsers")} value={users.length} description={t("users.registered")} />
         <StatCard title={t("users.active")} value={activeUsers.length} description={`${users.length > 0 ? ((activeUsers.length / users.length) * 100).toFixed(0) : 0}% ${t("users.enabled")}`} />
-        <StatCard title={t("users.withApiKey")} value={withApiKey.length} description={t("users.canUseCC")} />
+        <StatCard title={t("users.withContainer")} value={withContainer.length} description={t("users.canUseCC")} />
         <StatCard title={t("users.osSplit")} value={`${osCounts.ubuntu}/${osCounts.al2023}`} description="Ubuntu / AL2023" />
         <StatCard title={t("users.tierSplit")} value={`${tierCounts.light}/${tierCounts.standard}/${tierCounts.power}`} description="L / S / P" />
       </div>

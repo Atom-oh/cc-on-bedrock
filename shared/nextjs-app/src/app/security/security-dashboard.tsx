@@ -62,7 +62,7 @@ interface UserSecurity {
   securityPolicy: string;
   containerOs: string;
   resourceTier: string;
-  hasApiKey: boolean;
+  hasContainer: boolean;
   createdAt: string;
 }
 
@@ -476,7 +476,7 @@ export default function SecurityDashboard() {
               }).map((u) => {
                   const policyColor = u.securityPolicy === "locked" ? "bg-red-900/30 text-red-400" : u.securityPolicy === "restricted" ? "bg-yellow-900/30 text-yellow-400" : "bg-green-900/30 text-green-400";
                   const policyIcon = u.securityPolicy === "locked" ? "🔴" : u.securityPolicy === "restricted" ? "🟡" : "🟢";
-                  const riskLevel = u.securityPolicy === "open" && u.hasApiKey ? "MEDIUM" : u.securityPolicy === "locked" ? "LOW" : u.securityPolicy === "restricted" ? "LOW" : "MEDIUM";
+                  const riskLevel = u.securityPolicy === "open" && u.hasContainer ? "MEDIUM" : u.securityPolicy === "locked" ? "LOW" : u.securityPolicy === "restricted" ? "LOW" : "MEDIUM";
                   const riskColor = riskLevel === "LOW" ? "text-green-400" : riskLevel === "MEDIUM" ? "text-yellow-400" : "text-red-400";
                   return (
                     <tr key={u.username} className="hover:bg-gray-800/20 transition-colors">
@@ -496,8 +496,8 @@ export default function SecurityDashboard() {
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
-                        <span className={`text-[10px] ${u.hasApiKey ? "text-cyan-400" : "text-gray-600"}`}>
-                          {u.hasApiKey ? "✓ Issued" : "✗ None"}
+                        <span className={`text-[10px] ${u.hasContainer ? "text-cyan-400" : "text-gray-600"}`}>
+                          {u.hasContainer ? "✓ Issued" : "✗ None"}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
