@@ -211,23 +211,15 @@ export class EcsDevenvStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
-    // TODO: Block IMDS from containers to force Task Role usage (per-user token tracking)
-    // Currently containers fall back to Instance Role via IMDS on EC2 launch type.
-    // Temporary: add Bedrock to Instance Role so Claude Code works.
-    ecsInstanceRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'BedrockAccess',
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
-      resources: [
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
-      ],
-    }));
+    // No Bedrock on Instance Role — containers MUST use per-user Task Role
+    // IMDS blocked via ECS_AWSVPC_BLOCK_IMDS + IMDSv2 hop limit
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
       instanceType: new ec2.InstanceType(config.ecsHostInstanceType),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
       role: ecsInstanceRole,
       securityGroup: sgOpen,
+      requireImdsv2: true,
       blockDevices: [{
         deviceName: '/dev/xvda',
         volume: ec2.BlockDeviceVolume.ebs(100, {
@@ -237,10 +229,11 @@ export class EcsDevenvStack extends cdk.Stack {
       }],
       userData: ec2.UserData.forLinux(),
     });
-    // Add ECS cluster name to user data
+    // ECS agent config: cluster + awsvpc + IMDS block
     ecsLaunchTemplate.userData!.addCommands(
       `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
       'echo ECS_ENABLE_TASK_ENI=true >> /etc/ecs/ecs.config',
+      'echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config',
     );
 
     const capacityAsg = new autoscaling.AutoScalingGroup(this, 'EcsCapacityAsg', {

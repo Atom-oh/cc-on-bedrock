@@ -152,6 +152,13 @@ if [ -n "${S3_SYNC_BUCKET:-}" ]; then
   fi
 fi
 
+# --- Verify Task Role credentials ---
+if [ -n "$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" ]; then
+  echo "Using ECS Task Role credentials (endpoint: $AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)"
+else
+  echo "WARNING: AWS_CONTAINER_CREDENTIALS_RELATIVE_URI not set, may fall back to IMDS"
+fi
+
 # --- Start code-server ---
 # Claude Code: Bedrock mode via Task Role
 # CLAUDE_CODE_USE_BEDROCK=1 required to force Bedrock mode in ECS
