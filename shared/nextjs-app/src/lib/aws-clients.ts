@@ -159,10 +159,14 @@ export async function getCognitoUser(username: string): Promise<CognitoUser> {
 export async function createCognitoUser(
   input: CreateUserInput
 ): Promise<CognitoUser> {
+  // Generate initial temporary password for both Cognito and code-server
+  const tempPassword = require("crypto").randomBytes(12).toString("base64").slice(0, 16) + "A1!";
+
   const result = await cognitoClient.send(
     new AdminCreateUserCommand({
       UserPoolId: userPoolId,
       Username: input.email,
+      TemporaryPassword: tempPassword,
       UserAttributes: [
         { Name: "email", Value: input.email },
         { Name: "email_verified", Value: "true" },
@@ -176,6 +180,25 @@ export async function createCognitoUser(
       DesiredDeliveryMediums: ["EMAIL"],
     })
   );
+
+  // Store initial password in Secrets Manager for code-server sync
+  const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  try {
+    await secretsClient.send(new PutSecretValueCommand({
+      SecretId: secretName,
+      SecretString: tempPassword,
+    }));
+  } catch {
+    try {
+      await secretsClient.send(new CreateSecretCommand({
+        Name: secretName,
+        SecretString: tempPassword,
+        Description: `code-server password for ${input.subdomain}`,
+      }));
+    } catch (smErr) {
+      console.warn(`[createCognitoUser] Failed to store initial code-server password:`, smErr);
+    }
+  }
 
   // Add to 'user' group by default
   await cognitoClient.send(
@@ -558,6 +581,144 @@ export async function startContainer(
   if (!taskArn) {
     throw new Error("Failed to start container: no task ARN returned");
   }
+  return taskArn;
+}
+
+type ProgressCallback = (step: number, name: string, status: string, message?: string) => void;
+
+export async function startContainerWithProgress(
+  input: StartContainerInput,
+  onProgress: ProgressCallback
+): Promise<string> {
+  const taskDefKey = `${input.containerOs}-${input.resourceTier}`;
+  const taskDefinition = TASK_DEFINITION_MAP[taskDefKey];
+  if (!taskDefinition) {
+    throw new Error(`Invalid container config: ${taskDefKey}`);
+  }
+
+  const securityGroup = SECURITY_GROUP_MAP[input.securityPolicy];
+
+  // Step 1: IAM Role
+  onProgress(1, "iam_role", "in_progress", "Creating per-user IAM role...");
+  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
+  onProgress(1, "iam_role", "completed", "IAM role ready");
+
+  // Step 2: EFS Access Point
+  onProgress(2, "efs_access_point", "in_progress", "Creating EFS access point...");
+  const accessPointId = await ensureUserAccessPoint(input.subdomain);
+  onProgress(2, "efs_access_point", "completed", "EFS access point ready");
+
+  // Step 3: Task Definition
+  onProgress(3, "task_definition", "in_progress", "Registering task definition...");
+  let finalTaskDefinition = taskDefinition;
+  if (accessPointId) {
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({ taskDefinition }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: "/",
+                transitEncryption: "ENABLED" as const,
+                authorizationConfig: { accessPointId, iam: "ENABLED" as const },
+              },
+            };
+          }
+          return v;
+        });
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+      }
+    } catch (err) {
+      console.warn(`[SSE] Task def registration failed, using default:`, err);
+    }
+  }
+  onProgress(3, "task_definition", "completed", "Task definition registered");
+
+  // Step 4: Password Store
+  onProgress(4, "password_store", "in_progress", "Storing code-server password...");
+  const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  let codeserverPassword: string;
+  try {
+    // Try to read existing password first
+    const existing = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretName }));
+    codeserverPassword = existing.SecretString ?? require("crypto").randomBytes(16).toString("hex");
+  } catch {
+    // No existing password — generate a new one
+    codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  }
+  try {
+    await secretsClient.send(new PutSecretValueCommand({ SecretId: secretName, SecretString: codeserverPassword }));
+  } catch {
+    await secretsClient.send(new CreateSecretCommand({
+      Name: secretName,
+      SecretString: codeserverPassword,
+      Description: `code-server password for ${input.subdomain}`,
+    }));
+  }
+  const secretArn = `arn:aws:secretsmanager:${region}:${accountId}:secret:${secretName}`;
+  onProgress(4, "password_store", "completed", "Password stored");
+
+  // Step 5: Container Start
+  onProgress(5, "container_start", "in_progress", "Starting ECS task...");
+  const result = await ecsClient.send(
+    new RunTaskCommand({
+      cluster: ecsCluster,
+      taskDefinition: finalTaskDefinition,
+      count: 1,
+      launchType: "EC2",
+      enableExecuteCommand: true,
+      networkConfiguration: {
+        awsvpcConfiguration: {
+          subnets: (process.env.PRIVATE_SUBNET_IDS ?? "").split(","),
+          securityGroups: securityGroup ? [securityGroup] : [],
+          assignPublicIp: "DISABLED",
+        },
+      },
+      overrides: {
+        taskRoleArn: userTaskRoleArn,
+        containerOverrides: [
+          {
+            name: "devenv",
+            environment: [
+              { name: "SECURITY_POLICY", value: input.securityPolicy },
+              { name: "USER_SUBDOMAIN", value: input.subdomain },
+              { name: "CODESERVER_SECRET_ARN", value: secretArn },
+              { name: "AWS_DEFAULT_REGION", value: region },
+              ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
+            ],
+          },
+        ],
+      },
+      tags: [
+        { key: "username", value: input.username },
+        { key: "subdomain", value: input.subdomain },
+        { key: "department", value: input.department },
+        { key: "securityPolicy", value: input.securityPolicy },
+        { key: "storageType", value: input.storageType ?? "efs" },
+        { key: "domain", value: `${input.subdomain}.${devSubdomain}.${domainName}` },
+      ],
+    })
+  );
+
+  const taskArn = result.tasks?.[0]?.taskArn;
+  if (!taskArn) {
+    throw new Error("Failed to start container: no task ARN returned");
+  }
+  onProgress(5, "container_start", "completed", `Task started: ${taskArn.split("/").pop()}`);
+
   return taskArn;
 }
 

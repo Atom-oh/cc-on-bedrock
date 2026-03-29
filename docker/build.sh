@@ -19,11 +19,13 @@ build_image() {
   local image_tag="$5"
 
   echo "=== Building $name (tag: $image_tag) ==="
-  docker build \
+  docker buildx build \
+    --builder multibuilder \
     --platform linux/arm64 \
     -f "$dockerfile" \
     -t "${ecr_repo}:${image_tag}" \
     -t "${ECR_REGISTRY}/${ecr_repo}:${image_tag}" \
+    --load \
     "$context"
   echo "=== Built $name ==="
 }

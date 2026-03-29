@@ -146,6 +146,83 @@ export async function getContainerMetricsTimeSeries(
   };
 }
 
+// Per-task metrics for individual user containers
+export interface TaskMetrics {
+  cpu: number;        // CPU units utilized
+  cpuLimit: number;   // CPU units reserved
+  memory: number;     // Memory MB utilized
+  memoryLimit: number; // Memory MB reserved
+  networkRx: number;  // bytes received (last period)
+  networkTx: number;  // bytes sent (last period)
+  diskRead: number;   // bytes read (last period)
+  diskWrite: number;  // bytes written (last period)
+  timeseries: Array<{
+    time: string;
+    cpu: number;
+    memory: number;
+    networkRx: number;
+    networkTx: number;
+  }>;
+}
+
+export async function getTaskMetrics(taskId: string): Promise<TaskMetrics> {
+  const end = new Date();
+  const start = new Date(end.getTime() - 60 * 60 * 1000); // last 1 hour
+  const taskDims = [{ Name: "TaskId", Value: taskId }];
+
+  const result = await cwClient.send(
+    new GetMetricDataCommand({
+      StartTime: start,
+      EndTime: end,
+      MetricDataQueries: [
+        makeQuery("cpu", "CpuUtilized", "Average", 60, taskDims),
+        makeQuery("cpuR", "CpuReserved", "Average", 60, taskDims),
+        makeQuery("mem", "MemoryUtilized", "Average", 60, taskDims),
+        makeQuery("memR", "MemoryReserved", "Average", 60, taskDims),
+        makeQuery("netRx", "NetworkRxBytes", "Sum", 60, taskDims),
+        makeQuery("netTx", "NetworkTxBytes", "Sum", 60, taskDims),
+        makeQuery("stRd", "StorageReadBytes", "Sum", 60, taskDims),
+        makeQuery("stWr", "StorageWriteBytes", "Sum", 60, taskDims),
+      ],
+    })
+  );
+
+  const getLatest = (id: string) =>
+    result.MetricDataResults?.find((r) => r.Id === id)?.Values?.[0] ?? 0;
+
+  // Build timeseries from CPU timestamps
+  const cpuResult = result.MetricDataResults?.find((r) => r.Id === "cpu");
+  const timestamps = (cpuResult?.Timestamps ?? []).map((t) => t.toISOString());
+  const getAll = (id: string) =>
+    result.MetricDataResults?.find((r) => r.Id === id)?.Values ?? [];
+
+  const cpuVals = getAll("cpu");
+  const memVals = getAll("mem");
+  const rxVals = getAll("netRx");
+  const txVals = getAll("netTx");
+
+  // CloudWatch returns newest-first, reverse for chart display
+  const timeseries = timestamps.map((time, i) => ({
+    time,
+    cpu: cpuVals[i] ?? 0,
+    memory: memVals[i] ?? 0,
+    networkRx: rxVals[i] ?? 0,
+    networkTx: txVals[i] ?? 0,
+  })).reverse();
+
+  return {
+    cpu: getLatest("cpu"),
+    cpuLimit: getLatest("cpuR"),
+    memory: getLatest("mem"),
+    memoryLimit: getLatest("memR"),
+    networkRx: getLatest("netRx"),
+    networkTx: getLatest("netTx"),
+    diskRead: getLatest("stRd"),
+    diskWrite: getLatest("stWr"),
+    timeseries,
+  };
+}
+
 export async function getTaskDefMetrics(): Promise<TaskDefMetrics[]> {
   const end = new Date();
   const start = new Date(end.getTime() - 10 * 60 * 1000);

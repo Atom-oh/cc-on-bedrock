@@ -21,3 +21,21 @@ export const stopContainerSchema = z.object({
 export const keepAliveSchema = z.object({
   userId: z.string().email().optional(),
 });
+
+export const createUserSchema = z.object({
+  email: z.string().email("Invalid email"),
+  subdomain,
+  department: z.string().min(1).max(50).default("default"),
+  containerOs: z.enum(["ubuntu", "al2023"]),
+  resourceTier: z.enum(["light", "standard", "power"]),
+  securityPolicy: z.enum(["open", "restricted", "locked"]),
+  storageType: z.enum(["ebs", "efs"]).default("ebs"),
+});
+
+export const updateUserSchema = z.object({
+  username: z.string().min(1),
+  containerOs: z.enum(["ubuntu", "al2023"]).optional(),
+  resourceTier: z.enum(["light", "standard", "power"]).optional(),
+  securityPolicy: z.enum(["open", "restricted", "locked"]).optional(),
+  storageType: z.enum(["ebs", "efs"]).optional(),
+});

@@ -14,6 +14,7 @@ export interface CcOnBedrockConfig {
 
   // Domain
   domainName: string;
+  hostedZoneId?: string;
   devSubdomain: string;
   dashboardSubdomain: string;
   cognitoDomainPrefix: string;
@@ -31,8 +32,17 @@ export interface CcOnBedrockConfig {
   // Budget
   dailyBudgetUsd: number;
 
+  // Storage mode
+  // 'ebs' = enterprise mode with warm-stop, idle-check, snapshot/resize lifecycle
+  // 'efs' = simple mode, EFS-only, no EBS lifecycle management
+  storageType: 'efs' | 'ebs';
+
   // CloudFront Prefix List (region-specific)
   cloudfrontPrefixListId: string;
+}
+
+export function isEbsMode(config: CcOnBedrockConfig): boolean {
+  return config.storageType === 'ebs';
 }
 
 // Region-specific CloudFront Managed Prefix List IDs
@@ -56,10 +66,11 @@ export const defaultConfig: CcOnBedrockConfig = {
   privateSubnetCidrC: '10.100.32.0/20',
   isolatedSubnetCidrA: '10.100.100.0/23',
   isolatedSubnetCidrC: '10.100.102.0/23',
-  domainName: 'whchoi.net',
+  domainName: 'atomai.click',
+  hostedZoneId: '',  // Set via cdk.context.json or -c hostedZoneId=xxx
   devSubdomain: 'dev',
   dashboardSubdomain: 'cconbedrock-dashboard',
-  cognitoDomainPrefix: 'cc-on-bedrock',
+  cognitoDomainPrefix: 'cc-on-bedrock-ent',
   opusModelId: 'global.anthropic.claude-opus-4-6-v1[1m]',
   sonnetModelId: 'global.anthropic.claude-sonnet-4-6[1m]',
   ecsHostInstanceType: 'm7g.4xlarge',
@@ -67,5 +78,6 @@ export const defaultConfig: CcOnBedrockConfig = {
   dashboardInstanceType: 't4g.xlarge',
   nodeVersion: 'v20.18.3',
   dailyBudgetUsd: 50,
+  storageType: 'ebs',
   cloudfrontPrefixListId: 'pl-22a6434b',  // ap-northeast-2 default
 };

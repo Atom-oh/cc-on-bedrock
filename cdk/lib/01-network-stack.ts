@@ -72,10 +72,17 @@ export class NetworkStack extends cdk.Stack {
       service: ec2.GatewayVpcEndpointAwsService.S3,
     });
 
-    // Route 53 Hosted Zone
-    this.hostedZone = new route53.HostedZone(this, 'HostedZone', {
-      zoneName: config.domainName,
-    });
+    // Route 53 Hosted Zone: lookup existing if hostedZoneId provided, else create new
+    if (config.hostedZoneId) {
+      this.hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
+        hostedZoneId: config.hostedZoneId,
+        zoneName: config.domainName,
+      });
+    } else {
+      this.hostedZone = new route53.HostedZone(this, 'HostedZone', {
+        zoneName: config.domainName,
+      });
+    }
 
     // Outputs
     new cdk.CfnOutput(this, 'VpcId', { value: this.vpc.vpcId, exportName: 'cc-vpc-id' });

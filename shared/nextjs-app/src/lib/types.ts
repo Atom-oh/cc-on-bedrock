@@ -246,6 +246,78 @@ export interface HealthStatus {
   details?: Record<string, unknown>;
 }
 
+// ─── Provisioning Types ───
+
+export type ProvisioningStepName =
+  | "iam_role"
+  | "efs_access_point"
+  | "task_definition"
+  | "password_store"
+  | "container_start"
+  | "route_register";
+
+export interface ProvisioningEvent {
+  step: number;
+  name: ProvisioningStepName;
+  status: "pending" | "in_progress" | "completed" | "failed";
+  message?: string;
+  error?: string;
+  url?: string; // final code-server URL on completion
+}
+
+export const PROVISIONING_STEPS: { step: number; name: ProvisioningStepName; label: string }[] = [
+  { step: 1, name: "iam_role", label: "IAM Role" },
+  { step: 2, name: "efs_access_point", label: "EFS Access Point" },
+  { step: 3, name: "task_definition", label: "Task Definition" },
+  { step: 4, name: "password_store", label: "Password Store" },
+  { step: 5, name: "container_start", label: "Container Start" },
+  { step: 6, name: "route_register", label: "Route Register" },
+];
+
+// ─── Disk Usage Types ───
+
+export interface DiskUsage {
+  storageType: "ebs" | "efs";
+  total: number;
+  used: number;
+  available: number;
+  usagePercent: number;
+  mountPath: string;
+}
+
+export interface EbsResizeRequest {
+  requestedSizeGb: number;
+  reason: string;
+  status: "resize_pending" | "approved" | "rejected" | "completed";
+  requestedAt: string;
+  updatedAt?: string;
+  approvedBy?: string;
+}
+
+export interface EbsResizeData {
+  userId: string;
+  currentSizeGb: number;
+  volumeId?: string;
+  resizeRequest: EbsResizeRequest | null;
+}
+
+// ─── Password Management Types ───
+
+export interface PasswordInfo {
+  password: string;
+  lastChanged?: string;
+}
+
+// ─── User Portal Tab Types ───
+
+export type UserPortalTab = "environment" | "storage" | "settings";
+
+export const TIER_CONFIG = {
+  light: { label: "Light", cpu: "1 vCPU", memory: "2 GB", costMultiplier: 1 },
+  standard: { label: "Standard", cpu: "2 vCPU", memory: "4 GB", costMultiplier: 2 },
+  power: { label: "Power", cpu: "4 vCPU", memory: "8 GB", costMultiplier: 4 },
+} as const;
+
 // ─── API Response Types ───
 
 export interface ApiResponse<T> {

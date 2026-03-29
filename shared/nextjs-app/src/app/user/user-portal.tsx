@@ -1,55 +1,55 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
-import type { UserSession, ContainerInfo } from "@/lib/types";
-import ContainerMetrics from "@/components/container-metrics";
+import type { UserSession, ContainerInfo, UserPortalTab } from "@/lib/types";
+import EnvironmentTab from "@/components/user/environment-tab";
+import StorageTab from "@/components/user/storage-tab";
+import SettingsTab from "@/components/user/settings-tab";
 
 interface UserPortalProps {
   user: UserSession;
 }
 
-interface UsageData {
-  totalTokens: number;
-  dailyLimit: number;
-  requests: number;
-  estimatedCost: number;
-}
-
-interface DeptPolicy {
-  allowedTiers: ("light" | "standard" | "power")[];
-}
-
-const TIER_CONFIG = {
-  light: { label: "Light", cpu: "1 vCPU", memory: "2 GB", costMultiplier: 1 },
-  standard: { label: "Standard", cpu: "2 vCPU", memory: "4 GB", costMultiplier: 2 },
-  power: { label: "Power", cpu: "4 vCPU", memory: "8 GB", costMultiplier: 4 },
-} as const;
+const TABS: { id: UserPortalTab; label: string; icon: React.ReactNode }[] = [
+  {
+    id: "environment",
+    label: "Environment",
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+  {
+    id: "storage",
+    label: "Storage",
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+      </svg>
+    ),
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+    ),
+  },
+];
 
 export default function UserPortal({ user }: UserPortalProps) {
   const { t } = useI18n();
+  const [activeTab, setActiveTab] = useState<UserPortalTab>("environment");
   const [container, setContainer] = useState<ContainerInfo | null>(null);
-  const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedTier, setSelectedTier] = useState<"light" | "standard" | "power">(
-    user.resourceTier ?? "standard"
-  );
-  const [deptPolicy, setDeptPolicy] = useState<DeptPolicy>({
-    allowedTiers: ["light", "standard", "power"],
-  });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [containerMetrics, setContainerMetrics] = useState<any>(null);
-  const [metricsLoading, setMetricsLoading] = useState(false);
-  const metricsIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
-  const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
-
-  const fetchData = useCallback(async () => {
+  const fetchContainerStatus = useCallback(async () => {
     try {
-      // Fetch container status
       const containersRes = await fetch("/api/containers");
       const containersData = await containersRes.json();
       if (containersData.success && Array.isArray(containersData.data)) {
@@ -60,123 +60,20 @@ export default function UserPortal({ user }: UserPortalProps) {
         );
         setContainer(userContainer ?? null);
       }
-
-      // Fetch usage data (daily)
-      const today = new Date().toISOString().split("T")[0];
-      const usageRes = await fetch(`/api/user/usage?date=${today}`);
-      if (usageRes.ok) {
-        const usageData = await usageRes.json();
-        if (usageData.success) {
-          setUsage(usageData.data);
-        }
-      }
-
-      // Fetch department policy for allowed tiers
-      try {
-        const deptRes = await fetch("/api/dept");
-        if (deptRes.ok) {
-          const deptData = await deptRes.json();
-          if (deptData.success && deptData.data?.policy?.allowedTiers) {
-            setDeptPolicy({ allowedTiers: deptData.data.policy.allowedTiers });
-          }
-        }
-      } catch {
-        // Use default policy if fetch fails
-      }
     } catch (err) {
-      console.error("Failed to fetch data:", err);
+      console.error("Failed to fetch container status:", err);
     } finally {
       setLoading(false);
     }
   }, [user.subdomain]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000); // Refresh every 30s
+    fetchContainerStatus();
+    const interval = setInterval(fetchContainerStatus, 30000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [fetchContainerStatus]);
 
-  // Fetch container metrics when container is running
-  useEffect(() => {
-    if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
-    if (!container || container.status !== "RUNNING") {
-      setContainerMetrics(null);
-      return;
-    }
-    const fetchMetrics = async () => {
-      setMetricsLoading(true);
-      try {
-        const res = await fetch("/api/user/container-metrics");
-        const json = await res.json();
-        if (json.success && json.data) setContainerMetrics(json.data);
-      } catch { /* ignore */ }
-      finally { setMetricsLoading(false); }
-    };
-    fetchMetrics();
-    metricsIntervalRef.current = setInterval(fetchMetrics, 30000);
-    return () => { if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current); };
-  }, [container?.status, container?.taskId]);
-
-  const handleStartContainer = async () => {
-    // Validate selected tier against department policy
-    if (!deptPolicy.allowedTiers.includes(selectedTier)) {
-      setError(`Tier "${selectedTier}" is not allowed for your department`);
-      return;
-    }
-
-    setActionLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/user/container", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start", resourceTier: selectedTier }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        setError(data.error ?? "Failed to start container");
-      } else {
-        await fetchData();
-      }
-    } catch {
-      setError("Failed to start container");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleStopContainer = async () => {
-    if (!container) return;
-    setActionLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/user/container", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "stop", taskArn: container.taskArn }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        setError(data.error ?? "Failed to stop container");
-      } else {
-        setContainer(null);
-      }
-    } catch {
-      setError("Failed to stop container");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const codeServerUrl = user.subdomain
-    ? `https://${user.subdomain}.${devSubdomain}.${domainName}`
-    : null;
-
-  const usagePercent = usage
-    ? Math.min(100, Math.round((usage.totalTokens / usage.dailyLimit) * 100))
-    : 0;
-
-  if (loading && !container && !usage) {
+  if (loading && !container) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-gray-400">{t("analytics.loading")}</div>
@@ -186,251 +83,41 @@ export default function UserPortal({ user }: UserPortalProps) {
 
   return (
     <div className="space-y-6">
-      {error && (
-        <div className="bg-red-900/30 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg">
-          {error}
-        </div>
-      )}
-
-      {/* Container Status */}
-      <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-100">
-            {t("user.containerStatus") || "Container Status"}
-          </h2>
-          {container && container.status === "RUNNING" && (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-green-900/30 text-green-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              {t("monitoring.running")}
-            </span>
-          )}
-          {container && (container.status === "PENDING" || container.status === "PROVISIONING") && (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-900/30 text-yellow-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
-              {t("monitoring.pending")}
-            </span>
-          )}
-          {!container && (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-gray-800 text-gray-400">
-              {t("user.stopped") || "Stopped"}
-            </span>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div>
-            <p className="text-xs text-gray-500 mb-1">{t("user.os") || "OS"}</p>
-            <p className="text-sm text-gray-200">
-              {user.containerOs === "al2023" ? "Amazon Linux 2023" : "Ubuntu 24.04"}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 mb-1">{t("user.tier") || "Resource Tier"}</p>
-            <p className="text-sm text-gray-200 capitalize">{user.resourceTier ?? "standard"}</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 mb-1">{t("user.subdomain") || "Subdomain"}</p>
-            <p className="text-sm text-gray-200">{user.subdomain ?? "-"}</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 mb-1">Storage</p>
-            <p className="text-sm">
-              <span className={user.storageType === "ebs" ? "text-blue-400" : "text-green-400"}>
-                {(user.storageType ?? "efs").toUpperCase()}
-              </span>
-            </p>
-          </div>
-        </div>
-
-        {/* Tier Selection (only when container is not running) */}
-        {!container && (
-          <div className="mb-4">
-            <label className="block text-sm text-gray-400 mb-2">
-              {t("user.selectTier") || "Select Resource Tier"}
-            </label>
-            <div className="grid grid-cols-3 gap-3">
-              {(["light", "standard", "power"] as const).map((tier) => {
-                const config = TIER_CONFIG[tier];
-                const isAllowed = deptPolicy.allowedTiers.includes(tier);
-                const isSelected = selectedTier === tier;
-                return (
-                  <button
-                    key={tier}
-                    onClick={() => isAllowed && setSelectedTier(tier)}
-                    disabled={!isAllowed}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      isSelected
-                        ? "border-blue-500 bg-blue-900/30"
-                        : isAllowed
-                        ? "border-gray-700 bg-[#0d1117] hover:border-gray-600"
-                        : "border-gray-800 bg-gray-900/50 opacity-50 cursor-not-allowed"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`font-medium ${isSelected ? "text-blue-400" : "text-gray-200"}`}>
-                        {config.label}
-                      </span>
-                      <span className="text-xs text-gray-500">{config.costMultiplier}x</span>
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {config.cpu} / {config.memory}
-                    </div>
-                    {!isAllowed && (
-                      <div className="text-xs text-red-400 mt-1">
-                        {t("user.tierNotAllowed") || "Not allowed"}
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div className="flex items-center gap-3">
-          {!container && (
+      {/* Tab Navigation */}
+      <div className="bg-[#161b22] rounded-xl border border-gray-800">
+        <div className="flex border-b border-gray-800">
+          {TABS.map((tab) => (
             <button
-              onClick={handleStartContainer}
-              disabled={actionLoading || !user.subdomain}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              {actionLoading ? (t("user.starting") || "Starting...") : (t("user.start") || "Start Container")}
-            </button>
-          )}
-          {container && (
-            <>
-              <button
-                onClick={handleStopContainer}
-                disabled={actionLoading}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                {actionLoading ? (t("user.stopping") || "Stopping...") : (t("user.stop") || "Stop Container")}
-              </button>
-              {container.status === "RUNNING" && codeServerUrl && (
-                <a
-                  href={codeServerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors inline-flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                  {t("user.openCodeServer") || "Open code-server"}
-                </a>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Daily Usage */}
-      <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
-        <h2 className="text-lg font-semibold text-gray-100 mb-4">
-          {t("user.dailyUsage") || "Today's Usage"}
-        </h2>
-
-        <div className="mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-400">{t("user.tokenUsage") || "Token Usage"}</span>
-            <span className="text-sm text-gray-300">
-              {usage ? usage.totalTokens.toLocaleString() : 0} / {usage ? usage.dailyLimit.toLocaleString() : "100,000"}
-            </span>
-          </div>
-          <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                usagePercent >= 90
-                  ? "bg-red-500"
-                  : usagePercent >= 70
-                  ? "bg-yellow-500"
-                  : "bg-blue-500"
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 px-6 py-3.5 text-sm font-medium transition-all border-b-2 ${
+                activeTab === tab.id
+                  ? "border-blue-500 text-blue-400 bg-blue-900/10"
+                  : "border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/30"
               }`}
-              style={{ width: `${usagePercent}%` }}
-            />
-          </div>
-          <p className="text-xs text-gray-500 mt-1">
-            {usagePercent}% {t("user.ofDailyLimit") || "of daily limit"}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-[#0d1117] rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">{t("user.requests") || "API Requests"}</p>
-            <p className="text-xl font-bold text-gray-100">{usage?.requests ?? 0}</p>
-          </div>
-          <div className="bg-[#0d1117] rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">{t("user.estimatedCost") || "Est. Cost"}</p>
-            <p className="text-xl font-bold text-gray-100">
-              ${(usage?.estimatedCost ?? 0).toFixed(4)}
-            </p>
-          </div>
+            >
+              {tab.icon}
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Container Metrics (shown when running) */}
-      {container?.status === "RUNNING" && (
-        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
-          {containerMetrics ? (
-            <ContainerMetrics
-              metrics={{
-                cpu: containerMetrics.cpu ?? 0,
-                cpuLimit: containerMetrics.cpuLimit ?? 1,
-                memory: containerMetrics.memory ?? 0,
-                memoryLimit: containerMetrics.memoryLimit ?? 1,
-                networkRx: containerMetrics.networkRx ?? 0,
-                networkTx: containerMetrics.networkTx ?? 0,
-                diskRead: containerMetrics.diskRead ?? 0,
-                diskWrite: containerMetrics.diskWrite ?? 0,
-              }}
-              timeseries={containerMetrics.timeseries ?? []}
-              loading={metricsLoading}
-            />
-          ) : (
-            <ContainerMetrics
-              metrics={{ cpu: 0, cpuLimit: 1, memory: 0, memoryLimit: 1, networkRx: 0, networkTx: 0, diskRead: 0, diskWrite: 0 }}
-              timeseries={[]}
-              loading={true}
-            />
-          )}
-        </div>
+      {/* Tab Content */}
+      {activeTab === "environment" && (
+        <EnvironmentTab
+          user={user}
+          container={container}
+          setContainer={setContainer}
+          fetchData={fetchContainerStatus}
+        />
       )}
-
-      {/* Workspace Info */}
-      <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
-        <h2 className="text-lg font-semibold text-gray-100 mb-4">
-          {t("user.workspaceInfo") || "Workspace Info"}
-        </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-[#0d1117] rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">{t("user.securityPolicy") || "Security Policy"}</p>
-            <p className="text-sm text-gray-200 capitalize">{user.securityPolicy ?? "restricted"}</p>
-            <p className="text-xs text-gray-500 mt-1">
-              {user.securityPolicy === "open"
-                ? t("user.policyOpen") || "Full network access"
-                : user.securityPolicy === "locked"
-                ? t("user.policyLocked") || "No external network"
-                : t("user.policyRestricted") || "Restricted external access"}
-            </p>
-          </div>
-          <div className="bg-[#0d1117] rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">{t("user.accessUrl") || "Access URL"}</p>
-            {codeServerUrl ? (
-              <a
-                href={codeServerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-400 hover:text-blue-300 break-all"
-              >
-                {codeServerUrl}
-              </a>
-            ) : (
-              <p className="text-sm text-gray-500">{t("user.noSubdomain") || "No subdomain assigned"}</p>
-            )}
-          </div>
-        </div>
-      </div>
+      {activeTab === "storage" && (
+        <StorageTab user={user} container={container} />
+      )}
+      {activeTab === "settings" && (
+        <SettingsTab user={user} container={container} />
+      )}
     </div>
   );
 }

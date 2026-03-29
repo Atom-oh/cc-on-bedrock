@@ -9,7 +9,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
-import { CcOnBedrockConfig } from '../config/default';
+import { CcOnBedrockConfig, isEbsMode } from '../config/default';
 import * as path from 'path';
 
 export interface UsageTrackingStackProps extends cdk.StackProps {
@@ -166,7 +166,10 @@ export class UsageTrackingStack extends cdk.Stack {
     // Grant budget check Lambda read access to department budgets table
     departmentBudgetsTable.grantReadData(budgetCheckLambda);
 
-    // ==================== Warm Stop Automation ====================
+    // ==================== Warm Stop Automation (EBS mode only) ====================
+    const isEbs = isEbsMode(config);
+
+    if (isEbs) {
 
     // DynamoDB Table for user volumes (used by warm-stop and EBS lifecycle)
     const userVolumesTable = new dynamodb.Table(this, 'UserVolumesTable', {
@@ -275,6 +278,22 @@ export class UsageTrackingStack extends cdk.Stack {
       event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
     }));
 
+    // EBS-mode CfnOutputs
+    new cdk.CfnOutput(this, 'UserVolumesTableName', {
+      value: userVolumesTable.tableName,
+      exportName: 'cc-user-volumes-table-name',
+    });
+    new cdk.CfnOutput(this, 'WarmStopLambdaArn', {
+      value: warmStopLambda.functionArn,
+      exportName: 'cc-warm-stop-lambda-arn',
+    });
+    new cdk.CfnOutput(this, 'IdleCheckLambdaArn', {
+      value: idleCheckLambda.functionArn,
+      exportName: 'cc-idle-check-lambda-arn',
+    });
+
+    } // end if (isEbs)
+
     // Audit Logger Lambda
     const auditLoggerLambda = new lambda.Function(this, 'AuditLoggerLambda', {
       functionName: 'cc-on-bedrock-audit-logger',
@@ -331,18 +350,6 @@ export class UsageTrackingStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserBudgetsTableName', {
       value: userBudgetsTable.tableName,
       exportName: 'cc-user-budgets-table-name',
-    });
-    new cdk.CfnOutput(this, 'UserVolumesTableName', {
-      value: userVolumesTable.tableName,
-      exportName: 'cc-user-volumes-table-name',
-    });
-    new cdk.CfnOutput(this, 'WarmStopLambdaArn', {
-      value: warmStopLambda.functionArn,
-      exportName: 'cc-warm-stop-lambda-arn',
-    });
-    new cdk.CfnOutput(this, 'IdleCheckLambdaArn', {
-      value: idleCheckLambda.functionArn,
-      exportName: 'cc-idle-check-lambda-arn',
     });
     new cdk.CfnOutput(this, 'AuditLoggerLambdaArn', { value: auditLoggerLambda.functionArn });
     new cdk.CfnOutput(this, 'AuditTableName', { value: auditTable.tableName });

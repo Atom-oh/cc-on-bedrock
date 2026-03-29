@@ -10,7 +10,7 @@ import {
   disableCognitoUser,
   enableCognitoUser,
 } from "@/lib/aws-clients";
-import type { CreateUserInput, UpdateUserInput } from "@/lib/types";
+import { createUserSchema, updateUserSchema } from "@/lib/validation";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -41,8 +41,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const body = (await req.json()) as CreateUserInput;
-    // Direct Bedrock mode: no API key needed, just create Cognito user
+    const raw = await req.json();
+    const parsed = createUserSchema.safeParse(raw);
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    const body = parsed.data;
     const cognitoUser = await createCognitoUser(body);
     return NextResponse.json({ success: true, data: cognitoUser });
   } catch (err) {
@@ -63,8 +67,12 @@ export async function PUT(req: NextRequest) {
   }
 
   try {
-    const body = (await req.json()) as UpdateUserInput;
-    await updateCognitoUser(body);
+    const raw = await req.json();
+    const parsed = updateUserSchema.safeParse(raw);
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    await updateCognitoUser(parsed.data);
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[users] PUT", err instanceof Error ? err.message : err);

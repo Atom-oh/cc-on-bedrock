@@ -22,15 +22,17 @@ download_config() {
         return 1
     fi
 
-    # Get current ETag
+    # Get current ETag (log errors for debugging)
+    local head_err="/tmp/s3-head-err.log"
     CURRENT_ETAG=$(aws s3api head-object \
         --bucket "$CONFIG_BUCKET" \
         --key "$CONFIG_KEY" \
         --query 'ETag' \
-        --output text 2>/dev/null || echo "")
+        --output text 2>"$head_err" || echo "")
 
     if [ -z "$CURRENT_ETAG" ]; then
-        log "Config not found in S3: s3://$CONFIG_BUCKET/$CONFIG_KEY"
+        local err_msg=$(cat "$head_err" 2>/dev/null | head -3)
+        log "Config not found in S3: s3://$CONFIG_BUCKET/$CONFIG_KEY (error: $err_msg)"
         return 1
     fi
 
