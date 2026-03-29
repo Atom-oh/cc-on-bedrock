@@ -82,6 +82,7 @@ const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   env, config, crossRegionReferences: true,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
+  cloudfrontSecret: securityStack.cloudfrontSecret,
   devEnvCertificateArn: app.node.tryGetContext('devEnvCertArn'),
   // hostedZone imported directly from config to avoid cross-stack export dependency
   taskPermissionBoundary: securityStack.taskPermissionBoundary,

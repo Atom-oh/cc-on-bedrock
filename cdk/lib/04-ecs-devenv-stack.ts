@@ -26,6 +26,7 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
+  cloudfrontSecret: secretsmanager.Secret;
   devEnvCertificateArn?: string;
   hostedZone?: route53.IHostedZone;
   taskPermissionBoundary?: iam.IManagedPolicy;
@@ -45,7 +46,7 @@ export class EcsDevenvStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
 
-    const { config, vpc, encryptionKey,
+    const { config, vpc, encryptionKey, cloudfrontSecret,
             devEnvCertificateArn, webAclArn } = props;
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
@@ -364,23 +365,47 @@ export class EcsDevenvStack extends cdk.Stack {
     }
     this.devenvAlbListenerArn = devenvListener.listenerArn;
 
-    // CloudFront Distribution
+    // ─── Network Load Balancer (internet-facing for CloudFront access) ───
+    const nlbSg = new ec2.SecurityGroup(this, 'NlbSg', {
+      vpc,
+      description: 'NLB SG - allow CloudFront only',
+      allowAllOutbound: true,
+    });
+    nlbSg.addIngressRule(
+      ec2.Peer.prefixList(config.cloudfrontPrefixListId),
+      ec2.Port.tcp(80),
+      'Allow CloudFront HTTP'
+    );
+
+    const nlb = new elbv2.NetworkLoadBalancer(this, 'DevenvNlb', {
+      vpc,
+      internetFacing: true,
+      crossZoneEnabled: true,
+      securityGroups: [nlbSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+    });
+
+    // CloudFront Distribution — origin is NLB (via Nginx), not ALB
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
       webAclId: webAclArn,
       defaultBehavior: {
-        origin: new origins.LoadBalancerV2Origin(this.alb, {
-          protocolPolicy: devEnvCertificateArn
-            ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
-            : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          ...(devEnvCertificateArn ? {} : { httpPort: 80 }),
+        origin: new origins.HttpOrigin(nlb.loadBalancerDnsName, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          httpPort: 80,
+          customHeaders: {
+            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
+          },
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       },
-      // Note: CloudFront cert must be in us-east-1, handled separately
       comment: 'CC-on-Bedrock Dev Environment',
+      ...(devEnvCertificateArn ? {
+        domainNames: [`*.${config.devSubdomain}.${config.domainName}`],
+        certificate: acm.Certificate.fromCertificateArn(this, 'DevEnvCfCert', devEnvCertificateArn),
+      } : {}),
     });
 
     // Route 53 Wildcard Record
@@ -494,14 +519,6 @@ export class EcsDevenvStack extends cdk.Stack {
       placementStrategies: [
         ecs.PlacementStrategy.spreadAcrossInstances(),
       ],
-    });
-
-    // ─── Network Load Balancer ───
-    const nlb = new elbv2.NetworkLoadBalancer(this, 'DevenvNlb', {
-      vpc,
-      internetFacing: false,
-      crossZoneEnabled: true,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
     });
 
     const nlbListener = nlb.addListener('NlbListener', {
