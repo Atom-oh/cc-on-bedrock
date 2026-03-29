@@ -1,8 +1,16 @@
 # Introduction
 
+import Screenshot from '@site/src/components/Screenshot';
+
 **CC-on-Bedrock** is a multi-user Claude Code development platform powered by AWS Bedrock.
 
 It provides each developer with an isolated Claude Code + Kiro environment running on Amazon ECS, with centralized management through a Next.js dashboard. The infrastructure is implemented using three IaC tools: CDK (TypeScript), Terraform (HCL), and CloudFormation (YAML).
+
+<Screenshot 
+  src="/img/cconbedrock_arch.png" 
+  alt="CC-on-Bedrock Architecture" 
+  caption="Full System Architecture: From user access to Bedrock API invocation" 
+/>
 
 ## Key Features
 
@@ -12,9 +20,7 @@ It provides each developer with an isolated Claude Code + Kiro environment runni
 - **7-Layer Security**: CloudFront → ALB → Cognito → Security Groups → VPC Endpoints → DNS Firewall → IAM/DLP.
 - **Serverless Tracking**: Low-cost usage tracking via CloudTrail → EventBridge → Lambda → DynamoDB.
 
-## System Architecture Overview
-
-![Architecture](/img/cconbedrock_arch.png)
+## System Configuration Overview
 
 The system consists of 5 core stacks:
 

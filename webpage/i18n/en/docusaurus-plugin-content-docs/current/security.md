@@ -1,10 +1,20 @@
 # Security
 
 import SecurityLayers from '@site/src/components/InteractiveDoc/SecurityLayers';
+import Screenshot from '@site/src/components/Screenshot';
 
 CC-on-Bedrock implements a **7-Layer Security Model** designed for safe use in enterprise environments.
 
 <SecurityLayers />
+
+## Security Management Dashboard
+Centrally manage security policies and monitor threat logs in real-time.
+
+<Screenshot 
+  src="/img/security.png" 
+  alt="Security Dashboard" 
+  caption="Unified Security Dashboard: Integrated management of IAM, DLP, and DNS Firewall" 
+/>
 
 ## 7-Layer Security Model Detail
 
@@ -25,7 +35,3 @@ Network environments of development instances can be dynamically managed through
 - **Open**: Free internet outbound allowed (default).
 - **Restricted**: Only predefined specific domains (e.g., GitHub, npm) are allowed.
 - **Locked**: All internet outbound blocked; only AWS service access via VPC endpoints is allowed.
-
-## Audit and Tracking
-
-All Bedrock calls and infrastructure changes are recorded via CloudTrail, and real-time block logs and security checklists can be verified on the **Security** page of the dashboard.

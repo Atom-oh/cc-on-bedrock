@@ -1,15 +1,20 @@
 # 보안 (Security)
 
 import SecurityLayers from '@site/src/components/InteractiveDoc/SecurityLayers';
+import Screenshot from '@site/src/components/Screenshot';
 
 CC-on-Bedrock은 기업 환경에서도 안전하게 사용할 수 있도록 설계된 **7계층 보안 모델**을 적용하고 있습니다.
 
 <SecurityLayers />
 
 ## 보안 관리 대시보드
-대시보드의 Security 탭에서 IAM 정책 상태, DLP 제어, DNS Firewall 차단 내역 등을 통합적으로 관리합니다.
+대시보드에서는 보안 정책을 시각적으로 관리하고 위협 로그를 실시간으로 모니터링할 수 있습니다.
 
-![Security Dashboard](/img/security.png)
+<Screenshot 
+  src="/img/security.png" 
+  alt="Security Dashboard" 
+  caption="통합 보안 대시보드: IAM, DLP, DNS Firewall 통합 관리 화면" 
+/>
 
 ## 7계층 보안 모델 상세
 
