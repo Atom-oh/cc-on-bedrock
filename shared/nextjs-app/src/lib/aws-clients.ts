@@ -592,7 +592,8 @@ export async function startContainer(
               // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
-              // Password stored in Secrets Manager — pass ARN only (entrypoint fetches actual value)
+              // Password: direct env var (reliable) + Secrets Manager ARN (backup)
+              { name: "CODESERVER_PASSWORD", value: codeserverPassword },
               { name: "CODESERVER_SECRET_ARN", value: secretArn },
               { name: "AWS_DEFAULT_REGION", value: region },
               ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),

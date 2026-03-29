@@ -178,14 +178,24 @@ chmod 644 /etc/profile.d/claude-env.sh
 if ! grep -q "profile.d/claude-env" "$USER_BASHRC" 2>/dev/null; then
   echo '[ -f /etc/profile.d/claude-env.sh ] && source /etc/profile.d/claude-env.sh' >> "$USER_BASHRC"
 fi
-# Resolve code-server password: prefer Secrets Manager ARN, fallback to env var
-if [ -n "${CODESERVER_SECRET_ARN:-}" ]; then
+# Resolve code-server password (priority: env var > Secrets Manager > random)
+if [ -n "${CODESERVER_PASSWORD:-}" ]; then
+  RESOLVED_PASSWORD="$CODESERVER_PASSWORD"
+  echo "Using code-server password from environment variable"
+elif [ -n "${CODESERVER_SECRET_ARN:-}" ]; then
   RESOLVED_PASSWORD=$(aws secretsmanager get-secret-value \
     --secret-id "$CODESERVER_SECRET_ARN" \
     --region "${AWS_DEFAULT_REGION:-ap-northeast-2}" \
-    --query SecretString --output text 2>/dev/null) || RESOLVED_PASSWORD="${CODESERVER_PASSWORD:-}"
+    --query SecretString --output text 2>/dev/null) || RESOLVED_PASSWORD=""
+  if [ -n "$RESOLVED_PASSWORD" ]; then
+    echo "Using code-server password from Secrets Manager"
+  else
+    RESOLVED_PASSWORD=$(openssl rand -hex 16)
+    echo "WARNING: Secrets Manager read failed, using random password: $RESOLVED_PASSWORD"
+  fi
 else
-  RESOLVED_PASSWORD="${CODESERVER_PASSWORD:-}"
+  RESOLVED_PASSWORD=$(openssl rand -hex 16)
+  echo "WARNING: No password configured, using random: $RESOLVED_PASSWORD"
 fi
 
 # Force write config.yaml with resolved password (overrides stale EFS config)
