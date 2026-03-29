@@ -514,6 +514,40 @@ export async function startContainer(
     } catch (err) {
       console.warn(`[EFS] Task def registration failed, using default:`, err);
     }
+  } else {
+    // No Access Point — register task def with per-user rootDirectory for isolation
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({ taskDefinition }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: `/users/${input.subdomain}`,
+                transitEncryption: "ENABLED" as const,
+              },
+            };
+          }
+          return v;
+        });
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+        console.log(`[EFS] Registered task def with per-user rootDirectory: /users/${input.subdomain}`);
+      }
+    } catch (err) {
+      console.warn(`[EFS] Per-user rootDirectory registration failed, using default:`, err);
+    }
   }
 
   // Generate per-user code-server password and store in Secrets Manager
@@ -643,6 +677,40 @@ export async function startContainerWithProgress(
       }
     } catch (err) {
       console.warn(`[SSE] Task def registration failed, using default:`, err);
+    }
+  } else {
+    // No Access Point — still register task def with per-user rootDirectory for isolation
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({ taskDefinition }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: `/users/${input.subdomain}`,
+                transitEncryption: "ENABLED" as const,
+              },
+            };
+          }
+          return v;
+        });
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+        console.log(`[EFS] Registered task def with per-user rootDirectory: /users/${input.subdomain}`);
+      }
+    } catch (err) {
+      console.warn(`[EFS] Task def registration failed, using default:`, err);
     }
   }
   onProgress(3, "task_definition", "completed", "Task definition registered");
