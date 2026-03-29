@@ -205,14 +205,18 @@ export default function ContainersTable({
                   </td>
                   <td className="px-5 py-3.5 whitespace-nowrap">
                     {container.status === "RUNNING" && container.subdomain ? (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
-                      >
-                        {url}
-                      </a>
+                      container.healthStatus === "HEALTHY" ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
+                        >
+                          {url}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-yellow-500 animate-pulse">Starting...</span>
+                      )
                     ) : (
                       <span className="text-xs text-gray-600">-</span>
                     )}
