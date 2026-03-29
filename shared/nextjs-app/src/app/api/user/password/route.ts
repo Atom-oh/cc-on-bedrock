@@ -19,6 +19,7 @@ const cognitoClient = new CognitoIdentityProviderClient({ region });
 const secretsClient = new SecretsManagerClient({ region });
 
 // GET: Retrieve current code-server password from Secrets Manager
+// Returns password with no-store cache headers to prevent caching
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -29,6 +30,11 @@ export async function GET() {
   if (!subdomain) {
     return NextResponse.json({ error: "No subdomain assigned" }, { status: 400 });
   }
+
+  const headers = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    Pragma: "no-cache",
+  };
 
   try {
     const secretName = `cc-on-bedrock/codeserver/${subdomain}`;
@@ -42,13 +48,12 @@ export async function GET() {
         password: result.SecretString ?? "",
         lastChanged: result.CreatedDate?.toISOString(),
       },
-    });
-  } catch (err) {
-    // Secret doesn't exist yet
+    }, { headers });
+  } catch {
     return NextResponse.json({
       success: true,
       data: { password: "", lastChanged: null },
-    });
+    }, { headers });
   }
 }
 
@@ -78,8 +83,8 @@ export async function POST(req: NextRequest) {
   }
 
   // Validate password policy (matching Cognito User Pool policy)
-  if (newPassword.length < 8) {
-    return NextResponse.json({ error: "Password must be at least 8 characters" }, { status: 400 });
+  if (typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 128) {
+    return NextResponse.json({ error: "Password must be between 8 and 128 characters" }, { status: 400 });
   }
   if (!/[A-Z]/.test(newPassword)) {
     return NextResponse.json({ error: "Password must contain an uppercase letter" }, { status: 400 });
@@ -127,8 +132,7 @@ export async function POST(req: NextRequest) {
       message: "Password changed successfully. Code-server will use the new password on next container start.",
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to change password";
-    console.error("[user/password] POST", message);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    console.error("[user/password] POST", err instanceof Error ? err.message : err);
+    return NextResponse.json({ success: false, error: "Failed to change password" }, { status: 500 });
   }
 }

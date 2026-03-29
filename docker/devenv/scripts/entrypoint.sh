@@ -191,11 +191,11 @@ elif [ -n "${CODESERVER_SECRET_ARN:-}" ]; then
     echo "Using code-server password from Secrets Manager"
   else
     RESOLVED_PASSWORD=$(openssl rand -hex 16)
-    echo "WARNING: Secrets Manager read failed, using random password: $RESOLVED_PASSWORD"
+    echo "WARNING: Secrets Manager read failed, using generated random password"
   fi
 else
   RESOLVED_PASSWORD=$(openssl rand -hex 16)
-  echo "WARNING: No password configured, using random: $RESOLVED_PASSWORD"
+  echo "WARNING: No password configured, using generated random password"
 fi
 
 # Force write config.yaml with resolved password (overrides stale EFS config)

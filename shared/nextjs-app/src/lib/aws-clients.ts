@@ -550,16 +550,21 @@ export async function startContainer(
     }
   }
 
-  // Generate per-user code-server password and store in Secrets Manager
-  const codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  // Read existing password or generate new one (preserves user-set passwords)
   const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  let codeserverPassword: string;
+  try {
+    const existing = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretName }));
+    codeserverPassword = existing.SecretString ?? require("crypto").randomBytes(16).toString("hex");
+  } catch {
+    codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  }
   try {
     await secretsClient.send(new PutSecretValueCommand({
       SecretId: secretName,
       SecretString: codeserverPassword,
     }));
   } catch {
-    // Secret doesn't exist yet — create it
     await secretsClient.send(new CreateSecretCommand({
       Name: secretName,
       SecretString: codeserverPassword,
@@ -764,6 +769,7 @@ export async function startContainerWithProgress(
             environment: [
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
+              { name: "CODESERVER_PASSWORD", value: codeserverPassword },
               { name: "CODESERVER_SECRET_ARN", value: secretArn },
               { name: "AWS_DEFAULT_REGION", value: region },
               ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
