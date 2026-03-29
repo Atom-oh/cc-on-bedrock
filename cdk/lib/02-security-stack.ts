@@ -164,12 +164,19 @@ export class SecurityStack extends cdk.Stack {
           ],
         }),
         new iam.PolicyStatement({
-          sid: 'S3UserData',
+          sid: 'S3Access',
           actions: ['s3:GetObject', 's3:PutObject', 's3:ListBucket'],
           resources: [
             `arn:aws:s3:::cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}`,
             `arn:aws:s3:::cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}/*`,
+            `arn:aws:s3:::${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}`,
+            `arn:aws:s3:::${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}/*`,
           ],
+        }),
+        new iam.PolicyStatement({
+          sid: 'KmsDecrypt',
+          actions: ['kms:Decrypt', 'kms:DescribeKey', 'kms:GenerateDataKey'],
+          resources: [this.encryptionKey.keyArn],
         }),
         new iam.PolicyStatement({
           sid: 'CloudWatchLogs',
