@@ -46,8 +46,9 @@ export class EcsDevenvStack extends cdk.Stack {
     const { config, vpc, encryptionKey,
             devEnvCertificateArn, webAclArn } = props;
 
-    // Import CloudFront secret directly (avoids cross-stack export dependency)
-    const cloudfrontSecret = secretsmanager.Secret.fromSecretNameV2(this, 'ImportedCfSecret', 'cc-on-bedrock/cloudfront-secret');
+    // Import CloudFront secret by ARN (avoids cross-stack export + synth-time resolution)
+    const cloudfrontSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedCfSecret',
+      `arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/cloudfront-secret-lZMDiE`);
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
