@@ -41,8 +41,8 @@ mkdir -p "$EFS_USER_DIR/.bashrc.d"
 mkdir -p "$EFS_USER_DIR/.claude"
 mkdir -p "$EFS_USER_DIR/.kiro/settings"
 
-# Ensure correct ownership (only user's directory, not entire EFS)
-chown -R coder:coder "$EFS_USER_DIR"
+# Ensure correct ownership (ignore errors: AP enforces uid/gid, symlinks may be root-owned)
+chown -R coder:coder "$EFS_USER_DIR" 2>/dev/null || true
 
 # --- Configure Kiro for Bedrock ---
 cat > "$EFS_USER_DIR/.kiro/settings/bedrock.json" << KIROEOF
@@ -51,7 +51,7 @@ cat > "$EFS_USER_DIR/.kiro/settings/bedrock.json" << KIROEOF
   "bearer_token": "${AWS_BEARER_TOKEN_BEDROCK:-}"
 }
 KIROEOF
-chown coder:coder "$EFS_USER_DIR/.kiro/settings/bedrock.json"
+chown coder:coder "$EFS_USER_DIR/.kiro/settings/bedrock.json" 2>/dev/null || true
 
 # --- MCP Server Configuration ---
 cat > "$EFS_USER_DIR/.claude/mcp_servers.json" << MCPEOF
@@ -68,7 +68,7 @@ cat > "$EFS_USER_DIR/.claude/mcp_servers.json" << MCPEOF
   }
 }
 MCPEOF
-chown coder:coder "$EFS_USER_DIR/.claude/mcp_servers.json"
+chown coder:coder "$EFS_USER_DIR/.claude/mcp_servers.json" 2>/dev/null || true
 
 # --- Security Policy: code-server flags ---
 CODESERVER_FLAGS=""
@@ -95,14 +95,14 @@ esac
 # --- Copy default VSCode settings if not exists ---
 if [ ! -f "$USER_DATA_DIR/User/settings.json" ]; then
   cp /opt/devenv/config/settings.json "$USER_DATA_DIR/User/settings.json"
-  chown coder:coder "$USER_DATA_DIR/User/settings.json"
+  chown coder:coder "$USER_DATA_DIR/User/settings.json" 2>/dev/null || true
 fi
 
 # --- Ensure .bashrc.d sourcing in user's bashrc ---
 USER_BASHRC="$EFS_USER_DIR/.bashrc"
 if [ ! -f "$USER_BASHRC" ]; then
   cp /etc/skel/.bashrc "$USER_BASHRC" 2>/dev/null || touch "$USER_BASHRC"
-  chown coder:coder "$USER_BASHRC"
+  chown coder:coder "$USER_BASHRC" 2>/dev/null || true
 fi
 if ! grep -q 'bashrc.d' "$USER_BASHRC" 2>/dev/null; then
   echo 'for f in ~/.bashrc.d/*.sh; do [ -r "$f" ] && source "$f"; done' >> "$USER_BASHRC"
@@ -211,7 +211,7 @@ auth: ${CODESERVER_AUTH:-password}
 password: ${RESOLVED_PASSWORD}
 cert: false
 CFGEOF
-chown coder:coder /home/coder/.config/code-server/config.yaml
+chown coder:coder /home/coder/.config/code-server/config.yaml 2>/dev/null || true
 
 echo "Starting code-server for user: $SUBDOMAIN (Bedrock native mode)"
 exec sudo -u coder \
