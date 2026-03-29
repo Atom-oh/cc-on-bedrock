@@ -600,6 +600,7 @@ export async function startContainer(
               // Password: direct env var (reliable) + Secrets Manager ARN (backup)
               { name: "CODESERVER_PASSWORD", value: codeserverPassword },
               { name: "CODESERVER_SECRET_ARN", value: secretArn },
+              ...(accessPointId ? [{ name: "STORAGE_ISOLATED", value: "true" }] : []),
               { name: "AWS_DEFAULT_REGION", value: region },
               ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
             ],
@@ -771,6 +772,7 @@ export async function startContainerWithProgress(
               { name: "USER_SUBDOMAIN", value: input.subdomain },
               { name: "CODESERVER_PASSWORD", value: codeserverPassword },
               { name: "CODESERVER_SECRET_ARN", value: secretArn },
+              ...(accessPointId ? [{ name: "STORAGE_ISOLATED", value: "true" }] : []),
               { name: "AWS_DEFAULT_REGION", value: region },
               ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
             ],
