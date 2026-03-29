@@ -1,6 +1,7 @@
 {
   "hostedZoneId": "Z01703432E9KT1G1FIRFM",
   "cloudfrontCertArn": "arn:aws:acm:us-east-1:180294183052:certificate/f6b6907a-5747-4039-967a-a8c7c73116a7",
+  "devEnvCertArn": "arn:aws:acm:us-east-1:180294183052:certificate/85c9ded8-bab1-4cf0-9a5e-2a8d79b302b8",
   "availability-zones:account=061525506239:region=ap-northeast-2": [
     "ap-northeast-2a",
     "ap-northeast-2b",
