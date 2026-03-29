@@ -17,11 +17,16 @@ USER_HOME="/home/coder"
 SECURITY_POLICY="${SECURITY_POLICY:-open}"
 SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 
-# --- Per-user EFS directory isolation ---
-# EFS is mounted at /home/coder (shared root).
-# Each user gets their own subdirectory: /home/coder/users/{subdomain}/
-# code-server workspace points to the user's directory.
-EFS_USER_DIR="$USER_HOME/users/$SUBDOMAIN"
+# --- Per-user directory isolation ---
+# With EFS Access Point: /home/coder IS the user's root (no subdirectory needed)
+# Without Access Point: /home/coder/users/{subdomain}/ for isolation
+if [ -n "${EFS_ACCESS_POINT:-}" ] || [ "${STORAGE_ISOLATED:-}" = "true" ]; then
+  EFS_USER_DIR="$USER_HOME"
+  echo "Using isolated storage (Access Point or EBS): $EFS_USER_DIR"
+else
+  EFS_USER_DIR="$USER_HOME/users/$SUBDOMAIN"
+  echo "Using shared EFS with subdirectory: $EFS_USER_DIR"
+fi
 USER_WORKSPACE="$EFS_USER_DIR/workspace"
 USER_DATA_DIR="$EFS_USER_DIR/.local/share/code-server"
 USER_CONFIG_DIR="$EFS_USER_DIR/.config"
