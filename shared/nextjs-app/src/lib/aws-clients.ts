@@ -16,7 +16,14 @@ import {
   StopTaskCommand,
   DescribeTasksCommand,
   ListTasksCommand,
+  RegisterTaskDefinitionCommand,
+  DescribeTaskDefinitionCommand,
 } from "@aws-sdk/client-ecs";
+import {
+  EFSClient,
+  CreateAccessPointCommand,
+  DescribeAccessPointsCommand,
+} from "@aws-sdk/client-efs";
 import {
   ElasticLoadBalancingV2Client,
   CreateTargetGroupCommand,
@@ -71,6 +78,8 @@ const ecsClient = new ECSClient({ region });
 const elbv2Client = new ElasticLoadBalancingV2Client({ region });
 const iamClient = new IAMClient({ region });
 const secretsClient = new SecretsManagerClient({ region });
+const efsClientSdk = new EFSClient({ region });
+const efsFileSystemId = process.env.EFS_FILE_SYSTEM_ID ?? "";
 
 const devenvAlbListenerArn = process.env.DEVENV_ALB_LISTENER_ARN ?? "";
 const vpcId = process.env.VPC_ID ?? "";
@@ -361,6 +370,49 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
   }
 }
 
+// ─── Per-user EFS Access Point for file isolation ───
+
+async function ensureUserAccessPoint(subdomain: string): Promise<string> {
+  if (!efsFileSystemId) return "";
+
+  try {
+    const existing = await efsClientSdk.send(new DescribeAccessPointsCommand({
+      FileSystemId: efsFileSystemId,
+    }));
+    const userAp = existing.AccessPoints?.find(
+      ap => ap.RootDirectory?.Path === `/users/${subdomain}`
+    );
+    if (userAp?.AccessPointId) return userAp.AccessPointId;
+  } catch (err) {
+    console.error(`[EFS] Describe access points failed:`, err);
+  }
+
+  try {
+    const result = await efsClientSdk.send(new CreateAccessPointCommand({
+      FileSystemId: efsFileSystemId,
+      PosixUser: { Uid: 1001, Gid: 1001 },
+      RootDirectory: {
+        Path: `/users/${subdomain}`,
+        CreationInfo: {
+          OwnerUid: 1001,
+          OwnerGid: 1001,
+          Permissions: "0755",
+        },
+      },
+      Tags: [
+        { Key: "Name", Value: `cc-devenv-${subdomain}` },
+        { Key: "managed_by", Value: "cc-on-bedrock" },
+        { Key: "subdomain", Value: subdomain },
+      ],
+    }));
+    console.log(`[EFS] Created access point for ${subdomain}: ${result.AccessPointId}`);
+    return result.AccessPointId ?? "";
+  } catch (err) {
+    console.error(`[EFS] Create access point failed for ${subdomain}:`, err);
+    return "";
+  }
+}
+
 const SECURITY_GROUP_MAP: Record<string, string> = {
   open: process.env.SG_DEVENV_OPEN ?? "",
   restricted: process.env.SG_DEVENV_RESTRICTED ?? "",
@@ -394,6 +446,53 @@ export async function startContainer(
   // Create or get per-user IAM Task Role for budget control
   const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
 
+  // Create or get per-user EFS Access Point for file isolation
+  const accessPointId = await ensureUserAccessPoint(input.subdomain);
+
+  // If access point available, register task def revision with EFS isolation
+  let finalTaskDefinition = taskDefinition;
+  if (accessPointId) {
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({
+        taskDefinition,
+      }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: "/",
+                transitEncryption: "ENABLED" as const,
+                authorizationConfig: {
+                  accessPointId,
+                  iam: "ENABLED" as const,
+                },
+              },
+            };
+          }
+          return v;
+        });
+
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+        console.log(`[EFS] Registered task def with access point: ${finalTaskDefinition}`);
+      }
+    } catch (err) {
+      console.warn(`[EFS] Task def registration failed, using default:`, err);
+    }
+  }
+
   // Generate per-user code-server password and store in Secrets Manager
   const codeserverPassword = require("crypto").randomBytes(16).toString("hex");
   const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
@@ -415,7 +514,7 @@ export async function startContainer(
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
-      taskDefinition,
+      taskDefinition: finalTaskDefinition,
       count: 1,
       launchType: "EC2",
       enableExecuteCommand: true,
