@@ -35,11 +35,9 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
 export class EcsDevenvStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
   public readonly ecrRepo: ecr.IRepository;
-  public readonly alb: elbv2.ApplicationLoadBalancer;
   public readonly sgOpen: ec2.SecurityGroup;
   public readonly sgRestricted: ec2.SecurityGroup;
   public readonly sgLocked: ec2.SecurityGroup;
-  public readonly devenvAlbListenerArn: string;
   public readonly efsFileSystemId: string;
 
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
@@ -321,15 +319,7 @@ export class EcsDevenvStack extends cdk.Stack {
       }
     }
 
-    // ALB for Dev Environment
-    const albSg = new ec2.SecurityGroup(this, 'DevenvAlbSg', {
-      vpc, description: 'DevEnv ALB SG', allowAllOutbound: true,
-    });
-    // CloudFront Prefix List - allow only CloudFront IPs on HTTPS
-    albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
-    // Port 80 removed: HTTPS-only when cert available, HTTP fallback for dev/test only
-
-    // ─── Nginx Security Group (defined early for DevEnv SG ingress rules) ───
+    // ─── Nginx Security Group ───
     const nginxSg = new ec2.SecurityGroup(this, 'NginxSg', {
       vpc,
       description: 'Nginx reverse proxy SG',
@@ -337,44 +327,10 @@ export class EcsDevenvStack extends cdk.Stack {
     });
     nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
 
-    // Allow ALB + Nginx → DevEnv containers on port 8080
+    // Allow Nginx → DevEnv containers on port 8080
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
-      sg.addIngressRule(albSg, ec2.Port.tcp(8080), 'Allow from DevEnv ALB');
       sg.addIngressRule(nginxSg, ec2.Port.tcp(8080), 'Allow from Nginx proxy');
     });
-
-    this.alb = new elbv2.ApplicationLoadBalancer(this, 'DevenvAlb', {
-      vpc,
-      internetFacing: true,
-      securityGroup: albSg,
-      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
-    });
-
-    // Listener - default 403 (per-user rules added dynamically by Dashboard)
-    // ALB access restricted to CloudFront via Prefix List on SG
-    let devenvListener: elbv2.ApplicationListener;
-    if (devEnvCertificateArn) {
-      devenvListener = this.alb.addListener('HttpsListener', {
-        port: 443,
-        protocol: elbv2.ApplicationProtocol.HTTPS,
-        certificates: [elbv2.ListenerCertificate.fromArn(devEnvCertificateArn)],
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-    } else {
-      // Fallback HTTP listener (dev/test only - production must use HTTPS)
-      devenvListener = this.alb.addListener('HttpListener', {
-        port: 80,
-        protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-    }
-    this.devenvAlbListenerArn = devenvListener.listenerArn;
 
     // ─── Network Load Balancer (internet-facing for CloudFront access) ───
     const nlbSg = new ec2.SecurityGroup(this, 'NlbSg', {
