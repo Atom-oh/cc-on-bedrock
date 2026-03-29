@@ -211,8 +211,17 @@ export class EcsDevenvStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
-    // Bedrock permissions are on the ECS Task Role only (not Instance Role)
-    // to enforce least-privilege: host cannot call Bedrock, only containers can.
+    // TODO: Block IMDS from containers to force Task Role usage (per-user token tracking)
+    // Currently containers fall back to Instance Role via IMDS on EC2 launch type.
+    // Temporary: add Bedrock to Instance Role so Claude Code works.
+    ecsInstanceRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockAccess',
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
+      resources: [
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+      ],
+    }));
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
       instanceType: new ec2.InstanceType(config.ecsHostInstanceType),
