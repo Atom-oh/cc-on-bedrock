@@ -146,13 +146,7 @@ export class EcsDevenvStack extends cdk.Stack {
     }));
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
-      instanceType: (() => {
-        const [instanceClass, instanceSize] = config.ecsHostInstanceType.split('.');
-        return ec2.InstanceType.of(
-          instanceClass.toUpperCase() as unknown as ec2.InstanceClass,
-          instanceSize.toUpperCase() as unknown as ec2.InstanceSize,
-        );
-      })(),
+      instanceType: new ec2.InstanceType(config.ecsHostInstanceType),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
       role: ecsInstanceRole,
       securityGroup: sgOpen,
