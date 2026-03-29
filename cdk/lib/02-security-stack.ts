@@ -293,6 +293,20 @@ export class SecurityStack extends cdk.Stack {
       ],
     }));
     this.encryptionKey.grantDecrypt(this.dashboardEc2Role);
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'EfsAccessPointManagement',
+      actions: [
+        'elasticfilesystem:CreateAccessPoint',
+        'elasticfilesystem:DescribeAccessPoints',
+        'elasticfilesystem:DeleteAccessPoint',
+      ],
+      resources: [`arn:aws:elasticfilesystem:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:file-system/*`],
+    }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'EcsTaskDefRegistration',
+      actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition'],
+      resources: ['*'],
+    }));
 
     // Outputs
     new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId, exportName: 'cc-user-pool-id' });
