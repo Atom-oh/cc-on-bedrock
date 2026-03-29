@@ -7,10 +7,10 @@ const config: Config = {
   tagline: 'AWS Bedrock 기반 멀티유저 Claude Code 개발 플랫폼',
   favicon: 'img/favicon.ico',
 
-  url: 'https://cc-on-bedrock.example.com',
-  baseUrl: '/',
+  url: 'https://Atom-oh.github.io',
+  baseUrl: '/cc-on-bedrock/',
 
-  organizationName: 'whchoi',
+  organizationName: 'Atom-oh',
   projectName: 'cc-on-bedrock',
 
   onBrokenLinks: 'throw',

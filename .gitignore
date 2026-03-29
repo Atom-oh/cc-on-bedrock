@@ -48,4 +48,9 @@ docker/devenv/scripts/__pycache__/
 # Temporary files
 *.skill
 mockup-*.png
+mockup-*.html
 signin-page.png
+
+# Superpowers plans (session-specific)
+docs/superpowers/plans/
+docs-*.png
