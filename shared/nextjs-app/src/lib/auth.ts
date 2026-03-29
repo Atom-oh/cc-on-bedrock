@@ -29,6 +29,7 @@ export const authOptions: NextAuthOptions = {
       clientId: process.env.COGNITO_CLIENT_ID!,
       clientSecret: process.env.COGNITO_CLIENT_SECRET!,
       issuer: process.env.COGNITO_ISSUER!,
+      authorization: { params: { scope: "openid email profile" } },
       profile(profile) {
         return {
           id: profile.sub,
@@ -88,7 +89,8 @@ export const authOptions: NextAuthOptions = {
   // Cookie security: secure=true when NEXTAUTH_URL is HTTPS (production behind CloudFront)
   // secure=false only when ALB→App uses plain HTTP (no TLS termination at ALB)
   cookies: (() => {
-    const useSecure = process.env.NEXTAUTH_URL?.startsWith("https") ?? false;
+    const useSecure = process.env.NODE_ENV === "production" ||
+      (process.env.NEXTAUTH_URL?.startsWith("https") ?? false);
     const opts = { httpOnly: true, sameSite: "lax" as const, path: "/", secure: useSecure };
     const prefix = useSecure ? "__Secure-next-auth" : "next-auth";
     return {

@@ -26,6 +26,11 @@ export interface DashboardStackProps extends cdk.StackProps {
   cloudfrontSecret: secretsmanager.Secret;
   userPool: cognito.UserPool;
   userPoolClient: cognito.UserPoolClient;
+  sgOpen: ec2.ISecurityGroup;
+  sgRestricted: ec2.ISecurityGroup;
+  sgLocked: ec2.ISecurityGroup;
+  devenvAlbListenerArn: string;
+  efsFileSystemId: string;
 }
 
 export class DashboardStack extends cdk.Stack {
@@ -69,9 +74,11 @@ export class DashboardStack extends cdk.Stack {
         'bedrock:Converse',
         'bedrock:ConverseStream',
       ],
+      // Region '*' is required: foundation-model ARNs are region-agnostic,
+      // and global.anthropic.claude-* inference profiles route cross-region by design.
       resources: [
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+        `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-*`,
+        `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
       ],
     }));
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
@@ -165,6 +172,12 @@ export class DashboardStack extends cdk.Stack {
         `NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ${cdk.Aws.REGION} --query SecretString --output text 2>/dev/null || openssl rand -hex 32)`,
         `COGNITO_CLIENT_SECRET_VAL=$(aws cognito-idp describe-user-pool-client --user-pool-id ${userPool.userPoolId} --client-id ${userPoolClient.userPoolClientId} --region ${cdk.Aws.REGION} --query 'UserPoolClient.ClientSecret' --output text)`,
         '',
+        '# Handle case where client has no secret (returns "None")',
+        'if [ "$COGNITO_CLIENT_SECRET_VAL" = "None" ] || [ -z "$COGNITO_CLIENT_SECRET_VAL" ]; then',
+        '  echo "WARNING: Cognito client has no secret. Ensure generateSecret is true in CDK."',
+        '  COGNITO_CLIENT_SECRET_VAL=""',
+        'fi',
+        '',
         '# Environment config (written to standalone dir where server.js runs)',
         'cat > /opt/dashboard/.next/standalone/.env << ENVEOF',
         `NEXTAUTH_URL=https://${config.dashboardSubdomain}.${config.domainName}`,
@@ -181,12 +194,22 @@ export class DashboardStack extends cdk.Stack {
         'HOSTNAME=0.0.0.0',
         `VPC_ID=${vpc.vpcId}`,
         `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
+        `STORAGE_TYPE=${config.storageType}`,
+        `NEXT_PUBLIC_STORAGE_TYPE=${config.storageType}`,
+        `PRIVATE_SUBNET_IDS=${vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds.join(',')}`,
+        `SG_DEVENV_OPEN=${props.sgOpen.securityGroupId}`,
+        `SG_DEVENV_RESTRICTED=${props.sgRestricted.securityGroupId}`,
+        `SG_DEVENV_LOCKED=${props.sgLocked.securityGroupId}`,
+        `DEVENV_ALB_LISTENER_ARN=${props.devenvAlbListenerArn}`,
+        `S3_SYNC_BUCKET=${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
+        `EFS_FILE_SYSTEM_ID=${props.efsFileSystemId}`,
         'ENVEOF',
         'chmod 600 /opt/dashboard/.next/standalone/.env',
         '',
-        '# Start Next.js from standalone directory',
+        '# Load env vars and start Next.js from standalone directory',
         'cd /opt/dashboard/.next/standalone',
-        'pm2 start server.js --name dashboard --env production',
+        'set -a && source .env && set +a',
+        'pm2 start server.js --name dashboard',
         'pm2 startup',
         'pm2 save',
       ].join('\n')),
