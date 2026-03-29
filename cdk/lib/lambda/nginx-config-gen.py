@@ -83,11 +83,12 @@ http {{
         '' close;
     }}
 
-    # Health check endpoint for NLB
+    # Default server - health checks + reject unknown hosts
     server {{
-        listen 80;
-        server_name localhost;
+        listen 80 default_server;
+        server_name _;
 
+        # Health check (no auth - NLB uses IP, no custom headers)
         location /health {{
             access_log off;
             return 200 'ok';
@@ -98,20 +99,13 @@ http {{
             stub_status on;
             access_log off;
         }}
-    }}
 
-    # Default server - reject unknown hosts
-    server {{
-        listen 80 default_server;
-        server_name _;
-
-        # Validate CloudFront secret
-        set $cf_secret "{cloudfront_secret}";
-        if ($http_x_custom_secret != $cf_secret) {{
-            return 403 '{{"error":"Forbidden"}}';
-        }}
-
+        # All other requests require CloudFront secret
         location / {{
+            set $cf_secret "{cloudfront_secret}";
+            if ($http_x_custom_secret != $cf_secret) {{
+                return 403 '{{"error":"Forbidden"}}';
+            }}
             default_type application/json;
             return 503 '{{"error":"Container not running. Please start your development environment from the portal.","code":"CONTAINER_NOT_FOUND"}}';
         }}

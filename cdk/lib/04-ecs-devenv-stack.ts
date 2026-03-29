@@ -28,7 +28,6 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   devEnvCertificateArn?: string;
   hostedZone?: route53.IHostedZone;
-  cloudfrontSecret: secretsmanager.Secret;
   taskPermissionBoundary?: iam.IManagedPolicy;
   webAclArn?: string;
 }
@@ -47,7 +46,7 @@ export class EcsDevenvStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey,
-            devEnvCertificateArn, cloudfrontSecret, webAclArn } = props;
+            devEnvCertificateArn, webAclArn } = props;
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
@@ -339,7 +338,8 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // Listener - HTTPS with X-Custom-Secret validation
+    // Listener - default 403 (per-user rules added dynamically by Dashboard)
+    // ALB access restricted to CloudFront via Prefix List on SG
     let devenvListener: elbv2.ApplicationListener;
     if (devEnvCertificateArn) {
       devenvListener = this.alb.addListener('HttpsListener', {
@@ -373,9 +373,6 @@ export class EcsDevenvStack extends cdk.Stack {
             ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
             : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           ...(devEnvCertificateArn ? {} : { httpPort: 80 }),
-          customHeaders: {
-            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
-          },
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,

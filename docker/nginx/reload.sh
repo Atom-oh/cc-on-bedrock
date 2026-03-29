@@ -4,8 +4,8 @@
 
 set -e
 
-CONFIG_BUCKET="${CONFIG_BUCKET:-}"
-CONFIG_KEY="${CONFIG_KEY:-nginx/nginx.conf}"
+CONFIG_BUCKET="${CONFIG_BUCKET:-${S3_BUCKET:-}}"
+CONFIG_KEY="${CONFIG_KEY:-${S3_CONFIG_KEY:-nginx/nginx.conf}}"
 LOCAL_CONFIG="/etc/nginx/nginx.conf"
 TEMP_CONFIG="/tmp/nginx.conf.new"
 RELOAD_INTERVAL="${RELOAD_INTERVAL:-5}"
