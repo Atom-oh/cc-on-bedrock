@@ -35,11 +35,9 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
 export class EcsDevenvStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
   public readonly ecrRepo: ecr.IRepository;
-  public readonly alb: elbv2.ApplicationLoadBalancer;
   public readonly sgOpen: ec2.SecurityGroup;
   public readonly sgRestricted: ec2.SecurityGroup;
   public readonly sgLocked: ec2.SecurityGroup;
-  public readonly devenvAlbListenerArn: string;
   public readonly efsFileSystemId: string;
 
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
@@ -48,8 +46,9 @@ export class EcsDevenvStack extends cdk.Stack {
     const { config, vpc, encryptionKey,
             devEnvCertificateArn, webAclArn } = props;
 
-    // Import CloudFront secret directly (avoids cross-stack export dependency)
-    const cloudfrontSecret = secretsmanager.Secret.fromSecretNameV2(this, 'ImportedCfSecret', 'cc-on-bedrock/cloudfront-secret');
+    // Import CloudFront secret by ARN (avoids cross-stack export + synth-time resolution)
+    const cloudfrontSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedCfSecret',
+      `arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/cloudfront-secret-lZMDiE`);
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
@@ -212,14 +211,15 @@ export class EcsDevenvStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
-    // Bedrock permissions are on the ECS Task Role only (not Instance Role)
-    // to enforce least-privilege: host cannot call Bedrock, only containers can.
+    // No Bedrock on Instance Role — containers MUST use per-user Task Role
+    // IMDS blocked via ECS_AWSVPC_BLOCK_IMDS + IMDSv2 hop limit
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
       instanceType: new ec2.InstanceType(config.ecsHostInstanceType),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
       role: ecsInstanceRole,
       securityGroup: sgOpen,
+      requireImdsv2: true,
       blockDevices: [{
         deviceName: '/dev/xvda',
         volume: ec2.BlockDeviceVolume.ebs(100, {
@@ -229,10 +229,11 @@ export class EcsDevenvStack extends cdk.Stack {
       }],
       userData: ec2.UserData.forLinux(),
     });
-    // Add ECS cluster name to user data
+    // ECS agent config: cluster + awsvpc + IMDS block
     ecsLaunchTemplate.userData!.addCommands(
       `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
       'echo ECS_ENABLE_TASK_ENI=true >> /etc/ecs/ecs.config',
+      'echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config',
     );
 
     const capacityAsg = new autoscaling.AutoScalingGroup(this, 'EcsCapacityAsg', {
@@ -321,15 +322,7 @@ export class EcsDevenvStack extends cdk.Stack {
       }
     }
 
-    // ALB for Dev Environment
-    const albSg = new ec2.SecurityGroup(this, 'DevenvAlbSg', {
-      vpc, description: 'DevEnv ALB SG', allowAllOutbound: true,
-    });
-    // CloudFront Prefix List - allow only CloudFront IPs on HTTPS
-    albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
-    // Port 80 removed: HTTPS-only when cert available, HTTP fallback for dev/test only
-
-    // ─── Nginx Security Group (defined early for DevEnv SG ingress rules) ───
+    // ─── Nginx Security Group ───
     const nginxSg = new ec2.SecurityGroup(this, 'NginxSg', {
       vpc,
       description: 'Nginx reverse proxy SG',
@@ -337,44 +330,10 @@ export class EcsDevenvStack extends cdk.Stack {
     });
     nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
 
-    // Allow ALB + Nginx → DevEnv containers on port 8080
+    // Allow Nginx → DevEnv containers on port 8080
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
-      sg.addIngressRule(albSg, ec2.Port.tcp(8080), 'Allow from DevEnv ALB');
       sg.addIngressRule(nginxSg, ec2.Port.tcp(8080), 'Allow from Nginx proxy');
     });
-
-    this.alb = new elbv2.ApplicationLoadBalancer(this, 'DevenvAlb', {
-      vpc,
-      internetFacing: true,
-      securityGroup: albSg,
-      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
-    });
-
-    // Listener - default 403 (per-user rules added dynamically by Dashboard)
-    // ALB access restricted to CloudFront via Prefix List on SG
-    let devenvListener: elbv2.ApplicationListener;
-    if (devEnvCertificateArn) {
-      devenvListener = this.alb.addListener('HttpsListener', {
-        port: 443,
-        protocol: elbv2.ApplicationProtocol.HTTPS,
-        certificates: [elbv2.ListenerCertificate.fromArn(devEnvCertificateArn)],
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-    } else {
-      // Fallback HTTP listener (dev/test only - production must use HTTPS)
-      devenvListener = this.alb.addListener('HttpListener', {
-        port: 80,
-        protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-    }
-    this.devenvAlbListenerArn = devenvListener.listenerArn;
 
     // ─── Network Load Balancer (internet-facing for CloudFront access) ───
     const nlbSg = new ec2.SecurityGroup(this, 'NlbSg', {

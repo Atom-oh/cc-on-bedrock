@@ -79,6 +79,10 @@ const config: Config = {
           title: 'Docs',
           items: [
             {
+              label: 'Deployment',
+              to: '/docs/deployment',
+            },
+            {
               label: 'Architecture',
               to: '/docs/architecture',
             },

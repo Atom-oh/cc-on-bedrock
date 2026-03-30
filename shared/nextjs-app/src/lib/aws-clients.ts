@@ -514,18 +514,57 @@ export async function startContainer(
     } catch (err) {
       console.warn(`[EFS] Task def registration failed, using default:`, err);
     }
+  } else {
+    // No Access Point — register task def with per-user rootDirectory for isolation
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({ taskDefinition }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: `/users/${input.subdomain}`,
+                transitEncryption: "ENABLED" as const,
+              },
+            };
+          }
+          return v;
+        });
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+        console.log(`[EFS] Registered task def with per-user rootDirectory: /users/${input.subdomain}`);
+      }
+    } catch (err) {
+      console.warn(`[EFS] Per-user rootDirectory registration failed, using default:`, err);
+    }
   }
 
-  // Generate per-user code-server password and store in Secrets Manager
-  const codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  // Read existing password or generate new one (preserves user-set passwords)
   const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  let codeserverPassword: string;
+  try {
+    const existing = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretName }));
+    codeserverPassword = existing.SecretString ?? require("crypto").randomBytes(16).toString("hex");
+  } catch {
+    codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  }
   try {
     await secretsClient.send(new PutSecretValueCommand({
       SecretId: secretName,
       SecretString: codeserverPassword,
     }));
   } catch {
-    // Secret doesn't exist yet — create it
     await secretsClient.send(new CreateSecretCommand({
       Name: secretName,
       SecretString: codeserverPassword,
@@ -558,8 +597,10 @@ export async function startContainer(
               // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
-              // Password stored in Secrets Manager — pass ARN only (entrypoint fetches actual value)
+              // Password: direct env var (reliable) + Secrets Manager ARN (backup)
+              { name: "CODESERVER_PASSWORD", value: codeserverPassword },
               { name: "CODESERVER_SECRET_ARN", value: secretArn },
+              ...(accessPointId ? [{ name: "STORAGE_ISOLATED", value: "true" }] : []),
               { name: "AWS_DEFAULT_REGION", value: region },
               ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
             ],
@@ -644,6 +685,40 @@ export async function startContainerWithProgress(
     } catch (err) {
       console.warn(`[SSE] Task def registration failed, using default:`, err);
     }
+  } else {
+    // No Access Point — still register task def with per-user rootDirectory for isolation
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({ taskDefinition }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: `/users/${input.subdomain}`,
+                transitEncryption: "ENABLED" as const,
+              },
+            };
+          }
+          return v;
+        });
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+        console.log(`[EFS] Registered task def with per-user rootDirectory: /users/${input.subdomain}`);
+      }
+    } catch (err) {
+      console.warn(`[EFS] Task def registration failed, using default:`, err);
+    }
   }
   onProgress(3, "task_definition", "completed", "Task definition registered");
 
@@ -695,7 +770,9 @@ export async function startContainerWithProgress(
             environment: [
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
+              { name: "CODESERVER_PASSWORD", value: codeserverPassword },
               { name: "CODESERVER_SECRET_ARN", value: secretArn },
+              ...(accessPointId ? [{ name: "STORAGE_ISOLATED", value: "true" }] : []),
               { name: "AWS_DEFAULT_REGION", value: region },
               ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
             ],

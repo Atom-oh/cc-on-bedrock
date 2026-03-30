@@ -19,7 +19,7 @@ export default function ProvisioningProgress({ tier, os, onComplete, onError }: 
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
 
-  const progressPercent = Math.max(5, (currentStep / 6) * 100);
+  const progressPercent = Math.max(5, (currentStep / 7) * 100);
 
   const handleCancel = useCallback(() => {
     if (abortRef.current) {

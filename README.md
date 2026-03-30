@@ -102,17 +102,62 @@ Every 5 min: Lambda: budget-check
   → Next day: auto-release Deny Policy
 ```
 
-## Dashboard (7 Pages)
+## Dashboard (9 Pages)
 
 | Page | Access | Features |
 |------|--------|----------|
 | Home | All | Cost/token/user summary, cluster metrics |
+| **My Environment** | All | **3-tab user portal** — environment, storage, settings (see below) |
 | AI Assistant | All | Bedrock Converse + Tool Use, AgentCore Memory, copy, voice |
 | Analytics | All | Model/department/user cost trends, leaderboard |
+| Department | Manager | Department member management, budget, usage, pending approvals |
 | Monitoring | Admin | Container Insights (CPU/Memory/Network), ECS status |
 | Security | Admin | IAM, DLP, DNS Firewall, CloudTrail audit, checklist |
 | Users | Admin | Cognito CRUD, sort/filter (OS, Tier, Security, Status) |
 | Containers | Admin | ECS start/stop, sort/filter, EFS panel, duplicate prevention |
+
+### My Environment — User Self-Service Portal
+
+Tab-based layout with three sections for self-service container management:
+
+| Tab | Features |
+|-----|----------|
+| **Environment** | SSE real-time provisioning progress (6 steps), container status, VSCode URL (copy), tier selection, CPU/Memory metrics, daily token usage |
+| **Storage** | Disk usage gauge (EBS: capacity %, EFS: usage only), EBS volume expansion request (40/60/100 GB), request status/cancel, Keep-Alive |
+| **Settings** | Code-server password view/change (Cognito + Secrets Manager sync), account info (read-only) |
+
+**Provisioning Flow (SSE Streaming)**
+```
+Start → Setting up permissions → Preparing storage → Configuring environment
+     → Securing access → Starting container → Connecting network → Ready
+```
+Each step streams real-time status via Server-Sent Events (`/api/user/container/stream`).
+
+**Password Sync Architecture**
+```
+User Creation:
+  Admin creates user → TemporaryPassword → Cognito + Secrets Manager (both)
+
+Password Change (Dashboard):
+  User changes password → AdminSetUserPassword (Cognito)
+                        → PutSecretValue (Secrets Manager)
+                        → code-server uses new password on next start
+```
+
+**API Routes (User Self-Service)**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/user/container` | POST | Start/stop container |
+| `/api/user/container/stream` | POST | SSE provisioning progress |
+| `/api/user/container-metrics` | GET | CloudWatch Container Insights |
+| `/api/user/disk-usage` | GET | Disk capacity via CloudWatch |
+| `/api/user/ebs-resize` | GET/POST/DELETE | EBS expansion request/status/cancel |
+| `/api/user/password` | GET/POST | Password view/change |
+| `/api/user/usage` | GET | Daily token usage |
+| `/api/user/keep-alive` | POST | Extend idle timeout (EBS) |
+
+**Accessibility**: ARIA tablist/tab/tabpanel roles, progressbar roles, keyboard arrow navigation, form label associations, aria-live alerts, responsive grid layouts.
 
 ### Screenshots
 
@@ -149,7 +194,7 @@ docker/            Docker images (devenv Ubuntu/AL2023)
 cdk/               AWS CDK TypeScript (5 active stacks)
 terraform/         Terraform HCL (4 modules)
 cloudformation/    CloudFormation YAML (4 templates) + deploy.sh
-shared/nextjs-app/ Next.js dashboard (7 pages, 8 API routes)
+shared/nextjs-app/ Next.js dashboard (9 pages, 16 API routes)
 agent/             AgentCore agent (Strands + MCP Gateway)
 scripts/           ECR repos, deployment verification, test users
 tests/             Container integration tests, E2E tests
@@ -294,17 +339,62 @@ ECS Task (Claude Code) → Bedrock API 호출
   → 다음 날: Deny Policy 자동 해제
 ```
 
-## Dashboard (7 페이지)
+## Dashboard (9 페이지)
 
 | 페이지 | 접근 | 기능 |
 |--------|------|------|
 | Home | 전체 | 비용/토큰/사용자 요약, 클러스터 메트릭 |
+| **내 환경** | 전체 | **3-탭 사용자 포털** — 환경, 스토리지, 설정 (아래 참조) |
 | AI Assistant | 전체 | Bedrock Converse + Tool Use, AgentCore Memory, 복사, 음성 |
 | Analytics | 전체 | 모델/부서/사용자 비용 트렌드, 리더보드 |
+| Department | 관리자 | 부서 멤버 관리, 예산, 사용량, 승인 대기 |
 | Monitoring | Admin | Container Insights (CPU/Memory/Network), ECS 상태 |
 | Security | Admin | IAM, DLP, DNS Firewall, CloudTrail 감사, 체크리스트 |
 | Users | Admin | Cognito CRUD, 소팅/필터 (OS, Tier, Security, Status) |
 | Containers | Admin | ECS 시작/중지, 소팅/필터, EFS 패널, 중복 방지 |
+
+### 내 환경 — 사용자 셀프서비스 포털
+
+탭 기반 레이아웃으로 컨테이너 셀프 관리:
+
+| 탭 | 기능 |
+|----|------|
+| **환경 정보** | SSE 실시간 프로비저닝 프로그레스 (6단계), 컨테이너 상태, VSCode URL (복사), 티어 선택, CPU/Memory 메트릭, 일일 토큰 사용량 |
+| **스토리지** | 디스크 사용량 게이지 (EBS: 용량 %, EFS: 사용량만), EBS 볼륨 확장 신청 (40/60/100 GB), 신청 상태/취소, Keep-Alive |
+| **설정** | Code-server 비밀번호 조회/변경 (Cognito + Secrets Manager 동기화), 계정 정보 (읽기 전용) |
+
+**프로비저닝 흐름 (SSE 스트리밍)**
+```
+시작 → 권한 설정 → 스토리지 준비 → 환경 구성
+    → 접근 보안 → 컨테이너 시작 → 네트워크 연결 → 완료
+```
+각 단계는 Server-Sent Events (`/api/user/container/stream`)로 실시간 상태 전송.
+
+**비밀번호 동기화 구조**
+```
+사용자 생성:
+  Admin이 사용자 생성 → TemporaryPassword → Cognito + Secrets Manager (양쪽)
+
+비밀번호 변경 (대시보드):
+  사용자가 비밀번호 변경 → AdminSetUserPassword (Cognito)
+                         → PutSecretValue (Secrets Manager)
+                         → 다음 컨테이너 시작 시 새 비밀번호 적용
+```
+
+**API Routes (사용자 셀프서비스)**
+
+| 엔드포인트 | 메서드 | 용도 |
+|-----------|--------|------|
+| `/api/user/container` | POST | 컨테이너 시작/중지 |
+| `/api/user/container/stream` | POST | SSE 프로비저닝 진행상황 |
+| `/api/user/container-metrics` | GET | CloudWatch Container Insights |
+| `/api/user/disk-usage` | GET | CloudWatch 기반 디스크 용량 |
+| `/api/user/ebs-resize` | GET/POST/DELETE | EBS 확장 신청/상태/취소 |
+| `/api/user/password` | GET/POST | 비밀번호 조회/변경 |
+| `/api/user/usage` | GET | 일일 토큰 사용량 |
+| `/api/user/keep-alive` | POST | 유휴 타임아웃 연장 (EBS) |
+
+**접근성**: ARIA tablist/tab/tabpanel 역할, progressbar 역할, 키보드 Arrow 내비게이션, 폼 라벨 연결, aria-live 알림, 반응형 그리드.
 
 ### 스크린샷
 
@@ -341,7 +431,7 @@ docker/            Docker 이미지 (devenv Ubuntu/AL2023)
 cdk/               AWS CDK TypeScript (5 active stacks)
 terraform/         Terraform HCL (4 modules)
 cloudformation/    CloudFormation YAML (4 templates) + deploy.sh
-shared/nextjs-app/ Next.js 대시보드 (7 pages, 8 API routes)
+shared/nextjs-app/ Next.js 대시보드 (9 pages, 16 API routes)
 agent/             AgentCore 에이전트 (Strands + MCP Gateway)
 scripts/           ECR repos, 배포 검증, 테스트 유저
 tests/             컨테이너 통합 테스트, E2E 테스트

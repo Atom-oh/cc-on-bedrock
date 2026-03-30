@@ -74,9 +74,11 @@ export default function UserPortal({ user }: UserPortalProps) {
 
   useEffect(() => {
     fetchContainerStatus();
-    const interval = setInterval(fetchContainerStatus, 30000);
+    // Fast polling (5s) when container is starting, normal (30s) when healthy/idle
+    const pollInterval = container && container.status !== "STOPPED" && container.healthStatus !== "HEALTHY" ? 5000 : 30000;
+    const interval = setInterval(fetchContainerStatus, pollInterval);
     return () => clearInterval(interval);
-  }, [fetchContainerStatus]);
+  }, [fetchContainerStatus, container?.status, container?.healthStatus]);
 
   const switchTab = useCallback((tabId: UserPortalTab) => {
     if (tabId === activeTab) return;

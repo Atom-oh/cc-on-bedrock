@@ -111,22 +111,34 @@ export async function POST(req: NextRequest) {
 
   const subdomain = user.subdomain;
 
+  // H2: Validate containerOs at runtime
+  const VALID_OS = ["ubuntu", "al2023"] as const;
+  const containerOs = VALID_OS.includes(body.containerOs as typeof VALID_OS[number])
+    ? (body.containerOs as "ubuntu" | "al2023")
+    : (user.containerOs ?? "ubuntu");
+
+  // H1: Use req.signal for abort detection
+  const abortSignal = req.signal;
+
   // SSE stream
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
       const send = (step: number, name: string, status: string, extra?: Record<string, string>) => {
+        if (abortSignal.aborted) return;
         const data = JSON.stringify({ step, name, status, ...extra });
         controller.enqueue(encoder.encode(`data: ${data}\n\n`));
       };
 
       try {
+        if (abortSignal.aborted) { controller.close(); return; }
+
         const taskArn = await startContainerWithProgress(
           {
             username: user.email,
             subdomain,
             department,
-            containerOs: (body.containerOs as "ubuntu" | "al2023") ?? user.containerOs ?? "ubuntu",
+            containerOs,
             resourceTier: tierToUse,
             securityPolicy: user.securityPolicy ?? "restricted",
             storageType: user.storageType ?? "efs",
@@ -141,7 +153,12 @@ export async function POST(req: NextRequest) {
 
         let registered = false;
         for (let i = 0; i < 8; i++) {
-          await new Promise((r) => setTimeout(r, 5000));
+          if (abortSignal.aborted) break;
+          await new Promise<void>((r) => {
+            const timer = setTimeout(r, 5000);
+            abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
+          });
+          if (abortSignal.aborted) break;
           try {
             const info = await describeContainer(taskArn);
             if (info?.privateIp) {
@@ -153,15 +170,41 @@ export async function POST(req: NextRequest) {
           send(6, "route_register", "in_progress", { message: `Waiting for IP... (${i + 1}/8)` });
         }
 
-        if (registered) {
+        if (!abortSignal.aborted) {
+          if (registered) {
+            send(6, "route_register", "completed", { message: "Route registered" });
+          } else {
+            send(6, "route_register", "completed", { message: "Container started (route may take a moment)" });
+          }
+
+          // Step 7: Wait for code-server to be healthy before showing URL
+          send(7, "health_check", "in_progress", { message: "Waiting for code-server..." });
+          let healthy = false;
+          for (let i = 0; i < 30; i++) {
+            if (abortSignal.aborted) break;
+            await new Promise<void>((r) => {
+              const timer = setTimeout(r, 3000);
+              abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
+            });
+            if (abortSignal.aborted) break;
+            try {
+              const info = await describeContainer(taskArn);
+              if (info?.healthStatus === "HEALTHY") { healthy = true; break; }
+              send(7, "health_check", "in_progress", { message: `Health check... (${i + 1}/30)` });
+            } catch { /* retry */ }
+          }
           const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
-          send(6, "route_register", "completed", { message: "Route registered", url });
-        } else {
-          send(6, "route_register", "completed", { message: "Container started (route may take a moment)" });
+          if (healthy) {
+            send(7, "health_check", "completed", { message: "code-server is ready!", url });
+          } else {
+            send(7, "health_check", "completed", { message: "Container running (health check pending)", url });
+          }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown error";
-        send(0, "iam_role", "failed", { error: msg });
+        if (!abortSignal.aborted) {
+          send(0, "iam_role", "failed", { error: "Provisioning failed" });
+        }
+        console.error("[user/container/stream] SSE error:", err instanceof Error ? err.message : err);
       }
 
       controller.close();
@@ -171,7 +214,7 @@ export async function POST(req: NextRequest) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
+      "Cache-Control": "no-cache, no-store, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },

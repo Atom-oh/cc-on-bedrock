@@ -254,7 +254,8 @@ export type ProvisioningStepName =
   | "task_definition"
   | "password_store"
   | "container_start"
-  | "route_register";
+  | "route_register"
+  | "health_check";
 
 export interface ProvisioningEvent {
   step: number;
@@ -272,6 +273,7 @@ export const PROVISIONING_STEPS: { step: number; name: ProvisioningStepName; lab
   { step: 4, name: "password_store", label: "Securing access" },
   { step: 5, name: "container_start", label: "Starting container" },
   { step: 6, name: "route_register", label: "Connecting network" },
+  { step: 7, name: "health_check", label: "Verifying code-server" },
 ];
 
 // ─── Disk Usage Types ───
