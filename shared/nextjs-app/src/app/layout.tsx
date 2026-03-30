@@ -10,6 +10,9 @@ export const metadata: Metadata = {
   title: "CC-on-Bedrock Dashboard",
   description:
     "Multi-user Claude Code development environment on AWS Bedrock",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
