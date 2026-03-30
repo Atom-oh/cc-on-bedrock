@@ -57,6 +57,11 @@ export class DashboardStack extends cdk.Stack {
       resources: ['*'],
     }));
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'DynamoDBRouting',
+      actions: ['dynamodb:PutItem', 'dynamodb:DeleteItem', 'dynamodb:GetItem', 'dynamodb:Scan'],
+      resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`],
+    }));
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'SecurityDashboard',
       actions: [
         'cloudtrail:LookupEvents',
@@ -142,6 +147,7 @@ export class DashboardStack extends cdk.Stack {
         `VPC_ID=${vpc.vpcId}`,
         `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
         `CLOUDFRONT_SECRET=${cloudfrontSecret.secretValue.unsafeUnwrap()}`,
+        'ROUTING_TABLE_NAME=cc-routing-table',
         'ENVEOF',
         'chmod 600 /opt/dashboard/.env',
         '',

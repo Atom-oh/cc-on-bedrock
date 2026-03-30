@@ -121,20 +121,17 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        const taskArn = await startContainerWithProgress(
-          {
-            username: user.email,
-            subdomain,
-            department,
-            containerOs: (body.containerOs as "ubuntu" | "al2023") ?? user.containerOs ?? "ubuntu",
-            resourceTier: tierToUse,
-            securityPolicy: user.securityPolicy ?? "restricted",
-            storageType: user.storageType ?? "efs",
-          },
-          (step, name, status, message) => {
-            send(step, name, status, message ? { message } : undefined);
-          }
-        );
+        send(3, "launching", "in_progress", { message: "Starting ECS task..." });
+        const taskArn = await startContainerWithProgress({
+          username: user.email,
+          subdomain,
+          department,
+          containerOs: (body.containerOs as "ubuntu" | "al2023") ?? user.containerOs ?? "ubuntu",
+          resourceTier: tierToUse,
+          securityPolicy: user.securityPolicy ?? "restricted",
+          storageType: user.storageType ?? "efs",
+        });
+        send(4, "launched", "done", { message: `Task started: ${taskArn.split("/").pop()}` });
 
         // Step 6: Route registration
         send(6, "route_register", "in_progress", { message: "Waiting for IP assignment..." });

@@ -266,23 +266,23 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                         <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>
                         <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>
                         <td className="py-3 text-gray-400">
-                          {new Date(req.requestedAt).toLocaleDateString()}
+                          {req.requestedAt ? new Date(req.requestedAt).toLocaleDateString() : "-"}
                         </td>
                         <td className="py-3">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => handleApprove(req.requestId)}
-                              disabled={actionLoading === req.requestId}
+                              onClick={() => handleApprove(req.requestId ?? "")}
+                              disabled={actionLoading === (req.requestId ?? "")}
                               className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 text-white text-xs font-medium rounded transition-colors"
                             >
-                              {actionLoading === req.requestId ? "..." : t("dept.approve") || "Approve"}
+                              {actionLoading === (req.requestId ?? "") ? "..." : t("dept.approve") || "Approve"}
                             </button>
                             <button
-                              onClick={() => handleReject(req.requestId)}
-                              disabled={actionLoading === req.requestId}
+                              onClick={() => handleReject(req.requestId ?? "")}
+                              disabled={actionLoading === (req.requestId ?? "")}
                               className="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white text-xs font-medium rounded transition-colors"
                             >
-                              {actionLoading === req.requestId ? "..." : t("dept.reject") || "Reject"}
+                              {actionLoading === (req.requestId ?? "") ? "..." : t("dept.reject") || "Reject"}
                             </button>
                           </div>
                         </td>
@@ -407,23 +407,23 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                         <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>
                         <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>
                         <td className="py-3 text-gray-400">
-                          {new Date(req.requestedAt).toLocaleDateString()}
+                          {req.requestedAt ? new Date(req.requestedAt).toLocaleDateString() : "-"}
                         </td>
                         <td className="py-3">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => handleApprove(req.requestId)}
-                              disabled={actionLoading === req.requestId}
+                              onClick={() => handleApprove(req.requestId ?? "")}
+                              disabled={actionLoading === (req.requestId ?? "")}
                               className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 text-white text-xs font-medium rounded transition-colors"
                             >
-                              {actionLoading === req.requestId ? "..." : t("dept.approve") || "Approve"}
+                              {actionLoading === (req.requestId ?? "") ? "..." : t("dept.approve") || "Approve"}
                             </button>
                             <button
-                              onClick={() => handleReject(req.requestId)}
-                              disabled={actionLoading === req.requestId}
+                              onClick={() => handleReject(req.requestId ?? "")}
+                              disabled={actionLoading === (req.requestId ?? "")}
                               className="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white text-xs font-medium rounded transition-colors"
                             >
-                              {actionLoading === req.requestId ? "..." : t("dept.reject") || "Reject"}
+                              {actionLoading === (req.requestId ?? "") ? "..." : t("dept.reject") || "Reject"}
                             </button>
                           </div>
                         </td>

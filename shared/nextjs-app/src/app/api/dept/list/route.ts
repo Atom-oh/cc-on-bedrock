@@ -72,6 +72,8 @@ export async function GET() {
       const totalCost = usage?.totalCost ?? 0;
       return {
         department: dept,
+        userCount: memberMap.get(dept) ?? 0,
+        activeContainers: 0,
         memberCount: memberMap.get(dept) ?? 0,
         totalCost,
         totalTokens: usage?.totalTokens ?? 0,

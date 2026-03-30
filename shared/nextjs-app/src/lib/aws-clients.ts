@@ -383,6 +383,9 @@ export async function startContainer(
   return taskArn;
 }
 
+// Alias for SSE streaming container start (used by /api/user/container/stream)
+export const startContainerWithProgress = startContainer;
+
 export async function stopContainer(input: StopContainerInput): Promise<void> {
   await ecsClient.send(
     new StopTaskCommand({

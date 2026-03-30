@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getTaskMetrics } from "@/lib/cloudwatch-client";
+import { getTaskDefMetrics as getTaskMetrics } from "@/lib/cloudwatch-client";
 import { listContainers } from "@/lib/aws-clients";
 
 export async function GET() {
@@ -30,7 +30,8 @@ export async function GET() {
       });
     }
 
-    const metrics = await getTaskMetrics(userContainer.taskId);
+    const allMetrics = await getTaskMetrics();
+    const metrics = allMetrics.find(m => m.taskDefFamily?.includes(userContainer.containerOs ?? "ubuntu")) ?? allMetrics[0] ?? null;
 
     return NextResponse.json({
       success: true,
