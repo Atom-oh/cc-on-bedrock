@@ -217,7 +217,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         </div>
 
         {/* VSCode URL Card */}
-        {container?.status === "RUNNING" && codeServerUrl && (
+        {container?.status === "RUNNING" && container?.healthStatus === "HEALTHY" && codeServerUrl && (
           <div className="bg-[#0d1117] rounded-lg p-4 mb-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-gray-500 mb-1">VSCode URL</p>
@@ -252,6 +252,17 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
                 </svg>
               )}
             </button>
+          </div>
+        )}
+
+        {/* Warming up indicator */}
+        {container?.status === "RUNNING" && container?.healthStatus !== "HEALTHY" && !isProvisioning && (
+          <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-4 mb-4 flex items-center gap-3">
+            <div className="w-5 h-5 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin flex-shrink-0" aria-hidden="true" />
+            <div>
+              <p className="text-sm text-yellow-400 font-medium">code-server is starting up...</p>
+              <p className="text-xs text-gray-500">Usually ready within 30-60 seconds</p>
+            </div>
           </div>
         )}
 

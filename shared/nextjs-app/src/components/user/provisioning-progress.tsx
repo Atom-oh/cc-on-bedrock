@@ -79,7 +79,7 @@ export default function ProvisioningProgress({ tier, os, onComplete, onError }: 
 
               if (event.status === "in_progress") {
                 setCurrentStep(event.step);
-              } else if (event.status === "completed" && event.step === 6) {
+              } else if (event.status === "completed" && event.step === 7) {
                 setCompleted(true);
                 setTimeout(() => onComplete(event.url), 1500);
               } else if (event.status === "failed") {

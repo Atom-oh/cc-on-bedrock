@@ -54,3 +54,5 @@ signin-page.png
 # Superpowers plans (session-specific)
 docs/superpowers/plans/
 docs-*.png
+*.mov
+docusaurus-*.png

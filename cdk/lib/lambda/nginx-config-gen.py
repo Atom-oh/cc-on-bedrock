@@ -120,7 +120,7 @@ http {{
 # Upstream block template
 UPSTREAM_TEMPLATE = """    # Upstream for {subdomain}
     upstream user_{subdomain} {{
-        server {container_ip}:{port} max_fails=3 fail_timeout=30s;
+        server {container_ip}:{port} max_fails=3 fail_timeout=5s;
         keepalive 32;
     }}
 """
@@ -147,9 +147,18 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         proxy_set_header Connection $connection_upgrade;
 
         # Timeouts for long-running connections (Claude Code sessions)
-        proxy_connect_timeout 60s;
+        proxy_connect_timeout 10s;
         proxy_send_timeout 3600s;
         proxy_read_timeout 3600s;
+
+        # Custom loading page for 502/503/504 (code-server not ready yet)
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @loading;
+
+        location @loading {{
+            default_type text/html;
+            return 503 '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>Starting...</title><style>*{{margin:0;padding:0;box-sizing:border-box}}body{{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Noto Sans,Helvetica,Arial,sans-serif}}.c{{text-align:center;max-width:400px;padding:2rem}}.spinner{{width:48px;height:48px;border:4px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 1.5rem}}@keyframes spin{{to{{transform:rotate(360deg)}}}}h1{{font-size:1.25rem;font-weight:600;margin-bottom:.5rem;color:#e6edf3}}p{{font-size:.875rem;color:#8b949e;line-height:1.5}}.badge{{display:inline-flex;align-items:center;gap:6px;margin-top:1rem;padding:4px 12px;background:#161b22;border:1px solid #30363d;border-radius:999px;font-size:.75rem;color:#8b949e}}.dot{{width:6px;height:6px;background:#f0883e;border-radius:50%;animation:pulse 1.5s ease-in-out infinite}}@keyframes pulse{{0%,100%{{opacity:.4}}50%{{opacity:1}}}}</style></head><body><div class="c"><div class="spinner"></div><h1>Development environment is starting</h1><p>code-server is booting up. This page will automatically refresh.</p><div class="badge"><span class="dot"></span>Warming up</div></div></body></html>';
+        }}
 
         location / {{
             proxy_pass http://user_{subdomain};
