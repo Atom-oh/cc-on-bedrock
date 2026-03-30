@@ -7,7 +7,7 @@ import Screenshot from '@site/src/components/Screenshot';
 각 개발자에게 격리된 Claude Code + Kiro 환경을 Amazon ECS상에서 제공하며, Next.js 대시보드를 통해 중앙 집중식 관리가 가능합니다. 인프라는 CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 세 가지 IaC 도구로 구현되어 있습니다.
 
 <Screenshot 
-  src="/img/cconbedrock_arch.png" 
+  src="/cc-on-bedrock/img/cconbedrock_arch.png" 
   alt="CC-on-Bedrock Architecture" 
   caption="시스템 전체 아키텍처: 사용자 접속부터 Bedrock API 호출까지의 전 과정" 
 />

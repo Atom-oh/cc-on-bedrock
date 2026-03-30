@@ -83,7 +83,7 @@ Cognito + NextAuth.js 기반의 인증 체계와 code-server 비밀번호 동기
 | **Nginx Route** | `{subdomain}.dev.domain` → container IP:8080 |
 
 <Screenshot
-  src="/img/containers.png"
+  src="/cc-on-bedrock/img/containers.png"
   alt="Containers"
   caption="컨테이너 관리: 사용자별 독립된 개발 환경 실행 및 제어"
 />
@@ -100,13 +100,13 @@ Cognito + NextAuth.js 기반의 인증 체계와 code-server 비밀번호 동기
 ## 모니터링 및 분석
 
 <Screenshot
-  src="/img/monitoring.png"
+  src="/cc-on-bedrock/img/monitoring.png"
   alt="Monitoring"
   caption="실시간 인프라 모니터링: ECS 서비스 상태 및 컨테이너 메트릭"
 />
 
 <Screenshot
-  src="/img/Analytics01.png"
+  src="/cc-on-bedrock/img/Analytics01.png"
   alt="Analytics"
   caption="데이터 분석: 모델 및 부서별 비용 사용량 트렌드 시각화"
 />

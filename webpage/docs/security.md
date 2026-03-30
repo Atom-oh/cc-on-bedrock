@@ -11,7 +11,7 @@ CC-on-Bedrock은 기업 환경에서도 안전하게 사용할 수 있도록 설
 대시보드에서는 보안 정책을 시각적으로 관리하고 위협 로그를 실시간으로 모니터링할 수 있습니다.
 
 <Screenshot 
-  src="/img/security.png" 
+  src="/cc-on-bedrock/img/security.png" 
   alt="Security Dashboard" 
   caption="통합 보안 대시보드: IAM, DLP, DNS Firewall 통합 관리 화면" 
 />
