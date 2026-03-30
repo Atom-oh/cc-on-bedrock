@@ -1,4 +1,5 @@
 import React from 'react';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 
 interface Props {
   src: string;
@@ -7,6 +8,7 @@ interface Props {
 }
 
 export default function Screenshot({ src, alt, caption }: Props) {
+  const imgSrc = useBaseUrl(src);
   return (
     <div style={{ margin: '2rem 0', textAlign: 'center' }}>
       <div style={{
@@ -16,7 +18,7 @@ export default function Screenshot({ src, alt, caption }: Props) {
         border: '1px solid var(--ifm-color-emphasis-200)',
         lineHeight: 0
       }}>
-        <img src={src} alt={alt} style={{ width: '100%', height: 'auto', display: 'block' }} />
+        <img src={imgSrc} alt={alt} style={{ width: '100%', height: 'auto', display: 'block' }} />
       </div>
       {caption && (
         <p style={{
