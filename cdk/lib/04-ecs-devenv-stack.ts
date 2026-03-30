@@ -9,6 +9,7 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -402,6 +403,9 @@ export class EcsDevenvStack extends cdk.Stack {
 
     // ─── CloudFront Distribution ───
 
+    // CloudFront certificate for *.dev.{domain} (must be in us-east-1)
+    const devEnvCfCertArn = this.node.tryGetContext('devEnvCfCertArn') ?? '';
+
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
       defaultBehavior: {
         origin: new origins.HttpOrigin(this.nlb.loadBalancerDnsName, {
@@ -416,6 +420,10 @@ export class EcsDevenvStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       },
+      ...(devEnvCfCertArn ? {
+        domainNames: [`*.${config.devSubdomain}.${config.domainName}`],
+        certificate: acm.Certificate.fromCertificateArn(this, 'DevEnvCfCert', devEnvCfCertArn),
+      } : {}),
       comment: 'CC-on-Bedrock Dev Environment (NLB+Nginx)',
     });
 
