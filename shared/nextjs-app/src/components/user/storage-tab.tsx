@@ -21,6 +21,11 @@ export default function StorageTab({ user, container }: StorageTabProps) {
   const [reason, setReason] = useState("");
   const [submitLoading, setSubmitLoading] = useState(false);
 
+  // AI Resource Review state
+  const [aiReview, setAiReview] = useState<{ analysis: string; verdict: { recommended: boolean; actions: string[] } } | null>(null);
+  const [aiReviewLoading, setAiReviewLoading] = useState(false);
+  const [showReviewResult, setShowReviewResult] = useState(false);
+
   const isEbs = user.storageType === "ebs";
   const isRunning = container?.status === "RUNNING";
 
@@ -60,10 +65,41 @@ export default function StorageTab({ user, container }: StorageTabProps) {
     return () => clearInterval(interval);
   }, [fetchDiskUsage, fetchResizeStatus]);
 
+  // Step 1: AI reviews the request before submission
+  const handleRequestReview = async () => {
+    setAiReviewLoading(true);
+    setAiReview(null);
+    setShowReviewResult(false);
+    setError(null);
+    try {
+      const res = await fetch("/api/user/resource-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewType: "ebs_resize", requestedValue: String(requestedSize), reason: reason.trim() }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setAiReview(data.data);
+        setShowReviewResult(true);
+      } else {
+        // AI review failed — skip to direct submit
+        await handleSubmitResize();
+      }
+    } catch {
+      // AI unavailable — skip to direct submit
+      await handleSubmitResize();
+    } finally {
+      setAiReviewLoading(false);
+    }
+  };
+
+  // Step 2: Actually submit the resize request
   const handleSubmitResize = async () => {
     setSubmitLoading(true);
     setError(null);
     setSuccess(null);
+    setShowReviewResult(false);
+    setAiReview(null);
     try {
       const res = await fetch("/api/user/ebs-resize", {
         method: "POST",
@@ -294,12 +330,57 @@ export default function StorageTab({ user, container }: StorageTabProps) {
               </div>
 
               <button
-                onClick={handleSubmitResize}
-                disabled={submitLoading || reason.trim().length < 10 || requestedSize <= (resizeData?.currentSizeGb ?? 20)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
+                onClick={handleRequestReview}
+                disabled={aiReviewLoading || submitLoading || reason.trim().length < 10 || requestedSize <= (resizeData?.currentSizeGb ?? 20)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
               >
-                {submitLoading ? "Submitting..." : "Request Expansion"}
+                {aiReviewLoading ? (
+                  <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>AI Reviewing...</>
+                ) : submitLoading ? "Submitting..." : "AI Review & Request"}
               </button>
+
+              {/* AI Review Result Panel */}
+              {showReviewResult && aiReview && (
+                <div className={`mt-4 p-4 rounded-lg border ${aiReview.verdict.recommended ? "bg-green-900/20 border-green-800" : "bg-yellow-900/20 border-yellow-800"}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`text-lg ${aiReview.verdict.recommended ? "text-green-400" : "text-yellow-400"}`}>
+                      {aiReview.verdict.recommended ? "✅" : "💡"}
+                    </span>
+                    <span className={`text-sm font-bold ${aiReview.verdict.recommended ? "text-green-400" : "text-yellow-400"}`}>
+                      {aiReview.verdict.recommended ? "Expansion Recommended" : "Optimization Suggested"}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-300 whitespace-pre-wrap mb-3">{aiReview.analysis}</p>
+                  {aiReview.verdict.actions.length > 0 && (
+                    <ul className="text-xs text-gray-400 space-y-1 mb-3">
+                      {aiReview.verdict.actions.map((a, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="text-blue-400 mt-0.5">→</span>{a}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSubmitResize}
+                      disabled={submitLoading}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                        aiReview.verdict.recommended
+                          ? "bg-green-600 hover:bg-green-700 text-white"
+                          : "bg-gray-700 hover:bg-gray-600 text-gray-200"
+                      }`}
+                    >
+                      {submitLoading ? "Submitting..." : aiReview.verdict.recommended ? "Proceed with Request" : "Request Anyway"}
+                    </button>
+                    <button
+                      onClick={() => { setShowReviewResult(false); setAiReview(null); }}
+                      className="px-3 py-1.5 text-sm font-medium text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : null}
         </div>
