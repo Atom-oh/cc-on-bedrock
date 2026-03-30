@@ -8,6 +8,8 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as logsDest from 'aws-cdk-lib/aws-logs-destinations';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig, isEbsMode } from '../config/default';
 import * as path from 'path';
@@ -353,5 +355,68 @@ export class UsageTrackingStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'AuditLoggerLambdaArn', { value: auditLoggerLambda.functionArn });
     new cdk.CfnOutput(this, 'AuditTableName', { value: auditTable.tableName });
+
+    // ─── Bedrock Invocation Logging (token tracking) ───
+    const bedrockLoggingRole = iam.Role.fromRoleName(this, 'BedrockLoggingRole', 'cc-on-bedrock-invocation-logging');
+
+    const bedrockLogGroup = logs.LogGroup.fromLogGroupName(this, 'BedrockInvocationLogs', '/aws/bedrock/invocation-logs');
+
+    // Enable Bedrock Invocation Logging via AwsCustomResource
+    new cr.AwsCustomResource(this, 'EnableBedrockLogging', {
+      onCreate: {
+        service: 'Bedrock',
+        action: 'putModelInvocationLoggingConfiguration',
+        parameters: {
+          loggingConfig: {
+            cloudWatchConfig: {
+              logGroupName: bedrockLogGroup.logGroupName,
+              roleArn: bedrockLoggingRole.roleArn,
+            },
+            textDataDeliveryEnabled: true,
+            imageDataDeliveryEnabled: false,
+            embeddingDataDeliveryEnabled: false,
+          },
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging'),
+      },
+      onUpdate: {
+        service: 'Bedrock',
+        action: 'putModelInvocationLoggingConfiguration',
+        parameters: {
+          loggingConfig: {
+            cloudWatchConfig: {
+              logGroupName: bedrockLogGroup.logGroupName,
+              roleArn: bedrockLoggingRole.roleArn,
+            },
+            textDataDeliveryEnabled: true,
+            imageDataDeliveryEnabled: false,
+            embeddingDataDeliveryEnabled: false,
+          },
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging'),
+      },
+      onDelete: {
+        service: 'Bedrock',
+        action: 'deleteModelInvocationLoggingConfiguration',
+        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging'),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['bedrock:PutModelInvocationLoggingConfiguration', 'bedrock:DeleteModelInvocationLoggingConfiguration'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          actions: ['iam:PassRole'],
+          resources: [bedrockLoggingRole.roleArn],
+        }),
+      ]),
+    });
+
+    // Subscription filter: Bedrock logs → usage-tracker Lambda
+    new logs.SubscriptionFilter(this, 'BedrockLogsToUsageTracker', {
+      logGroup: bedrockLogGroup,
+      destination: new logsDest.LambdaDestination(trackerLambda),
+      filterPattern: logs.FilterPattern.allEvents(),
+    });
   }
 }
