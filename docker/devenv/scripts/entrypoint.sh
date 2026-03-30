@@ -110,14 +110,17 @@ fi
 
 # --- Symlink user config to home directory ---
 # code-server and Claude Code expect configs in $HOME
-for item in .bashrc .bashrc.d .claude .kiro .config; do
-  src="$EFS_USER_DIR/$item"
-  dst="$USER_HOME/$item"
-  if [ -e "$src" ] && [ ! -L "$dst" ]; then
-    rm -rf "$dst" 2>/dev/null || true
-    ln -sf "$src" "$dst"
-  fi
-done
+# Skip when STORAGE_ISOLATED (Access Point: EFS_USER_DIR == USER_HOME, no symlink needed)
+if [ "$EFS_USER_DIR" != "$USER_HOME" ]; then
+  for item in .bashrc .bashrc.d .claude .kiro .config; do
+    src="$EFS_USER_DIR/$item"
+    dst="$USER_HOME/$item"
+    if [ -e "$src" ] && [ ! -L "$dst" ]; then
+      rm -rf "$dst" 2>/dev/null || true
+      ln -sf "$src" "$dst"
+    fi
+  done
+fi
 
 # --- Start idle monitor in background ---
 /opt/devenv/scripts/idle-monitor.sh &
