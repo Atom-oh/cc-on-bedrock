@@ -33,6 +33,9 @@ export default function BudgetManagement() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editModal, setEditModal] = useState<EditModal | null>(null);
+  const [createModal, setCreateModal] = useState<{ type: "department" | "user" } | null>(null);
+  const [createId, setCreateId] = useState("");
+  const [createDept, setCreateDept] = useState("");
   const [newBudget, setNewBudget] = useState("");
   const [newLimit, setNewLimit] = useState("");
 
@@ -104,6 +107,43 @@ export default function BudgetManagement() {
     }
   };
 
+  const handleCreate = async () => {
+    if (!createModal || !createId.trim()) return;
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        type: createModal.type,
+        id: createId.trim(),
+        monthlyBudget: Number(newBudget) || 0,
+      };
+      if (createModal.type === "user") {
+        body.dailyTokenLimit = Number(newLimit) || 100000;
+        if (createDept.trim()) body.department = createDept.trim();
+      }
+
+      const res = await fetch("/api/admin/budgets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setCreateModal(null);
+        setCreateId("");
+        setCreateDept("");
+        setNewBudget("");
+        setNewLimit("");
+        void fetchData();
+      } else {
+        alert(json.error ?? "Failed to create budget");
+      }
+    } catch {
+      alert("Failed to create budget");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const formatCurrency = (n: number) => `$${n.toFixed(2)}`;
   const formatTokens = (n: number) =>
     n >= 1_000_000
@@ -139,12 +179,20 @@ export default function BudgetManagement() {
           <h3 className="text-lg font-semibold text-gray-100">
             Department Budgets
           </h3>
-          <button
-            onClick={() => void fetchData()}
-            className="px-3 py-1.5 text-xs font-medium text-gray-400 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors"
-          >
-            {t("common.refresh")}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setCreateModal({ type: "department" }); setNewBudget(""); setCreateId(""); }}
+              className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              + Add Department
+            </button>
+            <button
+              onClick={() => void fetchData()}
+              className="px-3 py-1.5 text-xs font-medium text-gray-400 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors"
+            >
+              {t("common.refresh")}
+            </button>
+          </div>
         </div>
 
         {departments.length === 0 ? (
@@ -207,9 +255,17 @@ export default function BudgetManagement() {
 
       {/* User Budgets */}
       <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
-        <h3 className="text-lg font-semibold text-gray-100 mb-4">
-          User Token Limits
-        </h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-100">
+            User Token Limits
+          </h3>
+          <button
+            onClick={() => { setCreateModal({ type: "user" }); setNewBudget(""); setNewLimit("100000"); setCreateId(""); setCreateDept(""); }}
+            className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            + Add User Budget
+          </button>
+        </div>
 
         {users.length === 0 ? (
           <p className="text-sm text-gray-500">No user budgets configured</p>
@@ -262,6 +318,89 @@ export default function BudgetManagement() {
           </div>
         )}
       </div>
+
+      {/* Create Modal */}
+      {createModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#161b22] rounded-xl border border-gray-700 p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-100 mb-4">
+              Add {createModal.type === "department" ? "Department" : "User"} Budget
+            </h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">
+                  {createModal.type === "department" ? "Department Name" : "User ID (subdomain)"}
+                </label>
+                <input
+                  type="text"
+                  value={createId}
+                  onChange={(e) => setCreateId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder={createModal.type === "department" ? "engineering" : "user-subdomain"}
+                />
+              </div>
+
+              {createModal.type === "user" && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Department</label>
+                  <input
+                    type="text"
+                    value={createDept}
+                    onChange={(e) => setCreateDept(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="engineering"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Monthly Budget (USD)</label>
+                <input
+                  type="number"
+                  value={newBudget}
+                  onChange={(e) => setNewBudget(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="500.00"
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+
+              {createModal.type === "user" && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Daily Token Limit</label>
+                  <input
+                    type="number"
+                    value={newLimit}
+                    onChange={(e) => setNewLimit(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="100000"
+                    min="0"
+                    step="1000"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => setCreateModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-400 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleCreate()}
+                disabled={saving || !createId.trim()}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {saving ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Modal */}
       {editModal && (

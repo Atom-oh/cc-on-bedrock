@@ -18,6 +18,7 @@ from decimal import Decimal
 
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 DEPT_BUDGETS_TABLE = os.environ.get("DEPT_BUDGETS_TABLE", "cc-department-budgets")
+USER_BUDGETS_TABLE = os.environ.get("USER_BUDGETS_TABLE", "cc-user-budgets")
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
 DAILY_BUDGET = float(os.environ.get("DAILY_BUDGET_USD", "50"))
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
@@ -28,8 +29,10 @@ DENY_POLICY_NAME = "BudgetExceededDeny"
 DEPT_DENY_POLICY_NAME = "DeptBudgetExceededDeny"
 
 dynamodb = boto3.resource("dynamodb")
+dynamodb_client = boto3.client("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 dept_budgets_table = dynamodb.Table(DEPT_BUDGETS_TABLE)
+user_budgets_table = dynamodb.Table(USER_BUDGETS_TABLE)
 iam_client = boto3.client("iam")
 cognito_client = boto3.client("cognito-idp")
 sns_client = boto3.client("sns")
@@ -118,6 +121,69 @@ def get_department_budgets():
     except Exception as e:
         print(f"[DEPT] Failed to fetch department budgets: {e}")
         return {}
+
+
+def get_user_budgets():
+    """Fetch per-user budget limits from cc-user-budgets table."""
+    try:
+        budgets = {}
+        last_key = None
+        pages = 0
+        while True:
+            params = {}
+            if last_key:
+                params["ExclusiveStartKey"] = last_key
+            result = user_budgets_table.scan(**params)
+            for item in result.get("Items", []):
+                user_id = item.get("user_id", item.get("userId", ""))
+                if user_id:
+                    budgets[user_id] = {
+                        "dailyTokenLimit": float(item.get("dailyTokenLimit", 0)),
+                        "monthlyBudget": float(item.get("monthlyBudget", 0)),
+                    }
+            last_key = result.get("LastEvaluatedKey")
+            pages += 1
+            if not last_key or pages >= MAX_SCAN_PAGES:
+                break
+        return budgets
+    except Exception as e:
+        print(f"[USER-BUDGETS] Failed to fetch user budgets: {e}")
+        return {}
+
+
+def write_current_spend(user_spend, dept_spend):
+    """Write computed currentSpend back to budget tables for dashboard display."""
+    now = datetime.utcnow().isoformat()
+
+    # Write per-user spend to cc-user-budgets
+    for user, data in user_spend.items():
+        try:
+            user_budgets_table.update_item(
+                Key={"user_id": user},
+                UpdateExpression="SET currentSpend = :spend, lastChecked = :ts, department = :dept",
+                ExpressionAttributeValues={
+                    ":spend": Decimal(str(round(data["cost"], 6))),
+                    ":ts": now,
+                    ":dept": data["department"],
+                },
+            )
+        except Exception as e:
+            print(f"[SPEND] Failed to write user spend for {user}: {e}")
+
+    # Write per-department spend to cc-department-budgets
+    for dept, data in dept_spend.items():
+        try:
+            dept_budgets_table.update_item(
+                Key={"dept_id": dept},
+                UpdateExpression="SET currentSpend = :spend, lastChecked = :ts, memberCount = :mc",
+                ExpressionAttributeValues={
+                    ":spend": Decimal(str(round(data["cost"], 6))),
+                    ":ts": now,
+                    ":mc": len(data["users"]),
+                },
+            )
+        except Exception as e:
+            print(f"[SPEND] Failed to write dept spend for {dept}: {e}")
 
 
 def get_user_department(subdomain: str) -> str:
@@ -306,14 +372,22 @@ def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
     user_spend = get_today_usage()
     all_known_users = set(user_spend.keys())
+    user_budgets = get_user_budgets()
     over_budget = []
     warnings = []
     denied = 0
     released = 0
 
+    # Write currentSpend to budget tables for dashboard display
+    dept_monthly = get_monthly_usage_by_department()
+    write_current_spend(user_spend, dept_monthly)
+
     # ─── Per-user daily budget check ───
     for user, data in user_spend.items():
-        pct = (data["cost"] / DAILY_BUDGET) * 100 if DAILY_BUDGET > 0 else 0
+        # Use per-user budget if set, otherwise fall back to global default
+        user_limit = user_budgets.get(user, {}).get("monthlyBudget", 0)
+        effective_budget = user_limit if user_limit > 0 else DAILY_BUDGET
+        pct = (data["cost"] / effective_budget) * 100 if effective_budget > 0 else 0
 
         if pct >= 100:
             over_budget.append({

@@ -110,6 +110,7 @@ export class UsageTrackingStack extends cdk.Stack {
         DEPT_BUDGETS_TABLE: 'cc-department-budgets',
         ECS_CLUSTER_NAME: config.ecsClusterName,
         DAILY_BUDGET_USD: String(config.dailyBudgetUsd),
+        USER_BUDGETS_TABLE: 'cc-user-budgets',
         SNS_TOPIC_ARN: alertTopic.topicArn,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
       },
@@ -165,8 +166,9 @@ export class UsageTrackingStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // Grant budget check Lambda read access to department budgets table
-    departmentBudgetsTable.grantReadData(budgetCheckLambda);
+    // Grant budget check Lambda read/write access to budget tables (writes currentSpend)
+    departmentBudgetsTable.grantReadWriteData(budgetCheckLambda);
+    userBudgetsTable.grantReadWriteData(budgetCheckLambda);
 
     // ==================== Warm Stop Automation (EBS mode only) ====================
     const isEbs = isEbsMode(config);
