@@ -124,7 +124,7 @@ export class SecurityStack extends cdk.Stack {
 
     // IAM Roles
     const bedrockPolicy = new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
       resources: [
         'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
@@ -214,6 +214,7 @@ export class SecurityStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
+    this.dashboardEc2Role.addToPolicy(bedrockPolicy);
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: [
         'cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser',
