@@ -591,16 +591,19 @@ export async function startContainer(
 
   // EBS mode: look up snapshot for data restoration
   let ebsSnapshotId: string | undefined;
+  let ebsSizeGiB = 20;
   if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
     try {
       const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
       const ddb = new DynamoDBClient({ region });
       const volResult = await ddb.send(new DDBGetItem({
-        TableName: "cc-user-volumes",
+        TableName: process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes",
         Key: { user_id: { S: input.subdomain } },
       }));
-      ebsSnapshotId = volResult.Item?.snapshotId?.S;
-      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}`);
+      ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
+      const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
+      if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
+      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB`);
     } catch { /* no snapshot — new volume */ }
   }
 
@@ -630,7 +633,7 @@ export async function startContainer(
           managedEBSVolume: {
             roleArn: ecsInfrastructureRoleArn,
             volumeType: "gp3",
-            sizeInGiB: 20,
+            sizeInGiB: ebsSizeGiB,
             encrypted: true,
             ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
             ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),
@@ -812,16 +815,19 @@ export async function startContainerWithProgress(
 
   // EBS mode: look up snapshot for data restoration
   let ebsSnapshotId: string | undefined;
+  let ebsSizeGiB = 20;
   if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
     try {
       const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
       const ddb = new DynamoDBClient({ region });
       const volResult = await ddb.send(new DDBGetItem({
-        TableName: "cc-user-volumes",
+        TableName: process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes",
         Key: { user_id: { S: input.subdomain } },
       }));
-      ebsSnapshotId = volResult.Item?.snapshotId?.S;
-      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}`);
+      ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
+      const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
+      if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
+      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB`);
     } catch { /* no snapshot — new volume */ }
   }
 
@@ -851,7 +857,7 @@ export async function startContainerWithProgress(
           managedEBSVolume: {
             roleArn: ecsInfrastructureRoleArn,
             volumeType: "gp3",
-            sizeInGiB: 20,
+            sizeInGiB: ebsSizeGiB,
             encrypted: true,
             ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
             ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),

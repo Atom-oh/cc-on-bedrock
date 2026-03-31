@@ -65,6 +65,11 @@ def handler(event: dict, context: Any) -> dict:
             return restore_from_snapshot(event)
         elif action == "check_user_volume":
             return check_user_volume(event)
+        elif action == "create_and_attach":
+            # Alias for create_volume (used by warm-stop resume)
+            return create_volume(event)
+        elif action == "modify_volume" or action == "modify-volume":
+            return modify_volume(event)
         else:
             return error_response(400, f"Unknown action: {action}")
     except ClientError as e:
@@ -368,6 +373,105 @@ def get_user_volume_record(user_id: str) -> dict | None:
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         return None
+
+
+def modify_volume(event: dict) -> dict:
+    """
+    Modify an existing EBS volume size (for admin-approved resize).
+
+    Required: user_id, requested_size_gb
+    Note: EBS volumes have a 6-hour cooldown between modifications.
+    """
+    user_id = event["user_id"]
+    requested_size_gb = event.get("requested_size_gb", event.get("requestedSizeGb"))
+
+    if not requested_size_gb:
+        return error_response(400, "Missing required parameter: requested_size_gb")
+
+    requested_size_gb = int(requested_size_gb)
+
+    # Get current volume info from DynamoDB
+    result = table.get_item(Key={"user_id": user_id})
+    item = result.get("Item")
+    if not item:
+        return error_response(404, f"No volume record found for user {user_id}")
+
+    volume_id = item.get("volume_id")
+    if not volume_id:
+        # No active volume — just update the size in DynamoDB for next start
+        timestamp = datetime.utcnow().isoformat()
+        table.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression="SET currentSizeGb = :size, size_gb = :size, updated_at = :ts",
+            ExpressionAttributeValues={
+                ":size": requested_size_gb,
+                ":ts": timestamp,
+            },
+        )
+        return success_response({
+            "user_id": user_id,
+            "action": "modify_volume",
+            "status": "size_updated_for_next_start",
+            "new_size_gb": requested_size_gb,
+        })
+
+    # Check if volume exists and is modifiable
+    try:
+        vol_desc = ec2.describe_volumes(VolumeIds=[volume_id])
+        current_size = vol_desc["Volumes"][0]["Size"]
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "InvalidVolume.NotFound":
+            # Volume doesn't exist — update DynamoDB size for next start
+            timestamp = datetime.utcnow().isoformat()
+            table.update_item(
+                Key={"user_id": user_id},
+                UpdateExpression="SET currentSizeGb = :size, size_gb = :size, updated_at = :ts, volume_id = :null",
+                ExpressionAttributeValues={
+                    ":size": requested_size_gb,
+                    ":ts": timestamp,
+                    ":null": None,
+                },
+            )
+            return success_response({
+                "user_id": user_id,
+                "action": "modify_volume",
+                "status": "volume_gone_size_updated",
+                "new_size_gb": requested_size_gb,
+            })
+        raise
+
+    if requested_size_gb <= current_size:
+        return error_response(400, f"Requested size ({requested_size_gb}GB) must be larger than current ({current_size}GB)")
+
+    logger.info(f"Modifying volume {volume_id} from {current_size}GB to {requested_size_gb}GB")
+
+    # Modify the volume
+    ec2.modify_volume(
+        VolumeId=volume_id,
+        Size=requested_size_gb,
+    )
+
+    # Update DynamoDB
+    timestamp = datetime.utcnow().isoformat()
+    table.update_item(
+        Key={"user_id": user_id},
+        UpdateExpression="SET currentSizeGb = :size, size_gb = :size, updated_at = :ts",
+        ExpressionAttributeValues={
+            ":size": requested_size_gb,
+            ":ts": timestamp,
+        },
+    )
+
+    logger.info(f"Volume {volume_id} resize initiated: {current_size}GB -> {requested_size_gb}GB")
+
+    return success_response({
+        "user_id": user_id,
+        "action": "modify_volume",
+        "volume_id": volume_id,
+        "old_size_gb": current_size,
+        "new_size_gb": requested_size_gb,
+        "status": "modifying",
+    })
 
 
 def success_response(data: dict) -> dict:

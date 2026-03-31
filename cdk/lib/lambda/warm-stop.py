@@ -100,6 +100,16 @@ def check_idle(event: dict) -> dict:
         if is_idle:
             logger.info(f"Task {task_id} (user: {user_id}) is idle for {idle_minutes} minutes")
 
+            # Check keep_alive_until — skip warm-stop if user extended
+            try:
+                vol_result = table.get_item(Key={"user_id": user_id})
+                keep_alive_until = vol_result.get("Item", {}).get("keep_alive_until", "")
+                if keep_alive_until and keep_alive_until > datetime.utcnow().isoformat():
+                    logger.info(f"Task {task_id} (user: {user_id}) has keep-alive until {keep_alive_until}, skipping")
+                    continue
+            except Exception as e:
+                logger.warning(f"Failed to check keep_alive for {user_id}: {e}")
+
             # Update DynamoDB with idle status
             update_idle_status(user_id, task_id, idle_minutes)
 
