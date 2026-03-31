@@ -191,11 +191,20 @@ def snapshot_and_detach(event: dict) -> dict:
     waiter = ec2.get_waiter("snapshot_completed")
     waiter.wait(SnapshotIds=[snapshot_id], WaiterConfig={"Delay": 15, "MaxAttempts": 120})
 
-    logger.info(f"Snapshot {snapshot_id} completed, deleting volume {volume_id}")
+    logger.info(f"Snapshot {snapshot_id} completed, checking if volume is ECS-managed")
 
-    # Delete the volume
-    ec2.delete_volume(VolumeId=volume_id)
-    logger.info(f"Deleted volume {volume_id}")
+    # Check if volume is ECS-managed (created via RunTask volumeConfigurations)
+    # ECS adds AmazonECSCreated and AmazonECSManaged tags — skip deletion for these
+    try:
+        vol_tags = ec2.describe_volumes(VolumeIds=[volume_id])["Volumes"][0].get("Tags", [])
+        ecs_managed = any(t["Key"] in ("AmazonECSCreated", "AmazonECSManaged") for t in vol_tags)
+        if ecs_managed:
+            logger.info(f"Volume {volume_id} is ECS-managed, skipping deletion (ECS handles lifecycle)")
+        else:
+            ec2.delete_volume(VolumeId=volume_id)
+            logger.info(f"Deleted volume {volume_id}")
+    except Exception as e:
+        logger.warning(f"Volume {volume_id} deletion skipped: {e}")
 
     # Update DynamoDB
     timestamp = datetime.utcnow().isoformat()

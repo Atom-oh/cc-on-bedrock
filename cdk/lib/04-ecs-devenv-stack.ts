@@ -439,11 +439,24 @@ export class EcsDevenvStack extends cdk.Stack {
       retryAttempts: 3,
     }));
 
+    // ─── Nginx Task Role (minimal — S3 config read only, no Bedrock) ───
+    const nginxTaskRole = new iam.Role(this, 'NginxTaskRole', {
+      roleName: 'cc-on-bedrock-nginx-task',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+    nginxTaskRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject', 's3:ListBucket'],
+      resources: [
+        `arn:aws:s3:::${config.projectPrefix}-nginx-config-${cdk.Aws.ACCOUNT_ID}`,
+        `arn:aws:s3:::${config.projectPrefix}-nginx-config-${cdk.Aws.ACCOUNT_ID}/*`,
+      ],
+    }));
+
     // ─── Nginx Reverse Proxy Task Definition ───
     const nginxTaskDef = new ecs.Ec2TaskDefinition(this, 'NginxTaskDef', {
       family: 'cc-nginx-proxy',
       networkMode: ecs.NetworkMode.AWS_VPC,
-      taskRole: ecsTaskRole,
+      taskRole: nginxTaskRole,
       executionRole: ecsTaskExecutionRole,
     });
 
