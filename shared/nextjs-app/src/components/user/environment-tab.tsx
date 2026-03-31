@@ -217,7 +217,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         </div>
 
         {/* VSCode URL Card */}
-        {container?.status === "RUNNING" && container?.healthStatus === "HEALTHY" && codeServerUrl && (
+        {container?.status === "RUNNING" && (container?.healthStatus === "HEALTHY" || container?.healthStatus === "UNKNOWN") && codeServerUrl && (
           <div className="bg-[#0d1117] rounded-lg p-4 mb-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-gray-500 mb-1">VSCode URL</p>
@@ -256,7 +256,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         )}
 
         {/* Warming up indicator */}
-        {container?.status === "RUNNING" && container?.healthStatus !== "HEALTHY" && !isProvisioning && (
+        {container?.status === "RUNNING" && container?.healthStatus !== "HEALTHY" && container?.healthStatus !== "UNKNOWN" && !isProvisioning && (
           <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-4 mb-4 flex items-center gap-3">
             <div className="w-5 h-5 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin flex-shrink-0" aria-hidden="true" />
             <div>
