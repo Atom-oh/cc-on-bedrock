@@ -4,23 +4,21 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useI18n } from "@/lib/i18n";
-import { 
-  RefreshCw, 
-  ChevronRight, 
-  ArrowUpRight, 
-  Shield, 
-  Database, 
-  Layers, 
+import {
+  RefreshCw,
+  ChevronRight,
+  ArrowUpRight,
+  Shield,
+  Database,
+  Layers,
   Layout as LayoutIcon,
   Cpu,
-  Zap
+  Zap,
+  BarChart3,
+  Activity
 } from "lucide-react";
-import type { SpendLog, ContainerInfo, ModelMetrics, ApiResponse } from "@/lib/types";
+import type { ContainerInfo, ApiResponse } from "@/lib/types";
 import StatCard from "@/components/cards/stat-card";
-import HealthCard from "@/components/cards/health-card";
-import ContainerMetrics from "@/components/container-metrics";
-import ModelUsageChart from "@/components/charts/model-usage-chart";
-import DailySpendChart from "@/components/charts/daily-spend-chart";
 import { cn } from "@/lib/utils";
 
 interface HomeDashboardProps {
@@ -84,21 +82,17 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [data, setData] = useState<{
-    dailySpend: SpendLog[];
     totalCost: number;
     totalTokens: number;
     activeContainers: number;
     containers: ContainerInfo[];
-    modelMetrics: ModelMetrics[];
     cwMetrics: ContainerCWMetrics | null;
     health: SystemHealth | null;
   }>({
-    dailySpend: [],
     totalCost: 0,
     totalTokens: 0,
     activeContainers: 0,
     containers: [],
-    modelMetrics: [],
     cwMetrics: null,
     health: null,
   });
@@ -106,30 +100,29 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const fetchData = useCallback(async () => {
     try {
       setRefreshing(true);
-      const [spendRes, containerRes, modelRes, cwRes, healthRes] = await Promise.all([
-        fetch("/api/spend/daily"),
-        fetch("/api/admin/containers"),
-        fetch("/api/admin/metrics/models"),
-        fetch("/api/admin/metrics/cloudwatch"),
+      const [containerRes, cwRes, healthRes, usageRes] = await Promise.all([
+        fetch("/api/containers"),
+        fetch("/api/container-metrics?action=current"),
         fetch("/api/health"),
+        fetch(`/api/usage?period=daily&date=${new Date().toISOString().split("T")[0]}`),
       ]);
 
-      const [spend, containers, models, cw, health]: [ApiResponse<SpendLog[]>, ApiResponse<ContainerInfo[]>, ApiResponse<ModelMetrics[]>, ApiResponse<ContainerCWMetrics>, ApiResponse<SystemHealth>] = 
-        await Promise.all([spendRes.json(), containerRes.json(), modelRes.json(), cwRes.json(), healthRes.json()]);
+      const containers: ApiResponse<ContainerInfo[]> = await containerRes.json();
+      const cw = await cwRes.json();
+      const health = await healthRes.json();
+      const usage = await usageRes.json();
 
-      const totalCost = spend.data?.reduce((acc, curr) => acc + curr.cost, 0) || 0;
-      const totalTokens = spend.data?.reduce((acc, curr) => acc + (curr.tokens || 0), 0) || 0;
-      const activeContainers = containers.data?.filter(c => c.status === "RUNNING").length || 0;
+      const activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING").length || 0;
+      const totalTokens = usage.data?.totalTokens ?? 0;
+      const totalCost = usage.data?.totalCost ?? 0;
 
       setData({
-        dailySpend: spend.data || [],
         totalCost,
         totalTokens,
         activeContainers,
         containers: containers.data || [],
-        modelMetrics: models.data || [],
-        cwMetrics: cw.data || null,
-        health: health.data || null,
+        cwMetrics: cw.success ? cw.data : null,
+        health: health.checks ?? null,
       });
     } catch (err) {
       console.error("Failed to fetch dashboard data:", err);
@@ -217,37 +210,51 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         />
       </div>
 
-      {/* Charts Section */}
+      {/* Quick Links Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <motion.div 
+        <motion.div
           whileHover={{ y: -4 }}
           className="lg:col-span-2 bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl relative overflow-hidden group"
         >
           <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
             <Zap className="w-32 h-32 text-primary-500" />
           </div>
-          <SectionHeader 
-            title={t("home.costTrend")} 
-            subtitle="Financial Analytics" 
-            icon={BarChart3} 
+          <SectionHeader
+            title={t("home.costTrend")}
+            subtitle="Financial Analytics"
+            icon={BarChart3}
             action={
               <Link href="/analytics" className="text-[10px] font-black text-primary-400 hover:text-primary-300 uppercase tracking-widest flex items-center gap-1 group/link">
                 Analysis <ArrowUpRight className="w-3 h-3 group-hover/link:translate-x-0.5 group-hover/link:-translate-y-0.5 transition-transform" />
               </Link>
             }
           />
-          <div className="h-[320px] w-full">
-            <DailySpendChart data={data.dailySpend} />
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Today Cost</p>
+              <p className="text-2xl font-black text-white">{formatCost(data.totalCost)}</p>
+            </div>
+            <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Today Tokens</p>
+              <p className="text-2xl font-black text-white">{formatNum(data.totalTokens)}</p>
+            </div>
           </div>
         </motion.div>
 
-        <motion.div 
+        <motion.div
           whileHover={{ y: -4 }}
           className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl"
         >
           <SectionHeader title={t("home.modelUsage")} subtitle="Compute Distribution" icon={Zap} />
-          <div className="h-[320px] w-full">
-            <ModelUsageChart data={data.modelMetrics} />
+          <div className="space-y-3 mt-4">
+            <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Active Containers</p>
+              <p className="text-2xl font-black text-white">{data.activeContainers}</p>
+            </div>
+            <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Architecture</p>
+              <p className="text-sm font-black text-primary-400 uppercase">Direct Bedrock</p>
+            </div>
           </div>
         </motion.div>
       </div>
@@ -258,12 +265,29 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         <div className="space-y-6">
           <SectionHeader title="Cluster Insights" subtitle="Infrastructure Performance" icon={Cpu} />
           {data.cwMetrics && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
               className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl"
             >
-              <ContainerMetrics metrics={data.cwMetrics} />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">CPU</p>
+                  <p className="text-xl font-black text-white">{data.cwMetrics.cpuUtilizationPct.toFixed(1)}%</p>
+                </div>
+                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Memory</p>
+                  <p className="text-xl font-black text-white">{data.cwMetrics.memoryUtilizationPct.toFixed(1)}%</p>
+                </div>
+                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Tasks</p>
+                  <p className="text-xl font-black text-white">{data.cwMetrics.taskCount}</p>
+                </div>
+                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Instances</p>
+                  <p className="text-xl font-black text-white">{data.cwMetrics.containerInstanceCount}</p>
+                </div>
+              </div>
             </motion.div>
           )}
         </div>
