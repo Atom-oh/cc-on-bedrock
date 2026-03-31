@@ -18,11 +18,16 @@ SECURITY_POLICY="${SECURITY_POLICY:-open}"
 SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 
 # --- Per-user directory isolation ---
-# With EFS Access Point: /home/coder IS the user's root (no subdirectory needed)
-# Without Access Point: /home/coder/users/{subdomain}/ for isolation
-if [ -n "${EFS_ACCESS_POINT:-}" ] || [ "${STORAGE_ISOLATED:-}" = "true" ]; then
+# EBS mode: /home/coder is an EBS volume (auto-mounted by ECS), EFS at /efs
+# EFS AP mode: /home/coder IS the user's root via Access Point
+# EFS fallback: /home/coder/users/{subdomain}/ for isolation
+STORAGE_TYPE="${STORAGE_TYPE:-efs}"
+if [ "$STORAGE_TYPE" = "ebs" ]; then
   EFS_USER_DIR="$USER_HOME"
-  echo "Using isolated storage (Access Point or EBS): $EFS_USER_DIR"
+  echo "Using EBS volume mount: $EFS_USER_DIR (EFS available at /efs)"
+elif [ -n "${EFS_ACCESS_POINT:-}" ] || [ "${STORAGE_ISOLATED:-}" = "true" ]; then
+  EFS_USER_DIR="$USER_HOME"
+  echo "Using isolated EFS (Access Point): $EFS_USER_DIR"
 else
   EFS_USER_DIR="$USER_HOME/users/$SUBDOMAIN"
   echo "Using shared EFS with subdirectory: $EFS_USER_DIR"
