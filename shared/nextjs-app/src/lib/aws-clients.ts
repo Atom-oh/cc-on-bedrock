@@ -828,7 +828,10 @@ export async function listContainers(): Promise<ContainerInfo[]> {
     })
   );
 
-  return (descResult.tasks ?? []).map((task) => {
+  // Filter to devenv tasks only (exclude Nginx service tasks)
+  return (descResult.tasks ?? [])
+    .filter((task) => (task.taskDefinitionArn ?? "").includes("devenv-"))
+    .map((task) => {
     const tags = task.tags ?? [];
     const getTag = (key: string) =>
       tags.find((t) => t.key === key)?.value ?? "";
