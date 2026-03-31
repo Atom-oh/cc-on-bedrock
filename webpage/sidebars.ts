@@ -9,6 +9,7 @@ const sidebars: SidebarsConfig = {
     'usage',
     'cost',
     'security',
+    'faq',
   ],
 };
 

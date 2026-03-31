@@ -1,0 +1,193 @@
+.container {
+  margin: 2rem 0;
+  padding: 1.5rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 12px;
+  background-color: var(--ifm-background-surface-color);
+}
+
+.subtitle {
+  font-size: 0.85rem;
+  color: var(--ifm-color-emphasis-600);
+  margin-bottom: 1.5rem;
+}
+
+.scenarios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.scenarioBtn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border: 2px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  background: var(--ifm-color-emphasis-100);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--ifm-color-emphasis-700);
+  transition: all 0.2s ease;
+}
+
+.scenarioBtn:hover {
+  border-color: var(--ifm-color-primary-light);
+}
+
+.activeBtn {
+  border-color: var(--ifm-color-primary);
+  background: var(--ifm-color-primary-lightest, rgba(37, 194, 160, 0.1));
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+}
+
+.btnLabel {
+  font-size: 0.75rem;
+}
+
+.azDiagram {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-bottom: 1.5rem;
+  min-height: 120px;
+}
+
+.az {
+  flex: 1;
+  border: 2px solid var(--ifm-color-emphasis-300);
+  border-radius: 10px;
+  padding: 0.75rem;
+  transition: all 0.3s ease;
+  background: var(--ifm-color-emphasis-100);
+}
+
+.azHighlight {
+  border-color: var(--ifm-color-primary);
+  background: var(--ifm-color-primary-lightest, rgba(37, 194, 160, 0.08));
+  box-shadow: 0 0 12px rgba(37, 194, 160, 0.15);
+}
+
+.azHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.azName {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.cpName {
+  font-size: 0.7rem;
+  color: var(--ifm-color-emphasis-500);
+  font-family: monospace;
+  background: var(--ifm-color-emphasis-200);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.azContent {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.resource {
+  font-size: 1.3rem;
+}
+
+.empty {
+  font-size: 0.75rem;
+  color: var(--ifm-color-emphasis-400);
+  font-style: italic;
+}
+
+.azSeparator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.75rem;
+}
+
+.separatorLine {
+  width: 2px;
+  flex: 1;
+  background: var(--ifm-color-emphasis-300);
+}
+
+.separatorLabel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--ifm-color-emphasis-500);
+  padding: 0.3rem 0;
+  writing-mode: vertical-lr;
+}
+
+.flowBox {
+  padding: 1.25rem;
+  background: var(--ifm-color-emphasis-100);
+  border-radius: 8px;
+  border-left: 5px solid var(--ifm-color-primary);
+  margin-bottom: 1rem;
+}
+
+.flowBox h4 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.flowSteps {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.flowSteps li {
+  margin-bottom: 0.4rem;
+  line-height: 1.5;
+  font-size: 0.9rem;
+}
+
+.legend {
+  font-size: 0.75rem;
+  color: var(--ifm-color-emphasis-500);
+  text-align: center;
+  padding-top: 0.5rem;
+}
+
+@media (max-width: 768px) {
+  .azDiagram {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .azSeparator {
+    flex-direction: row;
+    padding: 0.5rem 0;
+  }
+  .separatorLabel {
+    writing-mode: horizontal-tb;
+    padding: 0 0.5rem;
+  }
+  .scenarios {
+    gap: 0.3rem;
+  }
+  .scenarioBtn {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.75rem;
+  }
+}

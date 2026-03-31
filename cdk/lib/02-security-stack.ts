@@ -17,14 +17,7 @@ export class SecurityStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly encryptionKey: kms.Key;
-  // TODO: Remove litellmMasterKeySecret, valkeyAuthSecret, and litellmEc2Role
-  // once the CcOnBedrock-LiteLLM CloudFormation stack is fully deleted.
-  // These are retained to avoid breaking the existing deployed stack dependency.
-  public readonly litellmMasterKeySecret: secretsmanager.Secret;
-
   public readonly cloudfrontSecret: secretsmanager.Secret;
-  public readonly valkeyAuthSecret: secretsmanager.Secret;
-  public readonly litellmEc2Role: iam.Role;
   public readonly dashboardEc2Role: iam.Role;
   public readonly taskPermissionBoundary: iam.ManagedPolicy;
 
@@ -105,47 +98,19 @@ export class SecurityStack extends cdk.Stack {
     //   cdk deploy -c devEnvCertArn=arn:aws:acm:... -c dashboardCertArn=arn:aws:acm:...
 
     // Secrets Manager
-    this.litellmMasterKeySecret = new secretsmanager.Secret(this, 'LitellmMasterKey', {
-      secretName: 'cc-on-bedrock/litellm-master-key',
-      generateSecretString: { excludePunctuation: true, passwordLength: 32 },
-    });
-
-    // Note: RDS credentials are created in the LiteLLM stack to avoid cyclic cross-stack references
-
     this.cloudfrontSecret = new secretsmanager.Secret(this, 'CloudFrontSecret', {
       secretName: 'cc-on-bedrock/cloudfront-secret',
       generateSecretString: { excludePunctuation: true, passwordLength: 32 },
     });
 
-    this.valkeyAuthSecret = new secretsmanager.Secret(this, 'ValkeyAuth', {
-      secretName: 'cc-on-bedrock/valkey-auth',
-      generateSecretString: { excludePunctuation: true, passwordLength: 32 },
-    });
-
     // IAM Roles
     const bedrockPolicy = new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
       resources: [
         'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
       ],
     });
-
-    // LiteLLM EC2 Role
-    this.litellmEc2Role = new iam.Role(this, 'LitellmEc2Role', {
-      roleName: 'cc-on-bedrock-litellm-ec2',
-      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'),
-      ],
-    });
-    this.litellmEc2Role.addToPolicy(bedrockPolicy);
-    // Broad secret access for all cc-on-bedrock secrets (avoids cross-stack cyclic references)
-    this.litellmEc2Role.addToPolicy(new iam.PolicyStatement({
-      actions: ['secretsmanager:GetSecretValue'],
-      resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
-    }));
 
     // Note: ECS Task and Execution roles are created in the EcsDevenv stack
     // to avoid cross-stack cyclic references with ECR/EFS/CloudWatch
