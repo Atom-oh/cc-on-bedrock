@@ -95,7 +95,7 @@ def check_idle(event: dict) -> dict:
         task_id = task_arn.split("/")[-1]
 
         # Check CPU utilization from CloudWatch
-        is_idle, idle_minutes = check_task_idle_status(task_id, user_id, started_at=task_info.get("started_at"))
+        is_idle, idle_minutes = check_task_idle_status(task_id, user_id, started_at=task_info.get("started_at"), task_def_family=task_info.get("task_def_family", "devenv-ubuntu-standard"))
 
         if is_idle:
             logger.info(f"Task {task_id} (user: {user_id}) is idle for {idle_minutes} minutes")
@@ -301,7 +301,7 @@ def schedule_shutdown(event: dict) -> dict:
             continue
 
         # Check if task is actively being used (high CPU in last 15 minutes)
-        is_idle, _ = check_task_idle_status(task_id, user_id, period_minutes=15)
+        is_idle, _ = check_task_idle_status(task_id, user_id, period_minutes=15, task_def_family=task_info.get("task_def_family", "devenv-ubuntu-standard"))
         if not is_idle:
             logger.info(f"Skipping task {task_id} (user: {user_id}) - actively in use")
             skipped_tasks.append({
@@ -369,6 +369,10 @@ def get_task_info(task_arn: str) -> dict | None:
         task = tasks[0]
         tags = {t["key"]: t["value"] for t in task.get("tags", [])}
 
+        # Extract task def family from ARN: arn:aws:ecs:...:task-definition/devenv-ubuntu-standard:5
+        td_arn = task.get("taskDefinitionArn", "")
+        td_family = td_arn.split("/")[-1].split(":")[0] if "/" in td_arn else "devenv-ubuntu-standard"
+
         return {
             "task_arn": task_arn,
             "task_id": task_arn.split("/")[-1],
@@ -377,13 +381,14 @@ def get_task_info(task_arn: str) -> dict | None:
             "no_auto_stop": tags.get("no_auto_stop", "").lower() == "true",
             "started_at": task.get("startedAt"),
             "last_status": task.get("lastStatus"),
+            "task_def_family": td_family,
         }
     except ClientError as e:
         logger.error(f"Failed to describe task {task_arn}: {e}")
         return None
 
 
-def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = None, started_at: datetime = None) -> tuple:
+def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = None, started_at: datetime = None, task_def_family: str = "devenv-ubuntu-standard") -> tuple:
     """
     Check if task is idle based on CloudWatch CPU metrics.
     Returns (is_idle: bool, idle_minutes: int).
@@ -402,12 +407,15 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
     start_time = end_time - timedelta(minutes=period_minutes)
 
     try:
+        # Use ECS/ContainerInsights with TaskDefinitionFamily dimension
+        # (standalone tasks don't have ServiceName metrics)
+        # task_def_family passed as parameter (extracted from ECS task description)
         response = cloudwatch.get_metric_statistics(
-            Namespace="AWS/ECS",
-            MetricName="CPUUtilization",
+            Namespace="ECS/ContainerInsights",
+            MetricName="CpuUtilized",
             Dimensions=[
                 {"Name": "ClusterName", "Value": CLUSTER},
-                {"Name": "ServiceName", "Value": f"cc-user-{user_id}"},
+                {"Name": "TaskDefinitionFamily", "Value": task_def_family},
             ],
             StartTime=start_time,
             EndTime=end_time,
@@ -418,8 +426,7 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
         datapoints = response.get("Datapoints", [])
         if not datapoints:
             # No metrics = fail safe, do NOT assume idle
-            # Standalone tasks may not emit ServiceName-based metrics
-            logger.info(f"No CPU metrics for task {task_id} (user: {user_id}), assuming NOT idle (fail safe)")
+            logger.info(f"No CPU metrics for task {task_id} (user: {user_id}, family: {task_def_family}), assuming NOT idle (fail safe)")
             return False, 0
 
         # Sort by timestamp

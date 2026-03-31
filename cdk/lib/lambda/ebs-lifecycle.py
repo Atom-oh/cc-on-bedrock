@@ -2,7 +2,7 @@
 EBS Volume Lifecycle Management Lambda
 
 Manages EBS volumes for CC-on-Bedrock user workspaces.
-Actions: create_and_attach, snapshot_and_detach, restore_from_snapshot, check_user_volume
+Actions: create_volume, snapshot_and_detach, restore_from_snapshot, check_user_volume
 
 DynamoDB table "cc-user-volumes" schema:
   PK: user_id (String)
@@ -38,7 +38,7 @@ def handler(event: dict, context: Any) -> dict:
 
     Event format:
     {
-        "action": "create_and_attach" | "snapshot_and_detach" | "restore_from_snapshot" | "check_user_volume",
+        "action": "create_volume" | "snapshot_and_detach" | "restore_from_snapshot" | "check_user_volume",
         "user_id": "user1",
         "az": "ap-northeast-2a",  # Required for create/restore
         "size_gb": 20,            # Optional, default 20
@@ -57,8 +57,8 @@ def handler(event: dict, context: Any) -> dict:
         return error_response(400, "Missing required parameter: user_id")
 
     try:
-        if action == "create_and_attach":
-            return create_and_attach(event)
+        if action == "create_volume":
+            return create_volume(event)
         elif action == "snapshot_and_detach":
             return snapshot_and_detach(event)
         elif action == "restore_from_snapshot":
@@ -75,7 +75,7 @@ def handler(event: dict, context: Any) -> dict:
         return error_response(500, f"Internal error: {str(e)}")
 
 
-def create_and_attach(event: dict) -> dict:
+def create_volume(event: dict) -> dict:
     """
     Create a new gp3 EBS volume and store metadata in DynamoDB.
 
