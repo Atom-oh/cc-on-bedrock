@@ -147,6 +147,26 @@ export async function POST(req: NextRequest) {
       }
 
       await stopContainer({ taskArn, reason: "Stopped by user" });
+
+      // EBS mode: async snapshot for data persistence (volume kept for same-AZ reuse)
+      if (user.storageType === "ebs") {
+        try {
+          const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
+          const lambda = new LambdaClient({ region });
+          await lambda.send(new InvokeCommand({
+            FunctionName: process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle",
+            InvocationType: "Event", // async — don't block the response
+            Payload: Buffer.from(JSON.stringify({
+              action: "snapshot_and_detach",
+              user_id: user.subdomain,
+            })),
+          }));
+          console.log(`[user/container] EBS snapshot triggered for ${user.subdomain}`);
+        } catch (err) {
+          console.warn("[user/container] EBS snapshot trigger failed:", err);
+        }
+      }
+
       return NextResponse.json({ success: true });
     }
 

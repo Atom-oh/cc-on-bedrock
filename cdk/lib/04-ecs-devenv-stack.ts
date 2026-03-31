@@ -451,12 +451,17 @@ export class EcsDevenvStack extends cdk.Stack {
       ],
     }));
 
-    // ─── Nginx Reverse Proxy Task Definition ───
-    const nginxTaskDef = new ecs.Ec2TaskDefinition(this, 'NginxTaskDef', {
+    // ─── Nginx Reverse Proxy Task Definition (Fargate — lightweight, cost-efficient) ───
+    const nginxTaskDef = new ecs.FargateTaskDefinition(this, 'NginxTaskDef', {
       family: 'cc-nginx-proxy',
-      networkMode: ecs.NetworkMode.AWS_VPC,
+      cpu: 256,
+      memoryLimitMiB: 512,
       taskRole: nginxTaskRole,
       executionRole: ecsTaskExecutionRole,
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
     });
 
     const nginxImage = ecs.ContainerImage.fromEcrRepository(
@@ -465,8 +470,6 @@ export class EcsDevenvStack extends cdk.Stack {
 
     nginxTaskDef.addContainer('nginx', {
       image: nginxImage,
-      memoryLimitMiB: 4096,
-      cpu: 2048,
       essential: true,
       environment: {
         CONFIG_BUCKET: userDataBucket.bucketName,
@@ -492,8 +495,8 @@ export class EcsDevenvStack extends cdk.Stack {
       },
     });
 
-    // ─── Nginx ECS Service ───
-    const nginxService = new ecs.Ec2Service(this, 'NginxService', {
+    // ─── Nginx ECS Service (Fargate — $18/month vs $800/month EC2 idle) ───
+    const nginxService = new ecs.FargateService(this, 'NginxService', {
       cluster: this.cluster,
       taskDefinition: nginxTaskDef,
       desiredCount: 2,
@@ -502,9 +505,8 @@ export class EcsDevenvStack extends cdk.Stack {
       securityGroups: [nginxSg],
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       enableExecuteCommand: true,
-      placementStrategies: [
-        ecs.PlacementStrategy.spreadAcrossInstances(),
-      ],
+      assignPublicIp: false,
+      platformVersion: ecs.FargatePlatformVersion.LATEST,
     });
 
     const nlbListener = nlb.addListener('NlbListener', {
