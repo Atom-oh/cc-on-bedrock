@@ -804,6 +804,29 @@ export async function startContainerWithProgress(
           assignPublicIp: "DISABLED",
         },
       },
+      // EBS native volume (user self-service path)
+      ...(input.storageType === "ebs" && ecsInfrastructureRoleArn ? {
+        volumeConfigurations: [{
+          name: "user-data",
+          managedEBSVolume: {
+            roleArn: ecsInfrastructureRoleArn,
+            volumeType: "gp3",
+            sizeInGiB: 20,
+            encrypted: true,
+            ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
+            filesystemType: "ext4",
+            tagSpecifications: [{
+              resourceType: "volume",
+              tags: [
+                { key: "user_id", value: input.subdomain },
+                { key: "managed_by", value: "cc-on-bedrock" },
+              ],
+              propagateTags: "NONE",
+            }],
+            terminationPolicy: { deleteOnTermination: false },
+          },
+        }],
+      } : {}),
       overrides: {
         taskRoleArn: userTaskRoleArn,
         containerOverrides: [
