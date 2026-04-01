@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: cc-bedrock-x86
     defaults:
       run:
         working-directory: webpage

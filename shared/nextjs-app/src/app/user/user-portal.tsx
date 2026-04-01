@@ -6,6 +6,8 @@ import type { UserSession, ContainerInfo, UserPortalTab } from "@/lib/types";
 import EnvironmentTab from "@/components/user/environment-tab";
 import StorageTab from "@/components/user/storage-tab";
 import SettingsTab from "@/components/user/settings-tab";
+import WelcomeOnboarding from "@/components/user/welcome-onboarding";
+import FirstLaunchGuide from "@/components/user/first-launch-guide";
 
 interface UserPortalProps {
   user: UserSession;
@@ -50,6 +52,7 @@ export default function UserPortal({ user }: UserPortalProps) {
   const [activeTab, setActiveTab] = useState<UserPortalTab>("environment");
   const [container, setContainer] = useState<ContainerInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasEverStarted, setHasEverStarted] = useState(true); // assume yes until proven otherwise
   const [animating, setAnimating] = useState(false);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -113,6 +116,22 @@ export default function UserPortal({ user }: UserPortalProps) {
       <div className="flex items-center justify-center h-64">
         <div className="text-gray-400">{t("analytics.loading")}</div>
       </div>
+    );
+  }
+
+  // Onboarding: no subdomain assigned yet
+  if (!user.subdomain) {
+    return <WelcomeOnboarding email={user.email} />;
+  }
+
+  // First launch: subdomain assigned but never started a container
+  if (!container && !loading && !hasEverStarted) {
+    return (
+      <FirstLaunchGuide
+        subdomain={user.subdomain}
+        onStart={() => switchTab("environment")}
+        loading={false}
+      />
     );
   }
 
