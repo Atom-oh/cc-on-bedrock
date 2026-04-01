@@ -55,15 +55,10 @@ export default function UserPortal({ user }: UserPortalProps) {
 
   const fetchContainerStatus = useCallback(async () => {
     try {
-      const containersRes = await fetch("/api/containers");
-      const containersData = await containersRes.json();
-      if (containersData.success && Array.isArray(containersData.data)) {
-        const userContainer = containersData.data.find(
-          (c: ContainerInfo) =>
-            c.subdomain === user.subdomain &&
-            (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
-        );
-        setContainer(userContainer ?? null);
+      const res = await fetch("/api/user/container");
+      const data = await res.json();
+      if (data.success) {
+        setContainer(data.data ?? null);
       }
     } catch (err) {
       console.error("Failed to fetch container status:", err);

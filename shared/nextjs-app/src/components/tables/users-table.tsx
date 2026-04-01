@@ -5,7 +5,8 @@ import type { CognitoUser } from "@/lib/types";
 
 interface UsersTableProps {
   users: CognitoUser[];
-  onDelete?: (username: string) => void;
+  onResetEnvironment?: (username: string) => void;
+  onPermanentDelete?: (username: string) => void;
   onToggle?: (username: string, enabled: boolean) => void;
 }
 
@@ -49,7 +50,8 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 
 export default function UsersTable({
   users,
-  onDelete,
+  onResetEnvironment,
+  onPermanentDelete,
   onToggle,
 }: UsersTableProps) {
   const [search, setSearch] = useState("");
@@ -216,9 +218,17 @@ export default function UsersTable({
                         {user.enabled ? "Disable" : "Enable"}
                       </button>
                     )}
-                    {onDelete && (
+                    {onResetEnvironment && user.subdomain && (
                       <button
-                        onClick={() => onDelete(user.username)}
+                        onClick={() => onResetEnvironment(user.username)}
+                        className="px-2 py-1 text-xs font-medium text-orange-400 hover:bg-orange-900/30 rounded-lg transition-colors"
+                      >
+                        Reset Env
+                      </button>
+                    )}
+                    {onPermanentDelete && (
+                      <button
+                        onClick={() => onPermanentDelete(user.username)}
                         className="px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"
                       >
                         Delete

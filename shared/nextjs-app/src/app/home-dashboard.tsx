@@ -108,7 +108,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         fetches.push(
           fetch("/api/containers"),
           fetch("/api/container-metrics?action=current"),
-          fetch(`/api/usage?period=daily&date=${new Date().toISOString().split("T")[0]}`),
+          fetch("/api/usage?action=total_spend"),
         );
       }
 
@@ -143,7 +143,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => {
     fetchData();

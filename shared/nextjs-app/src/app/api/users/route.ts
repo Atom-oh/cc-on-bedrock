@@ -9,6 +9,7 @@ import {
   deleteCognitoUser,
   disableCognitoUser,
   enableCognitoUser,
+  resetUserEnvironment,
 } from "@/lib/aws-clients";
 import { createUserSchema, updateUserSchema } from "@/lib/validation";
 
@@ -114,9 +115,18 @@ export async function DELETE(req: NextRequest) {
       case "enable":
         await enableCognitoUser(username);
         return NextResponse.json({ success: true });
-      default:
+      case "permanent":
         await deleteCognitoUser(username);
         return NextResponse.json({ success: true });
+      default: {
+        // Soft-delete: keep Cognito user, remove environment
+        const user = await getCognitoUser(username);
+        if (!user.subdomain) {
+          return NextResponse.json({ success: true, data: { message: "No environment to reset" } });
+        }
+        const result = await resetUserEnvironment(username, user.subdomain, user.storageType);
+        return NextResponse.json({ success: true, data: result });
+      }
     }
   } catch (err) {
     console.error("[users] DELETE", err instanceof Error ? err.message : err);

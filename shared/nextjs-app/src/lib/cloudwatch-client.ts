@@ -226,6 +226,163 @@ export async function getTaskMetrics(taskId: string, taskDefFamily?: string): Pr
   };
 }
 
+// ─── Bedrock Usage Metrics (AWS/Bedrock namespace) ───
+
+const BEDROCK_MODELS = [
+  { id: "global.anthropic.claude-opus-4-6-v1", inputPricePer1M: 15, outputPricePer1M: 75 },
+  { id: "global.anthropic.claude-sonnet-4-6", inputPricePer1M: 3, outputPricePer1M: 15 },
+  { id: "global.anthropic.claude-haiku-4-5-20251001-v1:0", inputPricePer1M: 1, outputPricePer1M: 5 },
+];
+
+export interface BedrockMetrics {
+  inputTokensPerMin: number;
+  outputTokensPerMin: number;
+  totalTokensPerMin: number;
+  invocationsPerMin: number;
+  avgLatencyMs: number;
+  estimatedCostPerMin: number;
+}
+
+export interface BedrockMetricsTimeSeries {
+  timestamps: string[];
+  inputTokens: number[];
+  outputTokens: number[];
+  invocations: number[];
+  estimatedCost: number[];
+}
+
+function makeBedrockQuery(
+  id: string,
+  metricName: string,
+  stat: string,
+  period: number,
+  modelId?: string,
+): MetricDataQuery {
+  const dims = modelId ? [{ Name: "ModelId", Value: modelId }] : [];
+  return {
+    Id: id,
+    MetricStat: {
+      Metric: {
+        Namespace: "AWS/Bedrock",
+        MetricName: metricName,
+        Dimensions: dims,
+      },
+      Period: period,
+      Stat: stat,
+    },
+  };
+}
+
+export async function getBedrockMetrics(): Promise<BedrockMetrics> {
+  const periodMinutes = 5;
+  const periodSec = periodMinutes * 60;
+  const end = new Date();
+  const start = new Date(end.getTime() - periodSec * 1000);
+
+  const queries: MetricDataQuery[] = [
+    makeBedrockQuery("agg_in", "InputTokenCount", "Sum", periodSec),
+    makeBedrockQuery("agg_out", "OutputTokenCount", "Sum", periodSec),
+    makeBedrockQuery("agg_inv", "Invocations", "Sum", periodSec),
+    makeBedrockQuery("agg_lat", "InvocationLatency", "Average", periodSec),
+  ];
+  for (const [i, m] of BEDROCK_MODELS.entries()) {
+    queries.push(
+      makeBedrockQuery(`m${i}_in`, "InputTokenCount", "Sum", periodSec, m.id),
+      makeBedrockQuery(`m${i}_out`, "OutputTokenCount", "Sum", periodSec, m.id),
+    );
+  }
+
+  const result = await cwClient.send(
+    new GetMetricDataCommand({ StartTime: start, EndTime: end, MetricDataQueries: queries }),
+  );
+
+  const get = (id: string) =>
+    result.MetricDataResults?.find((r) => r.Id === id)?.Values?.[0] ?? 0;
+
+  const totalInput = get("agg_in");
+  const totalOutput = get("agg_out");
+
+  let totalCost = 0;
+  for (const [i, m] of BEDROCK_MODELS.entries()) {
+    totalCost +=
+      (get(`m${i}_in`) * m.inputPricePer1M + get(`m${i}_out`) * m.outputPricePer1M) / 1_000_000;
+  }
+
+  return {
+    inputTokensPerMin: totalInput / periodMinutes,
+    outputTokensPerMin: totalOutput / periodMinutes,
+    totalTokensPerMin: (totalInput + totalOutput) / periodMinutes,
+    invocationsPerMin: get("agg_inv") / periodMinutes,
+    avgLatencyMs: get("agg_lat"),
+    estimatedCostPerMin: totalCost / periodMinutes,
+  };
+}
+
+export async function getBedrockMetricsTimeSeries(
+  hours: number = 6,
+): Promise<BedrockMetricsTimeSeries> {
+  const periodSec = hours <= 6 ? 300 : 900;
+  const periodMinutes = periodSec / 60;
+  const end = new Date();
+  const start = new Date(end.getTime() - hours * 60 * 60 * 1000);
+
+  const queries: MetricDataQuery[] = [
+    makeBedrockQuery("agg_in", "InputTokenCount", "Sum", periodSec),
+    makeBedrockQuery("agg_out", "OutputTokenCount", "Sum", periodSec),
+    makeBedrockQuery("agg_inv", "Invocations", "Sum", periodSec),
+  ];
+  for (const [i, m] of BEDROCK_MODELS.entries()) {
+    queries.push(
+      makeBedrockQuery(`m${i}_in`, "InputTokenCount", "Sum", periodSec, m.id),
+      makeBedrockQuery(`m${i}_out`, "OutputTokenCount", "Sum", periodSec, m.id),
+    );
+  }
+
+  const result = await cwClient.send(
+    new GetMetricDataCommand({ StartTime: start, EndTime: end, MetricDataQueries: queries }),
+  );
+
+  const aggResult = result.MetricDataResults?.find((r) => r.Id === "agg_in");
+  const timestamps = (aggResult?.Timestamps ?? []).map((t) => t.toISOString());
+
+  // Build per-model value maps keyed by timestamp
+  const modelMaps: { inMap: Map<string, number>; outMap: Map<string, number>; model: typeof BEDROCK_MODELS[number] }[] = [];
+  for (const [i, m] of BEDROCK_MODELS.entries()) {
+    const inResult = result.MetricDataResults?.find((r) => r.Id === `m${i}_in`);
+    const outResult = result.MetricDataResults?.find((r) => r.Id === `m${i}_out`);
+    const inMap = new Map<string, number>();
+    const outMap = new Map<string, number>();
+    (inResult?.Timestamps ?? []).forEach((t, j) => inMap.set(t.toISOString(), inResult?.Values?.[j] ?? 0));
+    (outResult?.Timestamps ?? []).forEach((t, j) => outMap.set(t.toISOString(), outResult?.Values?.[j] ?? 0));
+    modelMaps.push({ inMap, outMap, model: m });
+  }
+
+  const getValues = (id: string) =>
+    (result.MetricDataResults?.find((r) => r.Id === id)?.Values ?? []).reverse();
+
+  // Compute cost at each timestamp
+  const costArr: number[] = [];
+  for (const ts of timestamps) {
+    let cost = 0;
+    for (const { inMap, outMap, model } of modelMaps) {
+      cost += ((inMap.get(ts) ?? 0) * model.inputPricePer1M + (outMap.get(ts) ?? 0) * model.outputPricePer1M) / 1_000_000;
+    }
+    costArr.push(cost / periodMinutes);
+  }
+
+  // Reverse all arrays (CloudWatch returns newest-first)
+  timestamps.reverse();
+  costArr.reverse();
+
+  return {
+    timestamps,
+    inputTokens: getValues("agg_in").map((v) => v / periodMinutes),
+    outputTokens: getValues("agg_out").map((v) => v / periodMinutes),
+    invocations: getValues("agg_inv").map((v) => v / periodMinutes),
+    estimatedCost: costArr,
+  };
+}
+
 export async function getTaskDefMetrics(): Promise<TaskDefMetrics[]> {
   const end = new Date();
   const start = new Date(end.getTime() - 10 * 60 * 1000);

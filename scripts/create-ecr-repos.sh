@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REGION="${AWS_REGION:-ap-northeast-2}"
-REPOS=("cc-on-bedrock/devenv" "cc-on-bedrock/litellm")
+REPOS=("cc-on-bedrock/devenv" "cc-on-bedrock/dashboard" "cc-on-bedrock/litellm")
 
 for REPO in "${REPOS[@]}"; do
   echo "Creating ECR repository: $REPO"

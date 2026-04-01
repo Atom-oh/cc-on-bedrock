@@ -53,6 +53,38 @@ interface TaskDefMetrics {
   memoryReserved: number;
 }
 
+interface BedrockMetricsSnapshot {
+  inputTokensPerMin: number;
+  outputTokensPerMin: number;
+  totalTokensPerMin: number;
+  invocationsPerMin: number;
+  avgLatencyMs: number;
+  estimatedCostPerMin: number;
+}
+
+interface BedrockTsData {
+  timestamps: string[];
+  inputTokens: number[];
+  outputTokens: number[];
+  invocations: number[];
+  estimatedCost: number[];
+}
+
+// EC2 on-demand pricing (ap-northeast-2, Seoul)
+const EC2_PRICING: Record<string, number> = {
+  "m7g.4xlarge": 0.8208,  // 16 vCPU, 64 GiB
+  "m7g.2xlarge": 0.4104,  // 8 vCPU, 32 GiB
+  "t4g.xlarge": 0.1792,   // 4 vCPU, 16 GiB
+};
+const ECS_INSTANCE_TYPE = "m7g.4xlarge";
+const DASHBOARD_INSTANCE_TYPE = "t4g.xlarge";
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
+
 function formatBytes(bytes: number): string {
   if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GiB`;
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MiB`;
@@ -86,12 +118,16 @@ export default function MonitoringDashboard({
   const [healthStatuses, setHealthStatuses] = useState<HealthStatus[]>([]);
   const [filterUser, setFilterUser] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [filterDept, setFilterDept] = useState("all");
+  const [filterTier, setFilterTier] = useState("all");
   const [searchText, setSearchText] = useState("");
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [cwMetrics, setCwMetrics] = useState<ContainerMetrics | null>(null);
   const [cwTimeSeries, setCwTimeSeries] = useState<MetricsTimeSeries | null>(null);
   const [taskDefMetrics, setTaskDefMetrics] = useState<TaskDefMetrics[]>([]);
+  const [bedrockMetrics, setBedrockMetrics] = useState<BedrockMetricsSnapshot | null>(null);
+  const [bedrockTimeSeries, setBedrockTimeSeries] = useState<BedrockTsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
@@ -145,6 +181,24 @@ export default function MonitoringDashboard({
         }
       } catch (cwErr) {
         console.error("Container Insights fetch failed:", cwErr);
+      }
+
+      // Bedrock Usage metrics
+      try {
+        const [brRes, brTsRes] = await Promise.all([
+          fetch("/api/container-metrics?action=bedrock"),
+          fetch("/api/container-metrics?action=bedrock_timeseries&hours=6"),
+        ]);
+        if (brRes.ok) {
+          const brJson = (await brRes.json()) as ApiResponse<BedrockMetricsSnapshot>;
+          setBedrockMetrics(brJson.data ?? null);
+        }
+        if (brTsRes.ok) {
+          const brTsJson = (await brTsRes.json()) as ApiResponse<BedrockTsData>;
+          setBedrockTimeSeries(brTsJson.data ?? null);
+        }
+      } catch (brErr) {
+        console.error("Bedrock metrics fetch failed:", brErr);
       }
 
       setLastRefresh(new Date());
@@ -263,6 +317,28 @@ export default function MonitoringDashboard({
                 { value: "PENDING", label: "PENDING", count: pendingContainers.length },
               ],
             },
+            {
+              key: "dept",
+              label: locale === "ko" ? "부서" : "Department",
+              value: filterDept,
+              onChange: setFilterDept,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All" },
+                ...[...new Set(containers.map((c) => c.department).filter((d): d is string => !!d))].sort().map((d) => ({ value: d, label: d })),
+              ],
+            },
+            {
+              key: "tier",
+              label: locale === "ko" ? "사이즈" : "Tier",
+              value: filterTier,
+              onChange: setFilterTier,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All" },
+                { value: "light", label: "Light", count: containers.filter((c) => c.resourceTier === "light").length },
+                { value: "standard", label: "Standard", count: containers.filter((c) => c.resourceTier === "standard").length },
+                { value: "power", label: "Power", count: containers.filter((c) => c.resourceTier === "power").length },
+              ],
+            },
           ]}
         />
       )}
@@ -297,6 +373,124 @@ export default function MonitoringDashboard({
             </>
           )}
         </div>
+      </section>
+
+      {/* Bedrock Usage */}
+      <section>
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">Bedrock Usage</h2>
+
+        {/* Stat Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Tokens / min</p>
+            <p className="text-2xl font-bold text-emerald-400">
+              {bedrockMetrics ? formatNumber(bedrockMetrics.totalTokensPerMin) : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              {bedrockMetrics ? `In ${formatNumber(bedrockMetrics.inputTokensPerMin)} · Out ${formatNumber(bedrockMetrics.outputTokensPerMin)}` : "No data"}
+            </p>
+          </div>
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Invocations / min</p>
+            <p className="text-2xl font-bold text-blue-400">
+              {bedrockMetrics ? bedrockMetrics.invocationsPerMin.toFixed(1) : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Bedrock API calls</p>
+          </div>
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Avg Latency</p>
+            <p className="text-2xl font-bold text-amber-400">
+              {bedrockMetrics && bedrockMetrics.avgLatencyMs > 0 ? `${(bedrockMetrics.avgLatencyMs / 1000).toFixed(1)}s` : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Response time</p>
+          </div>
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Bedrock Cost / hr</p>
+            <p className="text-2xl font-bold text-rose-400">
+              {bedrockMetrics ? `$${(bedrockMetrics.estimatedCostPerMin * 60).toFixed(2)}` : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Token usage cost</p>
+          </div>
+        </div>
+
+        {/* Infrastructure Cost Breakdown */}
+        {(() => {
+          const ecsCount = cwMetrics?.containerInstanceCount ?? 0;
+          const ecsCostHr = ecsCount * (EC2_PRICING[ECS_INSTANCE_TYPE] ?? 0);
+          const dashCostHr = EC2_PRICING[DASHBOARD_INSTANCE_TYPE] ?? 0;
+          const bedrockCostHr = (bedrockMetrics?.estimatedCostPerMin ?? 0) * 60;
+          const totalCostHr = bedrockCostHr + ecsCostHr + dashCostHr;
+          return (
+            <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium text-gray-300">Infrastructure Cost / hr</h3>
+                <span className="text-lg font-bold text-white">${totalCostHr.toFixed(2)}/hr</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Bedrock API</p>
+                  <p className="text-sm font-semibold text-rose-400">${bedrockCostHr.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-600">Token usage</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">ECS Instances</p>
+                  <p className="text-sm font-semibold text-cyan-400">${ecsCostHr.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-600">{ecsCount}× {ECS_INSTANCE_TYPE}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dashboard EC2</p>
+                  <p className="text-sm font-semibold text-purple-400">${dashCostHr.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-600">1× {DASHBOARD_INSTANCE_TYPE}</p>
+                </div>
+              </div>
+              {/* Cost bar */}
+              <div className="mt-3 h-2 bg-gray-800 rounded-full overflow-hidden flex">
+                {totalCostHr > 0 && (
+                  <>
+                    <div className="h-full bg-rose-500" style={{ width: `${(bedrockCostHr / totalCostHr) * 100}%` }} />
+                    <div className="h-full bg-cyan-500" style={{ width: `${(ecsCostHr / totalCostHr) * 100}%` }} />
+                    <div className="h-full bg-purple-500" style={{ width: `${(dashCostHr / totalCostHr) * 100}%` }} />
+                  </>
+                )}
+              </div>
+              <div className="flex gap-4 mt-1.5">
+                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />Bedrock</span>
+                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />ECS</span>
+                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500 inline-block" />Dashboard</span>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Time Series Charts */}
+        {bedrockTimeSeries && bedrockTimeSeries.timestamps.length > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <AreaTrendChart
+              data={bedrockTimeSeries.timestamps.map((ts, i) => ({
+                date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                input: bedrockTimeSeries.inputTokens[i] ?? 0,
+                output: bedrockTimeSeries.outputTokens[i] ?? 0,
+              }))}
+              series={[
+                { key: "input", name: "Input Tokens/min", color: "#34d399" },
+                { key: "output", name: "Output Tokens/min", color: "#f472b6" },
+              ]}
+              title="Token Throughput (Last 6h)"
+              height={220}
+            />
+            <AreaTrendChart
+              data={bedrockTimeSeries.timestamps.map((ts, i) => ({
+                date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                cost: (bedrockTimeSeries.estimatedCost[i] ?? 0) * 60,
+              }))}
+              series={[
+                { key: "cost", name: "Bedrock Cost $/hr", color: "#fb7185" },
+              ]}
+              title="Bedrock Cost Trend (Last 6h)"
+              height={220}
+            />
+          </div>
+        )}
       </section>
 
       {/* Resource Insights */}
@@ -389,7 +583,7 @@ export default function MonitoringDashboard({
               <p className={`text-2xl font-bold ${cwMetrics.cpuUtilizationPct > 80 ? "text-red-400" : cwMetrics.cpuUtilizationPct > 60 ? "text-yellow-400" : "text-green-400"}`}>
                 {cwMetrics.cpuUtilizationPct.toFixed(1)}%
               </p>
-              <p className="text-[10px] text-gray-600 mt-0.5">{cwMetrics.cpuUtilized.toFixed(0)} / {cwMetrics.cpuReserved.toFixed(0)} CPU units</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">{(cwMetrics.cpuUtilized / 1024).toFixed(1)} / {(cwMetrics.cpuReserved / 1024).toFixed(1)} cores</p>
             </div>
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
               <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Memory Utilization</p>
@@ -412,7 +606,7 @@ export default function MonitoringDashboard({
 
           {/* Utilization Bars */}
           <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4 space-y-4">
-            <UtilizationBar label="CPU" used={cwMetrics.cpuUtilized} total={cwMetrics.cpuReserved} unit="units" color="bg-cyan-500" />
+            <UtilizationBar label="CPU" used={cwMetrics.cpuUtilized / 1024} total={cwMetrics.cpuReserved / 1024} unit="cores" color="bg-cyan-500" />
             <UtilizationBar label="Memory" used={cwMetrics.memoryUtilized} total={cwMetrics.memoryReserved} unit="MiB" color="bg-purple-500" />
           </div>
 
@@ -422,11 +616,11 @@ export default function MonitoringDashboard({
               <AreaTrendChart
                 data={cwTimeSeries.timestamps.map((ts, i) => ({
                   date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-                  cpu: cwTimeSeries.cpuUtilized[i] ?? 0,
+                  cpu: (cwTimeSeries.cpuUtilized[i] ?? 0) / 1024,
                   memory: cwTimeSeries.memoryUtilized[i] ?? 0,
                 }))}
                 series={[
-                  { key: "cpu", name: "CPU (units)", color: "#06b6d4" },
+                  { key: "cpu", name: "CPU (cores)", color: "#06b6d4" },
                   { key: "memory", name: "Memory (MiB)", color: "#a855f7" },
                 ]}
                 title="CPU & Memory (Last 6h)"
@@ -509,6 +703,8 @@ export default function MonitoringDashboard({
           containers={containers.filter((c) => {
             if (filterUser !== "all" && (c.username || c.subdomain) !== filterUser) return false;
             if (filterStatus !== "all" && c.status !== filterStatus) return false;
+            if (filterDept !== "all" && c.department !== filterDept) return false;
+            if (filterTier !== "all" && c.resourceTier !== filterTier) return false;
             if (searchText && !(c.username || "").toLowerCase().includes(searchText.toLowerCase()) && !(c.subdomain || "").toLowerCase().includes(searchText.toLowerCase())) return false;
             return true;
           })}

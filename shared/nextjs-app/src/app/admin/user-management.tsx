@@ -80,12 +80,26 @@ export default function UserManagement() {
     }
   };
 
-  const handleDelete = async (username: string) => {
-    if (!confirm(`Are you sure you want to delete user "${username}"? This will also remove their Bedrock access.`)) {
+  const handleResetEnvironment = async (username: string) => {
+    if (!confirm(`"${username}" 의 컨테이너 환경을 초기화합니다.\nCognito 계정은 유지되며 사용자는 재신청할 수 있습니다.`)) {
       return;
     }
     try {
       await fetch(`/api/users?username=${encodeURIComponent(username)}`, {
+        method: "DELETE",
+      });
+      void fetchUsers();
+    } catch (err) {
+      console.error("Failed to reset environment:", err);
+    }
+  };
+
+  const handlePermanentDelete = async (username: string) => {
+    if (!confirm(`⚠️ "${username}" Cognito 계정을 완전히 삭제합니다.\n이 작업은 복구할 수 없습니다. 계속하시겠습니까?`)) {
+      return;
+    }
+    try {
+      await fetch(`/api/users?username=${encodeURIComponent(username)}&action=permanent`, {
         method: "DELETE",
       });
       void fetchUsers();
@@ -109,7 +123,7 @@ export default function UserManagement() {
 
   // User insights
   const activeUsers = users.filter((u) => u.enabled);
-  const withApiKey = users.filter((u) => u.litellmApiKey);
+  const withSubdomain = users.filter((u) => u.subdomain);
   const osCounts = { ubuntu: 0, al2023: 0 };
   const tierCounts = { light: 0, standard: 0, power: 0 };
   const policyCounts = { open: 0, restricted: 0, locked: 0 };
@@ -125,7 +139,7 @@ export default function UserManagement() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard title={t("users.totalUsers")} value={users.length} description={t("users.registered")} />
         <StatCard title={t("users.active")} value={activeUsers.length} description={`${users.length > 0 ? ((activeUsers.length / users.length) * 100).toFixed(0) : 0}% ${t("users.enabled")}`} />
-        <StatCard title={t("users.withApiKey")} value={withApiKey.length} description={t("users.canUseCC")} />
+        <StatCard title={t("users.withEnv")} value={withSubdomain.length} description={t("users.canUseCC")} />
         <StatCard title={t("users.osSplit")} value={`${osCounts.ubuntu}/${osCounts.al2023}`} description="Ubuntu / AL2023" />
         <StatCard title={t("users.tierSplit")} value={`${tierCounts.light}/${tierCounts.standard}/${tierCounts.power}`} description="L / S / P" />
       </div>
@@ -278,7 +292,8 @@ export default function UserManagement() {
       ) : (
         <UsersTable
           users={users}
-          onDelete={handleDelete}
+          onResetEnvironment={handleResetEnvironment}
+          onPermanentDelete={handlePermanentDelete}
           onToggle={handleToggle}
         />
       )}

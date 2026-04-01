@@ -140,7 +140,6 @@ function toCognitoUser(user: {
     resourceTier: (getAttr(attrs, "custom:resource_tier") as CognitoUser["resourceTier"]) ?? "standard",
     securityPolicy: (getAttr(attrs, "custom:security_policy") as CognitoUser["securityPolicy"]) ?? "restricted",
     storageType: (getAttr(attrs, "custom:storage_type") as CognitoUser["storageType"]) ?? "ebs",
-    litellmApiKey: getAttr(attrs, "custom:litellm_api_key"),
     containerId: getAttr(attrs, "custom:container_id"),
     groups: [],
   };
@@ -316,6 +315,64 @@ export async function enableCognitoUser(username: string): Promise<void> {
   );
 }
 
+/**
+ * Soft-delete: remove user's container environment while keeping Cognito account.
+ * 1. Stop running container  2. Deregister Nginx route  3. Trigger EBS snapshot
+ * 4. Clear subdomain in Cognito  5. User can re-request after re-login.
+ */
+export async function resetUserEnvironment(
+  username: string,
+  subdomain: string,
+  storageType?: string,
+): Promise<{ stopped: boolean; routeCleared: boolean; snapshotTriggered: boolean }> {
+  const result = { stopped: false, routeCleared: false, snapshotTriggered: false };
+
+  // 1. Stop running container for this subdomain
+  try {
+    const containers = await listContainers();
+    const userContainer = containers.find(
+      (c) => c.subdomain === subdomain &&
+        (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
+    );
+    if (userContainer) {
+      await stopContainer({ taskArn: userContainer.taskArn, reason: "Environment reset by admin" });
+      result.stopped = true;
+    }
+  } catch (err) {
+    console.warn("[resetUserEnvironment] Failed to stop container:", err);
+  }
+
+  // 2. Deregister Nginx route (DynamoDB cc-routing-table)
+  try {
+    await deregisterContainerRoute(subdomain);
+    result.routeCleared = true;
+  } catch (err) {
+    console.warn("[resetUserEnvironment] Failed to deregister route:", err);
+  }
+
+  // 3. Trigger EBS snapshot (async, keep snapshot for future restore)
+  if (storageType === "ebs") {
+    try {
+      await lambdaClient.send(new InvokeCommand({
+        FunctionName: process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle",
+        InvocationType: "Event",
+        Payload: Buffer.from(JSON.stringify({
+          action: "snapshot_and_detach",
+          user_id: subdomain,
+        })),
+      }));
+      result.snapshotTriggered = true;
+    } catch (err) {
+      console.warn("[resetUserEnvironment] Failed to trigger EBS snapshot:", err);
+    }
+  }
+
+  // 4. Clear subdomain in Cognito (user becomes "unassigned")
+  await updateCognitoUserAttribute(username, "custom:subdomain", "");
+
+  return result;
+}
+
 // ─── ECS: Container Management ───
 
 const TASK_DEFINITION_MAP: Record<string, string> = {
@@ -375,7 +432,7 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
           {
             Sid: "S3UserData",
             Effect: "Allow",
-            Action: ["s3:GetObject", "s3:PutObject"],
+            Action: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
             Resource: [
               `arn:aws:s3:::cc-on-bedrock-user-data-${accountId}`,
               `arn:aws:s3:::cc-on-bedrock-user-data-${accountId}/users/${subdomain}/*`,
@@ -404,6 +461,24 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
             Effect: "Allow",
             Action: ["secretsmanager:GetSecretValue"],
             Resource: `arn:aws:secretsmanager:${region}:${accountId}:secret:cc-on-bedrock/codeserver/*`,
+          },
+          {
+            Sid: "SsmMessages",
+            Effect: "Allow",
+            Action: [
+              "ssmmessages:CreateControlChannel",
+              "ssmmessages:CreateDataChannel",
+              "ssmmessages:OpenControlChannel",
+              "ssmmessages:OpenDataChannel",
+            ],
+            Resource: "*",
+          },
+          {
+            Sid: "CloudWatchMetrics",
+            Effect: "Allow",
+            Action: ["cloudwatch:PutMetricData"],
+            Resource: "*",
+            Condition: { StringEquals: { "cloudwatch:namespace": "CC/DevEnv" } },
           },
         ],
       }),
@@ -600,25 +675,23 @@ export async function startContainer(
   }
   const secretArn = `arn:aws:secretsmanager:${region}:${accountId}:secret:${secretName}`;
 
-  // EBS mode: look up snapshot for data restoration
+  // EBS volume: look up snapshot for data restoration (always needed — task defs have configuredAtLaunch)
   let ebsSnapshotId: string | undefined;
   let ebsSizeGiB = 20;
   let userAz: string | undefined;
-  if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
-    try {
-      const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
-      const ddb = new DynamoDBClient({ region });
-      const volResult = await ddb.send(new DDBGetItem({
-        TableName: process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes",
-        Key: { user_id: { S: input.subdomain } },
-      }));
-      ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
-      const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
-      if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
-      userAz = volResult.Item?.az?.S;
-      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB, az: ${userAz}`);
-    } catch { /* no snapshot — new volume */ }
-  }
+  try {
+    const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
+    const ddb = new DynamoDBClient({ region });
+    const volResult = await ddb.send(new DDBGetItem({
+      TableName: process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes",
+      Key: { user_id: { S: input.subdomain } },
+    }));
+    ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
+    const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
+    if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
+    userAz = volResult.Item?.az?.S;
+    if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB, az: ${userAz}`);
+  } catch { /* no snapshot — new volume */ }
 
   // AZ-aware capacity provider selection (EKS Karpenter-style)
   const capacityProvider = await getCapacityProviderForAz(userAz);
@@ -639,30 +712,28 @@ export async function startContainer(
           assignPublicIp: "DISABLED",
         },
       },
-      // EBS native volume: ECS auto-creates, attaches, and mounts to /home/coder
-      ...(input.storageType === "ebs" && ecsInfrastructureRoleArn ? {
-        volumeConfigurations: [{
-          name: "user-data",
-          managedEBSVolume: {
-            roleArn: ecsInfrastructureRoleArn,
-            volumeType: "gp3",
-            sizeInGiB: ebsSizeGiB,
-            encrypted: true,
-            ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
-            ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),
-            filesystemType: "ext4",
-            tagSpecifications: [{
-              resourceType: "volume",
-              tags: [
-                { key: "user_id", value: input.subdomain },
-                { key: "managed_by", value: "cc-on-bedrock" },
-              ],
-              propagateTags: "NONE",
-            }],
-            terminationPolicy: { deleteOnTermination: false },
-          },
-        }],
-      } : {}),
+      // EBS native volume: task defs have configuredAtLaunch=true, so volumeConfigurations is always required
+      volumeConfigurations: [{
+        name: "user-data",
+        managedEBSVolume: {
+          roleArn: ecsInfrastructureRoleArn || `arn:aws:iam::${accountId}:role/ecsInfrastructureRole`,
+          volumeType: "gp3",
+          sizeInGiB: ebsSizeGiB,
+          encrypted: true,
+          ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
+          ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),
+          filesystemType: "ext4",
+          tagSpecifications: [{
+            resourceType: "volume",
+            tags: [
+              { key: "user_id", value: input.subdomain },
+              { key: "managed_by", value: "cc-on-bedrock" },
+            ],
+            propagateTags: "NONE",
+          }],
+          terminationPolicy: { deleteOnTermination: false },
+        },
+      }],
       overrides: {
         // Per-user Task Role for individual budget control
         taskRoleArn: userTaskRoleArn,
@@ -826,25 +897,23 @@ export async function startContainerWithProgress(
   // Step 5: Container Start
   onProgress(5, "container_start", "in_progress", "Starting ECS task...");
 
-  // EBS mode: look up snapshot for data restoration
+  // EBS volume: look up snapshot for data restoration (always needed — task defs have configuredAtLaunch)
   let ebsSnapshotId: string | undefined;
   let ebsSizeGiB = 20;
   let userAz: string | undefined;
-  if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
-    try {
-      const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
-      const ddb = new DynamoDBClient({ region });
-      const volResult = await ddb.send(new DDBGetItem({
-        TableName: process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes",
-        Key: { user_id: { S: input.subdomain } },
-      }));
-      ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
-      const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
-      if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
-      userAz = volResult.Item?.az?.S;
-      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB, az: ${userAz}`);
-    } catch { /* no snapshot — new volume */ }
-  }
+  try {
+    const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
+    const ddb = new DynamoDBClient({ region });
+    const volResult = await ddb.send(new DDBGetItem({
+      TableName: process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes",
+      Key: { user_id: { S: input.subdomain } },
+    }));
+    ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
+    const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
+    if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
+    userAz = volResult.Item?.az?.S;
+    if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB, az: ${userAz}`);
+  } catch { /* no snapshot — new volume */ }
 
   // AZ-aware capacity provider selection (EKS Karpenter-style)
   const capacityProvider = await getCapacityProviderForAz(userAz);
@@ -865,30 +934,28 @@ export async function startContainerWithProgress(
           assignPublicIp: "DISABLED",
         },
       },
-      // EBS native volume (user self-service path)
-      ...(input.storageType === "ebs" && ecsInfrastructureRoleArn ? {
-        volumeConfigurations: [{
-          name: "user-data",
-          managedEBSVolume: {
-            roleArn: ecsInfrastructureRoleArn,
-            volumeType: "gp3",
-            sizeInGiB: ebsSizeGiB,
-            encrypted: true,
-            ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
-            ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),
-            filesystemType: "ext4",
-            tagSpecifications: [{
-              resourceType: "volume",
-              tags: [
-                { key: "user_id", value: input.subdomain },
-                { key: "managed_by", value: "cc-on-bedrock" },
-              ],
-              propagateTags: "NONE",
-            }],
-            terminationPolicy: { deleteOnTermination: false },
-          },
-        }],
-      } : {}),
+      // EBS native volume: task defs have configuredAtLaunch=true, so volumeConfigurations is always required
+      volumeConfigurations: [{
+        name: "user-data",
+        managedEBSVolume: {
+          roleArn: ecsInfrastructureRoleArn || `arn:aws:iam::${accountId}:role/ecsInfrastructureRole`,
+          volumeType: "gp3",
+          sizeInGiB: ebsSizeGiB,
+          encrypted: true,
+          ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
+          ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),
+          filesystemType: "ext4",
+          tagSpecifications: [{
+            resourceType: "volume",
+            tags: [
+              { key: "user_id", value: input.subdomain },
+              { key: "managed_by", value: "cc-on-bedrock" },
+            ],
+            propagateTags: "NONE",
+          }],
+          terminationPolicy: { deleteOnTermination: false },
+        },
+      }],
       overrides: {
         taskRoleArn: userTaskRoleArn,
         containerOverrides: [
@@ -987,8 +1054,9 @@ export async function listContainers(): Promise<ContainerInfo[]> {
       resourceTier,
       securityPolicy: (getTag("securityPolicy") || "restricted") as ContainerInfo["securityPolicy"],
       storageType: (getTag("storageType") || undefined) as ContainerInfo["storageType"],
+      department: getTag("department") || undefined,
       cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
-      memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
+      memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "3840", standard: "7680", power: "15360" }[resourceTier] || "0"),
       createdAt: task.createdAt?.toISOString() ?? "",
       startedAt: task.startedAt?.toISOString(),
       stoppedAt: task.stoppedAt?.toISOString(),
@@ -1043,7 +1111,7 @@ export async function describeContainer(
     securityPolicy: (getTag("securityPolicy") || "restricted") as ContainerInfo["securityPolicy"],
     storageType: (getTag("storageType") || undefined) as ContainerInfo["storageType"],
     cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
-    memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
+    memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "3840", standard: "7680", power: "15360" }[resourceTier] || "0"),
     createdAt: task.createdAt?.toISOString() ?? "",
     startedAt: task.startedAt?.toISOString(),
     stoppedAt: task.stoppedAt?.toISOString(),

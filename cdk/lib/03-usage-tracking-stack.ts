@@ -204,6 +204,7 @@ export class UsageTrackingStack extends cdk.Stack {
         REGION: cdk.Aws.REGION,
         ECS_CLUSTER: 'cc-on-bedrock-devenv',
         VOLUMES_TABLE: userVolumesTable.tableName,
+        ROUTING_TABLE: 'cc-routing-table',
         IDLE_THRESHOLD_MINUTES: '30',
         SNS_TOPIC_ARN: alertTopic.topicArn,
         EBS_LIFECYCLE_LAMBDA: 'cc-on-bedrock-ebs-lifecycle',
@@ -232,6 +233,14 @@ export class UsageTrackingStack extends cdk.Stack {
         'cloudwatch:GetMetricData',
       ],
       resources: ['*'],
+    }));
+
+    // DynamoDB routing table: deregister routes on warm-stop
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:DeleteItem'],
+      resources: [
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
+      ],
     }));
 
     // Lambda invoke: call EBS lifecycle Lambda and self-invoke for async warm-stop
@@ -428,6 +437,23 @@ export class UsageTrackingStack extends cdk.Stack {
       logGroup: bedrockLogGroup,
       destination: new logsDest.LambdaDestination(trackerLambda),
       filterPattern: logs.FilterPattern.allEvents(),
+    });
+
+    // Approval Requests Table (container request workflow)
+    const approvalTable = new dynamodb.Table(this, 'ApprovalRequestsTable', {
+      tableName: 'cc-on-bedrock-approval-requests',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.encryptionKey,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    approvalTable.addGlobalSecondaryIndex({
+      indexName: 'department-status-index',
+      partitionKey: { name: 'department', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'status', type: dynamodb.AttributeType.STRING },
     });
   }
 }
