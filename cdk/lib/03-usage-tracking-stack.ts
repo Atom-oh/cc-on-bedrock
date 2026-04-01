@@ -74,7 +74,10 @@ export class UsageTrackingStack extends cdk.Stack {
     this.usageTable.grantReadWriteData(trackerLambda);
     trackerLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
-      resources: ['*'],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+      ],
     }));
 
     // EventBridge Rule: Bedrock API calls from CloudTrail
@@ -110,6 +113,7 @@ export class UsageTrackingStack extends cdk.Stack {
         DEPT_BUDGETS_TABLE: 'cc-department-budgets',
         ECS_CLUSTER_NAME: config.ecsClusterName,
         DAILY_BUDGET_USD: String(config.dailyBudgetUsd),
+        USER_BUDGETS_TABLE: 'cc-user-budgets',
         SNS_TOPIC_ARN: alertTopic.topicArn,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
       },
@@ -121,7 +125,10 @@ export class UsageTrackingStack extends cdk.Stack {
     // ECS: find and stop over-budget user containers
     budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks', 'ecs:StopTask'],
-      resources: ['*'],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+      ],
     }));
     // Cognito: set budget_exceeded flag (specific user pool, not wildcard)
     budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
@@ -165,8 +172,9 @@ export class UsageTrackingStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // Grant budget check Lambda read access to department budgets table
-    departmentBudgetsTable.grantReadData(budgetCheckLambda);
+    // Grant budget check Lambda read/write access to budget tables (writes currentSpend)
+    departmentBudgetsTable.grantReadWriteData(budgetCheckLambda);
+    userBudgetsTable.grantReadWriteData(budgetCheckLambda);
 
     // ==================== Warm Stop Automation (EBS mode only) ====================
     const isEbs = isEbsMode(config);
@@ -196,6 +204,7 @@ export class UsageTrackingStack extends cdk.Stack {
         REGION: cdk.Aws.REGION,
         ECS_CLUSTER: 'cc-on-bedrock-devenv',
         VOLUMES_TABLE: userVolumesTable.tableName,
+        ROUTING_TABLE: 'cc-routing-table',
         IDLE_THRESHOLD_MINUTES: '30',
         SNS_TOPIC_ARN: alertTopic.topicArn,
         EBS_LIFECYCLE_LAMBDA: 'cc-on-bedrock-ebs-lifecycle',
@@ -226,6 +235,14 @@ export class UsageTrackingStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // DynamoDB routing table: deregister routes on warm-stop
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:DeleteItem'],
+      resources: [
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
+      ],
+    }));
+
     // Lambda invoke: call EBS lifecycle Lambda and self-invoke for async warm-stop
     warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['lambda:InvokeFunction'],
@@ -254,7 +271,10 @@ export class UsageTrackingStack extends cdk.Stack {
     // Idle check Lambda permissions
     idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
-      resources: ['*'],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+      ],
     }));
     idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudwatch:GetMetricStatistics', 'cloudwatch:GetMetricData'],
@@ -417,6 +437,23 @@ export class UsageTrackingStack extends cdk.Stack {
       logGroup: bedrockLogGroup,
       destination: new logsDest.LambdaDestination(trackerLambda),
       filterPattern: logs.FilterPattern.allEvents(),
+    });
+
+    // Approval Requests Table (container request workflow)
+    const approvalTable = new dynamodb.Table(this, 'ApprovalRequestsTable', {
+      tableName: 'cc-on-bedrock-approval-requests',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.encryptionKey,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    approvalTable.addGlobalSecondaryIndex({
+      indexName: 'department-status-index',
+      partitionKey: { name: 'department', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'status', type: dynamodb.AttributeType.STRING },
     });
   }
 }

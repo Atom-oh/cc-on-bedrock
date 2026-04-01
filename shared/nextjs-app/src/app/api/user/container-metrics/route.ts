@@ -30,7 +30,8 @@ export async function GET() {
       });
     }
 
-    const metrics = await getTaskMetrics(userContainer.taskId);
+    const taskDefFamily = `devenv-${userContainer.containerOs}-${userContainer.resourceTier}`;
+    const metrics = await getTaskMetrics(userContainer.taskId, taskDefFamily);
 
     return NextResponse.json({
       success: true,

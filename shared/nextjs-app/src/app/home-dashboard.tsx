@@ -100,28 +100,41 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const fetchData = useCallback(async () => {
     try {
       setRefreshing(true);
-      const [containerRes, cwRes, healthRes, usageRes] = await Promise.all([
-        fetch("/api/containers"),
-        fetch("/api/container-metrics?action=current"),
+      // Admin-only APIs: only fetch for admin users
+      const fetches: Promise<Response>[] = [
         fetch("/api/health"),
-        fetch(`/api/usage?period=daily&date=${new Date().toISOString().split("T")[0]}`),
-      ]);
+      ];
+      if (isAdmin) {
+        fetches.push(
+          fetch("/api/containers"),
+          fetch("/api/container-metrics?action=current"),
+          fetch("/api/usage?action=total_spend"),
+        );
+      }
 
-      const containers: ApiResponse<ContainerInfo[]> = await containerRes.json();
-      const cw = await cwRes.json();
-      const health = await healthRes.json();
-      const usage = await usageRes.json();
+      const responses = await Promise.all(fetches);
+      const health = await responses[0].json();
+      let activeContainers = 0;
+      let totalTokens = 0;
+      let totalCost = 0;
+      let cwData = null;
 
-      const activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING").length || 0;
-      const totalTokens = usage.data?.totalTokens ?? 0;
-      const totalCost = usage.data?.totalCost ?? 0;
+      if (isAdmin && responses.length > 1) {
+        const containers: ApiResponse<ContainerInfo[]> = await responses[1].json();
+        const cw = await responses[2].json();
+        const usage = await responses[3].json();
+        activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING").length || 0;
+        totalTokens = usage.data?.totalTokens ?? 0;
+        totalCost = usage.data?.totalCost ?? 0;
+        cwData = cw.success ? cw.data : null;
+      }
 
       setData({
         totalCost,
         totalTokens,
         activeContainers,
-        containers: containers.data || [],
-        cwMetrics: cw.success ? cw.data : null,
+        containers: [],
+        cwMetrics: cwData,
         health: health.checks ?? null,
       });
     } catch (err) {
@@ -130,7 +143,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => {
     fetchData();

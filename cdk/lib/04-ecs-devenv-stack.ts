@@ -92,6 +92,14 @@ export class EcsDevenvStack extends cdk.Stack {
       ],
       resources: ['*'],
     }));
+    // CloudWatch: publish custom idle metrics from idle-monitor.sh (CC/DevEnv namespace)
+    ecsTaskRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+      conditions: {
+        StringEquals: { 'cloudwatch:namespace': 'CC/DevEnv' },
+      },
+    }));
 
     // ECS Task Execution Role
     const ecsTaskExecutionRole = new iam.Role(this, 'EcsTaskExecutionRole', {
@@ -167,6 +175,11 @@ export class EcsDevenvStack extends cdk.Stack {
           },
         },
       }));
+      // EBS volume resize
+      ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['ec2:ModifyVolume'],
+        resources: ['*'],
+      }));
 
       new cdk.CfnOutput(this, 'EbsLifecycleLambdaArn', { value: ebsLifecycleLambda.functionArn });
     }
@@ -236,23 +249,86 @@ export class EcsDevenvStack extends cdk.Stack {
       'echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config',
     );
 
-    const capacityAsg = new autoscaling.AutoScalingGroup(this, 'EcsCapacityAsg', {
+    // ─── Per-AZ ASG + Capacity Provider (EKS Karpenter-style AZ-aware scaling) ───
+    const azs = vpc.availabilityZones.slice(0, 2); // Use first 2 AZs
+    const cpNames: string[] = [];
+
+    for (let i = 0; i < azs.length; i++) {
+      const azSuffix = azs[i].slice(-1); // 'a', 'c', etc.
+      const asg = new autoscaling.AutoScalingGroup(this, `EcsAsg-${azSuffix}`, {
+        vpc,
+        launchTemplate: ecsLaunchTemplate,
+        minCapacity: 0,
+        maxCapacity: 8,
+        desiredCapacity: 0,
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          availabilityZones: [azs[i]],
+        },
+        newInstancesProtectedFromScaleIn: false,
+      });
+
+      const cpName = `cc-cp-${azSuffix}`;
+      const cp = new ecs.AsgCapacityProvider(this, `EcsCp-${azSuffix}`, {
+        capacityProviderName: cpName,
+        autoScalingGroup: asg,
+        enableManagedScaling: true,
+        enableManagedTerminationProtection: true,
+        targetCapacityPercent: 80,
+      });
+      this.cluster.addAsgCapacityProvider(cp);
+      cpNames.push(cpName);
+    }
+
+    // Export CP names for dashboard to select per-user AZ
+    new cdk.CfnOutput(this, 'CapacityProviderNames', {
+      value: cpNames.join(','),
+      exportName: 'cc-capacity-provider-names',
+    });
+    new cdk.CfnOutput(this, 'AvailabilityZones', {
+      value: azs.join(','),
+      exportName: 'cc-availability-zones',
+    });
+
+    // ─── Dashboard Capacity Provider (dedicated ASG for dashboard ECS service) ───
+    const dashboardLaunchTemplate = new ec2.LaunchTemplate(this, 'DashboardCapacityLaunchTemplate', {
+      instanceType: new ec2.InstanceType(config.dashboardInstanceType),
+      machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
+      role: ecsInstanceRole,
+      securityGroup: sgOpen,
+      requireImdsv2: true,
+      blockDevices: [{
+        deviceName: '/dev/xvda',
+        volume: ec2.BlockDeviceVolume.ebs(30, {
+          volumeType: ec2.EbsDeviceVolumeType.GP3,
+          encrypted: true,
+        }),
+      }],
+      userData: ec2.UserData.forLinux(),
+    });
+    dashboardLaunchTemplate.userData!.addCommands(
+      `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
+      'echo ECS_ENABLE_TASK_ENI=true >> /etc/ecs/ecs.config',
+      'echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config',
+    );
+
+    const dashboardAsg = new autoscaling.AutoScalingGroup(this, 'DashboardAsg', {
       vpc,
-      launchTemplate: ecsLaunchTemplate,
-      minCapacity: 0,
-      maxCapacity: 15,
-      desiredCapacity: 0,
+      launchTemplate: dashboardLaunchTemplate,
+      minCapacity: 1,
+      maxCapacity: 2,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       newInstancesProtectedFromScaleIn: false,
     });
 
-    const capacityProvider = new ecs.AsgCapacityProvider(this, 'EcsCapacityProvider', {
-      autoScalingGroup: capacityAsg,
+    const dashboardCp = new ecs.AsgCapacityProvider(this, 'DashboardCp', {
+      capacityProviderName: 'cc-cp-dashboard',
+      autoScalingGroup: dashboardAsg,
       enableManagedScaling: true,
       enableManagedTerminationProtection: true,
-      targetCapacityPercent: 80,
+      targetCapacityPercent: 100,
     });
-    this.cluster.addAsgCapacityProvider(capacityProvider);
+    this.cluster.addAsgCapacityProvider(dashboardCp);
 
     // Log Group
     const logGroup = new logs.LogGroup(this, 'DevenvLogGroup', {
@@ -263,9 +339,9 @@ export class EcsDevenvStack extends cdk.Stack {
 
     // Task Definition helper
     const tiers = [
-      { name: 'light', cpu: 1024, memory: 4096 },
-      { name: 'standard', cpu: 2048, memory: 8192 },
-      { name: 'power', cpu: 4096, memory: 12288 },
+      { name: 'light', cpu: 1024, memory: 3840 },
+      { name: 'standard', cpu: 2048, memory: 7680 },
+      { name: 'power', cpu: 4096, memory: 15360 },
     ];
     const osVariants = ['ubuntu', 'al2023'];
 
@@ -301,24 +377,34 @@ export class EcsDevenvStack extends cdk.Stack {
           }),
         });
 
-        // EFS Volume
-        // NOTE: For user isolation, override rootDirectory at RunTask time
-        // with /users/{subdomain} to prevent cross-user file access.
-        // Or create per-user EFS Access Points for stronger isolation.
+        // EFS Volume — shared storage (always available)
         taskDef.addVolume({
           name: 'efs-workspace',
           efsVolumeConfiguration: {
             fileSystemId: fileSystem.fileSystemId,
-            rootDirectory: '/',  // Override per-user at RunTask: /users/{subdomain}
+            rootDirectory: '/',
             transitEncryption: 'ENABLED',
           },
         });
 
-        container.addMountPoints({
-          sourceVolume: 'efs-workspace',
-          containerPath: '/home/coder',
-          readOnly: false,
-        });
+        if (isEbsMode(config)) {
+          // EBS Volume — user data (configuredAtLaunch, attached via RunTask volumeConfigurations)
+          taskDef.addVolume({
+            name: 'user-data',
+            configuredAtLaunch: true,
+          });
+          // EBS mode: user-data (EBS) → /home/coder only (no EFS mount for simplicity)
+          container.addMountPoints(
+            { sourceVolume: 'user-data', containerPath: '/home/coder', readOnly: false },
+          );
+        } else {
+          // EFS mode: EFS → /home/coder (primary), no EBS volume
+          container.addMountPoints({
+            sourceVolume: 'efs-workspace',
+            containerPath: '/home/coder',
+            readOnly: false,
+          });
+        }
       }
     }
 
@@ -414,6 +500,7 @@ export class EcsDevenvStack extends cdk.Stack {
         CONFIG_KEY: 'nginx/nginx.conf',
         DEV_DOMAIN: `${config.devSubdomain}.${config.domainName}`,
         REGION: cdk.Aws.REGION,
+        CLOUDFRONT_SECRET: cloudfrontSecret.secretValue.unsafeUnwrap(),
       },
     });
 
@@ -428,12 +515,32 @@ export class EcsDevenvStack extends cdk.Stack {
       retryAttempts: 3,
     }));
 
-    // ─── Nginx Reverse Proxy Task Definition ───
-    const nginxTaskDef = new ecs.Ec2TaskDefinition(this, 'NginxTaskDef', {
+    // ─── Nginx Task Role (minimal — S3 config read only, no Bedrock) ───
+    const nginxTaskRole = new iam.Role(this, 'NginxTaskRole', {
+      roleName: 'cc-on-bedrock-nginx-task',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+    nginxTaskRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject', 's3:ListBucket', 's3:HeadObject'],
+      resources: [
+        userDataBucket.bucketArn,
+        `${userDataBucket.bucketArn}/*`,
+      ],
+    }));
+    // KMS decrypt for reading KMS-encrypted S3 objects
+    encryptionKey.grantDecrypt(nginxTaskRole);
+
+    // ─── Nginx Reverse Proxy Task Definition (Fargate — lightweight, cost-efficient) ───
+    const nginxTaskDef = new ecs.FargateTaskDefinition(this, 'NginxTaskDef', {
       family: 'cc-nginx-proxy',
-      networkMode: ecs.NetworkMode.AWS_VPC,
-      taskRole: ecsTaskRole,
+      cpu: 256,
+      memoryLimitMiB: 512,
+      taskRole: nginxTaskRole,
       executionRole: ecsTaskExecutionRole,
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
     });
 
     const nginxImage = ecs.ContainerImage.fromEcrRepository(
@@ -442,14 +549,13 @@ export class EcsDevenvStack extends cdk.Stack {
 
     nginxTaskDef.addContainer('nginx', {
       image: nginxImage,
-      memoryLimitMiB: 4096,
-      cpu: 2048,
       essential: true,
       environment: {
-        S3_BUCKET: userDataBucket.bucketName,
-        S3_CONFIG_KEY: 'nginx/nginx.conf',
+        CONFIG_BUCKET: userDataBucket.bucketName,
+        CONFIG_KEY: 'nginx/nginx.conf',
         RELOAD_INTERVAL: '5',
         AWS_DEFAULT_REGION: cdk.Aws.REGION,
+        AWS_REGION: cdk.Aws.REGION,
       },
       logging: ecs.LogDrivers.awsLogs({
         logGroup: new logs.LogGroup(this, 'NginxLogGroup', {
@@ -468,8 +574,8 @@ export class EcsDevenvStack extends cdk.Stack {
       },
     });
 
-    // ─── Nginx ECS Service ───
-    const nginxService = new ecs.Ec2Service(this, 'NginxService', {
+    // ─── Nginx ECS Service (Fargate — $18/month vs $800/month EC2 idle) ───
+    const nginxService = new ecs.FargateService(this, 'NginxService', {
       cluster: this.cluster,
       taskDefinition: nginxTaskDef,
       desiredCount: 2,
@@ -478,9 +584,8 @@ export class EcsDevenvStack extends cdk.Stack {
       securityGroups: [nginxSg],
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       enableExecuteCommand: true,
-      placementStrategies: [
-        ecs.PlacementStrategy.spreadAcrossInstances(),
-      ],
+      assignPublicIp: false,
+      platformVersion: ecs.FargatePlatformVersion.LATEST,
     });
 
     const nlbListener = nlb.addListener('NlbListener', {

@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53resolver from 'aws-cdk-lib/aws-route53resolver';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 
@@ -83,6 +84,33 @@ export class NetworkStack extends cdk.Stack {
         zoneName: config.domainName,
       });
     }
+
+    // ─── Route 53 DNS Firewall ───
+    // AWS managed threat domain lists
+    const awsThreatLists = [
+      { id: 'Malware', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsMalwareDomainList` },
+      { id: 'Botnet', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsBotnetCommandandControl` },
+      { id: 'AmazonGuardDuty', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsAmazonGuardDutyThreatList` },
+      { id: 'AggregateThreat', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsAggregateThreatList` },
+    ];
+
+    const dnsFirewallRuleGroup = new route53resolver.CfnFirewallRuleGroup(this, 'DnsFirewallRuleGroup', {
+      name: 'cc-on-bedrock-dns-firewall',
+      firewallRules: awsThreatLists.map((list, i) => ({
+        priority: (i + 1) * 100,
+        firewallDomainListId: list.arn,
+        action: 'BLOCK',
+        blockResponse: 'NXDOMAIN',
+        name: `Block-${list.id}`,
+      })),
+    });
+
+    new route53resolver.CfnFirewallRuleGroupAssociation(this, 'DnsFirewallAssociation', {
+      firewallRuleGroupId: dnsFirewallRuleGroup.attrId,
+      vpcId: this.vpc.vpcId,
+      priority: 101,
+      name: 'cc-on-bedrock-dns-firewall',
+    });
 
     // Outputs
     new cdk.CfnOutput(this, 'VpcId', { value: this.vpc.vpcId, exportName: 'cc-vpc-id' });

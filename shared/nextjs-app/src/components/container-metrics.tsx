@@ -51,12 +51,14 @@ const CircularGauge = ({
   label,
   subLabel,
   id,
+  unitLabel,
 }: {
   value: number;
   max: number;
   label: string;
   subLabel: string;
   id: string;
+  unitLabel?: string;
 }) => {
   const percentage = max > 0 ? Math.min(Math.max((value / max) * 100, 0), 100) : 0;
   const radius = 36;
@@ -87,8 +89,11 @@ const CircularGauge = ({
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-2xl font-bold text-gray-100">{Math.round(percentage)}%</span>
-        <span className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">{subLabel}</span>
+        <div className="flex flex-col items-center">
+          <span className="text-2xl font-bold text-gray-100">{Math.round(percentage)}%</span>
+          {unitLabel && <span className="text-[10px] font-bold text-gray-400 -mt-1">{unitLabel}</span>}
+        </div>
+        <span className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mt-1">{subLabel}</span>
       </div>
       <div className="mt-2 text-center">
         <p className="text-sm font-semibold text-gray-300">{label}</p>
@@ -138,6 +143,10 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
     );
   }
 
+  // Convert CPU units (1024 = 1 vCPU/Core) to a readable Core unit
+  const cpuCores = (metrics.cpu / 1024).toFixed(2);
+  const cpuLimitCores = (metrics.cpuLimit / 1024).toFixed(1);
+
   return (
     <div className="w-full space-y-6">
       {/* Header */}
@@ -160,7 +169,14 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
       {/* 2x2 Metric Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <MetricCard>
-          <CircularGauge value={metrics.cpu} max={metrics.cpuLimit} label="CPU" subLabel="Utilization" id="cpu" />
+          <CircularGauge 
+            value={metrics.cpu} 
+            max={metrics.cpuLimit} 
+            label="CPU" 
+            subLabel={`${cpuCores} / ${cpuLimitCores} Cores`} 
+            id="cpu" 
+            unitLabel="vCPU"
+          />
         </MetricCard>
 
         <MetricCard>
@@ -169,6 +185,7 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
             label="Memory"
             subLabel={`${Math.round(metrics.memory)} / ${Math.round(metrics.memoryLimit)} MB`}
             id="memory"
+            unitLabel="MB"
           />
         </MetricCard>
 
@@ -200,67 +217,57 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
         <MetricCard className="flex flex-col justify-between">
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2 bg-purple-500/10 rounded-lg">
-              <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7c0-2-1-3-3-3H7C5 4 4 5 4 7z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h8" /></svg>
+              <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7c0-2-1-3-3-3H7C5 4 4 5 4 7z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-3m3 3v-3m3 3v-3" /></svg>
             </div>
-            <span className="text-sm font-bold text-gray-300">Disk I/O</span>
+            <span className="text-sm font-bold text-gray-300">Storage I/O</span>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-400">Read</span>
-              <span className="text-lg font-mono font-bold text-gray-100 transition-all duration-500">{formatBytes(metrics.diskRead)}/s</span>
+              <span className="text-lg font-mono font-bold text-gray-100">{formatBytes(metrics.diskRead)}/s</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-400">Write</span>
-              <span className="text-lg font-mono font-bold text-gray-100 transition-all duration-500">{formatBytes(metrics.diskWrite)}/s</span>
+              <span className="text-lg font-mono font-bold text-gray-100">{formatBytes(metrics.diskWrite)}/s</span>
             </div>
           </div>
         </MetricCard>
       </div>
 
-      {/* Area Charts */}
+      {/* Chart Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <ChartCard title="CPU & Memory">
+        <ChartCard title="CPU Utilization History">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={timeseries}>
               <defs>
-                <linearGradient id="colorCpu" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id="cpuGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
                   <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                 </linearGradient>
-                <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
-                </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#30363d" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#30363d" vertical={false} />
               <XAxis dataKey="time" hide />
-              <YAxis hide />
+              <YAxis domain={[0, 100]} stroke="#484f58" fontSize={10} tickFormatter={(v) => `${v}%`} />
               <Tooltip {...customTooltipStyle} />
-              <Area type="monotone" dataKey="cpu" name="CPU" stroke="#3b82f6" fillOpacity={1} fill="url(#colorCpu)" strokeWidth={2} />
-              <Area type="monotone" dataKey="memory" name="Memory" stroke="#8b5cf6" fillOpacity={1} fill="url(#colorMem)" strokeWidth={2} />
+              <Area type="monotone" dataKey="cpu" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#cpuGradient)" />
             </AreaChart>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Network Rx / Tx">
+        <ChartCard title="Memory Utilization History">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={timeseries}>
               <defs>
-                <linearGradient id="colorRx" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="colorTx" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                <linearGradient id="memGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#30363d" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#30363d" vertical={false} />
               <XAxis dataKey="time" hide />
-              <YAxis hide />
+              <YAxis domain={[0, 100]} stroke="#484f58" fontSize={10} tickFormatter={(v) => `${v}%`} />
               <Tooltip {...customTooltipStyle} />
-              <Area type="monotone" dataKey="networkRx" name="Rx" stroke="#10b981" fillOpacity={1} fill="url(#colorRx)" strokeWidth={2} />
-              <Area type="monotone" dataKey="networkTx" name="Tx" stroke="#f59e0b" fillOpacity={1} fill="url(#colorTx)" strokeWidth={2} />
+              <Area type="monotone" dataKey="memory" stroke="#8b5cf6" strokeWidth={2} fillOpacity={1} fill="url(#memGradient)" />
             </AreaChart>
           </ResponsiveContainer>
         </ChartCard>

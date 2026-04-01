@@ -79,7 +79,8 @@ export async function POST(req: NextRequest) {
     let metricsContext = "컨테이너가 현재 실행 중이지 않습니다.";
     if (userContainer) {
       try {
-        const metrics = await getTaskMetrics(userContainer.taskId);
+        const taskDefFamily = `devenv-${userContainer.containerOs}-${userContainer.resourceTier}`;
+        const metrics = await getTaskMetrics(userContainer.taskId, taskDefFamily);
         const cpuPct = metrics.cpuLimit > 0 ? (metrics.cpu / metrics.cpuLimit * 100).toFixed(1) : "N/A";
         const memPct = metrics.memoryLimit > 0 ? (metrics.memory / metrics.memoryLimit * 100).toFixed(1) : "N/A";
 

@@ -20,6 +20,7 @@ export class SecurityStack extends cdk.Stack {
   public readonly cloudfrontSecret: secretsmanager.Secret;
   public readonly dashboardEc2Role: iam.Role;
   public readonly taskPermissionBoundary: iam.ManagedPolicy;
+  public readonly ecsInfrastructureRole: iam.Role;
 
   constructor(scope: Construct, id: string, props: SecurityStackProps) {
     super(scope, id, props);
@@ -66,6 +67,7 @@ export class SecurityStack extends cdk.Stack {
 
     const dashboardUrl = `https://${dashboardDomain}`;
     this.userPoolClient = this.userPool.addClient('AppClient', {
+      generateSecret: true,
       authFlows: { userPassword: true, userSrp: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
@@ -171,14 +173,38 @@ export class SecurityStack extends cdk.Stack {
       ],
     });
 
-    // Dashboard EC2 Role
+    // ECS Infrastructure Role — required for EBS volume attachment to tasks
+    this.ecsInfrastructureRole = new iam.Role(this, 'EcsInfrastructureRole', {
+      roleName: 'cc-on-bedrock-ecs-infrastructure',
+      assumedBy: new iam.ServicePrincipal('ecs.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSInfrastructureRolePolicyForVolumes'),
+      ],
+    });
+    // Grant KMS access for encrypted EBS volume creation
+    this.encryptionKey.grantEncryptDecrypt(this.ecsInfrastructureRole);
+    // ECS needs CreateGrant to delegate KMS access to EC2 for EBS attach
+    this.ecsInfrastructureRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'KmsCreateGrantForEbs',
+      actions: ['kms:CreateGrant', 'kms:DescribeKey'],
+      resources: [this.encryptionKey.keyArn],
+      conditions: {
+        Bool: { 'kms:GrantIsForAWSResource': 'true' },
+      },
+    }));
+
+    // Dashboard Role (shared by ECS Task + Troubleshooting EC2 instance profile)
     this.dashboardEc2Role = new iam.Role(this, 'DashboardEc2Role', {
       roleName: 'cc-on-bedrock-dashboard-ec2',
-      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('ec2.amazonaws.com'),
+        new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      ),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
+    this.dashboardEc2Role.addToPolicy(bedrockPolicy);
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: [
         'cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser',
@@ -191,7 +217,7 @@ export class SecurityStack extends cdk.Stack {
       resources: [this.userPool.userPoolArn],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:TagResource'],
+      actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:TagResource', 'ecs:ExecuteCommand'],
       resources: [
         `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
         `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
@@ -221,6 +247,7 @@ export class SecurityStack extends cdk.Stack {
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task`,
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task-execution`,
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-infrastructure`,
       ],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
@@ -255,6 +282,10 @@ export class SecurityStack extends cdk.Stack {
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-department-budgets/*`,
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests`,
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests/*`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-volumes`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-volumes/*`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets/*`,
       ],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
@@ -276,8 +307,14 @@ export class SecurityStack extends cdk.Stack {
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'EcsTaskDefRegistration',
-      actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition'],
+      actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition', 'ecs:DescribeClusters'],
       resources: ['*'],
+    }));
+    // Lambda invoke for EBS resize and other admin operations
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'LambdaInvoke',
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`],
     }));
 
     // Outputs

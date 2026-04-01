@@ -5,6 +5,8 @@ import {
   getContainerMetrics,
   getContainerMetricsTimeSeries,
   getTaskDefMetrics,
+  getBedrockMetrics,
+  getBedrockMetricsTimeSeries,
 } from "@/lib/cloudwatch-client";
 
 export async function GET(req: NextRequest) {
@@ -30,6 +32,15 @@ export async function GET(req: NextRequest) {
       case "taskdef": {
         const taskDefs = await getTaskDefMetrics();
         return NextResponse.json({ success: true, data: taskDefs });
+      }
+      case "bedrock": {
+        const brMetrics = await getBedrockMetrics();
+        return NextResponse.json({ success: true, data: brMetrics });
+      }
+      case "bedrock_timeseries": {
+        const brHours = parseInt(searchParams.get("hours") ?? "6", 10);
+        const brTs = await getBedrockMetricsTimeSeries(brHours);
+        return NextResponse.json({ success: true, data: brTs });
       }
       default:
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });

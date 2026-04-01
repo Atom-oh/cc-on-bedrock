@@ -18,11 +18,16 @@ SECURITY_POLICY="${SECURITY_POLICY:-open}"
 SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 
 # --- Per-user directory isolation ---
-# With EFS Access Point: /home/coder IS the user's root (no subdirectory needed)
-# Without Access Point: /home/coder/users/{subdomain}/ for isolation
-if [ -n "${EFS_ACCESS_POINT:-}" ] || [ "${STORAGE_ISOLATED:-}" = "true" ]; then
+# EBS mode: /home/coder is an EBS volume (auto-mounted by ECS), EFS at /efs
+# EFS AP mode: /home/coder IS the user's root via Access Point
+# EFS fallback: /home/coder/users/{subdomain}/ for isolation
+STORAGE_TYPE="${STORAGE_TYPE:-efs}"
+if [ "$STORAGE_TYPE" = "ebs" ]; then
   EFS_USER_DIR="$USER_HOME"
-  echo "Using isolated storage (Access Point or EBS): $EFS_USER_DIR"
+  echo "Using EBS volume mount: $EFS_USER_DIR (EFS available at /efs)"
+elif [ -n "${EFS_ACCESS_POINT:-}" ] || [ "${STORAGE_ISOLATED:-}" = "true" ]; then
+  EFS_USER_DIR="$USER_HOME"
+  echo "Using isolated EFS (Access Point): $EFS_USER_DIR"
 else
   EFS_USER_DIR="$USER_HOME/users/$SUBDOMAIN"
   echo "Using shared EFS with subdirectory: $EFS_USER_DIR"
@@ -168,8 +173,13 @@ else
 fi
 
 # --- Start code-server ---
-# Claude Code: Bedrock mode via Task Role
+# Claude Code: Bedrock mode via per-user Task Role (cc-on-bedrock-task-{subdomain})
 # CLAUDE_CODE_USE_BEDROCK=1 required to force Bedrock mode in ECS
+# Capture ECS credential endpoint vars before sudo strips them
+ECS_CREDS_URI="${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}"
+ECS_CREDS_FULL_URI="${AWS_CONTAINER_CREDENTIALS_FULL_URI:-}"
+ECS_CREDS_TOKEN="${AWS_CONTAINER_AUTHORIZATION_TOKEN:-}"
+
 cat > /etc/profile.d/claude-env.sh << ENVEOF
 export CLAUDE_CODE_USE_BEDROCK=1
 export ANTHROPIC_MODEL='global.anthropic.claude-opus-4-6-v1[1m]'
@@ -181,6 +191,10 @@ export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32768
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
 export AWS_REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
 export HOME="$USER_HOME"
+# ECS Task Role credentials (propagated from root PID 1 through sudo -u coder)
+export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="${ECS_CREDS_URI}"
+export AWS_CONTAINER_CREDENTIALS_FULL_URI="${ECS_CREDS_FULL_URI}"
+export AWS_CONTAINER_AUTHORIZATION_TOKEN="${ECS_CREDS_TOKEN}"
 ENVEOF
 chmod 644 /etc/profile.d/claude-env.sh
 if ! grep -q "profile.d/claude-env" "$USER_BASHRC" 2>/dev/null; then

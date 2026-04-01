@@ -10,7 +10,6 @@ export interface UserSession {
   containerOs?: "ubuntu" | "al2023";
   resourceTier?: "light" | "standard" | "power";
   securityPolicy?: "open" | "restricted" | "locked";
-  litellmApiKey?: string;
   containerId?: string;
   storageType?: "ebs" | "efs";
 }
@@ -27,7 +26,6 @@ export interface CognitoUser {
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
   storageType?: "ebs" | "efs";
-  litellmApiKey?: string;
   containerId?: string;
   groups: string[];
 }
@@ -112,6 +110,7 @@ export interface ContainerInfo {
   healthStatus?: string;
   privateIp?: string;
   storageType?: "ebs" | "efs";
+  department?: string;
 }
 
 export interface StartContainerInput {
@@ -315,9 +314,9 @@ export interface PasswordInfo {
 export type UserPortalTab = "environment" | "storage" | "settings";
 
 export const TIER_CONFIG = {
-  light: { label: "Light", cpu: "1 vCPU", memory: "2 GB", costMultiplier: 1 },
-  standard: { label: "Standard", cpu: "2 vCPU", memory: "4 GB", costMultiplier: 2 },
-  power: { label: "Power", cpu: "4 vCPU", memory: "8 GB", costMultiplier: 4 },
+  light: { label: "Light", cpu: "1 vCPU", memory: "3.75 GB", costMultiplier: 1 },
+  standard: { label: "Standard", cpu: "2 vCPU", memory: "7.5 GB", costMultiplier: 2 },
+  power: { label: "Power", cpu: "4 vCPU", memory: "15 GB", costMultiplier: 4 },
 } as const;
 
 // ─── API Response Types ───

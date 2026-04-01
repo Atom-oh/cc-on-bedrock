@@ -8,6 +8,7 @@ import {
   registerContainerRoute,
   describeContainer,
   deregisterContainerRoute,
+  getCognitoUser,
 } from "@/lib/aws-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
@@ -40,6 +41,52 @@ async function getDeptAllowedTiers(department: string): Promise<ResourceTier[]> 
   }
   // Default: allow all tiers
   return ["light", "standard", "power"];
+}
+
+export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+  const user = session.user;
+  const action = req.nextUrl.searchParams.get("action");
+
+  if (action === "dept-policy") {
+    const department = ((user as unknown as Record<string, string>).department) ?? "";
+    const allowedTiers = department ? await getDeptAllowedTiers(department) : ["light", "standard", "power"];
+    return NextResponse.json({ success: true, data: { allowedTiers } });
+  }
+
+  // Verify actual Cognito subdomain (bypasses stale JWT cache)
+  if (action === "verify") {
+    try {
+      const cognitoUser = await getCognitoUser(user.email);
+      return NextResponse.json({
+        success: true,
+        data: { subdomain: cognitoUser.subdomain || null },
+      });
+    } catch {
+      return NextResponse.json({
+        success: true,
+        data: { subdomain: null },
+      });
+    }
+  }
+
+  if (!user.subdomain) {
+    return NextResponse.json({ success: true, data: null });
+  }
+  try {
+    const containers = await listContainers();
+    const userContainer = containers.find(
+      (c) => c.subdomain === user.subdomain &&
+        (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
+    );
+    return NextResponse.json({ success: true, data: userContainer ?? null });
+  } catch (err) {
+    console.error("[user/container GET]", err);
+    return NextResponse.json({ error: "Failed to fetch container" }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -147,6 +194,26 @@ export async function POST(req: NextRequest) {
       }
 
       await stopContainer({ taskArn, reason: "Stopped by user" });
+
+      // EBS mode: async snapshot for data persistence (volume kept for same-AZ reuse)
+      if (user.storageType === "ebs") {
+        try {
+          const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
+          const lambda = new LambdaClient({ region });
+          await lambda.send(new InvokeCommand({
+            FunctionName: process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle",
+            InvocationType: "Event", // async — don't block the response
+            Payload: Buffer.from(JSON.stringify({
+              action: "snapshot_and_detach",
+              user_id: user.subdomain,
+            })),
+          }));
+          console.log(`[user/container] EBS snapshot triggered for ${user.subdomain}`);
+        } catch (err) {
+          console.warn("[user/container] EBS snapshot trigger failed:", err);
+        }
+      }
+
       return NextResponse.json({ success: true });
     }
 

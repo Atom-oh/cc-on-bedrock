@@ -11,18 +11,19 @@
 #   S3_SYNC_BUCKET  - S3 bucket name (required)
 #   USER_SUBDOMAIN  - User identifier (required)
 #
-# Workspace: /home/coder/workspace
+# Sync scope: /home/coder/ (full home, excluding caches)
 
 set -euo pipefail
 
-# Configuration
+# Configuration — sync entire home directory for dotfile preservation
+SYNC_ROOT="/home/coder"
 WORKSPACE="/home/coder/workspace"
 METADATA_FILE="$WORKSPACE/.metadata.json"
 LOG_PREFIX="[s3-sync]"
 S3_BUCKET="${S3_SYNC_BUCKET:-}"
 USER_ID="${USER_SUBDOMAIN:-}"
 
-# Exclude patterns for sync (common build artifacts and caches)
+# Exclude patterns for sync (caches + regenerable artifacts)
 EXCLUDE_PATTERNS=(
     "node_modules/*"
     ".git/objects/*"
@@ -43,6 +44,9 @@ EXCLUDE_PATTERNS=(
     ".venv/*"
     "venv/*"
     ".tox/*"
+    ".local/share/code-server/CachedExtensionVSIXs/*"
+    ".local/share/code-server/coder-logs/*"
+    ".config/code-server/config.yaml"
 )
 
 log() {
@@ -64,7 +68,7 @@ validate_env() {
 }
 
 get_s3_path() {
-    echo "s3://$S3_BUCKET/users/$USER_ID/workspace/"
+    echo "s3://$S3_BUCKET/users/$USER_ID/home/"
 }
 
 build_exclude_args() {
@@ -88,7 +92,7 @@ update_metadata() {
     "last_action": "$action",
     "status": "$status",
     "s3_bucket": "$S3_BUCKET",
-    "s3_path": "users/$USER_ID/workspace/"
+    "s3_path": "users/$USER_ID/home/"
 }
 EOF
     chown coder:coder "$METADATA_FILE" 2>/dev/null || true
@@ -103,7 +107,7 @@ do_restore() {
     local s3_path
     s3_path=$(get_s3_path)
 
-    # Ensure workspace exists
+    # Ensure directories exist
     mkdir -p "$WORKSPACE"
 
     # Check if S3 path exists (has any objects)
@@ -113,17 +117,17 @@ do_restore() {
         return 0
     fi
 
-    log "Downloading from $s3_path to $WORKSPACE"
+    log "Downloading from $s3_path to $SYNC_ROOT"
 
     # Build exclude arguments
     local exclude_args
     exclude_args=$(build_exclude_args)
 
     # Restore from S3 (download only, don't delete local files)
-    eval aws s3 sync "$s3_path" "$WORKSPACE" $exclude_args --no-progress
+    eval aws s3 sync "$s3_path" "$SYNC_ROOT" $exclude_args --no-progress
 
     # Fix ownership
-    chown -R coder:coder "$WORKSPACE"
+    chown -R coder:coder "$SYNC_ROOT"
 
     update_metadata "restore" "success"
     log "Restore completed successfully"
@@ -138,8 +142,8 @@ do_sync() {
     local s3_path
     s3_path=$(get_s3_path)
 
-    if [ ! -d "$WORKSPACE" ]; then
-        log "Workspace directory does not exist, skipping sync"
+    if [ ! -d "$SYNC_ROOT" ]; then
+        log "Sync root does not exist, skipping sync"
         return 0
     fi
 
@@ -147,10 +151,10 @@ do_sync() {
     local exclude_args
     exclude_args=$(build_exclude_args)
 
-    log "Syncing $WORKSPACE to $s3_path"
+    log "Syncing $SYNC_ROOT to $s3_path"
 
     # Incremental sync (upload changes only, don't delete from S3)
-    eval aws s3 sync "$WORKSPACE" "$s3_path" $exclude_args --no-progress
+    eval aws s3 sync "$SYNC_ROOT" "$s3_path" $exclude_args --no-progress
 
     update_metadata "sync" "success"
     log "Incremental sync completed"
@@ -165,8 +169,8 @@ do_full_backup() {
     local s3_path
     s3_path=$(get_s3_path)
 
-    if [ ! -d "$WORKSPACE" ]; then
-        log "Workspace directory does not exist, skipping backup"
+    if [ ! -d "$SYNC_ROOT" ]; then
+        log "Sync root does not exist, skipping backup"
         return 0
     fi
 
@@ -174,10 +178,10 @@ do_full_backup() {
     local exclude_args
     exclude_args=$(build_exclude_args)
 
-    log "Full backup $WORKSPACE to $s3_path (with --delete)"
+    log "Full backup $SYNC_ROOT to $s3_path (with --delete)"
 
-    # Full sync with delete (S3 mirrors local workspace exactly)
-    eval aws s3 sync "$WORKSPACE" "$s3_path" $exclude_args --delete --no-progress
+    # Full sync with delete (S3 mirrors local home exactly)
+    eval aws s3 sync "$SYNC_ROOT" "$s3_path" $exclude_args --delete --no-progress
 
     update_metadata "full-backup" "success"
     log "Full backup completed"

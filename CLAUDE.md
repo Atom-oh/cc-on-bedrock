@@ -29,6 +29,17 @@ scripts/           - ECR repos, deployment verification
 tests/             - Container integration tests, E2E tests
 ```
 
+## Portability & Reusability Rules (CRITICAL)
+- **도메인, Account ID, Region은 하드코딩 금지** — CDK config, 환경변수, SSM Parameter Store로 관리
+- **스택 삭제 후 재배포가 완벽히 동작해야 함** — 수동 리소스 생성 금지, 모든 리소스는 CDK로 관리
+- **S3 deploy 경로 통일**: `s3://{prefix}-deploy-{accountId}/dashboard-deploy.tar.gz` (standalone tar)
+- **Cognito 자격 증명**: SSM Parameter Store (`/cc-on-bedrock/cognito/client-id`, `/cc-on-bedrock/cognito/client-secret`)에서 UserData가 부팅 시 읽음
+- **Secret**: Secrets Manager에 저장, CDK에서 `fromSecretNameV2` 또는 `fromSecretCompleteArn`으로 참조
+- **Cross-stack 참조 금지**: CloudFormation export 대신 SSM Parameter Store 또는 direct import 사용
+- **IAM role은 CDK에서 생성** — CLI로 수동 생성한 role은 CDK import(`fromRoleName`)하거나 CDK로 재생성
+- **Docker 이미지**: ECR에 push 후 task definition에서 참조. 이미지 빌드는 ARM64 ECS 인스턴스에서 수행
+- **환경변수 우선순위**: CDK config → SSM Parameter → Secrets Manager → 기본값
+
 ## Conventions
 - Korean for docs/communication, English for code/comments
 - Commit messages: conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`)

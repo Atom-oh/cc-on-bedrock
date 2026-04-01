@@ -98,7 +98,7 @@ def list_running_tasks() -> list:
 
 
 def get_task_info(task_arn: str) -> dict | None:
-    """Get task details including tags."""
+    """Get task details including tags and task definition family."""
     try:
         response = ecs.describe_tasks(
             cluster=CLUSTER,
@@ -112,12 +112,18 @@ def get_task_info(task_arn: str) -> dict | None:
         task = tasks[0]
         tags = {t["key"]: t["value"] for t in task.get("tags", [])}
 
+        # Extract task def family from ARN: arn:aws:ecs:...:task-definition/devenv-ubuntu-standard:5
+        td_arn = task.get("taskDefinitionArn", "")
+        td_family = td_arn.split("/")[-1].split(":")[0] if "/" in td_arn else "devenv-ubuntu-standard"
+
         return {
             "task_arn": task_arn,
             "task_id": task_arn.split("/")[-1],
             "user_id": tags.get("username", tags.get("user_id", "unknown")),
+            "subdomain": tags.get("subdomain", ""),
             "department": tags.get("department", "default"),
             "started_at": task.get("startedAt"),
+            "task_def_family": td_family,
         }
     except ClientError as e:
         logger.error(f"Failed to describe task {task_arn}: {e}")
@@ -127,6 +133,7 @@ def get_task_info(task_arn: str) -> dict | None:
 def check_task_metrics(task_arn: str, period_minutes: int) -> dict | None:
     """
     Check CPU and Network metrics for a task.
+    Uses custom CC/DevEnv metrics (per-task) first, falls back to Container Insights (per-family).
     Returns task status with idle determination.
     """
     task_info = get_task_info(task_arn)
@@ -135,15 +142,20 @@ def check_task_metrics(task_arn: str, period_minutes: int) -> dict | None:
 
     task_id = task_info["task_id"]
     user_id = task_info["user_id"]
+    subdomain = task_info.get("subdomain", "")
+    task_def_family = task_info["task_def_family"]
 
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(minutes=period_minutes)
 
-    # Get CPU metrics
-    cpu_avg = get_cpu_metrics(user_id, start_time, end_time)
+    # Try custom per-task metrics first (published by idle-monitor.sh)
+    cpu_avg = get_custom_cpu_metrics(task_id, subdomain, start_time, end_time)
+    if cpu_avg is None:
+        # Fall back to Container Insights (per TaskDefinitionFamily — shared across users)
+        cpu_avg = get_cpu_metrics(task_def_family, start_time, end_time)
 
-    # Get Network metrics
-    network_avg = get_network_metrics(user_id, start_time, end_time)
+    # Get Network metrics (Container Insights per TaskDefinitionFamily)
+    network_avg = get_network_metrics(task_def_family, start_time, end_time)
 
     # Determine if idle
     is_idle = cpu_avg < IDLE_CPU_THRESHOLD and network_avg < IDLE_NETWORK_THRESHOLD
@@ -161,20 +173,23 @@ def check_task_metrics(task_arn: str, period_minutes: int) -> dict | None:
         "network_threshold": IDLE_NETWORK_THRESHOLD,
     }
 
-    logger.info(f"Task {task_id} (user: {user_id}): idle={is_idle}, cpu={cpu_avg:.2f}%, network={network_avg:.0f}B/s")
+    logger.info(f"Task {task_id} (user: {user_id}, family: {task_def_family}): idle={is_idle}, cpu={cpu_avg:.2f}%, network={network_avg:.0f}B/s")
     return result
 
 
-def get_cpu_metrics(user_id: str, start_time: datetime, end_time: datetime) -> float:
-    """Get average CPU utilization from CloudWatch."""
+def get_custom_cpu_metrics(task_id: str, subdomain: str, start_time: datetime, end_time: datetime) -> float | None:
+    """Get per-task CPU metrics from custom CC/DevEnv namespace (published by idle-monitor.sh).
+    Returns None if no custom metrics are available (container hasn't published yet)."""
+    if not subdomain:
+        return None
+
     try:
-        # Try ECS service metrics first
         response = cloudwatch.get_metric_statistics(
-            Namespace="AWS/ECS",
-            MetricName="CPUUtilization",
+            Namespace="CC/DevEnv",
+            MetricName="CpuUsage",
             Dimensions=[
-                {"Name": "ClusterName", "Value": CLUSTER},
-                {"Name": "ServiceName", "Value": f"cc-user-{user_id}"},
+                {"Name": "TaskId", "Value": task_id},
+                {"Name": "UserId", "Value": subdomain},
             ],
             StartTime=start_time,
             EndTime=end_time,
@@ -184,15 +199,29 @@ def get_cpu_metrics(user_id: str, start_time: datetime, end_time: datetime) -> f
 
         datapoints = response.get("Datapoints", [])
         if datapoints:
-            return sum(dp["Average"] for dp in datapoints) / len(datapoints)
+            avg = sum(dp["Average"] for dp in datapoints) / len(datapoints)
+            logger.info(f"Custom CPU metric for task {task_id}: {avg:.2f}%")
+            return avg
 
-        # Fallback to Container Insights metrics
+        return None  # No custom metrics yet, caller will fall back
+
+    except ClientError as e:
+        logger.warning(f"Failed to get custom CPU metrics for task {task_id}: {e}")
+        return None
+
+
+def get_cpu_metrics(task_def_family: str, start_time: datetime, end_time: datetime) -> float:
+    """Get average CPU utilization from CloudWatch Container Insights (per TaskDefinitionFamily).
+    Note: This is aggregated across all tasks in the same family (shared metric)."""
+    try:
+        # Container Insights with TaskDefinitionFamily dimension
+        # (standalone ECS tasks don't have ServiceName-based metrics)
         response = cloudwatch.get_metric_statistics(
             Namespace="ECS/ContainerInsights",
             MetricName="CpuUtilized",
             Dimensions=[
                 {"Name": "ClusterName", "Value": CLUSTER},
-                {"Name": "ServiceName", "Value": f"cc-user-{user_id}"},
+                {"Name": "TaskDefinitionFamily", "Value": task_def_family},
             ],
             StartTime=start_time,
             EndTime=end_time,
@@ -205,8 +234,7 @@ def get_cpu_metrics(user_id: str, start_time: datetime, end_time: datetime) -> f
             return sum(dp["Average"] for dp in datapoints) / len(datapoints)
 
         # No metrics found - return high value to prevent false idle detection
-        # Standalone ECS tasks may not emit ServiceName-based metrics
-        logger.warning(f"No CPU metrics found for user {user_id}, returning 100% (fail safe)")
+        logger.warning(f"No CPU metrics found for family {task_def_family}, returning 100% (fail safe)")
         return 100.0
 
     except ClientError as e:
@@ -214,16 +242,15 @@ def get_cpu_metrics(user_id: str, start_time: datetime, end_time: datetime) -> f
         return 100.0  # Fail safe - don't mark as idle
 
 
-def get_network_metrics(user_id: str, start_time: datetime, end_time: datetime) -> float:
-    """Get average network throughput from CloudWatch."""
+def get_network_metrics(task_def_family: str, start_time: datetime, end_time: datetime) -> float:
+    """Get average network throughput from CloudWatch Container Insights (per TaskDefinitionFamily)."""
     try:
-        # Container Insights network metrics
         response = cloudwatch.get_metric_statistics(
             Namespace="ECS/ContainerInsights",
             MetricName="NetworkRxBytes",
             Dimensions=[
                 {"Name": "ClusterName", "Value": CLUSTER},
-                {"Name": "ServiceName", "Value": f"cc-user-{user_id}"},
+                {"Name": "TaskDefinitionFamily", "Value": task_def_family},
             ],
             StartTime=start_time,
             EndTime=end_time,
@@ -239,7 +266,7 @@ def get_network_metrics(user_id: str, start_time: datetime, end_time: datetime) 
             MetricName="NetworkTxBytes",
             Dimensions=[
                 {"Name": "ClusterName", "Value": CLUSTER},
-                {"Name": "ServiceName", "Value": f"cc-user-{user_id}"},
+                {"Name": "TaskDefinitionFamily", "Value": task_def_family},
             ],
             StartTime=start_time,
             EndTime=end_time,

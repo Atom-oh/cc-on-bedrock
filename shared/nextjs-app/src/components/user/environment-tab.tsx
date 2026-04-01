@@ -6,6 +6,7 @@ import type { UserSession, ContainerInfo } from "@/lib/types";
 import { TIER_CONFIG } from "@/lib/types";
 import ContainerMetrics from "@/components/container-metrics";
 import ProvisioningProgress from "./provisioning-progress";
+import { emailToSubdomain } from "@/lib/utils";
 
 interface EnvironmentTabProps {
   user: UserSession;
@@ -43,11 +44,24 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
   const [urlCopied, setUrlCopied] = useState(false);
   const metricsIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Container request state (for users without subdomain)
+  const [requestStatus, setRequestStatus] = useState<"none" | "pending" | "approved" | "loading">("loading");
+  // Verified subdomain from Cognito (bypasses stale JWT)
+  const [verifiedSubdomain, setVerifiedSubdomain] = useState<string | null | undefined>(undefined); // undefined = not yet checked
+  const [requestTier, setRequestTier] = useState<"light" | "standard" | "power">("standard");
+  const [requestStorage, setRequestStorage] = useState<"ebs" | "efs">("ebs");
+  const [requestVolumeSize, setRequestVolumeSize] = useState(20);
+  const [requestSubmitting, setRequestSubmitting] = useState(false);
+
   const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
   const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
 
-  const codeServerUrl = user.subdomain
-    ? `https://${user.subdomain}.${devSubdomain}.${domainName}`
+  // Use Cognito-verified subdomain when available, fall back to JWT value during initial load
+  const effectiveSubdomain = verifiedSubdomain !== undefined ? verifiedSubdomain : (user.subdomain ?? null);
+  const hasSubdomain = !!effectiveSubdomain;
+
+  const codeServerUrl = effectiveSubdomain
+    ? `https://${effectiveSubdomain}.${devSubdomain}.${domainName}`
     : null;
 
   // Fetch usage data
@@ -65,11 +79,11 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
 
     const fetchDeptPolicy = async () => {
       try {
-        const deptRes = await fetch("/api/dept");
+        const deptRes = await fetch("/api/user/container?action=dept-policy");
         if (deptRes.ok) {
           const deptData = await deptRes.json();
-          if (deptData.success && deptData.data?.policy?.allowedTiers) {
-            setDeptPolicy({ allowedTiers: deptData.data.policy.allowedTiers });
+          if (deptData.success && deptData.data?.allowedTiers) {
+            setDeptPolicy({ allowedTiers: deptData.data.allowedTiers });
           }
         }
       } catch { /* ignore */ }
@@ -80,6 +94,61 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
     const interval = setInterval(fetchUsage, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Verify actual subdomain from Cognito (bypasses stale JWT)
+  // Then fetch container request status if subdomain is empty
+  useEffect(() => {
+    (async () => {
+      // Step 1: Verify subdomain against Cognito
+      let actualSubdomain = user.subdomain ?? null;
+      try {
+        const verifyRes = await fetch("/api/user/container?action=verify");
+        if (verifyRes.ok) {
+          const verifyData = await verifyRes.json();
+          if (verifyData.success) {
+            actualSubdomain = verifyData.data?.subdomain ?? null;
+          }
+        }
+      } catch { /* fall back to JWT value */ }
+      setVerifiedSubdomain(actualSubdomain);
+
+      // Step 2: If no subdomain, fetch request status
+      if (actualSubdomain) {
+        setRequestStatus("none");
+        return;
+      }
+      try {
+        const res = await fetch("/api/user/container-request");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.data) {
+            setRequestStatus(data.data.status === "pending" ? "pending" : data.data.status === "approved" ? "approved" : "none");
+          } else {
+            setRequestStatus("none");
+          }
+        } else { setRequestStatus("none"); }
+      } catch { setRequestStatus("none"); }
+    })();
+  }, [user.subdomain]);
+
+  const handleSubmitRequest = async () => {
+    setRequestSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/user/container-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resourceTier: requestTier, storageType: requestStorage, volumeSize: requestVolumeSize }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setRequestStatus("pending");
+      } else {
+        setError(data.error ?? "신청에 실패했습니다");
+      }
+    } catch { setError("요청 중 오류가 발생했습니다"); }
+    finally { setRequestSubmitting(false); }
+  };
 
   // Fetch container metrics when running
   useEffect(() => {
@@ -103,10 +172,13 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
   }, [container?.status, container?.taskId]);
 
   const handleStartContainer = async () => {
+    console.log("[DEBUG] handleStartContainer called, tier:", selectedTier, "allowed:", deptPolicy.allowedTiers);
     if (!deptPolicy.allowedTiers.includes(selectedTier)) {
       setError(`Tier "${selectedTier}" is not allowed for your department`);
+      console.log("[DEBUG] Tier not allowed");
       return;
     }
+    console.log("[DEBUG] Setting isProvisioning=true");
     setIsProvisioning(true);
     setError(null);
   };
@@ -153,6 +225,92 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
       {error && (
         <div className="bg-red-900/30 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg">
           {error}
+        </div>
+      )}
+
+      {/* Container Request Form (no subdomain assigned) */}
+      {!hasSubdomain && requestStatus === "loading" && (
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-8 text-center">
+          <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-3" />
+          <p className="text-gray-400">신청 상태 확인 중...</p>
+        </div>
+      )}
+
+      {!hasSubdomain && requestStatus === "pending" && (
+        <div className="bg-[#161b22] rounded-xl border border-yellow-500/30 p-8 text-center">
+          <div className="w-12 h-12 bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+            <span className="text-2xl">⏳</span>
+          </div>
+          <h2 className="text-lg font-semibold text-gray-100 mb-2">컨테이너 신청 대기 중</h2>
+          <p className="text-gray-400 text-sm">관리자 승인 후 개발 환경이 할당됩니다.</p>
+        </div>
+      )}
+
+      {!hasSubdomain && requestStatus === "approved" && (
+        <div className="bg-[#161b22] rounded-xl border border-green-500/30 p-8 text-center">
+          <div className="w-12 h-12 bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+            <span className="text-2xl">✅</span>
+          </div>
+          <h2 className="text-lg font-semibold text-gray-100 mb-2">신청이 승인되었습니다</h2>
+          <p className="text-gray-400 text-sm">관리자가 리소스를 할당하면 시작 버튼이 활성화됩니다.</p>
+        </div>
+      )}
+
+      {!hasSubdomain && requestStatus === "none" && (
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">개발 환경 신청</h2>
+          <p className="text-sm text-gray-400 mb-4">리소스 크기와 스토리지를 선택하고 신청하세요. 부서 관리자 승인 후 환경이 할당됩니다.</p>
+          <div className="bg-[#0d1117] rounded-lg p-3 mb-6 flex items-center gap-2">
+            <span className="text-xs text-gray-500">예상 subdomain:</span>
+            <code className="text-sm text-blue-400 font-mono">{emailToSubdomain(user.email)}</code>
+          </div>
+
+          <div className="mb-6">
+            <label className="block text-sm text-gray-400 mb-2">리소스 크기</label>
+            <div className="grid grid-cols-3 gap-3">
+              {(["light", "standard", "power"] as const).map((tier) => {
+                const cfg = TIER_CONFIG[tier];
+                return (
+                  <button key={tier} onClick={() => setRequestTier(tier)}
+                    className={`p-3 rounded-lg border text-left transition-all ${requestTier === tier ? "border-blue-500 bg-blue-900/20" : "border-gray-700 bg-[#0d1117] hover:border-gray-600"}`}>
+                    <p className="text-sm font-medium text-gray-200">{tier === "light" ? "Small" : tier === "standard" ? "Medium" : "Large"}</p>
+                    <p className="text-xs text-gray-500">{cfg.cpu} / {cfg.memory}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <label className="block text-sm text-gray-400 mb-2">스토리지 타입</label>
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => setRequestStorage("ebs")}
+                className={`p-3 rounded-lg border text-left transition-all ${requestStorage === "ebs" ? "border-blue-500 bg-blue-900/20" : "border-gray-700 bg-[#0d1117] hover:border-gray-600"}`}>
+                <p className="text-sm font-medium text-gray-200">EBS (Fast SSD)</p>
+                <p className="text-xs text-gray-500">고성능 블록 스토리지</p>
+              </button>
+              <button onClick={() => setRequestStorage("efs")}
+                className={`p-3 rounded-lg border text-left transition-all ${requestStorage === "efs" ? "border-blue-500 bg-blue-900/20" : "border-gray-700 bg-[#0d1117] hover:border-gray-600"}`}>
+                <p className="text-sm font-medium text-gray-200">EFS (Shared)</p>
+                <p className="text-xs text-gray-500">공유 네트워크 스토리지</p>
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <label className="block text-sm text-gray-400 mb-2">볼륨 크기: {requestVolumeSize}GB</label>
+            <input type="range" min={20} max={100} step={10} value={requestVolumeSize}
+              onChange={(e) => setRequestVolumeSize(Number(e.target.value))}
+              className="w-full accent-blue-500" />
+            <div className="flex justify-between text-xs text-gray-600 mt-1">
+              <span>20GB</span><span>60GB</span><span>100GB</span>
+            </div>
+          </div>
+
+          <button onClick={handleSubmitRequest} disabled={requestSubmitting}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors">
+            {requestSubmitting ? "신청 중..." : "개발 환경 신청"}
+          </button>
         </div>
       )}
 
@@ -204,7 +362,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">{t("user.subdomain") || "Subdomain"}</p>
-            <p className="text-sm text-gray-200">{user.subdomain ?? "-"}</p>
+            <p className="text-sm text-gray-200">{effectiveSubdomain ?? "-"}</p>
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">Storage</p>
@@ -217,7 +375,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         </div>
 
         {/* VSCode URL Card */}
-        {container?.status === "RUNNING" && container?.healthStatus === "HEALTHY" && codeServerUrl && (
+        {container?.status === "RUNNING" && (container?.healthStatus === "HEALTHY" || container?.healthStatus === "UNKNOWN") && codeServerUrl && (
           <div className="bg-[#0d1117] rounded-lg p-4 mb-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-gray-500 mb-1">VSCode URL</p>
@@ -256,7 +414,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         )}
 
         {/* Warming up indicator */}
-        {container?.status === "RUNNING" && container?.healthStatus !== "HEALTHY" && !isProvisioning && (
+        {container?.status === "RUNNING" && container?.healthStatus !== "HEALTHY" && container?.healthStatus !== "UNKNOWN" && !isProvisioning && (
           <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-4 mb-4 flex items-center gap-3">
             <div className="w-5 h-5 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin flex-shrink-0" aria-hidden="true" />
             <div>
@@ -315,7 +473,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
           {!container && !isProvisioning && (
             <button
               onClick={handleStartContainer}
-              disabled={actionLoading || !user.subdomain}
+              disabled={actionLoading || !hasSubdomain}
               className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
             >
               {t("user.start") || "Start Container"}

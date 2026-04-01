@@ -1,0 +1,60 @@
+name: Build Dashboard Image → ECR
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'shared/nextjs-app/**'
+      - 'docker/dashboard/**'
+      - '.github/workflows/deploy-dashboard.yml'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'ECR image tag (default: git SHA + latest)'
+        required: false
+        default: ''
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: cc-on-bedrock/dashboard
+
+jobs:
+  build-and-push:
+    name: Build → Push to ECR
+    runs-on: [self-hosted, linux, ARM64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          TAG="${INPUT_TAG:-$GIT_SHA}"
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          docker build \
+            --platform linux/arm64 \
+            -f docker/dashboard/Dockerfile \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+            .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"

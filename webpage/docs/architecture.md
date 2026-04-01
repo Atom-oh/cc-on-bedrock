@@ -69,7 +69,8 @@ Cognito + NextAuth.js 기반의 인증 체계와 code-server 비밀번호 동기
 
 ---
 
-## 컨테이너 아키텍처
+## 모니터링 및 분석 (Monitoring & Analytics)
+대시보드에서는 인프라 상태를 실시간으로 감시하고 사용량을 분석할 수 있습니다.
 
 각 사용자는 완전히 격리된 ECS 태스크를 할당받습니다:
 
@@ -112,6 +113,12 @@ Cognito + NextAuth.js 기반의 인증 체계와 code-server 비밀번호 동기
 />
 
 ---
+
+<Screenshot 
+  src="/img/containers.png" 
+  alt="Containers" 
+  caption="컨테이너 관리: 사용자별 독립된 개발 환경 실행 및 제어" 
+/>
 
 ## 하이브리드 AI 아키텍처
 
