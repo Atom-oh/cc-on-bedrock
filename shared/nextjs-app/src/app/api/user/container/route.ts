@@ -10,10 +10,16 @@ import {
   deregisterContainerRoute,
   getCognitoUser,
 } from "@/lib/aws-clients";
+import {
+  startInstance,
+  stopInstance,
+  listInstances,
+} from "@/lib/ec2-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
+const computeMode = process.env.COMPUTE_MODE ?? "ec2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const dynamodb = new DynamoDBClient({ region });
 
@@ -77,6 +83,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, data: null });
   }
   try {
+    if (computeMode === "ec2") {
+      const instances = await listInstances();
+      const userInstance = instances.find(
+        (i) => i.subdomain === user.subdomain && (i.status === "running" || i.status === "pending")
+      );
+      // Map to ContainerInfo-like shape for UI compatibility
+      if (userInstance) {
+        return NextResponse.json({ success: true, data: {
+          taskArn: userInstance.instanceId,
+          taskId: userInstance.instanceId,
+          status: userInstance.status.toUpperCase(),
+          desiredStatus: userInstance.status.toUpperCase(),
+          username: userInstance.username,
+          subdomain: userInstance.subdomain,
+          containerOs: "ubuntu",
+          resourceTier: "standard",
+          securityPolicy: userInstance.securityPolicy,
+          privateIp: userInstance.privateIp,
+          healthStatus: userInstance.status === "running" ? "HEALTHY" : "UNKNOWN",
+        }});
+      }
+      return NextResponse.json({ success: true, data: null });
+    }
+
     const containers = await listContainers();
     const userContainer = containers.find(
       (c) => c.subdomain === user.subdomain &&
@@ -105,7 +135,17 @@ export async function POST(req: NextRequest) {
     const { action, taskArn, resourceTier: requestedTier } = body;
 
     if (action === "start") {
-      // Check if user already has a running container
+      if (computeMode === "ec2") {
+        const result = await startInstance({
+          subdomain: user.subdomain,
+          username: user.email,
+          department: (user as unknown as Record<string, string>).department ?? "default",
+          securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+        });
+        return NextResponse.json({ success: true, data: { taskArn: result.instanceId } });
+      }
+
+      // ECS mode
       const containers = await listContainers();
       const existingContainer = containers.find(
         (c) =>
@@ -120,13 +160,11 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Determine the tier to use: requested > user default > standard
       const tierToUse: ResourceTier = VALID_TIERS.includes(requestedTier)
         ? requestedTier
         : (user.resourceTier as ResourceTier) ?? "standard";
 
-      // Validate tier against department policy
-      const department = "default"; // Could be extended to read from user attributes
+      const department = "default";
       const allowedTiers = await getDeptAllowedTiers(department);
 
       if (!allowedTiers.includes(tierToUse)) {
@@ -149,7 +187,6 @@ export async function POST(req: NextRequest) {
         storageType: user.storageType ?? "efs",
       });
 
-      // Auto-register route after a short delay for IP assignment
       setTimeout(async () => {
         try {
           for (let i = 0; i < 6; i++) {
@@ -169,6 +206,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "stop") {
+      if (computeMode === "ec2") {
+        await stopInstance(user.subdomain, "Stopped by user");
+        return NextResponse.json({ success: true });
+      }
+
       if (!taskArn) {
         return NextResponse.json({ error: "taskArn required for stop action" }, { status: 400 });
       }
