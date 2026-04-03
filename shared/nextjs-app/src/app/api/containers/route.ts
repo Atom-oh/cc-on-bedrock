@@ -190,6 +190,27 @@ export async function DELETE(req: NextRequest) {
     }
 
     await stopContainer(body);
+
+    // EBS mode: trigger async snapshot for data persistence
+    const serverStorageType = process.env.STORAGE_TYPE ?? "ebs";
+    if (serverStorageType === "ebs" && body.subdomain) {
+      try {
+        const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
+        const lambda = new LambdaClient({ region });
+        await lambda.send(new InvokeCommand({
+          FunctionName: process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle",
+          InvocationType: "Event",
+          Payload: Buffer.from(JSON.stringify({
+            action: "snapshot_and_detach",
+            user_id: body.subdomain,
+          })),
+        }));
+        console.log(`[containers] EBS snapshot triggered for ${body.subdomain}`);
+      } catch (err) {
+        console.warn("[containers] EBS snapshot trigger failed:", err);
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[containers] DELETE", err instanceof Error ? err.message : err);

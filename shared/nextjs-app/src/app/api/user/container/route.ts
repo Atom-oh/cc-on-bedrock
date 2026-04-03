@@ -196,7 +196,9 @@ export async function POST(req: NextRequest) {
       await stopContainer({ taskArn, reason: "Stopped by user" });
 
       // EBS mode: async snapshot for data persistence (volume kept for same-AZ reuse)
-      if (user.storageType === "ebs") {
+      // Use server env var — JWT storageType can be stale/missing and default to "efs"
+      const serverStorageType = process.env.STORAGE_TYPE ?? "ebs";
+      if (serverStorageType === "ebs") {
         try {
           const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
           const lambda = new LambdaClient({ region });
