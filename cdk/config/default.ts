@@ -31,7 +31,15 @@ export interface CcOnBedrockConfig {
   // Budget
   dailyBudgetUsd: number;
 
-  // Storage mode
+  // Compute mode
+  // 'ecs' = ECS tasks on shared instances (original)
+  // 'ec2' = EC2-per-user instances (recommended for code-server)
+  computeMode: 'ecs' | 'ec2';
+
+  // DevEnv instance type (EC2 mode only)
+  devenvInstanceType: string;
+
+  // Storage mode (ECS mode only)
   // 'ebs' = enterprise mode with warm-stop, idle-check, snapshot/resize lifecycle
   // 'efs' = simple mode, EFS-only, no EBS lifecycle management
   storageType: 'efs' | 'ebs';
@@ -76,6 +84,8 @@ export const defaultConfig: CcOnBedrockConfig = {
   ecsClusterName: 'cc-on-bedrock-devenv',
   nodeVersion: 'v20.18.3',
   dailyBudgetUsd: 50,
+  computeMode: 'ec2',
+  devenvInstanceType: 't4g.large',
   storageType: 'ebs',
   cloudfrontPrefixListId: 'pl-22a6434b',  // ap-northeast-2 default
 };

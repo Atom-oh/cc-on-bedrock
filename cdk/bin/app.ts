@@ -32,6 +32,8 @@ const config = {
   ecsClusterName: app.node.tryGetContext('ecsClusterName') ?? defaultConfig.ecsClusterName,
   nodeVersion: app.node.tryGetContext('nodeVersion') ?? defaultConfig.nodeVersion,
   dailyBudgetUsd: Number(app.node.tryGetContext('dailyBudgetUsd')) || defaultConfig.dailyBudgetUsd,
+  computeMode: (app.node.tryGetContext('computeMode') as 'ecs' | 'ec2') ?? defaultConfig.computeMode,
+  devenvInstanceType: app.node.tryGetContext('devenvInstanceType') ?? defaultConfig.devenvInstanceType,
   storageType: (app.node.tryGetContext('storageType') as 'efs' | 'ebs') ?? defaultConfig.storageType,
   cloudfrontPrefixListId: app.node.tryGetContext('cloudfrontPrefixListId') ?? defaultConfig.cloudfrontPrefixListId,
 };
