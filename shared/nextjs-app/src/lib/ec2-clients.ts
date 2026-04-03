@@ -99,8 +99,22 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   const existing = await getUserInstance(input.subdomain);
 
   if (existing?.instanceId) {
-    // Try to start existing stopped instance
     const desc = await describeInstance(existing.instanceId);
+
+    // Wait if instance is transitioning (stopping → stopped, pending → running)
+    if (desc && (desc.status === "stopping" || desc.status === "pending")) {
+      console.log(`[EC2] Instance ${existing.instanceId} is ${desc.status}, waiting...`);
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const check = await describeInstance(existing.instanceId);
+        if (!check || check.status === "stopped" || check.status === "running") {
+          desc!.status = check?.status ?? "terminated";
+          desc!.privateIp = check?.privateIp ?? "";
+          break;
+        }
+      }
+    }
+
     if (desc && desc.status === "stopped") {
       // Resize instance type if tier changed
       const newType = INSTANCE_TIERS[input.resourceTier ?? "standard"].type;
