@@ -35,12 +35,20 @@ import {
   AddRoleToInstanceProfileCommand,
   GetInstanceProfileCommand,
 } from "@aws-sdk/client-iam";
+import {
+  SecretsManagerClient,
+  GetSecretValueCommand,
+  PutSecretValueCommand,
+  CreateSecretCommand,
+} from "@aws-sdk/client-secrets-manager";
+import { randomBytes } from "crypto";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const ec2Client = new EC2Client({ region });
 const ssmClient = new SSMClient({ region });
 const ddbClient = new DynamoDBClient({ region });
 const iamClient = new IAMClient({ region });
+const secretsClient = new SecretsManagerClient({ region });
 const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 
 const INSTANCE_TABLE = process.env.INSTANCE_TABLE ?? "cc-user-instances";
@@ -149,6 +157,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Per-user instance profile for individual Bedrock usage tracking
   const instanceProfileName = await ensureUserInstanceProfile(input.subdomain);
 
+  // Per-user code-server password (Secrets Manager)
+  const codeserverPassword = await ensureCodeserverPassword(input.subdomain);
+
   const result = await ec2Client.send(new RunInstancesCommand({
     ImageId: amiId!,
     IamInstanceProfile: { Name: instanceProfileName },
@@ -173,9 +184,18 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${input.subdomain}" >> /etc/environment`,
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
+      `echo "ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-6-v1:0" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
-      // Configure code-server password via Secrets Manager or env
-      `systemctl start code-server || true`,
+      `# Set per-user code-server password`,
+      `mkdir -p /home/coder/.config/code-server`,
+      `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
+      `bind-addr: 0.0.0.0:8080`,
+      `auth: password`,
+      `password: ${codeserverPassword}`,
+      `cert: false`,
+      `CSCFG`,
+      `chown -R coder:coder /home/coder/.config`,
+      `systemctl restart code-server || systemctl start code-server`,
     ].join("\n")).toString("base64"),
   }));
 
@@ -385,6 +405,28 @@ async function deregisterRoute(subdomain: string): Promise<void> {
 }
 
 const ROLE_PREFIX = "cc-on-bedrock-task";  // Reuse same naming convention as ECS for CloudTrail compatibility
+
+async function ensureCodeserverPassword(subdomain: string): Promise<string> {
+  const secretName = `cc-on-bedrock/codeserver/${subdomain}`;
+  // Read existing or generate new
+  try {
+    const existing = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretName }));
+    if (existing.SecretString) return existing.SecretString;
+  } catch { /* not found — create */ }
+
+  const password = randomBytes(16).toString("hex");
+  try {
+    await secretsClient.send(new PutSecretValueCommand({ SecretId: secretName, SecretString: password }));
+  } catch {
+    await secretsClient.send(new CreateSecretCommand({
+      Name: secretName,
+      SecretString: password,
+      Description: `code-server password for ${subdomain}`,
+    }));
+  }
+  console.log(`[Password] Generated code-server password for ${subdomain}`);
+  return password;
+}
 
 async function ensureUserInstanceProfile(subdomain: string): Promise<string> {
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
