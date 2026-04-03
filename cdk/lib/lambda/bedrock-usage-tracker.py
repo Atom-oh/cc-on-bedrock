@@ -71,7 +71,16 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
         except Exception as e:
             print(f"ECS task lookup failed for {session_name[:8]}...: {e}")
 
-    # Fallback: use role name
+    # EC2 per-user mode: role name is cc-on-bedrock-task-{subdomain}
+    # Extract subdomain for DynamoDB PK compatibility
+    TASK_ROLE_PREFIX = "cc-on-bedrock-task-"
+    if role_name.startswith(TASK_ROLE_PREFIX):
+        user = role_name[len(TASK_ROLE_PREFIX):]
+        _task_cache[cache_key] = (user, "default")
+        print(f"Resolved EC2 role {role_name} → {user}(default)")
+        return user, "default"
+
+    # Fallback: use role name as-is
     _task_cache[cache_key] = (role_name, "default")
     return role_name, "default"
 
