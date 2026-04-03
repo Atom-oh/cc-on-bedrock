@@ -62,16 +62,10 @@ jobs:
             BASE="${GIT_TAG#v}"  # strip 'v' prefix
 
             # Find highest incremental suffix for this base tag in ECR
-            EXISTING=$(aws ecr describe-images --repository-name cc-on-bedrock/dashboard \
-              --query "imageDetails[*].imageTags[]" --output text 2>/dev/null \
-              | tr '\t' '\n' | grep "^${BASE}_" | sort -t_ -k2 -n | tail -1)
-
-            if [ -n "$EXISTING" ]; then
-              LAST_NUM=$(echo "$EXISTING" | awk -F_ '{print $NF}')
-              NEXT_NUM=$((LAST_NUM + 1))
-            else
-              NEXT_NUM=1
-            fi
+            LAST_NUM=$(aws ecr describe-images --repository-name cc-on-bedrock/dashboard \
+              --query "imageDetails[?imageTags].imageTags[]" --output text 2>/dev/null \
+              | tr '\t' '\n' | grep "^${BASE}_" | sed "s/${BASE}_//" | sort -n | tail -1)
+            NEXT_NUM=$(( ${LAST_NUM:-0} + 1 ))
 
             TAG="${BASE}_${NEXT_NUM}"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
