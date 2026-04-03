@@ -96,7 +96,7 @@ export class Ec2DevenvStack extends cdk.Stack {
       ...(props.taskPermissionBoundary ? { permissionsBoundary: props.taskPermissionBoundary } : {}),
     });
 
-    // Bedrock access
+    // Bedrock access — all Claude models (foundation + global/us/eu inference profiles)
     this.devenvRole.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockAccess',
       actions: [
@@ -105,7 +105,7 @@ export class Ec2DevenvStack extends cdk.Stack {
       ],
       resources: [
         'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
       ],
     }));
 
