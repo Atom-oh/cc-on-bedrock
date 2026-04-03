@@ -224,9 +224,8 @@ export class DashboardStack extends cdk.Stack {
       },
     });
 
-    // ─── ECS Service (runs on cc-cp-dashboard Capacity Provider) ───
-    const service = new ecs.Ec2Service(this, 'DashboardService', {
-      serviceName: 'cc-dashboard',
+    // ─── ECS Service ───
+    const service = new ecs.Ec2Service(this, 'DashboardSvc', {
       cluster,
       taskDefinition: taskDef,
       desiredCount: 1,

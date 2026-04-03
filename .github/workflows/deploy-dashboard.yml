@@ -27,7 +27,7 @@ env:
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com
   ECR_REPO: cc-on-bedrock/dashboard
   ECS_CLUSTER: cc-on-bedrock-devenv
-  ECS_SERVICE: cc-dashboard
+  ECS_SERVICE: CcOnBedrock-Dashboard-DashboardSvcService607C5919-6YUFqXVEqA77
 
 jobs:
   build-and-push:
