@@ -216,7 +216,8 @@ export class EcsDevenvStack extends cdk.Stack {
       containerInsights: true,
     });
 
-    // ECS Capacity Provider (m7g.4xlarge ASG with Launch Template)
+    // ECS Capacity Provider — in EC2 compute mode, only Dashboard runs here
+    // so a smaller instance type suffices (set via config.ecsHostInstanceType)
     const ecsInstanceRole = new iam.Role(this, 'EcsInstanceRole', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
       managedPolicies: [
@@ -256,7 +257,7 @@ export class EcsDevenvStack extends cdk.Stack {
       vpc,
       launchTemplate: ecsLaunchTemplate,
       minCapacity: 0,
-      maxCapacity: 16,
+      maxCapacity: 2,  // Dashboard only in EC2 mode
       desiredCapacity: 0,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       newInstancesProtectedFromScaleIn: false,
