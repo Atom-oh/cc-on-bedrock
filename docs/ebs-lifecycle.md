@@ -211,6 +211,74 @@ aws s3 sync /home/coder s3://{S3_SYNC_BUCKET}/users/{USER_SUBDOMAIN}/home/ --del
 | `docker/devenv/scripts/entrypoint.sh` | SIGTERM → S3 backup handler |
 | `docker/devenv/scripts/s3-sync.sh` | S3 sync 유틸리티 |
 
+## Test Checklist
+
+### 1. 파일 보존 테스트
+
+```bash
+# [1회차 시작]
+# code-server 터미널에서:
+echo "hello" > /home/coder/test-file.txt
+ls /home/coder/test-file.txt   # 확인
+
+# [대시보드에서 Stop]
+# 확인: Lambda 로그에 "Found EBS volume vol-xxx" + "snapshot initiated"
+# 확인: DynamoDB cc-user-volumes에 snapshot_id 저장됨
+
+# [다시 Start]
+cat /home/coder/test-file.txt  # "hello" 출력되면 성공
+```
+
+### 2. 패키지 보존 테스트 (/usr/local symlink)
+
+```bash
+# [1회차 시작]
+# symlink 확인:
+ls -la /usr/local              # → /data/usr-local 확인
+ls -la /home/coder             # → /data/home 확인
+
+# 패키지 설치:
+npm install -g cowsay
+cowsay "test"                  # 동작 확인
+which cowsay                   # /data/usr-local/bin/cowsay
+
+pip install httpie
+http --version                 # 동작 확인
+
+# [대시보드에서 Stop → Start]
+cowsay "survived"              # 동작하면 성공
+http --version                 # 동작하면 성공
+ls /data/usr-local/.initialized  # 존재 확인
+```
+
+### 3. Snapshot 확인 (관리자)
+
+```bash
+# DynamoDB 확인
+aws dynamodb scan --table-name cc-user-volumes \
+  --query 'Items[*].{user:user_id.S,snapshot:snapshot_id.S,status:status.S}'
+
+# EBS volume 확인 (orphan 없어야 함)
+aws ec2 describe-volumes \
+  --filters "Name=tag:managed_by,Values=cc-on-bedrock" \
+  --query 'Volumes[*].{id:VolumeId,status:State,user:Tags[?Key==`user_id`].Value|[0]}'
+
+# Lambda 로그 확인
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/cc-on-bedrock-ebs-lifecycle \
+  --start-time $(date -d '10 minutes ago' +%s)000 \
+  --filter-pattern "snapshot"
+```
+
+### 4. Scale-in 확인
+
+```bash
+# 모든 devenv 태스크 중지 후 15분 대기
+aws autoscaling describe-auto-scaling-groups \
+  --query 'AutoScalingGroups[?contains(AutoScalingGroupName, `EcsAsg`)].{desired:DesiredCapacity,instances:Instances|length(@)}'
+# desired가 줄어들면 성공 (dashboard 1대만 남음)
+```
+
 ---
 
 ## Appendix: EFS 대안 검토 (ADR)
