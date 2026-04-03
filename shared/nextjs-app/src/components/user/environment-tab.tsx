@@ -197,6 +197,10 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
     if (!container) return;
     setActionLoading(true);
     setError(null);
+
+    // Immediately show STOPPING state
+    setContainer({ ...container, status: "STOPPING", desiredStatus: "STOPPED" });
+
     try {
       const res = await fetch("/api/user/container", {
         method: "POST",
@@ -206,16 +210,26 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
       const data = await res.json();
       if (!data.success) {
         setError(data.error ?? "Failed to stop instance");
-      } else {
-        // Show STOPPING state briefly before clearing
-        if (container) {
-          setContainer({ ...container, status: "STOPPING", desiredStatus: "STOPPED" });
-        }
-        // Wait for instance to fully stop before allowing Start
-        setTimeout(() => setContainer(null), 30000);
+        setContainer(container); // Restore original state on error
+        setActionLoading(false);
+        return;
       }
+
+      // Poll until instance is fully stopped
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        try {
+          const check = await fetch("/api/user/container");
+          const checkData = await check.json();
+          if (!checkData.data || checkData.data.status === "STOPPED" || checkData.data.status === "stopped") {
+            break;
+          }
+        } catch { /* continue polling */ }
+      }
+
+      setContainer(null);
     } catch {
-      setError("Failed to stop container");
+      setError("Failed to stop instance");
     } finally {
       setActionLoading(false);
     }
@@ -335,6 +349,12 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
           <h2 className="text-lg font-semibold text-gray-100">
             {t("user.containerStatus") || "Container Status"}
           </h2>
+          {container && container.status === "STOPPING" && (
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-900/30 text-yellow-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              {t("user.stopping") || "Stopping..."}
+            </span>
+          )}
           {container && container.status === "RUNNING" && (
             <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-green-900/30 text-green-400">
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
