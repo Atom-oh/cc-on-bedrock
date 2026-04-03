@@ -108,6 +108,44 @@ export class DashboardStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // EC2 DevEnv management (computeMode: 'ec2')
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'Ec2DevenvManagement',
+      actions: [
+        'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
+        'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
+        'ec2:ModifyInstanceAttribute',
+      ],
+      resources: ['*'],
+    }));
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'Ec2DevenvDynamoDB',
+      actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
+      resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-instances`],
+    }));
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'Ec2DevenvIamRoles',
+      actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:TagRole', 'iam:DeleteRole', 'iam:DeleteRolePolicy'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+    }));
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'Ec2DevenvInstanceProfiles',
+      actions: ['iam:CreateInstanceProfile', 'iam:GetInstanceProfile', 'iam:AddRoleToInstanceProfile', 'iam:RemoveRoleFromInstanceProfile', 'iam:DeleteInstanceProfile'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`],
+    }));
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'Ec2DevenvPassRole',
+      actions: ['iam:PassRole'],
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-devenv-instance`,
+      ],
+    }));
+
     // ─── Security Groups ───
     const albSg = new ec2.SecurityGroup(this, 'DashboardAlbSg', {
       vpc, description: 'Dashboard ALB SG', allowAllOutbound: true,
