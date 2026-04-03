@@ -24,7 +24,20 @@ SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 STORAGE_TYPE="${STORAGE_TYPE:-efs}"
 if [ "$STORAGE_TYPE" = "ebs" ]; then
   echo "Setting up EBS volume at /data..."
+
+  # Migrate: if old snapshot has files at /data root (from /home/coder mount era), move to /data/home
+  if [ -f /data/.bashrc ] && [ ! -d /data/home/.bashrc.d ]; then
+    echo "Migrating old /home/coder data from /data root to /data/home..."
+    mkdir -p /data/home
+    for item in /data/.* /data/*; do
+      base=$(basename "$item")
+      [ "$base" = "." ] || [ "$base" = ".." ] || [ "$base" = "home" ] || [ "$base" = "usr-local" ] || [ "$base" = "lost+found" ] && continue
+      mv "$item" /data/home/ 2>/dev/null || true
+    done
+  fi
+
   mkdir -p /data/home /data/usr-local
+  chown coder:coder /data/home /data/usr-local
 
   # Persist /usr/local: copy Docker image contents on first boot
   if [ ! -f /data/usr-local/.initialized ]; then
