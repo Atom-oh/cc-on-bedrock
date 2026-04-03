@@ -18,13 +18,32 @@ SECURITY_POLICY="${SECURITY_POLICY:-open}"
 SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 
 # --- Per-user directory isolation ---
-# EBS mode: /home/coder is an EBS volume (auto-mounted by ECS), EFS at /efs
+# EBS mode: /data is EBS volume, symlink /home/coder + /usr/local into it
 # EFS AP mode: /home/coder IS the user's root via Access Point
 # EFS fallback: /home/coder/users/{subdomain}/ for isolation
 STORAGE_TYPE="${STORAGE_TYPE:-efs}"
 if [ "$STORAGE_TYPE" = "ebs" ]; then
+  echo "Setting up EBS volume at /data..."
+  mkdir -p /data/home /data/usr-local
+
+  # Persist /usr/local: copy Docker image contents on first boot
+  if [ ! -f /data/usr-local/.initialized ]; then
+    echo "First boot: copying /usr/local to EBS..."
+    cp -a /usr/local/* /data/usr-local/ 2>/dev/null || true
+    touch /data/usr-local/.initialized
+  fi
+  rm -rf /usr/local && ln -sf /data/usr-local /usr/local
+  echo "Symlinked /usr/local → /data/usr-local"
+
+  # Persist /home/coder
+  rm -rf "$USER_HOME" && ln -sf /data/home "$USER_HOME"
+  echo "Symlinked /home/coder → /data/home"
+
+  # Refresh PATH to pick up symlinked binaries
+  export PATH="/data/usr-local/bin:$PATH"
+
   EFS_USER_DIR="$USER_HOME"
-  echo "Using EBS volume mount: $EFS_USER_DIR (EFS available at /efs)"
+  echo "Using EBS volume: /data (home + usr-local)"
 elif [ -n "${EFS_ACCESS_POINT:-}" ] || [ "${STORAGE_ISOLATED:-}" = "true" ]; then
   EFS_USER_DIR="$USER_HOME"
   echo "Using isolated EFS (Access Point): $EFS_USER_DIR"

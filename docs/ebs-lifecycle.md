@@ -114,10 +114,22 @@ DynamoDB `cc-user-volumes` 상태값:
           filesystemType: ext4
           terminationPolicy: deleteOnTermination: false
 
-4. Volume mount: /home/coder (task definition configuredAtLaunch: true)
+4. Volume mount: /data (task definition configuredAtLaunch: true)
 
-5. [컨테이너 내부] S3 restore (entrypoint.sh)
+5. [컨테이너 내부] entrypoint.sh EBS 초기화:
+   ├─ mkdir -p /data/home /data/usr-local
+   ├─ 최초 부팅: cp -a /usr/local/* → /data/usr-local/
+   ├─ symlink: /usr/local → /data/usr-local (패키지 보존)
+   ├─ symlink: /home/coder → /data/home (사용자 파일 보존)
    └─ s3-sync.sh restore: S3 → /home/coder (보조 복구 경로)
+
+### EBS 보존 범위
+
+| 경로 | EBS 위치 | 보존 대상 |
+|------|----------|----------|
+| `/home/coder` | `/data/home` (symlink) | 사용자 파일, 프로젝트, .bashrc, .config |
+| `/usr/local` | `/data/usr-local` (symlink) | npm -g, pip, go install, 수동 바이너리 |
+| `/usr/bin` 등 | Docker image | apt install (Dockerfile에 포함) |
 ```
 
 **코드:** `shared/nextjs-app/src/lib/aws-clients.ts` line 900-958

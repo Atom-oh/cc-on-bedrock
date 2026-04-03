@@ -350,9 +350,9 @@ export class EcsDevenvStack extends cdk.Stack {
             name: 'user-data',
             configuredAtLaunch: true,
           });
-          // EBS mode: user-data (EBS) → /home/coder only (no EFS mount for simplicity)
+          // EBS mode: mount at /data, entrypoint sets up symlinks for /home/coder + /usr/local
           container.addMountPoints(
-            { sourceVolume: 'user-data', containerPath: '/home/coder', readOnly: false },
+            { sourceVolume: 'user-data', containerPath: '/data', readOnly: false },
           );
         } else {
           // EFS mode: EFS → /home/coder (primary), no EBS volume
