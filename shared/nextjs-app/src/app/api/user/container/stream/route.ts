@@ -7,7 +7,7 @@ import {
   registerContainerRoute,
   describeContainer,
 } from "@/lib/aws-clients";
-// Uses ProvisioningStepName as string via the callback pattern
+import { startInstance, listInstances } from "@/lib/ec2-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
@@ -17,6 +17,7 @@ const dynamodb = new DynamoDBClient({ region });
 const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? process.env.DOMAIN_NAME ?? "atomai.click";
 const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? process.env.DEV_SUBDOMAIN ?? "dev";
 
+const computeMode = process.env.COMPUTE_MODE ?? "ec2";
 const VALID_TIERS = ["light", "standard", "power"] as const;
 type ResourceTier = (typeof VALID_TIERS)[number];
 
@@ -74,24 +75,32 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Check for existing container
+  // Check for existing container/instance
   try {
-    const containers = await listContainers();
-    const existing = containers.find(
-      (c) =>
-        c.subdomain === user.subdomain &&
-        (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
-    );
-    if (existing) {
-      return new Response(JSON.stringify({ error: "You already have a running container" }), {
-        status: 409,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (computeMode === "ec2") {
+      const instances = await listInstances();
+      const existing = instances.find(i => i.subdomain === user.subdomain && i.status === "running");
+      if (existing) {
+        return new Response(JSON.stringify({ error: "You already have a running instance" }), {
+          status: 409, headers: { "Content-Type": "application/json" },
+        });
+      }
+    } else {
+      const containers = await listContainers();
+      const existing = containers.find(
+        (c) =>
+          c.subdomain === user.subdomain &&
+          (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
+      );
+      if (existing) {
+        return new Response(JSON.stringify({ error: "You already have a running container" }), {
+          status: 409, headers: { "Content-Type": "application/json" },
+        });
+      }
     }
   } catch (err) {
-    return new Response(JSON.stringify({ error: "Failed to check containers" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+    return new Response(JSON.stringify({ error: "Failed to check status" }), {
+      status: 500, headers: { "Content-Type": "application/json" },
     });
   }
 
@@ -133,71 +142,103 @@ export async function POST(req: NextRequest) {
       try {
         if (abortSignal.aborted) { controller.close(); return; }
 
-        const taskArn = await startContainerWithProgress(
-          {
-            username: user.email,
+        if (computeMode === "ec2") {
+          // EC2 mode: simple start, no multi-step provisioning
+          send(1, "instance_start", "in_progress", { message: "Starting EC2 instance..." });
+          const result = await startInstance({
             subdomain,
+            username: user.email,
             department,
-            containerOs,
-            resourceTier: tierToUse,
-            securityPolicy: user.securityPolicy ?? "restricted",
-            storageType: user.storageType ?? "efs",
-          },
-          (step, name, status, message) => {
-            send(step, name, status, message ? { message } : undefined);
-          }
-        );
-
-        // Step 6: Route registration
-        send(6, "route_register", "in_progress", { message: "Waiting for IP assignment..." });
-
-        let registered = false;
-        for (let i = 0; i < 8; i++) {
-          if (abortSignal.aborted) break;
-          await new Promise<void>((r) => {
-            const timer = setTimeout(r, 5000);
-            abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
+            securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+            resourceTier: tierToUse as "light" | "standard" | "power",
           });
-          if (abortSignal.aborted) break;
-          try {
-            const info = await describeContainer(taskArn);
-            if (info?.privateIp) {
-              await registerContainerRoute(subdomain, info.privateIp);
-              registered = true;
-              break;
-            }
-          } catch { /* retry */ }
-          send(6, "route_register", "in_progress", { message: `Waiting for IP... (${i + 1}/8)` });
-        }
+          send(1, "instance_start", "completed", { message: `Instance ${result.instanceId} running` });
 
-        if (!abortSignal.aborted) {
-          if (registered) {
-            send(6, "route_register", "completed", { message: "Route registered" });
-          } else {
-            send(6, "route_register", "completed", { message: "Container started (route may take a moment)" });
+          const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
+          send(2, "health_check", "in_progress", { message: "Waiting for code-server..." });
+
+          // Wait for code-server health (port 8080)
+          let healthy = false;
+          for (let i = 0; i < 20; i++) {
+            if (abortSignal.aborted) break;
+            await new Promise<void>((r) => { const t = setTimeout(r, 3000); abortSignal.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true }); });
+            if (abortSignal.aborted) break;
+            // code-server is healthy if instance is running (systemd auto-starts it)
+            if (result.status === "running") { healthy = true; break; }
+            send(2, "health_check", "in_progress", { message: `Waiting... (${i + 1}/20)` });
           }
 
-          // Step 7: Wait for code-server to be healthy before showing URL
-          send(7, "health_check", "in_progress", { message: "Waiting for code-server..." });
-          let healthy = false;
-          for (let i = 0; i < 30; i++) {
+          if (!abortSignal.aborted) {
+            send(2, "health_check", "completed", { message: healthy ? "code-server is ready!" : "Instance started", url });
+          }
+        } else {
+          // ECS mode: multi-step provisioning
+          const taskArn = await startContainerWithProgress(
+            {
+              username: user.email,
+              subdomain,
+              department,
+              containerOs,
+              resourceTier: tierToUse,
+              securityPolicy: user.securityPolicy ?? "restricted",
+              storageType: user.storageType ?? "efs",
+            },
+            (step, name, status, message) => {
+              send(step, name, status, message ? { message } : undefined);
+            }
+          );
+
+          // Step 6: Route registration
+          send(6, "route_register", "in_progress", { message: "Waiting for IP assignment..." });
+
+          let registered = false;
+          for (let i = 0; i < 8; i++) {
             if (abortSignal.aborted) break;
             await new Promise<void>((r) => {
-              const timer = setTimeout(r, 3000);
+              const timer = setTimeout(r, 5000);
               abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
             });
             if (abortSignal.aborted) break;
             try {
               const info = await describeContainer(taskArn);
-              if (info?.healthStatus === "HEALTHY") { healthy = true; break; }
-              send(7, "health_check", "in_progress", { message: `Health check... (${i + 1}/30)` });
+              if (info?.privateIp) {
+                await registerContainerRoute(subdomain, info.privateIp);
+                registered = true;
+                break;
+              }
             } catch { /* retry */ }
+            send(6, "route_register", "in_progress", { message: `Waiting for IP... (${i + 1}/8)` });
           }
-          const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
-          if (healthy) {
-            send(7, "health_check", "completed", { message: "code-server is ready!", url });
-          } else {
-            send(7, "health_check", "completed", { message: "Container running (health check pending)", url });
+
+          if (!abortSignal.aborted) {
+            if (registered) {
+              send(6, "route_register", "completed", { message: "Route registered" });
+            } else {
+              send(6, "route_register", "completed", { message: "Container started (route may take a moment)" });
+            }
+
+            // Step 7: Wait for code-server to be healthy before showing URL
+            send(7, "health_check", "in_progress", { message: "Waiting for code-server..." });
+            let healthy = false;
+            for (let i = 0; i < 30; i++) {
+              if (abortSignal.aborted) break;
+              await new Promise<void>((r) => {
+                const timer = setTimeout(r, 3000);
+                abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
+              });
+              if (abortSignal.aborted) break;
+              try {
+                const info = await describeContainer(taskArn);
+                if (info?.healthStatus === "HEALTHY") { healthy = true; break; }
+                send(7, "health_check", "in_progress", { message: `Health check... (${i + 1}/30)` });
+              } catch { /* retry */ }
+            }
+            const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
+            if (healthy) {
+              send(7, "health_check", "completed", { message: "code-server is ready!", url });
+            } else {
+              send(7, "health_check", "completed", { message: "Container running (health check pending)", url });
+            }
           }
         }
       } catch (err) {
