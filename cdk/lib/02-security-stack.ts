@@ -317,6 +317,40 @@ export class SecurityStack extends cdk.Stack {
       resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`],
     }));
 
+    // EC2-per-user DevEnv management (computeMode: 'ec2')
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'Ec2DevenvInstances',
+      actions: [
+        'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
+        'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
+        'ec2:ModifyInstanceAttribute',
+      ],
+      resources: ['*'],
+    }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'Ec2DevenvDynamoDB',
+      actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
+      resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-instances`],
+    }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'Ec2DevenvIamRoles',
+      actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:TagRole', 'iam:DeleteRole', 'iam:DeleteRolePolicy'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+    }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'Ec2DevenvInstanceProfiles',
+      actions: ['iam:CreateInstanceProfile', 'iam:GetInstanceProfile', 'iam:AddRoleToInstanceProfile', 'iam:RemoveRoleFromInstanceProfile'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`],
+    }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'Ec2DevenvPassRole',
+      actions: ['iam:PassRole'],
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-devenv-instance`,
+      ],
+    }));
+
     // Outputs
     new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId, exportName: 'cc-user-pool-id' });
     new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId, exportName: 'cc-user-pool-client-id' });
