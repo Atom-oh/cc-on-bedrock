@@ -125,7 +125,7 @@ export class Ec2DevenvStack extends cdk.Stack {
       launchTemplateName: 'cc-on-bedrock-devenv',
       instanceType: new ec2.InstanceType(config.devenvInstanceType),
       machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-      role: this.devenvRole,
+      // No role here — per-user instance profile is set at RunInstances time
       securityGroup: this.sgOpen,
       requireImdsv2: true,
       blockDevices: [{
