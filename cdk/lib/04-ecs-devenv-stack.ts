@@ -247,6 +247,7 @@ export class EcsDevenvStack extends cdk.Stack {
       `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
       'echo ECS_ENABLE_TASK_ENI=true >> /etc/ecs/ecs.config',
       'echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config',
+      'echo ECS_IMAGE_PULL_BEHAVIOR=always >> /etc/ecs/ecs.config',
     );
 
     // ─── Single multi-AZ ASG + Capacity Provider ───

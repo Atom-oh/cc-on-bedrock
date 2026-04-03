@@ -76,6 +76,7 @@ const kmsKeyArn = process.env.KMS_KEY_ARN ?? "";
 // Single capacity provider — EBS snapshots are region-level, no AZ pinning needed
 const CAPACITY_PROVIDER = 'cc-cp-devenv';
 
+
 const MAX_COGNITO_PAGES = 20;
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
