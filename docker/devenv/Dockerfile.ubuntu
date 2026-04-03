@@ -36,6 +36,14 @@ RUN while IFS= read -r ext || [ -n "$ext" ]; do \
 RUN cp -r /home/coder/.local/share/code-server/extensions /opt/extensions-approved 2>/dev/null || true \
     && cp -r /home/coder/.local/share/code-server/extensions /opt/extensions-readonly 2>/dev/null || true
 
+# Backup /usr/local for EBS symlink initialization (entrypoint restores from here)
+RUN cp -a /usr/local /usr/local.bak
+# Image ID for detecting image updates (triggers /usr/local re-sync)
+RUN echo "$(date +%Y%m%d%H%M%S)" > /opt/devenv/.image-id
+
+# Allow pip install without --break-system-packages
+RUN rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
+
 # Expose code-server port
 EXPOSE 8080
 

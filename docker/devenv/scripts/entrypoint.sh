@@ -39,11 +39,14 @@ if [ "$STORAGE_TYPE" = "ebs" ]; then
   mkdir -p /data/home /data/usr-local
   chown -R coder:coder /data/home /data/usr-local
 
-  # Persist /usr/local: copy Docker image contents on first boot
-  if [ ! -f /data/usr-local/.initialized ]; then
-    echo "First boot: copying /usr/local to EBS..."
-    cp -a /usr/local/* /data/usr-local/ 2>/dev/null || true
-    touch /data/usr-local/.initialized
+  # Persist /usr/local: copy from Docker image backup on first boot or image update
+  # /usr/local.bak is created at build time and always contains the correct binaries
+  IMAGE_ID=$(cat /opt/devenv/.image-id 2>/dev/null || echo "unknown")
+  STORED_ID=$(cat /data/usr-local/.image-id 2>/dev/null || echo "none")
+  if [ "$IMAGE_ID" != "$STORED_ID" ] && [ -d /usr/local.bak ]; then
+    echo "Initializing /usr/local from image (image=$IMAGE_ID, stored=$STORED_ID)..."
+    cp -a /usr/local.bak/* /data/usr-local/ 2>/dev/null || true
+    echo "$IMAGE_ID" > /data/usr-local/.image-id
   fi
   rm -rf /usr/local && ln -sf /data/usr-local /usr/local
   echo "Symlinked /usr/local → /data/usr-local"

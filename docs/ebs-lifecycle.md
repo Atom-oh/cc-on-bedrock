@@ -236,19 +236,22 @@ cat /home/coder/test-file.txt  # "hello" 출력되면 성공
 # symlink 확인:
 ls -la /usr/local              # → /data/usr-local 확인
 ls -la /home/coder             # → /data/home 확인
+cat /data/usr-local/.image-id  # 이미지 빌드 시간
 
 # 패키지 설치:
 npm install -g cowsay
 cowsay "test"                  # 동작 확인
-which cowsay                   # /data/usr-local/bin/cowsay
+which cowsay                   # /usr/local/bin/cowsay (→ /data/usr-local/bin/cowsay)
 
-pip install httpie
+pip install httpie             # PEP 668 해제됨 (Dockerfile에서 EXTERNALLY-MANAGED 삭제)
 http --version                 # 동작 확인
 
 # [대시보드에서 Stop → Start]
 cowsay "survived"              # 동작하면 성공
 http --version                 # 동작하면 성공
-ls /data/usr-local/.initialized  # 존재 확인
+
+# 이미지 업데이트 시: /usr/local.bak에서 자동 재복사 (image-id 비교)
+# 사용자 설치 패키지는 EBS에 유지, 시스템 패키지만 갱신
 ```
 
 ### 3. Snapshot 확인 (관리자)
