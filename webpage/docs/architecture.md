@@ -3,20 +3,22 @@
 import Screenshot from '@site/src/components/Screenshot';
 import NetworkFlow from '@site/src/components/diagrams/NetworkFlow';
 import AuthFlow from '@site/src/components/diagrams/AuthFlow';
+import Ec2Lifecycle from '@site/src/components/diagrams/Ec2Lifecycle';
 
 CC-on-Bedrock의 아키텍처는 가용성, 보안, 그리고 개별 사용자 격리에 중점을 두고 설계되었습니다.
 
 ## 인프라 스택 구성
 
-시스템은 5개의 핵심 스택으로 구성되며, 각 스택은 독립적으로 배포 및 관리가 가능합니다.
+시스템은 6개의 핵심 스택으로 구성되며, 각 스택은 독립적으로 배포 및 관리가 가능합니다.
 
 | 스택 | 주요 리소스 |
 |-------|-----------|
 | **01-Network** | VPC (10.100.0.0/16), NAT Gateway, VPC Endpoints x8, DNS Firewall |
 | **02-Security** | Cognito (Hosted UI + OAuth 2.0), ACM, KMS, WAFv2, Secrets Manager, IAM |
-| **03-Usage Tracking** | DynamoDB x5, Lambda (usage-tracker + budget-check), EventBridge, CloudTrail |
-| **04-ECS DevEnv** | ECS Cluster (EC2 mode), Task Definitions x6, EFS, ALB, **NLB, Nginx Proxy**, CloudFront |
-| **05-Dashboard** | Next.js Standalone, EC2 ASG, ALB, CloudFront, S3 Deploy Bucket |
+| **03-Usage Tracking** | DynamoDB, Lambda (usage-tracker + budget-check + idle-stop), EventBridge, CloudTrail |
+| **04-ECS Infra** | ECS Cluster (Dashboard + Nginx), NLB, CloudFront |
+| **05-Dashboard** | Next.js ECS Service, ALB, CloudFront |
+| **07-EC2 DevEnv** | EC2-per-user (AMI), Launch Template, DLP Security Groups, DynamoDB |
 
 ---
 
@@ -72,16 +74,20 @@ Cognito + NextAuth.js 기반의 인증 체계와 code-server 비밀번호 동기
 ## 모니터링 및 분석 (Monitoring & Analytics)
 대시보드에서는 인프라 상태를 실시간으로 감시하고 사용량을 분석할 수 있습니다.
 
-각 사용자는 완전히 격리된 ECS 태스크를 할당받습니다:
+각 사용자는 완전히 격리된 EC2 인스턴스를 할당받습니다:
 
 | 리소스 | 격리 방식 |
 |--------|----------|
-| **ECS Task** | 독립 컨테이너 (code-server + Claude Code + Kiro) |
-| **ENI** | 고유 Private IP (`awsvpc` 네트워크 모드) |
-| **IAM Role** | Per-user `cc-on-bedrock-task-{subdomain}` (Bedrock, S3 scoped) |
-| **EFS Access Point** | `/users/{subdomain}`, UID/GID 1001, 0755 (파일 격리) |
+| **EC2 Instance** | 독립 인스턴스 (code-server + Claude Code + Kiro) |
+| **EBS Root Volume** | 30GB gp3, Stop/Start 시 자동 보존 |
+| **IAM Instance Profile** | Bedrock + SSM + CloudWatch 권한 |
 | **Security Group** | 3-tier DLP: Open / Restricted / Locked |
-| **Nginx Route** | `{subdomain}.dev.domain` → container IP:8080 |
+| **Nginx Route** | `{subdomain}.dev.domain` → instance IP:8080 |
+| **접근 방식** | SSM Session Manager only (SSH 비활성) |
+
+### EC2 인스턴스 라이프사이클
+
+<Ec2Lifecycle />
 
 <Screenshot
   src="/cc-on-bedrock/img/containers.png"
@@ -89,12 +95,18 @@ Cognito + NextAuth.js 기반의 인증 체계와 code-server 비밀번호 동기
   caption="컨테이너 관리: 사용자별 독립된 개발 환경 실행 및 제어"
 />
 
-### Task Definition 사양 (2 OS × 3 Tier = 6종)
+### 인스턴스 사양
 
-| OS | Light | Standard | Power |
-|----|-------|----------|-------|
-| **Ubuntu 24.04** | 1 vCPU / 4 GiB | 2 vCPU / 8 GiB | 4 vCPU / 12 GiB |
-| **Amazon Linux 2023** | 1 vCPU / 4 GiB | 2 vCPU / 8 GiB | 4 vCPU / 12 GiB |
+| 기본 타입 | vCPU | 메모리 | EBS | 비용 (On-Demand) |
+|----------|------|--------|-----|-----------------|
+| **t4g.medium** | 2 | 4 GiB | 30GB gp3 | $0.0336/hr |
+| **t4g.large** (기본) | 2 | 8 GiB | 30GB gp3 | $0.0672/hr |
+| **t4g.xlarge** | 4 | 16 GiB | 50GB gp3 | $0.1344/hr |
+
+:::tip Stop 시 비용
+EC2 Stop 상태에서는 **컴퓨트 비용 $0**. EBS 스토리지만 과금 (30GB × $0.08/GB = $2.4/월).
+Snapshot이나 S3 백업 불필요 — Stop/Start로 모든 상태 보존.
+:::
 
 ---
 
