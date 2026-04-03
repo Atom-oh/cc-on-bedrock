@@ -205,9 +205,14 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
       });
       const data = await res.json();
       if (!data.success) {
-        setError(data.error ?? "Failed to stop container");
+        setError(data.error ?? "Failed to stop instance");
       } else {
-        setContainer(null);
+        // Show STOPPING state briefly before clearing
+        if (container) {
+          setContainer({ ...container, status: "STOPPING", desiredStatus: "STOPPED" });
+        }
+        // Wait for instance to fully stop before allowing Start
+        setTimeout(() => setContainer(null), 30000);
       }
     } catch {
       setError("Failed to stop container");
@@ -476,17 +481,25 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
               disabled={actionLoading || !hasSubdomain}
               className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
             >
-              {t("user.start") || "Start Container"}
+              {t("user.start") || "Start Instance"}
             </button>
           )}
-          {container && (
+          {container && container.status === "STOPPING" && (
+            <button
+              disabled
+              className="px-4 py-2 bg-yellow-600/50 text-yellow-300 text-sm font-medium rounded-lg cursor-not-allowed"
+            >
+              {t("user.stopping") || "Stopping..."}
+            </button>
+          )}
+          {container && container.status !== "STOPPING" && (
             <>
               <button
                 onClick={handleStopContainer}
                 disabled={actionLoading}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
               >
-                {actionLoading ? (t("user.stopping") || "Stopping...") : (t("user.stop") || "Stop Container")}
+                {actionLoading ? (t("user.stopping") || "Stopping...") : (t("user.stop") || "Stop Instance")}
               </button>
               {container.status === "RUNNING" && codeServerUrl && (
                 <a
