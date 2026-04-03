@@ -9,12 +9,19 @@ import {
   registerContainerRoute,
   deregisterContainerRoute,
 } from "@/lib/aws-clients";
+import {
+  startInstance,
+  stopInstance,
+  terminateInstance,
+  listInstances,
+} from "@/lib/ec2-clients";
 import { EFSClient, DescribeFileSystemsCommand } from "@aws-sdk/client-efs";
 import { ECSClient, ExecuteCommandCommand, ListTasksCommand, DescribeTasksCommand } from "@aws-sdk/client-ecs";
 import type { StartContainerInput, StopContainerInput } from "@/lib/types";
 import { startContainerSchema, stopContainerSchema } from "@/lib/validation";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
+const computeMode = process.env.COMPUTE_MODE ?? "ec2";
 const efsClient = new EFSClient({ region });
 const ecsExecClient = new ECSClient({ region });
 const EFS_ID = process.env.EFS_FILE_SYSTEM_ID ?? "";
@@ -104,6 +111,29 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    if (computeMode === "ec2") {
+      const instances = await listInstances();
+      // Map to ContainerInfo-like shape for UI compatibility
+      const mapped = instances.map(i => ({
+        taskArn: i.instanceId,
+        taskId: i.instanceId,
+        status: i.status.toUpperCase(),
+        desiredStatus: i.status.toUpperCase(),
+        username: i.username,
+        subdomain: i.subdomain,
+        containerOs: "ubuntu" as const,
+        resourceTier: "standard" as const,
+        securityPolicy: i.securityPolicy,
+        privateIp: i.privateIp,
+        healthStatus: i.status === "running" ? "HEALTHY" : "UNKNOWN",
+      }));
+      if (taskArn) {
+        const found = mapped.find(m => m.taskArn === taskArn);
+        return NextResponse.json({ success: true, data: found ?? null });
+      }
+      return NextResponse.json({ success: true, data: mapped });
+    }
+
     if (taskArn) {
       const container = await describeContainer(taskArn);
       if (!container) {
@@ -127,6 +157,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const raw = await req.json();
+
+    if (computeMode === "ec2") {
+      const { subdomain, username, department, securityPolicy } = raw as {
+        subdomain: string; username: string; department?: string; securityPolicy?: string;
+      };
+      const result = await startInstance({
+        subdomain,
+        username,
+        department: department ?? "default",
+        securityPolicy: (securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+      });
+      return NextResponse.json({ success: true, data: { taskArn: result.instanceId } });
+    }
+
     const parsed = startContainerSchema.safeParse(raw);
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
@@ -174,6 +218,17 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const raw = await req.json();
+
+    if (computeMode === "ec2") {
+      const { subdomain, action: deleteAction } = raw as { subdomain: string; action?: string };
+      if (deleteAction === "terminate") {
+        await terminateInstance(subdomain);
+      } else {
+        await stopInstance(subdomain, "Stopped by admin");
+      }
+      return NextResponse.json({ success: true });
+    }
+
     const parsed = stopContainerSchema.safeParse(raw);
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });

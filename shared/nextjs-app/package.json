@@ -23,6 +23,8 @@
     "@aws-sdk/client-lambda": "^3.1019.0",
     "@aws-sdk/client-route53resolver": "^3.1014.0",
     "@aws-sdk/client-secrets-manager": "^3.1019.0",
+    "@aws-sdk/client-ssm": "^3.1023.0",
+    "@aws-sdk/lib-dynamodb": "^3.1023.0",
     "@aws-sdk/util-dynamodb": "^3.996.2",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",

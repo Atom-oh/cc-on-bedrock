@@ -7,6 +7,7 @@ import { UsageTrackingStack } from '../lib/03-usage-tracking-stack';
 import { EcsDevenvStack } from '../lib/04-ecs-devenv-stack';
 import { DashboardStack } from '../lib/05-dashboard-stack';
 import { WafStack } from '../lib/06-waf-stack';
+import { Ec2DevenvStack } from '../lib/07-ec2-devenv-stack';
 
 const app = new cdk.App();
 
@@ -111,5 +112,17 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
 });
 dashboardStack.addDependency(ecsDevenvStack);
 dashboardStack.addDependency(wafStack);
+
+// Stack 07: EC2-per-user Dev Environment (computeMode: 'ec2')
+if (config.computeMode === 'ec2') {
+  const ec2DevenvStack = new Ec2DevenvStack(app, 'CcOnBedrock-Ec2Devenv', {
+    env, config,
+    vpc: networkStack.vpc,
+    encryptionKey: securityStack.encryptionKey,
+    taskPermissionBoundary: securityStack.taskPermissionBoundary,
+    description: 'CC-on-Bedrock: EC2-per-user DevEnv (Launch Template, SG, IAM, DynamoDB)',
+  });
+  ec2DevenvStack.addDependency(securityStack);
+}
 
 console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));

@@ -118,9 +118,12 @@ run_script() {
   local script_name=$(basename "$script_path")
   echo "Running $script_name..."
 
-  # Read script content and send via SSM
+  # Read script content, wrap in bash + prepend environment for SSM (which uses /bin/sh)
   local script_content
-  script_content=$(cat "$script_path")
+  script_content="#!/bin/bash
+export HOME=/root
+export DEBIAN_FRONTEND=noninteractive
+$(cat "$script_path")"
 
   COMMAND_ID=$(aws ssm send-command \
     --instance-ids "$INSTANCE_ID" \
