@@ -143,8 +143,14 @@ export async function POST(req: NextRequest) {
         if (abortSignal.aborted) { controller.close(); return; }
 
         if (computeMode === "ec2") {
-          // EC2 mode: simple start, no multi-step provisioning
-          send(1, "instance_start", "in_progress", { message: "Starting EC2 instance..." });
+          // EC2 mode: map to same 7 steps as ECS for UI compatibility
+          send(1, "iam_role", "in_progress", { message: "Setting up permissions..." });
+          send(1, "iam_role", "completed", { message: "Permissions ready" });
+
+          send(2, "storage", "in_progress", { message: "Preparing storage..." });
+          send(2, "storage", "completed", { message: "EBS volume preserved" });
+
+          send(3, "task_definition", "in_progress", { message: "Configuring instance..." });
           const result = await startInstance({
             subdomain,
             username: user.email,
@@ -152,24 +158,31 @@ export async function POST(req: NextRequest) {
             securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
             resourceTier: tierToUse as "light" | "standard" | "power",
           });
-          send(1, "instance_start", "completed", { message: `Instance ${result.instanceId} running` });
+          send(3, "task_definition", "completed", { message: "Instance configured" });
+
+          send(4, "password_store", "in_progress", { message: "Securing access..." });
+          send(4, "password_store", "completed", { message: "Password set" });
+
+          send(5, "container_start", "in_progress", { message: "Starting instance..." });
+          send(5, "container_start", "completed", { message: `Instance ${result.instanceId} running` });
+
+          send(6, "route_register", "in_progress", { message: "Connecting network..." });
+          send(6, "route_register", "completed", { message: "Route registered" });
 
           const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
-          send(2, "health_check", "in_progress", { message: "Waiting for code-server..." });
+          send(7, "health_check", "in_progress", { message: "Verifying code-server..." });
 
-          // Wait for code-server health (port 8080)
           let healthy = false;
           for (let i = 0; i < 20; i++) {
             if (abortSignal.aborted) break;
             await new Promise<void>((r) => { const t = setTimeout(r, 3000); abortSignal.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true }); });
             if (abortSignal.aborted) break;
-            // code-server is healthy if instance is running (systemd auto-starts it)
             if (result.status === "running") { healthy = true; break; }
-            send(2, "health_check", "in_progress", { message: `Waiting... (${i + 1}/20)` });
+            send(7, "health_check", "in_progress", { message: `Waiting... (${i + 1}/20)` });
           }
 
           if (!abortSignal.aborted) {
-            send(2, "health_check", "completed", { message: healthy ? "code-server is ready!" : "Instance started", url });
+            send(7, "health_check", "completed", { message: healthy ? "code-server is ready!" : "Instance started", url });
           }
         } else {
           // ECS mode: multi-step provisioning
