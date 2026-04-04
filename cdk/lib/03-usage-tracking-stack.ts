@@ -400,7 +400,7 @@ export class UsageTrackingStack extends cdk.Stack {
             embeddingDataDeliveryEnabled: false,
           },
         },
-        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging'),
+        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging-v2'),
       },
       onUpdate: {
         service: 'Bedrock',
@@ -416,13 +416,10 @@ export class UsageTrackingStack extends cdk.Stack {
             embeddingDataDeliveryEnabled: false,
           },
         },
-        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging'),
+        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging-v2'),
       },
-      onDelete: {
-        service: 'Bedrock',
-        action: 'deleteModelInvocationLoggingConfiguration',
-        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging'),
-      },
+      // No onDelete — keep logging enabled even if stack is deleted/updated
+      // Previous onDelete disabled logging during CDK rollbacks
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
           actions: ['bedrock:PutModelInvocationLoggingConfiguration', 'bedrock:DeleteModelInvocationLoggingConfiguration'],
