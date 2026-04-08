@@ -245,7 +245,69 @@ Admin 승인 →
 
 ---
 
-## 6. Verification
+## 6. UI 미구현/미완성 항목
+
+### 6.1 i18n 키 미번역
+
+| 페이지 | 미번역 키 | 수정 필요 |
+|--------|----------|----------|
+| 홈 | `home.totalTokens` | "총 토큰" / "Total Tokens" |
+| 홈 | `home.costTrend` | "비용 트렌드" / "Cost Trend" |
+| 홈 | `home.modelUsage` | "모델 사용량" / "Model Usage" |
+| 홈 | `home.activeContainers` | "실행 인스턴스" / "Running Instances" |
+| 사용자 관리 | `USERS.WITHENV` | "환경 보유" / "With Environment" |
+| 토큰 사용량 | `TOTAL TOKENS` | "총 토큰" |
+| 예산 설정 | `DEPARTMENTS`, `TOTAL BUDGET`, `TOTAL SPEND`, `OVER BUDGET` | 한글 번역 |
+| 내 환경 | `user.selectTier` | "리소스 등급 선택" / "Select Tier" |
+
+**파일:** `shared/nextjs-app/src/lib/i18n.tsx`
+
+### 6.2 ECS → EC2 용어 미전환
+
+| 위치 | 현재 텍스트 | 변경 |
+|------|-----------|------|
+| 홈 카드 | "Live ECS Task Instances" | "Running EC2 Instances" |
+| 홈 카드 | "Active Containers: 0" | EC2 인스턴스 수 연동 |
+| 모니터링 subtitle | "Proxy health, ECS status, active sessions, and error rates" | "Instance health, active sessions, and error rates" |
+| 인스턴스 관리 title | "Container Management" | 이미 i18n에서 변경했지만 영어 fallback 미변경 |
+| 인스턴스 관리 subtitle | "Start, stop, and manage ECS dev environment containers" | "Start, stop, and manage dev environment instances" |
+| 인스턴스 관리 카드 | "EFS STORAGE" | 제거 또는 "EBS Storage" |
+| 내 환경 subtitle | "Your container status, usage, and workspace info" | "Your instance status, usage, and workspace info" |
+| Storage 탭 | "Container must be running to view disk usage" | "Instance must be running" |
+
+**파일:** `i18n.tsx`, `home-dashboard.tsx`, `monitoring-dashboard.tsx`, `containers-page.tsx`, `user-portal.tsx`, `storage-tab.tsx`
+
+### 6.3 기능 미연동
+
+| 페이지 | 문제 | 수정 |
+|--------|------|------|
+| 홈 Active Instances | 항상 0 | `listInstances()` 결과 연동 |
+| 홈 Cluster Insights | CPU/Memory/Network 전부 0 | EC2 `AWS/EC2` + `CWAgent` 메트릭 연동 |
+| 보안 DNS Firewall | 0 표시 | VPC DNS Firewall 규칙 조회 확인 |
+| 보안 방화벽 규칙 | 0 표시 | Security Group 규칙 카운트 연동 |
+| 예산 Departments | 0 | `cc-user-budgets` 테이블 연동 |
+| 토큰 비용 | $0.00 vs 168 토큰 | `estimatedCost` 필드 합산 로직 |
+| Storage Disk Usage | "Container must be running" | EC2 CWAgent `disk_used_percent` 메트릭 |
+| Storage EBS Expansion | ECS ebs-lifecycle Lambda 기반 | EC2 `ec2:ModifyVolume` 직접 호출로 변경 |
+| Storage Keep-Alive | `cc-user-volumes` 테이블 사용 | `cc-user-instances` 테이블로 변경 (완료) |
+
+### 6.4 미구현 기능
+
+| 기능 | 현재 상태 | 구현 내용 |
+|------|----------|----------|
+| **Tier 변경 신청** | UI에 tier select 있지만 직접 적용 (신청 workflow 없음) | POST `/api/user/container-request` type=tier_change → admin 승인 → Cognito + ModifyInstanceAttribute |
+| **DLP 정책 변경 신청** | 미구현 | POST `/api/user/container-request` type=dlp_change → admin 승인 → Cognito + SG swap |
+| **IAM 확장 신청** | 미구현 | POST `/api/user/container-request` type=iam_extension → admin 승인 → PutRolePolicy |
+| **부서 예산 설정** | UI shell만 존재 (Department Budgets 0) | `/api/admin/budgets` CRUD + DynamoDB 연동 |
+| **부서 상세 페이지** | 부서 카드 클릭 시 상세 없음 | 멤버 목록, 개별 사용량, 예산 소진율 |
+| **Admin 승인 대기 섹션** | `/admin` 페이지에 미구현 | 신청 목록 + 승인/거부 UI |
+| **EBS 리사이즈 (EC2)** | ECS Lambda 기반, EC2 미동작 | `ec2:ModifyVolume` API 직접 호출 |
+| **model ID 정규화** | DynamoDB에 "arn"으로 저장 | `normalize_model()` ARN → short name |
+| **department 추출** | 항상 "default" | Cognito `custom:department` 또는 DynamoDB에서 조회 |
+
+---
+
+## 7. Verification
 
 | # | 검증 항목 | 방법 |
 |---|----------|------|
