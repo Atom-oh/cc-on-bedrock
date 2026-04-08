@@ -600,6 +600,8 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
                 cpuLimit: containerMetrics.cpuLimit ?? 1,
                 memory: containerMetrics.memory ?? 0,
                 memoryLimit: containerMetrics.memoryLimit ?? 1,
+                memoryUsedBytes: containerMetrics.memoryUsedBytes ?? 0,
+                memoryTotalBytes: containerMetrics.memoryTotalBytes ?? 0,
                 networkRx: containerMetrics.networkRx ?? 0,
                 networkTx: containerMetrics.networkTx ?? 0,
                 diskRead: containerMetrics.diskRead ?? 0,
@@ -610,7 +612,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
             />
           ) : (
             <ContainerMetrics
-              metrics={{ cpu: 0, cpuLimit: 1, memory: 0, memoryLimit: 1, networkRx: 0, networkTx: 0, diskRead: 0, diskWrite: 0 }}
+              metrics={{ cpu: 0, cpuLimit: 1, memory: 0, memoryLimit: 1, memoryUsedBytes: 0, memoryTotalBytes: 0, networkRx: 0, networkTx: 0, diskRead: 0, diskWrite: 0 }}
               timeseries={[]}
               loading={true}
             />

@@ -33,17 +33,12 @@ interface SystemHealth {
   model_count: number;
 }
 
-interface ContainerCWMetrics {
-  cpuUtilized: number;
-  cpuReserved: number;
-  cpuUtilizationPct: number;
-  memoryUtilized: number;
-  memoryReserved: number;
-  memoryUtilizationPct: number;
-  networkRxBytes: number;
-  networkTxBytes: number;
-  taskCount: number;
-  containerInstanceCount: number;
+interface Ec2ClusterMetrics {
+  avgCpu: number;
+  avgMemory: number;
+  totalNetworkRx: number;
+  totalNetworkTx: number;
+  instanceCount: number;
 }
 
 function formatCost(v: number): string {
@@ -86,7 +81,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
     totalTokens: number;
     activeContainers: number;
     containers: ContainerInfo[];
-    cwMetrics: ContainerCWMetrics | null;
+    cwMetrics: Ec2ClusterMetrics | null;
     health: SystemHealth | null;
   }>({
     totalCost: 0,
@@ -285,20 +280,20 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
             >
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">CPU</p>
-                  <p className="text-xl font-black text-white">{data.cwMetrics.cpuUtilizationPct.toFixed(1)}%</p>
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Avg CPU</p>
+                  <p className="text-xl font-black text-white">{data.cwMetrics.avgCpu.toFixed(1)}%</p>
                 </div>
                 <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Memory</p>
-                  <p className="text-xl font-black text-white">{data.cwMetrics.memoryUtilizationPct.toFixed(1)}%</p>
-                </div>
-                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Tasks</p>
-                  <p className="text-xl font-black text-white">{data.cwMetrics.taskCount}</p>
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Avg Memory</p>
+                  <p className="text-xl font-black text-white">{data.cwMetrics.avgMemory.toFixed(1)}%</p>
                 </div>
                 <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
                   <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Instances</p>
-                  <p className="text-xl font-black text-white">{data.cwMetrics.containerInstanceCount}</p>
+                  <p className="text-xl font-black text-white">{data.cwMetrics.instanceCount}</p>
+                </div>
+                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Network</p>
+                  <p className="text-xl font-black text-white">{formatNum(data.cwMetrics.totalNetworkRx + data.cwMetrics.totalNetworkTx)}B</p>
                 </div>
               </div>
             </motion.div>

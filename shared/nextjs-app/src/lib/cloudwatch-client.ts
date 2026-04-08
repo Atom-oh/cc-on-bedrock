@@ -14,6 +14,8 @@ export interface InstanceMetrics {
   cpuLimit: number;       // always 100
   memory: number;         // mem_used_percent % (0-100), from CWAgent
   memoryLimit: number;    // always 100
+  memoryUsedBytes: number; // mem_used (bytes) from CWAgent
+  memoryTotalBytes: number; // mem_total (bytes) from CWAgent
   networkRx: number;      // bytes received
   networkTx: number;      // bytes sent
   diskRead: number;       // always 0 (use diskUsedPercent instead)
@@ -92,6 +94,8 @@ export async function getEc2Metrics(instanceId: string): Promise<InstanceMetrics
         ec2Query("netRx", "AWS/EC2", "NetworkIn", "Sum", period, instanceId),
         ec2Query("netTx", "AWS/EC2", "NetworkOut", "Sum", period, instanceId),
         ec2Query("disk", "CWAgent", "disk_used_percent", "Average", period, instanceId),
+        ec2Query("memUsed", "CWAgent", "mem_used", "Average", period, instanceId),
+        ec2Query("memTotal", "CWAgent", "mem_total", "Average", period, instanceId),
       ],
     })
   );
@@ -125,6 +129,8 @@ export async function getEc2Metrics(instanceId: string): Promise<InstanceMetrics
     cpuLimit: 100,
     memory: getLatest("mem"),
     memoryLimit: 100,
+    memoryUsedBytes: getLatest("memUsed"),
+    memoryTotalBytes: getLatest("memTotal"),
     networkRx: getLatest("netRx"),
     networkTx: getLatest("netTx"),
     diskRead: 0,

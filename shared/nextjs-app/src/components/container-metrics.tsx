@@ -16,6 +16,8 @@ interface MetricProps {
   cpuLimit: number;
   memory: number;
   memoryLimit: number;
+  memoryUsedBytes: number;
+  memoryTotalBytes: number;
   networkRx: number;
   networkTx: number;
   diskRead: number;
@@ -43,6 +45,12 @@ const formatBytes = (bytes: number, decimals = 2) => {
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+};
+
+const formatMemSize = (bytes: number) => {
+  if (bytes <= 0) return '0';
+  const gib = bytes / (1024 * 1024 * 1024);
+  return gib >= 1 ? `${gib.toFixed(1)} GiB` : `${(bytes / (1024 * 1024)).toFixed(0)} MiB`;
 };
 
 const CircularGauge = ({
@@ -183,7 +191,9 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
           <CircularGauge
             value={metrics.memory} max={metrics.memoryLimit}
             label="Memory"
-            subLabel={`${memPct}%`}
+            subLabel={metrics.memoryTotalBytes > 0
+              ? `${formatMemSize(metrics.memoryUsedBytes)} / ${formatMemSize(metrics.memoryTotalBytes)}`
+              : `${memPct}%`}
             id="memory"
             unitLabel="%"
           />
@@ -248,13 +258,15 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
               <CartesianGrid strokeDasharray="3 3" stroke="#30363d" vertical={false} />
               <XAxis dataKey="time" hide />
               <YAxis domain={[0, 100]} stroke="#484f58" fontSize={10} tickFormatter={(v) => `${v}%`} />
-              <Tooltip {...customTooltipStyle} />
+              <Tooltip {...customTooltipStyle} formatter={(value: number) => [`${value.toFixed(1)}%`, 'CPU']} />
               <Area type="monotone" dataKey="cpu" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#cpuGradient)" />
             </AreaChart>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Memory Utilization History">
+        <ChartCard title={metrics.memoryTotalBytes > 0
+          ? `Memory Utilization History (${formatMemSize(metrics.memoryTotalBytes)} total)`
+          : "Memory Utilization History"}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={timeseries}>
               <defs>
@@ -266,7 +278,7 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
               <CartesianGrid strokeDasharray="3 3" stroke="#30363d" vertical={false} />
               <XAxis dataKey="time" hide />
               <YAxis domain={[0, 100]} stroke="#484f58" fontSize={10} tickFormatter={(v) => `${v}%`} />
-              <Tooltip {...customTooltipStyle} />
+              <Tooltip {...customTooltipStyle} formatter={(value: number) => [`${value.toFixed(1)}%`, 'Memory']} />
               <Area type="monotone" dataKey="memory" stroke="#8b5cf6" strokeWidth={2} fillOpacity={1} fill="url(#memGradient)" />
             </AreaChart>
           </ResponsiveContainer>
