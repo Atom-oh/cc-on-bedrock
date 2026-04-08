@@ -222,6 +222,12 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `CSCFG`,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
+      `# Start CloudWatch Agent for memory/disk metrics`,
+      `if [ -f /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json ]; then`,
+      `  amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
+      `else`,
+      `  systemctl start amazon-cloudwatch-agent 2>/dev/null || true`,
+      `fi`,
     ].join("\n")).toString("base64"),
   }));
 

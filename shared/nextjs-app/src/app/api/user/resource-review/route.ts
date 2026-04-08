@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { listContainers } from "@/lib/aws-clients";
-import { getTaskMetrics } from "@/lib/cloudwatch-client";
+import { listInstances } from "@/lib/ec2-clients";
+import { getEc2Metrics } from "@/lib/cloudwatch-client";
 import {
   BedrockRuntimeClient,
   ConverseCommand,
@@ -70,31 +70,27 @@ export async function POST(req: NextRequest) {
       reason?: string;
     };
 
-    // Gather metrics for the user's running container
-    const containers = await listContainers();
-    const userContainer = containers.find(
-      (c) => c.subdomain === subdomain && c.status === "RUNNING"
+    // Gather metrics for the user's running EC2 instance
+    const instances = await listInstances();
+    const userInstance = instances.find(
+      (i) => i.subdomain === subdomain && i.status === "running"
     );
 
-    let metricsContext = "컨테이너가 현재 실행 중이지 않습니다.";
-    if (userContainer) {
+    let metricsContext = "인스턴스가 현재 실행 중이지 않습니다.";
+    if (userInstance) {
       try {
-        const taskDefFamily = `devenv-${userContainer.containerOs}-${userContainer.resourceTier}`;
-        const metrics = await getTaskMetrics(userContainer.taskId, taskDefFamily);
-        const cpuPct = metrics.cpuLimit > 0 ? (metrics.cpu / metrics.cpuLimit * 100).toFixed(1) : "N/A";
-        const memPct = metrics.memoryLimit > 0 ? (metrics.memory / metrics.memoryLimit * 100).toFixed(1) : "N/A";
+        const metrics = await getEc2Metrics(userInstance.instanceId);
 
         metricsContext = [
-          `## 현재 컨테이너 상태`,
-          `- OS: ${userContainer.containerOs}, Tier: ${userContainer.resourceTier}`,
-          `- CPU: ${metrics.cpu.toFixed(1)} / ${metrics.cpuLimit.toFixed(1)} units (${cpuPct}%)`,
-          `- Memory: ${metrics.memory.toFixed(0)} / ${metrics.memoryLimit.toFixed(0)} MB (${memPct}%)`,
+          `## 현재 인스턴스 상태`,
+          `- Instance Type: ${userInstance.instanceType}`,
+          `- CPU: ${metrics.cpu.toFixed(1)}%`,
+          `- Memory: ${metrics.memory.toFixed(1)}%`,
+          `- Disk: ${metrics.diskUsedPercent.toFixed(1)}%`,
           `- Network Rx: ${(metrics.networkRx / 1024).toFixed(1)} KB/s, Tx: ${(metrics.networkTx / 1024).toFixed(1)} KB/s`,
-          `- Disk Read: ${(metrics.diskRead / 1024).toFixed(1)} KB/s, Write: ${(metrics.diskWrite / 1024).toFixed(1)} KB/s`,
-          `- 할당: CPU ${userContainer.cpu}, Memory ${userContainer.memory}`,
         ].join("\n");
       } catch {
-        metricsContext = "메트릭 수집에 실패했습니다. 컨테이너는 실행 중입니다.";
+        metricsContext = "메트릭 수집에 실패했습니다. 인스턴스는 실행 중입니다.";
       }
     }
 
@@ -133,7 +129,7 @@ export async function POST(req: NextRequest) {
         data: {
           analysis: aiText.replace(/```json[\s\S]*?```/, "").trim(),
           verdict,
-          metricsAvailable: !!userContainer,
+          metricsAvailable: !!userInstance,
         },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } }

@@ -5,157 +5,20 @@ import {
 } from "@aws-sdk/client-cloudwatch";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const clusterName = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-devenv";
 const cwClient = new CloudWatchClient({ region });
 
-export interface ContainerMetrics {
-  cpuUtilized: number;
-  cpuReserved: number;
-  cpuUtilizationPct: number;
-  memoryUtilized: number;
-  memoryReserved: number;
-  memoryUtilizationPct: number;
-  networkRxBytes: number;
-  networkTxBytes: number;
-  storageReadBytes: number;
-  storageWriteBytes: number;
-  taskCount: number;
-  containerInstanceCount: number;
-}
+// ─── EC2 Instance Metrics ───
 
-export interface ContainerMetricsTimeSeries {
-  timestamps: string[];
-  cpuUtilized: number[];
-  memoryUtilized: number[];
-  networkRx: number[];
-  networkTx: number[];
-}
-
-export interface TaskDefMetrics {
-  taskDefFamily: string;
-  cpuUtilized: number;
-  cpuReserved: number;
-  memoryUtilized: number;
-  memoryReserved: number;
-}
-
-function makeQuery(
-  id: string,
-  metricName: string,
-  stat: string,
-  period: number,
-  extraDims?: { Name: string; Value: string }[]
-): MetricDataQuery {
-  const dims = [{ Name: "ClusterName", Value: clusterName }];
-  if (extraDims) dims.push(...extraDims);
-  return {
-    Id: id,
-    MetricStat: {
-      Metric: {
-        Namespace: "ECS/ContainerInsights",
-        MetricName: metricName,
-        Dimensions: dims,
-      },
-      Period: period,
-      Stat: stat,
-    },
-  };
-}
-
-export async function getContainerMetrics(): Promise<ContainerMetrics> {
-  const end = new Date();
-  const start = new Date(end.getTime() - 10 * 60 * 1000); // last 10 min
-
-  const result = await cwClient.send(
-    new GetMetricDataCommand({
-      StartTime: start,
-      EndTime: end,
-      MetricDataQueries: [
-        makeQuery("cpu", "CpuUtilized", "Average", 300),
-        makeQuery("cpuRes", "CpuReserved", "Average", 300),
-        makeQuery("mem", "MemoryUtilized", "Average", 300),
-        makeQuery("memRes", "MemoryReserved", "Average", 300),
-        makeQuery("netRx", "NetworkRxBytes", "Sum", 300),
-        makeQuery("netTx", "NetworkTxBytes", "Sum", 300),
-        makeQuery("stRead", "StorageReadBytes", "Sum", 300),
-        makeQuery("stWrite", "StorageWriteBytes", "Sum", 300),
-        makeQuery("tasks", "TaskCount", "Average", 300),
-        makeQuery("instances", "ContainerInstanceCount", "Average", 300),
-      ],
-    })
-  );
-
-  const get = (id: string) =>
-    result.MetricDataResults?.find((r) => r.Id === id)?.Values?.[0] ?? 0;
-
-  const cpuUtilized = get("cpu");
-  const cpuReserved = get("cpuRes");
-  const memoryUtilized = get("mem");
-  const memoryReserved = get("memRes");
-
-  return {
-    cpuUtilized,
-    cpuReserved,
-    cpuUtilizationPct: cpuReserved > 0 ? (cpuUtilized / cpuReserved) * 100 : 0,
-    memoryUtilized,
-    memoryReserved,
-    memoryUtilizationPct: memoryReserved > 0 ? (memoryUtilized / memoryReserved) * 100 : 0,
-    networkRxBytes: get("netRx"),
-    networkTxBytes: get("netTx"),
-    storageReadBytes: get("stRead"),
-    storageWriteBytes: get("stWrite"),
-    taskCount: get("tasks"),
-    containerInstanceCount: get("instances"),
-  };
-}
-
-export async function getContainerMetricsTimeSeries(
-  hours: number = 6
-): Promise<ContainerMetricsTimeSeries> {
-  const end = new Date();
-  const start = new Date(end.getTime() - hours * 60 * 60 * 1000);
-  const period = hours <= 6 ? 300 : 900; // 5min or 15min
-
-  const result = await cwClient.send(
-    new GetMetricDataCommand({
-      StartTime: start,
-      EndTime: end,
-      MetricDataQueries: [
-        makeQuery("cpu", "CpuUtilized", "Average", period),
-        makeQuery("mem", "MemoryUtilized", "Average", period),
-        makeQuery("netRx", "NetworkRxBytes", "Sum", period),
-        makeQuery("netTx", "NetworkTxBytes", "Sum", period),
-      ],
-    })
-  );
-
-  const cpuResult = result.MetricDataResults?.find((r) => r.Id === "cpu");
-  const timestamps = (cpuResult?.Timestamps ?? [])
-    .map((t) => t.toISOString())
-    .reverse();
-
-  const getValues = (id: string) =>
-    (result.MetricDataResults?.find((r) => r.Id === id)?.Values ?? []).reverse();
-
-  return {
-    timestamps,
-    cpuUtilized: getValues("cpu"),
-    memoryUtilized: getValues("mem"),
-    networkRx: getValues("netRx"),
-    networkTx: getValues("netTx"),
-  };
-}
-
-// Per-task metrics for individual user containers
-export interface TaskMetrics {
-  cpu: number;        // CPU units utilized
-  cpuLimit: number;   // CPU units reserved
-  memory: number;     // Memory MB utilized
-  memoryLimit: number; // Memory MB reserved
-  networkRx: number;  // bytes received (last period)
-  networkTx: number;  // bytes sent (last period)
-  diskRead: number;   // bytes read (last period)
-  diskWrite: number;  // bytes written (last period)
+export interface InstanceMetrics {
+  cpu: number;            // CPUUtilization % (0-100)
+  cpuLimit: number;       // always 100
+  memory: number;         // mem_used_percent % (0-100), from CWAgent
+  memoryLimit: number;    // always 100
+  networkRx: number;      // bytes received
+  networkTx: number;      // bytes sent
+  diskRead: number;       // always 0 (use diskUsedPercent instead)
+  diskWrite: number;      // always 0
+  diskUsedPercent: number; // disk_used_percent from CWAgent
   timeseries: Array<{
     time: string;
     cpu: number;
@@ -165,27 +28,70 @@ export interface TaskMetrics {
   }>;
 }
 
-export async function getTaskMetrics(taskId: string, taskDefFamily?: string): Promise<TaskMetrics> {
+export interface InstanceTimeSeries {
+  timestamps: string[];
+  cpu: number[];
+  memory: number[];
+  networkRx: number[];
+  networkTx: number[];
+}
+
+export interface AggregateMetrics {
+  avgCpu: number;
+  avgMemory: number;
+  totalNetworkRx: number;
+  totalNetworkTx: number;
+  instanceCount: number;
+  instances: Array<{
+    instanceId: string;
+    cpu: number;
+    memory: number;
+    networkRx: number;
+    networkTx: number;
+  }>;
+}
+
+function ec2Query(
+  id: string,
+  namespace: string,
+  metricName: string,
+  stat: string,
+  period: number,
+  instanceId: string,
+): MetricDataQuery {
+  return {
+    Id: id,
+    MetricStat: {
+      Metric: {
+        Namespace: namespace,
+        MetricName: metricName,
+        Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+      },
+      Period: period,
+      Stat: stat,
+    },
+  };
+}
+
+/**
+ * Get metrics for a single EC2 instance.
+ * CPU/Network from AWS/EC2, Memory/Disk from CWAgent namespace.
+ */
+export async function getEc2Metrics(instanceId: string): Promise<InstanceMetrics> {
   const end = new Date();
   const start = new Date(end.getTime() - 60 * 60 * 1000); // last 1 hour
-  // Container Insights only has TaskDefinitionFamily dimension, not TaskId
-  const taskDims = taskDefFamily
-    ? [{ Name: "TaskDefinitionFamily", Value: taskDefFamily }]
-    : [{ Name: "TaskDefinitionFamily", Value: "devenv-ubuntu-power" }];
+  const period = 60;
 
   const result = await cwClient.send(
     new GetMetricDataCommand({
       StartTime: start,
       EndTime: end,
       MetricDataQueries: [
-        makeQuery("cpu", "CpuUtilized", "Average", 60, taskDims),
-        makeQuery("cpuR", "CpuReserved", "Average", 60, taskDims),
-        makeQuery("mem", "MemoryUtilized", "Average", 60, taskDims),
-        makeQuery("memR", "MemoryReserved", "Average", 60, taskDims),
-        makeQuery("netRx", "NetworkRxBytes", "Sum", 60, taskDims),
-        makeQuery("netTx", "NetworkTxBytes", "Sum", 60, taskDims),
-        makeQuery("stRd", "StorageReadBytes", "Sum", 60, taskDims),
-        makeQuery("stWr", "StorageWriteBytes", "Sum", 60, taskDims),
+        ec2Query("cpu", "AWS/EC2", "CPUUtilization", "Average", period, instanceId),
+        ec2Query("mem", "CWAgent", "mem_used_percent", "Average", period, instanceId),
+        ec2Query("netRx", "AWS/EC2", "NetworkIn", "Sum", period, instanceId),
+        ec2Query("netTx", "AWS/EC2", "NetworkOut", "Sum", period, instanceId),
+        ec2Query("disk", "CWAgent", "disk_used_percent", "Average", period, instanceId),
       ],
     })
   );
@@ -195,14 +101,15 @@ export async function getTaskMetrics(taskId: string, taskDefFamily?: string): Pr
 
   // Build timeseries from CPU timestamps
   const cpuResult = result.MetricDataResults?.find((r) => r.Id === "cpu");
-  const timestamps = (cpuResult?.Timestamps ?? []).map((t) => t.toISOString());
-  const getAll = (id: string) =>
-    result.MetricDataResults?.find((r) => r.Id === id)?.Values ?? [];
+  const memResult = result.MetricDataResults?.find((r) => r.Id === "mem");
+  const rxResult = result.MetricDataResults?.find((r) => r.Id === "netRx");
+  const txResult = result.MetricDataResults?.find((r) => r.Id === "netTx");
 
-  const cpuVals = getAll("cpu");
-  const memVals = getAll("mem");
-  const rxVals = getAll("netRx");
-  const txVals = getAll("netTx");
+  const timestamps = (cpuResult?.Timestamps ?? []).map((t) => t.toISOString());
+  const cpuVals = cpuResult?.Values ?? [];
+  const memVals = memResult?.Values ?? [];
+  const rxVals = rxResult?.Values ?? [];
+  const txVals = txResult?.Values ?? [];
 
   // CloudWatch returns newest-first, reverse for chart display
   const timeseries = timestamps.map((time, i) => ({
@@ -215,14 +122,107 @@ export async function getTaskMetrics(taskId: string, taskDefFamily?: string): Pr
 
   return {
     cpu: getLatest("cpu"),
-    cpuLimit: getLatest("cpuR"),
+    cpuLimit: 100,
     memory: getLatest("mem"),
-    memoryLimit: getLatest("memR"),
+    memoryLimit: 100,
     networkRx: getLatest("netRx"),
     networkTx: getLatest("netTx"),
-    diskRead: getLatest("stRd"),
-    diskWrite: getLatest("stWr"),
+    diskRead: 0,
+    diskWrite: 0,
+    diskUsedPercent: getLatest("disk"),
     timeseries,
+  };
+}
+
+/**
+ * Get time series for a single EC2 instance (for charts).
+ */
+export async function getEc2TimeSeries(instanceId: string, hours: number = 6): Promise<InstanceTimeSeries> {
+  const end = new Date();
+  const start = new Date(end.getTime() - hours * 60 * 60 * 1000);
+  const period = hours <= 6 ? 300 : 900;
+
+  const result = await cwClient.send(
+    new GetMetricDataCommand({
+      StartTime: start,
+      EndTime: end,
+      MetricDataQueries: [
+        ec2Query("cpu", "AWS/EC2", "CPUUtilization", "Average", period, instanceId),
+        ec2Query("mem", "CWAgent", "mem_used_percent", "Average", period, instanceId),
+        ec2Query("netRx", "AWS/EC2", "NetworkIn", "Sum", period, instanceId),
+        ec2Query("netTx", "AWS/EC2", "NetworkOut", "Sum", period, instanceId),
+      ],
+    })
+  );
+
+  const cpuResult = result.MetricDataResults?.find((r) => r.Id === "cpu");
+  const timestamps = (cpuResult?.Timestamps ?? []).map((t) => t.toISOString()).reverse();
+
+  const getValues = (id: string) =>
+    (result.MetricDataResults?.find((r) => r.Id === id)?.Values ?? []).reverse();
+
+  return {
+    timestamps,
+    cpu: getValues("cpu"),
+    memory: getValues("mem"),
+    networkRx: getValues("netRx"),
+    networkTx: getValues("netTx"),
+  };
+}
+
+/**
+ * Get aggregate metrics across multiple EC2 instances (admin dashboard).
+ */
+export async function getEc2AggregateMetrics(instanceIds: string[]): Promise<AggregateMetrics> {
+  if (instanceIds.length === 0) {
+    return { avgCpu: 0, avgMemory: 0, totalNetworkRx: 0, totalNetworkTx: 0, instanceCount: 0, instances: [] };
+  }
+
+  const end = new Date();
+  const start = new Date(end.getTime() - 10 * 60 * 1000);
+  const period = 300;
+
+  const queries: MetricDataQuery[] = [];
+  for (const [i, id] of instanceIds.entries()) {
+    queries.push(
+      ec2Query(`cpu${i}`, "AWS/EC2", "CPUUtilization", "Average", period, id),
+      ec2Query(`mem${i}`, "CWAgent", "mem_used_percent", "Average", period, id),
+      ec2Query(`rx${i}`, "AWS/EC2", "NetworkIn", "Sum", period, id),
+      ec2Query(`tx${i}`, "AWS/EC2", "NetworkOut", "Sum", period, id),
+    );
+  }
+
+  // CloudWatch allows max 500 queries; batch if needed
+  const batchSize = 500;
+  const allResults: Map<string, number> = new Map();
+  for (let offset = 0; offset < queries.length; offset += batchSize) {
+    const batch = queries.slice(offset, offset + batchSize);
+    const result = await cwClient.send(
+      new GetMetricDataCommand({ StartTime: start, EndTime: end, MetricDataQueries: batch })
+    );
+    for (const r of result.MetricDataResults ?? []) {
+      allResults.set(r.Id!, r.Values?.[0] ?? 0);
+    }
+  }
+
+  const instances = instanceIds.map((id, i) => ({
+    instanceId: id,
+    cpu: allResults.get(`cpu${i}`) ?? 0,
+    memory: allResults.get(`mem${i}`) ?? 0,
+    networkRx: allResults.get(`rx${i}`) ?? 0,
+    networkTx: allResults.get(`tx${i}`) ?? 0,
+  }));
+
+  const running = instances.filter((inst) => inst.cpu > 0 || inst.memory > 0);
+  const count = running.length || 1;
+
+  return {
+    avgCpu: instances.reduce((sum, i) => sum + i.cpu, 0) / count,
+    avgMemory: instances.reduce((sum, i) => sum + i.memory, 0) / count,
+    totalNetworkRx: instances.reduce((sum, i) => sum + i.networkRx, 0),
+    totalNetworkTx: instances.reduce((sum, i) => sum + i.networkTx, 0),
+    instanceCount: instanceIds.length,
+    instances,
   };
 }
 
@@ -345,7 +345,6 @@ export async function getBedrockMetricsTimeSeries(
   const aggResult = result.MetricDataResults?.find((r) => r.Id === "agg_in");
   const timestamps = (aggResult?.Timestamps ?? []).map((t) => t.toISOString());
 
-  // Build per-model value maps keyed by timestamp
   const modelMaps: { inMap: Map<string, number>; outMap: Map<string, number>; model: typeof BEDROCK_MODELS[number] }[] = [];
   for (const [i, m] of BEDROCK_MODELS.entries()) {
     const inResult = result.MetricDataResults?.find((r) => r.Id === `m${i}_in`);
@@ -360,7 +359,6 @@ export async function getBedrockMetricsTimeSeries(
   const getValues = (id: string) =>
     (result.MetricDataResults?.find((r) => r.Id === id)?.Values ?? []).reverse();
 
-  // Compute cost at each timestamp
   const costArr: number[] = [];
   for (const ts of timestamps) {
     let cost = 0;
@@ -370,7 +368,6 @@ export async function getBedrockMetricsTimeSeries(
     costArr.push(cost / periodMinutes);
   }
 
-  // Reverse all arrays (CloudWatch returns newest-first)
   timestamps.reverse();
   costArr.reverse();
 
@@ -381,50 +378,4 @@ export async function getBedrockMetricsTimeSeries(
     invocations: getValues("agg_inv").map((v) => v / periodMinutes),
     estimatedCost: costArr,
   };
-}
-
-export async function getTaskDefMetrics(): Promise<TaskDefMetrics[]> {
-  const end = new Date();
-  const start = new Date(end.getTime() - 10 * 60 * 1000);
-
-  const families = [
-    "devenv-ubuntu-light",
-    "devenv-ubuntu-standard",
-    "devenv-ubuntu-power",
-    "devenv-al2023-light",
-    "devenv-al2023-standard",
-    "devenv-al2023-power",
-  ];
-
-  const queries: MetricDataQuery[] = [];
-  for (const [i, family] of families.entries()) {
-    const dims = [{ Name: "TaskDefinitionFamily", Value: family }];
-    queries.push(
-      makeQuery(`cpu${i}`, "CpuUtilized", "Average", 300, dims),
-      makeQuery(`cpuR${i}`, "CpuReserved", "Average", 300, dims),
-      makeQuery(`mem${i}`, "MemoryUtilized", "Average", 300, dims),
-      makeQuery(`memR${i}`, "MemoryReserved", "Average", 300, dims),
-    );
-  }
-
-  const result = await cwClient.send(
-    new GetMetricDataCommand({
-      StartTime: start,
-      EndTime: end,
-      MetricDataQueries: queries,
-    })
-  );
-
-  const get = (id: string) =>
-    result.MetricDataResults?.find((r) => r.Id === id)?.Values?.[0] ?? 0;
-
-  return families
-    .map((family, i) => ({
-      taskDefFamily: family,
-      cpuUtilized: get(`cpu${i}`),
-      cpuReserved: get(`cpuR${i}`),
-      memoryUtilized: get(`mem${i}`),
-      memoryReserved: get(`memR${i}`),
-    }))
-    .filter((m) => m.cpuReserved > 0 || m.memoryReserved > 0);
 }

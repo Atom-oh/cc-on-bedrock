@@ -9,8 +9,8 @@ import {
   type ToolConfiguration,
   type ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
-import { listContainers } from "@/lib/aws-clients";
-import { getContainerMetrics } from "@/lib/cloudwatch-client";
+import { listInstances } from "@/lib/ec2-clients";
+import { getEc2AggregateMetrics } from "@/lib/cloudwatch-client";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const MODEL_ID = "global.anthropic.claude-sonnet-4-6";
@@ -22,26 +22,27 @@ function getBedrockClient() {
 // ── Gather platform context (no LiteLLM dependency) ──
 async function gatherContext(): Promise<string> {
   try {
-    const [containers, cwMetrics] = await Promise.all([
-      listContainers().catch(() => []),
-      getContainerMetrics().catch(() => null),
-    ]);
+    const instances = await listInstances().catch(() => []);
+    const running = instances.filter((i) => i.status === "running");
+    const runningIds = running.map((i) => i.instanceId);
+    const cwMetrics = runningIds.length > 0
+      ? await getEc2AggregateMetrics(runningIds).catch(() => null)
+      : null;
 
-    const running = containers.filter(c => c.status === "RUNNING");
-    const containerLines = running.map(c =>
-      `${c.username || c.subdomain}: ${c.containerOs}/${c.resourceTier} (${c.status})`
+    const instanceLines = running.map((i) =>
+      `${i.username || i.subdomain}: ${i.instanceType} (${i.status})`
     ).join("\n");
 
     let cwLines = "N/A";
     if (cwMetrics) {
-      cwLines = `CPU: ${cwMetrics.cpuUtilizationPct.toFixed(1)}%, Memory: ${cwMetrics.memoryUtilizationPct.toFixed(1)}%, Tasks: ${cwMetrics.taskCount}, Hosts: ${cwMetrics.containerInstanceCount}`;
+      cwLines = `CPU: ${cwMetrics.avgCpu.toFixed(1)}%, Memory: ${cwMetrics.avgMemory.toFixed(1)}%, Instances: ${cwMetrics.instanceCount}`;
     }
 
     return `[Platform Data - Direct Bedrock Mode]
-Architecture: Claude Code → ECS Task Role → Bedrock (direct, no proxy)
-Containers: ${running.length}/${containers.length} running
-${containerLines}
-Cluster Metrics: ${cwLines}
+Architecture: Claude Code → EC2 Instance Role → Bedrock (direct, no proxy)
+Instances: ${running.length}/${instances.length} running
+${instanceLines}
+Aggregate Metrics: ${cwLines}
 Region: ${region}
 Note: Usage tracking via CloudTrail (data may have 1-5 min delay)`;
   } catch {
@@ -62,44 +63,35 @@ async function executeTool(toolName: string): Promise<string> {
   try {
     switch (toolName) {
       case "get_container_status": {
-        const c = await listContainers();
-        const running = c.filter(x => x.status === "RUNNING");
-        const osDist: Record<string, number> = {};
-        const tierDist: Record<string, number> = {};
-        for (const r of running) {
-          osDist[r.containerOs] = (osDist[r.containerOs] ?? 0) + 1;
-          tierDist[r.resourceTier] = (tierDist[r.resourceTier] ?? 0) + 1;
+        const inst = await listInstances();
+        const runningInst = inst.filter((x) => x.status === "running");
+        const typeDist: Record<string, number> = {};
+        for (const r of runningInst) {
+          typeDist[r.instanceType] = (typeDist[r.instanceType] ?? 0) + 1;
         }
         return JSON.stringify({
-          total: c.length,
-          running: running.length,
-          osDist,
-          tierDist,
-          containers: c.map(x => ({
+          total: inst.length,
+          running: runningInst.length,
+          typeDist,
+          instances: inst.map((x) => ({
             user: x.username || x.subdomain,
             status: x.status,
-            os: x.containerOs,
-            tier: x.resourceTier,
-            cpu: x.cpu,
-            memory: x.memory,
-            startedAt: x.startedAt,
+            instanceType: x.instanceType,
             ip: x.privateIp,
+            launchTime: x.launchTime,
           })),
         });
       }
       case "get_container_metrics": {
-        const m = await getContainerMetrics();
+        const allInstances = await listInstances().catch(() => []);
+        const allRunning = allInstances.filter((i) => i.status === "running");
+        const m = await getEc2AggregateMetrics(allRunning.map((i) => i.instanceId));
         return JSON.stringify({
-          cpu_pct: m.cpuUtilizationPct.toFixed(1),
-          mem_pct: m.memoryUtilizationPct.toFixed(1),
-          cpu_utilized: m.cpuUtilized,
-          cpu_reserved: m.cpuReserved,
-          memory_utilized_mib: m.memoryUtilized,
-          memory_reserved_mib: m.memoryReserved,
-          network_rx_bytes: m.networkRxBytes,
-          network_tx_bytes: m.networkTxBytes,
-          tasks: m.taskCount,
-          hosts: m.containerInstanceCount,
+          cpu_pct: m.avgCpu.toFixed(1),
+          mem_pct: m.avgMemory.toFixed(1),
+          network_rx_bytes: m.totalNetworkRx,
+          network_tx_bytes: m.totalNetworkTx,
+          instances: m.instanceCount,
         });
       }
       case "get_platform_summary": {

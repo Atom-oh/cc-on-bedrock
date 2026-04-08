@@ -143,9 +143,9 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
     );
   }
 
-  // Convert CPU units (1024 = 1 vCPU/Core) to a readable Core unit
-  const cpuCores = (metrics.cpu / 1024).toFixed(2);
-  const cpuLimitCores = (metrics.cpuLimit / 1024).toFixed(1);
+  // CPU and Memory are percentages (0-100) from EC2/CWAgent metrics
+  const cpuPct = metrics.cpu.toFixed(1);
+  const memPct = metrics.memory.toFixed(1);
 
   return (
     <div className="w-full space-y-6">
@@ -153,9 +153,9 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-bold text-gray-100 tracking-tight">
-            Container Resources
+            Instance Resources
           </h3>
-          <p className="text-xs text-gray-500 mt-0.5">Real-time container metrics</p>
+          <p className="text-xs text-gray-500 mt-0.5">Real-time EC2 instance metrics</p>
         </div>
         <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900/50 rounded-full border border-gray-800">
           <div className="relative flex h-2 w-2">
@@ -169,13 +169,13 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
       {/* 2x2 Metric Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <MetricCard>
-          <CircularGauge 
-            value={metrics.cpu} 
-            max={metrics.cpuLimit} 
-            label="CPU" 
-            subLabel={`${cpuCores} / ${cpuLimitCores} Cores`} 
-            id="cpu" 
-            unitLabel="vCPU"
+          <CircularGauge
+            value={metrics.cpu}
+            max={metrics.cpuLimit}
+            label="CPU"
+            subLabel={`${cpuPct}%`}
+            id="cpu"
+            unitLabel="%"
           />
         </MetricCard>
 
@@ -183,9 +183,9 @@ export default function ContainerMetrics({ metrics, timeseries, loading }: Conta
           <CircularGauge
             value={metrics.memory} max={metrics.memoryLimit}
             label="Memory"
-            subLabel={`${Math.round(metrics.memory)} / ${Math.round(metrics.memoryLimit)} MB`}
+            subLabel={`${memPct}%`}
             id="memory"
-            unitLabel="MB"
+            unitLabel="%"
           />
         </MetricCard>
 

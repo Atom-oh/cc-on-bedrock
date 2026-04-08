@@ -146,6 +146,11 @@ export class SecurityStack extends cdk.Stack {
           resources: [this.encryptionKey.keyArn],
         }),
         new iam.PolicyStatement({
+          sid: 'CloudWatchMetrics',
+          actions: ['cloudwatch:PutMetricData'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
           sid: 'CloudWatchLogs',
           actions: ['logs:CreateLogStream', 'logs:PutLogEvents', 'logs:CreateLogGroup'],
           resources: [`arn:aws:logs:*:${cdk.Aws.ACCOUNT_ID}:log-group:/cc-on-bedrock/*`],

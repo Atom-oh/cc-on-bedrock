@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getTaskMetrics } from "@/lib/cloudwatch-client";
-import { listContainers } from "@/lib/aws-clients";
+import { getEc2Metrics } from "@/lib/cloudwatch-client";
+import { listInstances } from "@/lib/ec2-clients";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -16,22 +16,20 @@ export async function GET() {
   }
 
   try {
-    // Find the user's running container
-    const containers = await listContainers();
-    const userContainer = containers.find(
-      (c) => c.subdomain === subdomain && c.status === "RUNNING"
+    const instances = await listInstances();
+    const userInstance = instances.find(
+      (i) => i.subdomain === subdomain && i.status === "running"
     );
 
-    if (!userContainer) {
+    if (!userInstance) {
       return NextResponse.json({
         success: true,
         data: null,
-        message: "No running container",
+        message: "No running instance",
       });
     }
 
-    const taskDefFamily = `devenv-${userContainer.containerOs}-${userContainer.resourceTier}`;
-    const metrics = await getTaskMetrics(userContainer.taskId, taskDefFamily);
+    const metrics = await getEc2Metrics(userInstance.instanceId);
 
     return NextResponse.json({
       success: true,
