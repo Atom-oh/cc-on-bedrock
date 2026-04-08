@@ -95,15 +95,32 @@ def get_model_pricing(model_id: str) -> dict:
 
 
 def normalize_model(model_id: str) -> str:
-    """Normalize model ID to short form."""
+    """Normalize model ID to short form.
+
+    Handles:
+      - ARN: arn:aws:bedrock:region:account:inference-profile/global.anthropic.claude-sonnet-4-6
+      - Prefixed: global.anthropic.claude-sonnet-4-6
+      - Plain: claude-sonnet-4-6
+    """
+    # Extract from ARN if present
+    if "/" in model_id:
+        model_id = model_id.split("/")[-1]
+    # Remove region prefixes
     result = (model_id
               .replace("global.anthropic.", "")
               .replace("apac.anthropic.", "")
+              .replace("us.anthropic.", "")
+              .replace("eu.anthropic.", "")
               .replace("anthropic.", "")
               .split(":")[0])
-    # Remove version suffix like [1m] (rstrip would strip individual chars)
+    # Remove version suffix like [1m]
     if result.endswith("[1m]"):
         result = result[:-4]
+    # Remove version suffix like -v1, -v2 at the end
+    for suffix in ["-v1", "-v2", "-v1:0", "-v2:0"]:
+        if result.endswith(suffix):
+            result = result[:-len(suffix)]
+            break
     return result
 
 
