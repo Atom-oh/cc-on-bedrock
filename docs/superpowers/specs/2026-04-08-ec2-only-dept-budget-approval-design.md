@@ -309,15 +309,100 @@ Admin 승인 →
 
 ## 7. Verification
 
-| # | 검증 항목 | 방법 |
-|---|----------|------|
-| 1 | CDK synth | `npx cdk synth --all` 성공 |
-| 2 | TypeScript | `npx tsc --noEmit` 성공 |
-| 3 | EC2 Start/Stop | Dashboard에서 인스턴스 시작/중지 |
-| 4 | Tier 변경 | Stop → tier 변경 신청 → 승인 → Start → 새 instance type |
-| 5 | DLP 변경 | 신청 → 승인 → SG 교체 확인 |
-| 6 | IAM 확장 | 신청 → 승인 → DynamoDB 접근 가능 |
-| 7 | Bedrock 추적 | 호출 → DynamoDB USER#{subdomain} 기록 |
-| 8 | 부서 예산 | 한도 설정 → 초과 → deny policy 부착 |
-| 9 | dept-manager | 부서 사용량 조회 |
-| 10 | Idle auto-stop | 45분 idle → StopInstances |
+### 7.1 빌드 검증
+
+| # | 항목 | 절차 | 기대 결과 |
+|---|------|------|----------|
+| B-1 | CDK synth | `cd cdk && npx cdk synth --all` | 에러 없이 6개 스택 출력 (ECS devenv task def 없음) |
+| B-2 | TypeScript | `cd shared/nextjs-app && npx tsc --noEmit` | 에러 0개 |
+| B-3 | CDK deploy | `npx cdk deploy --all --exclusively` | 모든 스택 UPDATE_COMPLETE |
+| B-4 | Dashboard 배포 | GitHub Actions workflow 성공 | SHA-tagged 이미지 → ECS service stable |
+
+### 7.2 EC2 인스턴스 Lifecycle
+
+| # | 항목 | 절차 | 기대 결과 | 검증 방법 |
+|---|------|------|----------|----------|
+| E-1 | 신규 시작 | Dashboard `/user` → "인스턴스 시작" | 7단계 프로그레스바 → code-server URL 표시 | `aws ec2 describe-instances --filters "Name=tag:subdomain"` → running |
+| E-2 | code-server 접속 | URL 클릭 → 비밀번호 입력 | VS Code 에디터 로드 | 브라우저에서 확인 |
+| E-3 | 파일 보존 | 파일 생성 → Stop → Start | 파일 존재 | `cat /home/coder/test.txt` |
+| E-4 | 패키지 보존 | `npm install -g cowsay` → Stop → Start | `cowsay` 동작 | `which cowsay` |
+| E-5 | Stop 상태 표시 | Stop 클릭 | "Stopping..." badge → 30초 후 "인스턴스 시작" 버튼 | UI 확인 |
+| E-6 | Tier 변경 | Stop → 다른 tier로 Start | instance type 변경, EBS 동일 | `aws ec2 describe-instances` → InstanceType 확인 |
+
+### 7.3 토큰 사용량 추적
+
+| # | 항목 | 절차 | 기대 결과 | 검증 방법 |
+|---|------|------|----------|----------|
+| T-1 | Bedrock 호출 기록 | code-server에서 Claude Code 사용 | `/aws/bedrock/invocation-logs`에 로그 | `aws logs filter-log-events --filter-pattern "cc-on-bedrock-task"` |
+| T-2 | Identity 매핑 | 위 로그의 identity.arn | `cc-on-bedrock-task-{subdomain}` | 로그에서 arn 필드 확인 |
+| T-3 | Lambda 처리 | usage-tracker Lambda 실행 | "Resolved EC2 role → {subdomain}" | Lambda CloudWatch 로그 |
+| T-4 | DynamoDB 기록 | Lambda → DynamoDB | `USER#{subdomain}` 레코드, inputTokens/outputTokens > 0 | `aws dynamodb query --key-condition-expression "PK = :pk"` |
+| T-5 | 비용 계산 | DynamoDB estimatedCost | $0 아닌 값 | DynamoDB 레코드 확인 |
+| T-6 | Dashboard 표시 | `/user` Environment 탭 "오늘 사용량" | 토큰 수 > 0, 비용 > $0 | UI 확인 |
+| T-7 | model ID 정규화 | DynamoDB SK 필드 | `2026-04-08#claude-sonnet-4-6` ("arn" 아님) | DynamoDB scan |
+| T-8 | 비-cc-on-bedrock 필터 | 다른 역할의 Bedrock 호출 | DynamoDB에 기록 안 됨 | Lambda 로그 "Skipping non-cc-on-bedrock role" |
+| T-9 | Admin 토큰 페이지 | `/admin/tokens` | 사용자별 토큰/비용 표시 | UI 확인 |
+
+### 7.4 신청/승인 Workflow
+
+| # | 항목 | 절차 | 기대 결과 | 검증 방법 |
+|---|------|------|----------|----------|
+| A-1 | Tier 신청 | user → `/user` → tier 변경 → "신청" | DynamoDB `cc-approval-requests` status=pending | DynamoDB scan |
+| A-2 | Tier 승인 | admin → `/admin` → 승인 대기 → "승인" | Cognito `custom:resource_tier` 업데이트 | `aws cognito-idp admin-get-user` |
+| A-3 | Tier 적용 | user → Stop → Start | 새 instance type으로 시작 | `aws ec2 describe-instances` → InstanceType |
+| A-4 | DLP 신청 | user → DLP 변경 신청 (open → restricted) | DynamoDB pending | DynamoDB 확인 |
+| A-5 | DLP 승인 | admin 승인 | Cognito `custom:security_policy` 업데이트 | Cognito 확인 |
+| A-6 | DLP 적용 (실행 중) | 승인 즉시 | SG 교체 | `aws ec2 describe-instances` → SecurityGroups |
+| A-7 | DLP 적용 (정지) | 다음 Start 시 | 새 SG로 시작 | SecurityGroups 확인 |
+| A-8 | IAM 신청 | user → DynamoDB 접근 신청 | DynamoDB pending | DynamoDB 확인 |
+| A-9 | IAM 승인 | admin 승인 | `cc-on-bedrock-task-{subdomain}`에 policy 추가 | `aws iam get-role-policy` |
+| A-10 | IAM 적용 | user code-server에서 DynamoDB 접근 | 성공 | `aws dynamodb list-tables` in code-server |
+| A-11 | 거부 | admin → "거부" | status=rejected, 적용 없음 | DynamoDB + Cognito 변경 없음 |
+
+### 7.5 부서 예산 관리
+
+| # | 항목 | 절차 | 기대 결과 | 검증 방법 |
+|---|------|------|----------|----------|
+| D-1 | 예산 설정 | admin → `/admin/budgets` → engineering 부서 $100/월 | DynamoDB `cc-user-budgets` 기록 | DynamoDB 확인 |
+| D-2 | 예산 표시 | `/admin/budgets` | Departments > 0, 금액 표시 | UI 확인 |
+| D-3 | 부서 사용량 | dept-manager → `/dept` → engineering 클릭 | 멤버별 토큰/비용 테이블 | UI 확인 |
+| D-4 | 예산 초과 감지 | 부서 사용량 > 월 예산 | budget-check Lambda 감지 | Lambda 로그 |
+| D-5 | Deny policy 부착 | 예산 초과 | 부서 멤버 전원 role에 BedrockDeny | `aws iam get-role-policy --policy-name BedrockDenyBudget` |
+| D-6 | Bedrock 차단 확인 | deny 후 Claude Code 사용 | AccessDeniedException | code-server에서 확인 |
+| D-7 | 예산 증액 → 복구 | admin이 예산 증액 | deny policy 제거 | role policy 확인 |
+
+### 7.6 Idle Detection + Auto-Stop
+
+| # | 항목 | 절차 | 기대 결과 | 검증 방법 |
+|---|------|------|----------|----------|
+| I-1 | Grace period | 인스턴스 시작 직후 | 10분간 idle 체크 skip | Lambda 로그 |
+| I-2 | Active 감지 | CPU > 5% 또는 Network > 1KB/s | NOT idle | Lambda 로그 |
+| I-3 | Token active | Bedrock 호출 15분 이내 | NOT idle | Lambda 로그 |
+| I-4 | Keep-alive | `/user` Storage 탭 → Keep-Alive 연장 | `cc-user-instances` keep_alive_until 설정 | DynamoDB 확인 |
+| I-5 | Idle 경고 | 30분 idle | SNS 알림 | SNS + Lambda 로그 |
+| I-6 | Auto-stop | 45분 idle | StopInstances | `aws ec2 describe-instances` → stopped |
+| I-7 | EOD 종료 | 18:00 KST | running 인스턴스 전부 stop (no_auto_stop 제외) | 다음 날 확인 |
+| I-8 | Nginx 라우팅 해제 | Stop 시 | `cc-routing-table`에서 삭제 | DynamoDB 확인 |
+
+### 7.7 UI/i18n 검증
+
+| # | 항목 | 절차 | 기대 결과 | 검증 방법 |
+|---|------|------|----------|----------|
+| U-1 | i18n 한글 | 한글 모드로 전체 페이지 순회 | 영어 키 노출 없음 | 브라우저 전체 탐색 |
+| U-2 | i18n 영어 | ENG 모드로 전체 페이지 순회 | 정상 영어 표시 | 브라우저 전체 탐색 |
+| U-3 | EC2 용어 | 모든 페이지 | "Container", "ECS", "EFS" 문구 없음 | 텍스트 검색 |
+| U-4 | 홈 대시보드 | Active Instances, Cluster Insights | 실제 EC2 데이터 반영 | 인스턴스 시작 후 확인 |
+| U-5 | 모니터링 | 인스턴스 목록, CPU/Memory | EC2 메트릭 표시 | CWAgent 데이터 확인 |
+| U-6 | 보안 | DNS Firewall, 방화벽 규칙 | 0 아닌 값 | 실제 규칙 존재 시 |
+
+### 7.8 보안 검증
+
+| # | 항목 | 절차 | 기대 결과 | 검증 방법 |
+|---|------|------|----------|----------|
+| S-1 | SSH 차단 | `ssh coder@{instance-ip}` | 연결 거부 | SG에 port 22 없음 |
+| S-2 | SSM 접근 | `aws ssm start-session --target {instance-id}` | 셸 접근 가능 | SSM Session Manager |
+| S-3 | DLP Open | Open SG 인스턴스에서 `curl google.com` | 성공 | code-server 터미널 |
+| S-4 | DLP Restricted | Restricted SG에서 `curl google.com` | 실패 (HTTPS만 허용) | code-server 터미널 |
+| S-5 | DLP Locked | Locked SG에서 외부 접근 | 전부 차단 (VPC 내부만) | code-server 터미널 |
+| S-6 | Permission boundary | user role에서 IAM 변경 시도 | 거부 | `aws iam create-role` → AccessDenied |
+| S-7 | AI Assistant | 일반 사용자 `/ai` 접근 | 403 | 비-admin 계정으로 테스트 |
