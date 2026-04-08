@@ -118,7 +118,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         const containers: ApiResponse<ContainerInfo[]> = await responses[1].json();
         const cw = await responses[2].json();
         const usage = await responses[3].json();
-        activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING").length || 0;
+        activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING" || c.status === "running").length || 0;
         totalTokens = usage.data?.totalTokens ?? 0;
         totalCost = usage.data?.totalCost ?? 0;
         cwData = cw.success ? cw.data : null;
@@ -272,7 +272,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         {/* Cluster Metrics */}
         <div className="space-y-6">
           <SectionHeader title="Cluster Insights" subtitle="Infrastructure Performance" icon={Cpu} />
-          {data.cwMetrics && (
+          {data.cwMetrics ? (
             <motion.div
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -297,6 +297,10 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
                 </div>
               </div>
             </motion.div>
+          ) : (
+            <div className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 text-center">
+              <p className="text-gray-500 text-sm">No running instances. Start an instance to see metrics.</p>
+            </div>
           )}
         </div>
 
