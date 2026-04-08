@@ -108,8 +108,85 @@ export class DashboardStack extends cdk.Stack {
       resources: ['*'],
     }));
 
-    // EC2 DevEnv permissions are on the role itself (Security stack)
-    // to avoid inline policy size limit in this stack
+    // ─── Dashboard Core Permissions (Cognito, ECS, EFS, ELB, Secrets, DynamoDB, KMS, Lambda) ───
+    const corePolicy = new iam.Policy(this, 'DashboardCorePolicy', {
+      roles: [dashboardEc2Role],
+    });
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'CognitoAdmin',
+      actions: [
+        'cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser',
+        'cognito-idp:AdminGetUser', 'cognito-idp:AdminSetUserPassword',
+        'cognito-idp:AdminEnableUser', 'cognito-idp:AdminDisableUser',
+        'cognito-idp:ListUsers',
+      ],
+      resources: [userPool.userPoolArn],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'EcsManagement',
+      actions: [
+        'ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks',
+        'ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition', 'ecs:DeregisterTaskDefinition',
+        'ecs:DescribeClusters', 'ecs:ListServices', 'ecs:DescribeServices',
+        'ecs:DescribeContainerInstances', 'ecs:ListContainerInstances',
+      ],
+      resources: ['*'],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'EfsAccess',
+      actions: [
+        'elasticfilesystem:DescribeFileSystems', 'elasticfilesystem:DescribeMountTargets',
+        'elasticfilesystem:CreateAccessPoint', 'elasticfilesystem:DescribeAccessPoints',
+        'elasticfilesystem:DeleteAccessPoint',
+      ],
+      resources: ['*'],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'ElbManagement',
+      actions: [
+        'elasticloadbalancing:CreateTargetGroup', 'elasticloadbalancing:DeleteTargetGroup',
+        'elasticloadbalancing:RegisterTargets', 'elasticloadbalancing:DeregisterTargets',
+        'elasticloadbalancing:DescribeTargetGroups', 'elasticloadbalancing:DescribeTargetHealth',
+        'elasticloadbalancing:CreateRule', 'elasticloadbalancing:DeleteRule',
+        'elasticloadbalancing:DescribeListeners', 'elasticloadbalancing:ModifyRule',
+      ],
+      resources: ['*'],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'SecretsManager',
+      actions: [
+        'secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue',
+        'secretsmanager:UpdateSecret', 'secretsmanager:DeleteSecret',
+        'secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret',
+      ],
+      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'DynamoDBAccess',
+      actions: [
+        'dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem',
+        'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
+      ],
+      resources: [
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-usage`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
+      ],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'KmsAccess',
+      actions: ['kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey'],
+      resources: [encryptionKey.keyArn],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'LambdaInvoke',
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'PassRoleEcs',
+      actions: ['iam:PassRole'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task`],
+    }));
 
     // ─── Security Groups ───
     const albSg = new ec2.SecurityGroup(this, 'DashboardAlbSg', {
