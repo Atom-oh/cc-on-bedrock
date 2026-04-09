@@ -16,8 +16,9 @@ import {
   ShieldCheck, 
   Users2, 
   Server, 
-  Coins, 
+  Coins,
   Wallet,
+  ClipboardCheck,
   LogOut,
   ChevronRight,
   Globe
@@ -44,6 +45,7 @@ const navItems: NavItem[] = [
   { href: "/admin/containers", labelKey: "nav.containers", icon: Server, adminOnly: true },
   { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
   { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
+  { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
 ];
 
 export default function Sidebar() {

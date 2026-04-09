@@ -124,7 +124,7 @@ export async function DELETE(req: NextRequest) {
         if (!user.subdomain) {
           return NextResponse.json({ success: true, data: { message: "No environment to reset" } });
         }
-        const result = await resetUserEnvironment(username, user.subdomain, user.storageType);
+        const result = await resetUserEnvironment(username, user.subdomain);
         return NextResponse.json({ success: true, data: result });
       }
     }

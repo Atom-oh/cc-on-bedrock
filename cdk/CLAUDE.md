@@ -19,6 +19,5 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 5 active stacks + 1 retained
 - IAM Role은 사용하는 스택에서 생성 (cross-stack cyclic ref 방지)
 - grantRead/grantPull 대신 broad ARN 패턴 사용
 - CDK context로 파라미터 오버라이드: `cdk deploy -c vpcCidr=10.1.0.0/16`
-- `storageType` config: `'ebs'` (기본값, 엔터프라이즈 — warm-stop, idle-check, EBS lifecycle) 또는 `'efs'` (심플, EFS-only)
-  - 오버라이드: `cdk deploy -c storageType=efs`
-  - `isEbsMode(config)` 헬퍼로 조건부 리소스 생성 (Stack 03, 04)
+- EC2-per-user DevEnv: Stack 07에서 Launch Template + per-user IAM 관리 (ECS devenv 제거됨)
+- Stack 04는 ECS Cluster + Nginx 서비스만 유지 (Dashboard + 리버스 프록시)

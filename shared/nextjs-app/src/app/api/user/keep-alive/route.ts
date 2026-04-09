@@ -5,22 +5,10 @@ import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { keepAliveSchema } from "@/lib/validation";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const computeMode = process.env.COMPUTE_MODE ?? "ec2";
-const TABLE_NAME = computeMode === "ec2"
-  ? (process.env.INSTANCE_TABLE ?? "cc-user-instances")
-  : (process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes");
-
+const TABLE_NAME = process.env.INSTANCE_TABLE ?? "cc-user-instances";
 const dynamodb = new DynamoDBClient({ region });
-const storageType = process.env.STORAGE_TYPE ?? "ebs";
 
 export async function POST(req: NextRequest) {
-  // Keep-alive is available in both EC2 and EBS modes
-  if (computeMode !== "ec2" && storageType !== "ebs") {
-    return NextResponse.json(
-      { success: true, storageType: "efs", message: "Keep-alive not needed in EFS mode" },
-      { status: 501 }
-    );
-  }
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });

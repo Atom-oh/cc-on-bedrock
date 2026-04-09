@@ -99,11 +99,12 @@ export async function PUT(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { type, id, monthlyBudget, dailyTokenLimit } = body as {
+    const { type, id, monthlyBudget, dailyTokenLimit, allowedTiers } = body as {
       type: "department" | "user";
       id: string;
       monthlyBudget?: number;
       dailyTokenLimit?: number;
+      allowedTiers?: string[];
     };
 
     if (!type || !id) {
@@ -116,14 +117,20 @@ export async function PUT(req: NextRequest) {
       if (monthlyBudget === undefined) {
         return NextResponse.json({ error: "monthlyBudget is required for department" }, { status: 400 });
       }
+      const updateParts = ["monthlyBudget = :budget", "updatedAt = :now"];
+      const exprVals: Record<string, { N: string } | { S: string } | { L: { S: string }[] }> = {
+        ":budget": { N: String(monthlyBudget) },
+        ":now": { S: now },
+      };
+      if (allowedTiers && Array.isArray(allowedTiers)) {
+        updateParts.push("allowedTiers = :tiers");
+        exprVals[":tiers"] = { L: allowedTiers.map(t => ({ S: t })) };
+      }
       await dynamodb.send(new UpdateItemCommand({
         TableName: DEPT_BUDGETS_TABLE,
         Key: { dept_id: { S: id } },
-        UpdateExpression: "SET monthlyBudget = :budget, updatedAt = :now",
-        ExpressionAttributeValues: {
-          ":budget": { N: String(monthlyBudget) },
-          ":now": { S: now },
-        },
+        UpdateExpression: `SET ${updateParts.join(", ")}`,
+        ExpressionAttributeValues: exprVals,
       }));
     } else if (type === "user") {
       const updateParts: string[] = ["updatedAt = :now"];
