@@ -50,8 +50,16 @@ create_user() {
     # AL2023 has no default user, so we must explicitly set 1001
     groupadd -g 1001 coder 2>/dev/null || true
     useradd -m -s /bin/bash -d /home/coder -u 1001 -g 1001 coder
-    # Restricted sudo: coder can only run code-server as root (no iptables, no credential access)
-    echo "coder ALL=(root) NOPASSWD: /usr/bin/code-server" > /etc/sudoers.d/coder
+    # Restricted sudo: coder can run code-server + package managers (no shell, no iptables)
+    cat > /etc/sudoers.d/coder << 'SUDOEOF'
+coder ALL=(root) NOPASSWD: /usr/bin/code-server
+coder ALL=(root) NOPASSWD: /usr/local/bin/npm
+coder ALL=(root) NOPASSWD: /usr/local/bin/npx
+coder ALL=(root) NOPASSWD: /usr/bin/pip3
+coder ALL=(root) NOPASSWD: /usr/bin/apt-get
+coder ALL=(root) NOPASSWD: /usr/bin/dnf
+coder ALL=(root) NOPASSWD: /usr/bin/yum
+SUDOEOF
     chmod 0440 /etc/sudoers.d/coder
   fi
 }
