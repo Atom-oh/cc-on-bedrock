@@ -31,6 +31,7 @@ import {
   GetRoleCommand,
   CreateRoleCommand,
   PutRolePolicyCommand,
+  TagRoleCommand,
   CreateInstanceProfileCommand,
   AddRoleToInstanceProfileCommand,
   GetInstanceProfileCommand,
@@ -179,7 +180,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
 
   // Per-user instance profile for individual Bedrock usage tracking
-  const instanceProfileName = await ensureUserInstanceProfile(input.subdomain);
+  const instanceProfileName = await ensureUserInstanceProfile(input.subdomain, input.username, input.department);
 
   // Per-user code-server password (Secrets Manager)
   const codeserverPassword = await ensureCodeserverPassword(input.subdomain);
@@ -460,13 +461,22 @@ async function ensureCodeserverPassword(subdomain: string): Promise<string> {
   return password;
 }
 
-async function ensureUserInstanceProfile(subdomain: string): Promise<string> {
+async function ensureUserInstanceProfile(subdomain: string, username: string, department: string): Promise<string> {
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
   const profileName = roleName;
+
+  // Cost allocation tags for AWS Billing integration (Bedrock IAM Cost Allocation)
+  const costAllocationTags = [
+    { Key: "username", Value: username },
+    { Key: "department", Value: department },
+    { Key: "project", Value: "cc-on-bedrock" },
+  ];
 
   // Check if role already exists
   try {
     await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
+    // Sync cost allocation tags on existing role (ensures tags stay current)
+    await iamClient.send(new TagRoleCommand({ RoleName: roleName, Tags: costAllocationTags }));
   } catch {
     // Create per-user role with EC2 trust
     console.log(`[IAM] Creating per-user role: ${roleName}`);
@@ -485,6 +495,7 @@ async function ensureUserInstanceProfile(subdomain: string): Promise<string> {
       Tags: [
         { Key: "cc-on-bedrock", Value: "user-instance-role" },
         { Key: "subdomain", Value: subdomain },
+        ...costAllocationTags,
       ],
     }));
 

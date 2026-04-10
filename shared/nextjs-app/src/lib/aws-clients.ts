@@ -49,6 +49,7 @@ import {
   CreateRoleCommand,
   PutRolePolicyCommand,
   GetRoleCommand,
+  TagRoleCommand,
 } from "@aws-sdk/client-iam";
 import {
   LambdaClient,
@@ -372,13 +373,22 @@ const TASK_DEFINITION_MAP: Record<string, string> = {
 
 // ─── Per-user IAM Role for budget control ───
 
-async function ensureUserTaskRole(subdomain: string): Promise<string> {
+async function ensureUserTaskRole(subdomain: string, username: string, department: string): Promise<string> {
   const roleName = `${TASK_ROLE_PREFIX}-${subdomain}`;
   const roleArn = `arn:aws:iam::${accountId}:role/${roleName}`;
 
+  // Cost allocation tags for AWS Billing integration (Bedrock IAM Cost Allocation)
+  const costAllocationTags = [
+    { Key: "username", Value: username },
+    { Key: "department", Value: department },
+    { Key: "project", Value: "cc-on-bedrock" },
+  ];
+
   try {
     await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
-    return roleArn; // Already exists
+    // Sync cost allocation tags on existing role (ensures tags stay current)
+    await iamClient.send(new TagRoleCommand({ RoleName: roleName, Tags: costAllocationTags }));
+    return roleArn;
   } catch {
     // Create new per-user role
   }
@@ -396,7 +406,11 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
       }),
       PermissionsBoundary: `arn:aws:iam::${accountId}:policy/cc-on-bedrock-task-boundary`,
       Description: `Per-user ECS Task Role for ${subdomain}`,
-      Tags: [{ Key: "cc-on-bedrock", Value: "user-task-role" }, { Key: "subdomain", Value: subdomain }],
+      Tags: [
+        { Key: "cc-on-bedrock", Value: "user-task-role" },
+        { Key: "subdomain", Value: subdomain },
+        ...costAllocationTags,
+      ],
     }));
 
     // Attach scoped Bedrock + S3 + Logs + ECR + Secrets permissions
@@ -555,7 +569,7 @@ export async function startContainer(
   const securityGroup = SECURITY_GROUP_MAP[input.securityPolicy];
 
   // Create or get per-user IAM Task Role for budget control
-  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
+  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain, input.username, input.department);
 
   // Create or get per-user EFS Access Point for file isolation
   const accessPointId = await ensureUserAccessPoint(input.subdomain);
@@ -769,7 +783,7 @@ export async function startContainerWithProgress(
 
   // Step 1: IAM Role
   onProgress(1, "iam_role", "in_progress", "Creating per-user IAM role...");
-  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
+  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain, input.username, input.department);
   onProgress(1, "iam_role", "completed", "IAM role ready");
 
   // Step 2: EFS Access Point

@@ -7,6 +7,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as sns from 'aws-cdk-lib/aws-sns';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as logsDest from 'aws-cdk-lib/aws-logs-destinations';
 import * as cr from 'aws-cdk-lib/custom-resources';
@@ -512,6 +513,103 @@ export class UsageTrackingStack extends cdk.Stack {
       indexName: 'department-status-index',
       partitionKey: { name: 'department', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+    });
+
+    // ─── CUR 2.0 Data Export with IAM Principal Cost Allocation ───
+    // Enables per-user Bedrock cost tracking in Cost Explorer and CUR 2.0
+    // Ref: https://aws.amazon.com/about-aws/whats-new/2026/04/bedrock-iam-cost-allocation/
+
+    const costReportBucket = new s3.Bucket(this, 'CostReportBucket', {
+      bucketName: `${config.projectPrefix}-cost-reports-${cdk.Aws.ACCOUNT_ID}`,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [{ expiration: cdk.Duration.days(365) }],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // BCM Data Exports requires bucket policy granting access
+    costReportBucket.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'AllowBCMDataExports',
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ServicePrincipal('bcm-data-exports.amazonaws.com')],
+      actions: ['s3:PutObject', 's3:GetBucketPolicy'],
+      resources: [
+        costReportBucket.bucketArn,
+        `${costReportBucket.bucketArn}/*`,
+      ],
+      conditions: {
+        StringLike: {
+          'aws:SourceArn': `arn:aws:bcm-data-exports:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:export/*`,
+        },
+      },
+    }));
+
+    // CUR 2.0 Data Export with caller identity (IAM principal) allocation
+    new cr.AwsCustomResource(this, 'CUR2DataExport', {
+      onCreate: {
+        service: '@aws-sdk/client-bcm-data-exports',
+        action: 'CreateExport',
+        parameters: {
+          Export: {
+            Name: 'cc-on-bedrock-bedrock-cost-by-iam',
+            DataQuery: {
+              QueryStatement: [
+                'SELECT identity_line_item_id, line_item_usage_account_id,',
+                'line_item_product_code, line_item_usage_type,',
+                'line_item_operation, line_item_unblended_cost,',
+                'line_item_usage_amount, resource_tags_user_username,',
+                'resource_tags_user_department, resource_tags_user_project,',
+                'line_item_usage_start_date, line_item_usage_end_date',
+                'FROM COST_AND_USAGE_REPORT',
+              ].join(' '),
+              TableConfigurations: {
+                COST_AND_USAGE_REPORT: {
+                  TIME_GRANULARITY: 'DAILY',
+                  INCLUDE_RESOURCES: 'TRUE',
+                  INCLUDE_CALLER_IDENTITY: 'TRUE',
+                },
+              },
+            },
+            DestinationConfigurations: {
+              S3Destination: {
+                S3Bucket: costReportBucket.bucketName,
+                S3Prefix: 'cur2',
+                S3Region: cdk.Aws.REGION,
+                S3OutputConfigurations: {
+                  OutputType: 'CUSTOM',
+                  Format: 'PARQUET',
+                  Compression: 'PARQUET',
+                  Overwrite: 'OVERWRITE_REPORT',
+                },
+              },
+            },
+            RefreshCadence: {
+              Frequency: 'SYNCHRONOUS',
+            },
+          },
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('cc-on-bedrock-cur2-export'),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: [
+            'bcm-data-exports:CreateExport',
+            'bcm-data-exports:DeleteExport',
+            'bcm-data-exports:GetExport',
+            'bcm-data-exports:UpdateExport',
+          ],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          actions: ['cur:PutReportDefinition', 'cur:DeleteReportDefinition'],
+          resources: ['*'],
+        }),
+      ]),
+    });
+
+    new cdk.CfnOutput(this, 'CostReportBucketName', {
+      value: costReportBucket.bucketName,
+      description: 'S3 bucket for CUR 2.0 cost reports with IAM principal allocation',
     });
   }
 }
