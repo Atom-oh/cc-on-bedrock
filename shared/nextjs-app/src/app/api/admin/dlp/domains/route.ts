@@ -18,14 +18,35 @@ import {
   ListFirewallDomainsCommand,
   CreateFirewallRuleCommand,
   DeleteFirewallRuleCommand,
+  ListFirewallRuleGroupAssociationsCommand,
 } from "@aws-sdk/client-route53resolver";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const TABLE = process.env.DLP_DOMAIN_LIST_TABLE ?? "cc-dlp-domain-lists";
-const RULE_GROUP_ID = process.env.DNS_FIREWALL_RULE_GROUP_ID ?? "";
+const VPC_ID = process.env.VPC_ID ?? "";
 
 const ddb = new DynamoDBClient({ region });
 const r53 = new Route53ResolverClient({ region });
+
+// Runtime discovery of DNS Firewall Rule Group ID (cached after first lookup)
+let cachedRuleGroupId: string | null = null;
+async function getRuleGroupId(): Promise<string> {
+  if (cachedRuleGroupId) return cachedRuleGroupId;
+  // Try env var first
+  const envId = process.env.DNS_FIREWALL_RULE_GROUP_ID;
+  if (envId) { cachedRuleGroupId = envId; return envId; }
+  // Discover from VPC associations
+  const result = await r53.send(new ListFirewallRuleGroupAssociationsCommand({
+    VpcId: VPC_ID || undefined,
+    Status: "COMPLETE",
+  }));
+  const assoc = result.FirewallRuleGroupAssociations?.find(
+    (a) => a.Name?.includes("cc-on-bedrock")
+  ) ?? result.FirewallRuleGroupAssociations?.[0];
+  if (!assoc?.FirewallRuleGroupId) throw new Error("No DNS Firewall Rule Group found");
+  cachedRuleGroupId = assoc.FirewallRuleGroupId;
+  return cachedRuleGroupId;
+}
 
 // GET: List domain lists or domains in a specific list
 export async function GET(req: NextRequest) {
@@ -93,11 +114,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Invalid domain format: ${invalid.join(", ")}` }, { status: 400 });
   }
 
-  if (!RULE_GROUP_ID) {
-    return NextResponse.json({ error: "DNS_FIREWALL_RULE_GROUP_ID not configured" }, { status: 500 });
-  }
-
   try {
+    const ruleGroupId = await getRuleGroupId();
     // 1. Create FirewallDomainList in Route53 Resolver
     const createResult = await r53.send(new CreateFirewallDomainListCommand({
       Name: `cc-on-bedrock-${tier}-${listType.toLowerCase()}-${Date.now()}`,
@@ -118,7 +136,7 @@ export async function POST(req: NextRequest) {
     const action = listType === "ALLOW" ? "ALLOW" : "BLOCK";
 
     await r53.send(new CreateFirewallRuleCommand({
-      FirewallRuleGroupId: RULE_GROUP_ID,
+      FirewallRuleGroupId: ruleGroupId,
       FirewallDomainListId: firewallDomainListId,
       Priority: priority,
       Action: action,
@@ -139,7 +157,7 @@ export async function POST(req: NextRequest) {
         listType,
         tier,
         firewallDomainListId,
-        firewallRuleGroupId: RULE_GROUP_ID,
+        firewallRuleGroupId: ruleGroupId,
         domainCount: domains.length,
         status: "ACTIVE",
         createdAt: now,
