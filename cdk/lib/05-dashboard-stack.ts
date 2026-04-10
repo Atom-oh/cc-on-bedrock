@@ -31,6 +31,7 @@ export interface DashboardStackProps extends cdk.StackProps {
   efsFileSystemId: string;
   ecsInfrastructureRoleArn?: string;
   webAclArn?: string;
+  dnsFirewallRuleGroupId?: string;
 }
 
 export class DashboardStack extends cdk.Stack {
@@ -101,9 +102,22 @@ export class DashboardStack extends cdk.Stack {
         'route53resolver:ListFirewallRuleGroupAssociations',
         'route53resolver:ListFirewallRules',
         'route53resolver:ListFirewallDomainLists',
+        'route53resolver:ListFirewallDomains',
         'route53resolver:GetFirewallDomainList',
         'route53resolver:GetFirewallRuleGroup',
         'ec2:DescribeSecurityGroups',
+      ],
+      resources: ['*'],
+    }));
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'DlpDnsFirewallManagement',
+      actions: [
+        'route53resolver:CreateFirewallDomainList',
+        'route53resolver:DeleteFirewallDomainList',
+        'route53resolver:UpdateFirewallDomains',
+        'route53resolver:CreateFirewallRule',
+        'route53resolver:DeleteFirewallRule',
+        'route53resolver:UpdateFirewallRule',
       ],
       resources: ['*'],
     }));
@@ -166,10 +180,12 @@ export class DashboardStack extends cdk.Stack {
       actions: [
         'dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem',
         'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
+        'dynamodb:BatchWriteItem',
       ],
       resources: [
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-usage`,
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dlp-domain-lists`,
       ],
     }));
     corePolicy.addStatements(new iam.PolicyStatement({
@@ -271,9 +287,9 @@ export class DashboardStack extends cdk.Stack {
         DEV_SUBDOMAIN: config.devSubdomain,
         VPC_ID: vpc.vpcId,
         AWS_ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
-        COMPUTE_MODE: config.computeMode,
-        STORAGE_TYPE: config.storageType,
-        NEXT_PUBLIC_STORAGE_TYPE: config.storageType,
+        COMPUTE_MODE: 'ec2',
+        STORAGE_TYPE: 'ec2',
+        NEXT_PUBLIC_STORAGE_TYPE: 'ec2',
         INSTANCE_TABLE: 'cc-user-instances',
         LAUNCH_TEMPLATE: 'cc-on-bedrock-devenv',
         PRIVATE_SUBNET_IDS: cdk.Fn.join(',', vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds),
@@ -283,6 +299,8 @@ export class DashboardStack extends cdk.Stack {
         S3_SYNC_BUCKET: `${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
         EFS_FILE_SYSTEM_ID: props.efsFileSystemId,
         ROUTING_TABLE: 'cc-routing-table',
+        DLP_DOMAIN_LIST_TABLE: 'cc-dlp-domain-lists',
+        DNS_FIREWALL_RULE_GROUP_ID: props.dnsFirewallRuleGroupId ?? '',
         ECS_INFRASTRUCTURE_ROLE_ARN: props.ecsInfrastructureRoleArn ?? '',
         KMS_KEY_ARN: encryptionKey.keyArn,
       },

@@ -12,7 +12,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as logsDest from 'aws-cdk-lib/aws-logs-destinations';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
-import { CcOnBedrockConfig, isEbsMode } from '../config/default';
+import { CcOnBedrockConfig } from '../config/default';
 import * as path from 'path';
 
 export interface UsageTrackingStackProps extends cdk.StackProps {
@@ -54,6 +54,16 @@ export class UsageTrackingStack extends cdk.Stack {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'date', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // DLP Domain Lists table (DNS Firewall domain management)
+    new dynamodb.Table(this, 'DlpDomainListTable', {
+      tableName: 'cc-dlp-domain-lists',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     // Lambda for processing CloudTrail events
@@ -177,134 +187,11 @@ export class UsageTrackingStack extends cdk.Stack {
     departmentBudgetsTable.grantReadWriteData(budgetCheckLambda);
     userBudgetsTable.grantReadWriteData(budgetCheckLambda);
 
-    // ==================== Warm Stop Automation (EBS mode only) ====================
-    const isEbs = isEbsMode(config);
+    // ==================== EC2 Idle Stop (EC2-only mode) ====================
+    // ECS warm-stop, idle-check, ebs-lifecycle Lambdas REMOVED (ADR-004)
+    // EC2 Stop/Start preserves EBS — no snapshot/restore needed
 
-    if (isEbs) {
-
-    // DynamoDB Table for user volumes (used by warm-stop and EBS lifecycle)
-    const userVolumesTable = new dynamodb.Table(this, 'UserVolumesTable', {
-      tableName: 'cc-user-volumes',
-      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey,
-      pointInTimeRecovery: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    // Warm Stop Lambda
-    const warmStopLambda = new lambda.Function(this, 'WarmStopLambda', {
-      functionName: 'cc-on-bedrock-warm-stop',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'warm-stop.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
-      timeout: cdk.Duration.minutes(5),
-      memorySize: 256,
-      environment: {
-        REGION: cdk.Aws.REGION,
-        ECS_CLUSTER: 'cc-on-bedrock-devenv',
-        VOLUMES_TABLE: userVolumesTable.tableName,
-        ROUTING_TABLE: 'cc-routing-table',
-        IDLE_THRESHOLD_MINUTES: '30',
-        SNS_TOPIC_ARN: alertTopic.topicArn,
-        EBS_LIFECYCLE_LAMBDA: 'cc-on-bedrock-ebs-lifecycle',
-        USAGE_TABLE: this.usageTable.tableName,
-        EOD_SHUTDOWN_ENABLED: 'true',
-      },
-      logRetention: logs.RetentionDays.ONE_MONTH,
-    });
-
-    // Grant warm-stop Lambda permissions
-    userVolumesTable.grantReadWriteData(warmStopLambda);
-    this.usageTable.grantReadData(warmStopLambda);
-    alertTopic.grantPublish(warmStopLambda);
-
-    // ECS permissions: list, describe, stop tasks
-    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: [
-        'ecs:ListTasks',
-        'ecs:DescribeTasks',
-        'ecs:StopTask',
-      ],
-      resources: ['*'],
-    }));
-
-    // CloudWatch permissions: read metrics
-    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: [
-        'cloudwatch:GetMetricStatistics',
-        'cloudwatch:GetMetricData',
-      ],
-      resources: ['*'],
-    }));
-
-    // DynamoDB routing table: deregister routes on warm-stop
-    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:DeleteItem'],
-      resources: [
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
-      ],
-    }));
-
-    // Lambda invoke: call EBS lifecycle Lambda and self-invoke for async warm-stop
-    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['lambda:InvokeFunction'],
-      resources: [
-        `arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`,
-      ],
-    }));
-
-    // Idle Check Lambda (lightweight metrics checker, can be called independently)
-    const idleCheckLambda = new lambda.Function(this, 'IdleCheckLambda', {
-      functionName: 'cc-on-bedrock-idle-check',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'idle-check.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 128,
-      environment: {
-        REGION: cdk.Aws.REGION,
-        ECS_CLUSTER: 'cc-on-bedrock-devenv',
-        IDLE_CPU_THRESHOLD: '5.0',
-        IDLE_NETWORK_THRESHOLD: '1000',
-      },
-      logRetention: logs.RetentionDays.ONE_MONTH,
-    });
-
-    // Idle check Lambda permissions
-    idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
-      resources: [
-        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
-        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
-      ],
-    }));
-    idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['cloudwatch:GetMetricStatistics', 'cloudwatch:GetMetricData'],
-      resources: ['*'],
-    }));
-
-    // EventBridge: Idle check every 5 minutes (triggers warm-stop check_idle action)
-    const idleCheckRule = new events.Rule(this, 'IdleCheckRule', {
-      ruleName: 'cc-idle-check',
-      description: 'Check for idle ECS tasks every 5 minutes',
-      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
-    });
-    idleCheckRule.addTarget(new targets.LambdaFunction(warmStopLambda, {
-      event: events.RuleTargetInput.fromObject({ action: 'check_idle' }),
-    }));
-
-    // EventBridge: EOD batch shutdown (18:00 KST = 09:00 UTC)
-    const eodShutdownRule = new events.Rule(this, 'EodShutdownRule', {
-      ruleName: 'cc-eod-shutdown',
-      schedule: events.Schedule.cron({ hour: '9', minute: '0' }),
-    });
-    eodShutdownRule.addTarget(new targets.LambdaFunction(warmStopLambda, {
-      event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
-    }));
-
-    // ─── EC2 Idle Stop Lambda (computeMode: 'ec2') ───
+    // ─── EC2 Idle Stop Lambda ───
     const ec2IdleStopLambda = new lambda.Function(this, 'Ec2IdleStopLambda', {
       functionName: 'cc-on-bedrock-ec2-idle-stop',
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -361,22 +248,6 @@ export class UsageTrackingStack extends cdk.Stack {
     ec2EodRule.addTarget(new targets.LambdaFunction(ec2IdleStopLambda, {
       event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
     }));
-
-    // EBS-mode CfnOutputs
-    new cdk.CfnOutput(this, 'UserVolumesTableName', {
-      value: userVolumesTable.tableName,
-      exportName: 'cc-user-volumes-table-name',
-    });
-    new cdk.CfnOutput(this, 'WarmStopLambdaArn', {
-      value: warmStopLambda.functionArn,
-      exportName: 'cc-warm-stop-lambda-arn',
-    });
-    new cdk.CfnOutput(this, 'IdleCheckLambdaArn', {
-      value: idleCheckLambda.functionArn,
-      exportName: 'cc-idle-check-lambda-arn',
-    });
-
-    } // end if (isEbs)
 
     // Audit Logger Lambda
     const auditLoggerLambda = new lambda.Function(this, 'AuditLoggerLambda', {

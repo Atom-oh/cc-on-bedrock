@@ -6,18 +6,20 @@ import { useSession, signOut } from "next-auth/react";
 import { useI18n } from "@/lib/i18n";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { 
-  Home, 
-  Terminal, 
-  Building2, 
-  Sparkles, 
-  BarChart3, 
-  Activity, 
-  ShieldCheck, 
-  Users2, 
-  Server, 
-  Coins, 
+import {
+  Home,
+  Terminal,
+  Building2,
+  Sparkles,
+  BarChart3,
+  Activity,
+  ShieldCheck,
+  Users2,
+  Server,
+  Coins,
   Wallet,
+  ClipboardCheck,
+  BookOpen,
   LogOut,
   ChevronRight,
   Globe
@@ -41,9 +43,12 @@ const navItems: NavItem[] = [
   { href: "/monitoring", labelKey: "nav.monitoring", icon: Activity, adminOnly: true },
   { href: "/security", labelKey: "nav.security", icon: ShieldCheck, adminOnly: true },
   { href: "/admin", labelKey: "nav.users", icon: Users2, adminOnly: true },
-  { href: "/admin/containers", labelKey: "nav.containers", icon: Server, adminOnly: true },
+  { href: "/admin/instances", labelKey: "nav.containers", icon: Server, adminOnly: true },
   { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
   { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
+  { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
+  { href: "/admin/dlp", labelKey: "nav.dlpManagement", icon: ShieldCheck, adminOnly: true },
+  { href: "/docs", labelKey: "nav.docs", icon: BookOpen, showForAll: true },
 ];
 
 export default function Sidebar() {

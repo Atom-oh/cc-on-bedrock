@@ -1,13 +1,12 @@
 # CloudFormation Module
 
 ## Role
-CloudFormation YAML로 전체 인프라 배포. 5개 템플릿 + Shell 배포 스크립트 (LiteLLM 템플릿은 제거 예정).
+CloudFormation YAML로 전체 인프라 배포. 4개 템플릿 + Shell 배포 스크립트.
 
 ## Key Files
 - `01-network.yaml` - VPC, Subnets, NAT, VPC Endpoints, Route 53
 - `02-security.yaml` - Cognito (Hosted UI), ACM, KMS, Secrets Manager, IAM
-- `03-litellm.yaml` - **deprecated** (Bedrock Direct 전환으로 제거 예정)
-- `04-ecs-devenv.yaml` - ECS Cluster, Task Defs, EFS, ALB, CloudFront
+- `04-ecs-devenv.yaml` - ECS Cluster, Task Defs, EFS, NLB+Nginx, DynamoDB Routing, CloudFront
 - `05-dashboard.yaml` - Dashboard EC2 ASG, ALB, CloudFront
 - ※ Usage Tracking (DynamoDB, Lambda, EventBridge) 템플릿 추가 필요
 - `deploy.sh` - 순차 배포 (01→05), 스택 출력값 자동 전달

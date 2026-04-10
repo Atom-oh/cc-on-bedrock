@@ -79,14 +79,6 @@ const config: Config = {
           title: 'Docs',
           items: [
             {
-              label: 'User Portal',
-              to: '/docs/user-portal',
-            },
-            {
-              label: 'Deployment',
-              to: '/docs/deployment',
-            },
-            {
               label: 'Architecture',
               to: '/docs/architecture',
             },

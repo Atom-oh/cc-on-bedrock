@@ -8,6 +8,7 @@ interface UsersTableProps {
   onResetEnvironment?: (username: string) => void;
   onPermanentDelete?: (username: string) => void;
   onToggle?: (username: string, enabled: boolean) => void;
+  onUpdate?: (username: string, field: string, value: string) => Promise<void>;
 }
 
 const tierBadge: Record<string, string> = {
@@ -53,7 +54,21 @@ export default function UsersTable({
   onResetEnvironment,
   onPermanentDelete,
   onToggle,
+  onUpdate,
 }: UsersTableProps) {
+  const [editingCell, setEditingCell] = useState<{ username: string; field: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleInlineChange = async (username: string, field: string, value: string) => {
+    if (!onUpdate) return;
+    setSaving(true);
+    try {
+      await onUpdate(username, field, value);
+    } finally {
+      setSaving(false);
+      setEditingCell(null);
+    }
+  };
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("email");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -181,22 +196,59 @@ export default function UsersTable({
                   <p className="text-[10px] text-gray-600">{user.username}</p>
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-400">{user.subdomain}</td>
-                <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-400">
-                  {user.containerOs === "al2023" ? "Amazon Linux" : "Ubuntu"}
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  {editingCell?.username === user.username && editingCell?.field === "containerOs" ? (
+                    <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.containerOs} disabled={saving}
+                      onChange={(e) => handleInlineChange(user.username, "containerOs", e.target.value)}
+                      onBlur={() => setEditingCell(null)}>
+                      <option value="ubuntu">Ubuntu</option>
+                      <option value="al2023">AL2023</option>
+                    </select>
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "containerOs" })}
+                      className={`text-sm text-gray-400 ${onUpdate ? "hover:text-blue-400 cursor-pointer" : ""}`}>
+                      {user.containerOs === "al2023" ? "Amazon Linux" : "Ubuntu"}
+                    </button>
+                  )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">
-                  <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${tierBadge[user.resourceTier] ?? tierBadge.standard}`}>
-                    {user.resourceTier}
-                  </span>
+                  {editingCell?.username === user.username && editingCell?.field === "resourceTier" ? (
+                    <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.resourceTier} disabled={saving}
+                      onChange={(e) => handleInlineChange(user.username, "resourceTier", e.target.value)}
+                      onBlur={() => setEditingCell(null)}>
+                      <option value="light">Light</option>
+                      <option value="standard">Standard</option>
+                      <option value="power">Power</option>
+                    </select>
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "resourceTier" })}
+                      className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${tierBadge[user.resourceTier] ?? tierBadge.standard} ${onUpdate ? "hover:ring-1 hover:ring-blue-500 cursor-pointer" : ""}`}>
+                      {user.resourceTier}
+                    </button>
+                  )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">
-                  <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${policyBadge[user.securityPolicy] ?? policyBadge.restricted}`}>
-                    {user.securityPolicy}
-                  </span>
+                  {editingCell?.username === user.username && editingCell?.field === "securityPolicy" ? (
+                    <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.securityPolicy} disabled={saving}
+                      onChange={(e) => handleInlineChange(user.username, "securityPolicy", e.target.value)}
+                      onBlur={() => setEditingCell(null)}>
+                      <option value="open">Open</option>
+                      <option value="restricted">Restricted</option>
+                      <option value="locked">Locked</option>
+                    </select>
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "securityPolicy" })}
+                      className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${policyBadge[user.securityPolicy] ?? policyBadge.restricted} ${onUpdate ? "hover:ring-1 hover:ring-blue-500 cursor-pointer" : ""}`}>
+                      {user.securityPolicy}
+                    </button>
+                  )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">
                   <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full uppercase ${storageBadge[user.storageType ?? "ebs"] ?? storageBadge.ebs}`}>
-                    {user.storageType ?? "ebs"}
+                    {(user.storageType ?? "ebs").toUpperCase()}
                   </span>
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">

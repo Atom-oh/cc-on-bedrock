@@ -1,7 +1,7 @@
 # CDK Module
 
 ## Role
-AWS CDK v2 (TypeScript)로 전체 인프라 배포. 5 active stacks + 1 retained (LiteLLM).
+AWS CDK v2 (TypeScript)로 전체 인프라 배포. 5 active stacks.
 
 ## Key Files
 - `bin/app.ts` - CDK app entry, 모든 스택 연결 및 의존성 설정
@@ -9,8 +9,7 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 5 active stacks + 1 retained
 - `lib/01-network-stack.ts` - VPC, Subnets, NAT, VPC Endpoints, Route 53
 - `lib/02-security-stack.ts` - Cognito (Hosted UI domain 포함), ACM, KMS, Secrets Manager, IAM
 - `lib/03-usage-tracking-stack.ts` - DynamoDB (사용량 저장), Lambda (EventBridge 트리거), EventBridge Rules
-- `lib/03-litellm-stack.ts` - **Retained, not deployed** (CloudFormation 스택 삭제 전까지 보존)
-- `lib/04-ecs-devenv-stack.ts` - ECS Cluster, Task Defs, EFS, ALB, CloudFront
+- `lib/04-ecs-devenv-stack.ts` - ECS Cluster, NLB+Nginx, DynamoDB Routing, EFS, CloudFront
 - `lib/05-dashboard-stack.ts` - Dashboard EC2 ASG, ALB, CloudFront
 - `lib/lambda/bedrock-usage-tracker.py` - Bedrock API 호출 추적 Lambda (EventBridge → DynamoDB)
 - `lib/lambda/budget-check.py` - 예산 초과 확인 Lambda (5분 주기, IAM Deny Policy 동적 부착)
@@ -19,6 +18,5 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 5 active stacks + 1 retained
 - IAM Role은 사용하는 스택에서 생성 (cross-stack cyclic ref 방지)
 - grantRead/grantPull 대신 broad ARN 패턴 사용
 - CDK context로 파라미터 오버라이드: `cdk deploy -c vpcCidr=10.1.0.0/16`
-- `storageType` config: `'ebs'` (기본값, 엔터프라이즈 — warm-stop, idle-check, EBS lifecycle) 또는 `'efs'` (심플, EFS-only)
-  - 오버라이드: `cdk deploy -c storageType=efs`
-  - `isEbsMode(config)` 헬퍼로 조건부 리소스 생성 (Stack 03, 04)
+- EC2-per-user DevEnv: Stack 07에서 Launch Template + per-user IAM 관리 (ECS devenv 제거됨)
+- Stack 04는 ECS Cluster + Nginx 서비스만 유지 (Dashboard + 리버스 프록시)

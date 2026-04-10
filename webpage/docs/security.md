@@ -1,20 +1,10 @@
 # 보안 (Security)
 
 import SecurityLayers from '@site/src/components/InteractiveDoc/SecurityLayers';
-import Screenshot from '@site/src/components/Screenshot';
 
 CC-on-Bedrock은 기업 환경에서도 안전하게 사용할 수 있도록 설계된 **7계층 보안 모델**을 적용하고 있습니다.
 
 <SecurityLayers />
-
-## 보안 관리 대시보드
-대시보드에서는 보안 정책을 시각적으로 관리하고 위협 로그를 실시간으로 모니터링할 수 있습니다.
-
-<Screenshot 
-  src="/cc-on-bedrock/img/security.png" 
-  alt="Security Dashboard" 
-  caption="통합 보안 대시보드: IAM, DLP, DNS Firewall 통합 관리 화면" 
-/>
 
 ## 7계층 보안 모델 상세
 
@@ -35,3 +25,7 @@ CC-on-Bedrock은 기업 환경에서도 안전하게 사용할 수 있도록 설
 - **Open**: 자유로운 인터넷 아웃바운드 허용 (기본값)
 - **Restricted**: 사전에 정의된 특정 도메인(예: GitHub, npm)만 허용
 - **Locked**: 모든 인터넷 아웃바운드 차단 및 VPC 엔드포인트를 통한 AWS 서비스 접근만 허용
+
+## 감사 및 추적
+
+CloudTrail을 통해 모든 Bedrock 호출 및 인프라 변경 이력을 저장하며, 대시보드의 **Security** 페이지에서 실시간 차단 내역 및 보안 체크리스트를 확인할 수 있습니다.

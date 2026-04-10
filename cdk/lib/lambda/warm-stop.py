@@ -12,7 +12,7 @@ Actions:
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 import boto3
@@ -26,12 +26,9 @@ logger.setLevel(logging.INFO)
 REGION = os.environ.get("REGION", "ap-northeast-2")
 CLUSTER = os.environ.get("ECS_CLUSTER", "cc-on-bedrock-devenv")
 VOLUMES_TABLE = os.environ.get("VOLUMES_TABLE", "cc-user-volumes")
-ROUTING_TABLE = os.environ.get("ROUTING_TABLE", "cc-routing-table")
 IDLE_THRESHOLD_MINUTES = int(os.environ.get("IDLE_THRESHOLD_MINUTES", "30"))
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 EBS_LIFECYCLE_LAMBDA = os.environ.get("EBS_LIFECYCLE_LAMBDA", "cc-on-bedrock-ebs-lifecycle")
-USAGE_TABLE = os.environ.get("USAGE_TABLE", "cc-on-bedrock-usage")
-EOD_SHUTDOWN_ENABLED = os.environ.get("EOD_SHUTDOWN_ENABLED", "true")
 
 # AWS clients
 ecs = boto3.client("ecs", region_name=REGION)
@@ -44,9 +41,8 @@ lambda_client = boto3.client("lambda", region_name=REGION)
 # DynamoDB table
 table = dynamodb.Table(VOLUMES_TABLE)
 
-# Idle thresholds
-IDLE_CPU_THRESHOLD = 5.0  # percentage
-IDLE_NETWORK_THRESHOLD = 1000  # bytes/sec (RX+TX combined)
+# Idle CPU threshold (percentage)
+IDLE_CPU_THRESHOLD = 5.0
 
 
 def handler(event: dict, context: Any) -> dict:
@@ -99,24 +95,10 @@ def check_idle(event: dict) -> dict:
         task_id = task_arn.split("/")[-1]
 
         # Check CPU utilization from CloudWatch
-        is_idle, idle_minutes = check_task_idle_status(task_id, user_id, started_at=task_info.get("started_at"), task_def_family=task_info.get("task_def_family", "devenv-ubuntu-standard"))
+        is_idle, idle_minutes = check_task_idle_status(task_id, user_id, started_at=task_info.get("started_at"))
 
         if is_idle:
             logger.info(f"Task {task_id} (user: {user_id}) is idle for {idle_minutes} minutes")
-
-            # Check keep_alive_until — skip warm-stop if user extended
-            try:
-                vol_result = table.get_item(Key={"user_id": user_id})
-                keep_alive_until = vol_result.get("Item", {}).get("keep_alive_until", "")
-                if keep_alive_until:
-                    ka_time = datetime.fromisoformat(keep_alive_until.replace("Z", "+00:00"))
-                    if ka_time > datetime.now(timezone.utc):
-                        logger.info(f"Task {task_id} (user: {user_id}) has keep-alive until {keep_alive_until}, skipping")
-                        continue
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Invalid keep_alive_until format for {user_id}: {e}")
-            except Exception as e:
-                logger.warning(f"Failed to check keep_alive for {user_id}: {e}")
 
             # Update DynamoDB with idle status
             update_idle_status(user_id, task_id, idle_minutes)
@@ -130,7 +112,7 @@ def check_idle(event: dict) -> dict:
                     "action": "warm_stop_triggered",
                 })
                 # Trigger warm stop asynchronously
-                trigger_warm_stop(user_id, task_arn, subdomain=user_id)
+                trigger_warm_stop(user_id, task_arn)
 
             elif idle_minutes >= IDLE_THRESHOLD_MINUTES:
                 # Idle for 30+ minutes -> send warning
@@ -173,26 +155,8 @@ def warm_stop(event: dict) -> dict:
             return error_response(404, f"No running task found for user {user_id}")
 
     task_id = task_arn.split("/")[-1]
-    subdomain = event.get("subdomain", "")
 
-    # Step 0: Get EBS volume ID from task BEFORE stopping (attachment info lost after stop)
-    volume_id = None
-    try:
-        task_desc = ecs.describe_tasks(cluster=CLUSTER, tasks=[task_arn])
-        for attachment in task_desc.get("tasks", [{}])[0].get("attachments", []):
-            if attachment.get("type") == "AmazonElasticBlockStorage":
-                for detail in attachment.get("details", []):
-                    if detail.get("name") == "volumeId":
-                        volume_id = detail.get("value")
-                        logger.info(f"Found EBS volume {volume_id} for task {task_id}")
-    except ClientError as e:
-        logger.warning(f"Failed to get EBS volume ID from task {task_id}: {e}")
-
-    # Step 1: Deregister Nginx route to prevent stale connections
-    if subdomain:
-        deregister_route(subdomain)
-
-    # Step 2: Stop ECS task (triggers SIGTERM -> entrypoint S3 sync)
+    # Step 1: Stop ECS task (triggers SIGTERM -> entrypoint S3 sync)
     logger.info(f"Stopping ECS task {task_id} for user {user_id}")
     try:
         ecs.stop_task(
@@ -206,24 +170,21 @@ def warm_stop(event: dict) -> dict:
             raise
         logger.warning(f"Task {task_id} may already be stopped: {e}")
 
-    # Step 3: Invoke EBS lifecycle Lambda to snapshot+delete volume
-    if volume_id:
-        logger.info(f"Invoking EBS lifecycle Lambda for user {user_id}, volume {volume_id}")
-        try:
-            lambda_client.invoke(
-                FunctionName=EBS_LIFECYCLE_LAMBDA,
-                InvocationType="Event",
-                Payload=json.dumps({
-                    "action": "snapshot_and_detach",
-                    "user_id": user_id,
-                    "volume_id": volume_id,
-                }),
-            )
-            logger.info(f"EBS snapshot initiated for user {user_id}")
-        except ClientError as e:
-            logger.error(f"Failed to invoke EBS lifecycle Lambda: {e}")
-    else:
-        logger.warning(f"No EBS volume found for task {task_id}, skipping snapshot")
+    # Step 2: Invoke EBS lifecycle Lambda to snapshot+delete volume
+    logger.info(f"Invoking EBS lifecycle Lambda for user {user_id}")
+    try:
+        lambda_client.invoke(
+            FunctionName=EBS_LIFECYCLE_LAMBDA,
+            InvocationType="Event",  # Async invocation
+            Payload=json.dumps({
+                "action": "snapshot_and_detach",
+                "user_id": user_id,
+            }),
+        )
+        logger.info(f"EBS snapshot initiated for user {user_id}")
+    except ClientError as e:
+        logger.error(f"Failed to invoke EBS lifecycle Lambda: {e}")
+        # Continue anyway - task stop is the critical path
 
     # Step 3: Update DynamoDB status
     update_warm_stop_status(user_id, task_id)
@@ -243,10 +204,10 @@ def warm_resume(event: dict) -> dict:
     Resume a warm-stopped container: restore EBS from snapshot, start new task.
 
     Required: user_id
-    Note: AZ is no longer needed — EBS snapshots are region-level,
-    ECS managed EBS handles AZ placement automatically via RunTask.
+    Optional: az (availability zone for volume restore)
     """
     user_id = event.get("user_id")
+    az = event.get("az", f"{REGION}a")
 
     if not user_id:
         return error_response(400, "Missing required parameter: user_id")
@@ -272,6 +233,7 @@ def warm_resume(event: dict) -> dict:
                 Payload=json.dumps({
                     "action": "restore_from_snapshot",
                     "user_id": user_id,
+                    "az": az,
                 }),
             )
         else:
@@ -281,6 +243,7 @@ def warm_resume(event: dict) -> dict:
                 Payload=json.dumps({
                     "action": "create_and_attach",
                     "user_id": user_id,
+                    "az": az,
                 }),
             )
 
@@ -307,13 +270,8 @@ def warm_resume(event: dict) -> dict:
 def schedule_shutdown(event: dict) -> dict:
     """
     Batch stop all idle containers at EOD (called at 18:00 KST).
-    Excludes tasks with 'no_auto_stop' tag or active keep-alive.
-    Can be disabled globally via EOD_SHUTDOWN_ENABLED env var.
+    Excludes tasks with 'no_auto_stop' tag.
     """
-    if EOD_SHUTDOWN_ENABLED.lower() != "true":
-        logger.info("EOD shutdown is disabled via EOD_SHUTDOWN_ENABLED")
-        return success_response({"message": "EOD shutdown is disabled"})
-
     logger.info("Scheduled shutdown: stopping all idle containers")
 
     running_tasks = list_running_tasks()
@@ -342,26 +300,8 @@ def schedule_shutdown(event: dict) -> dict:
             })
             continue
 
-        # Check keep_alive_until — skip if user extended
-        try:
-            vol_result = table.get_item(Key={"user_id": user_id})
-            keep_alive_until = vol_result.get("Item", {}).get("keep_alive_until", "")
-            if keep_alive_until:
-                ka_time = datetime.fromisoformat(keep_alive_until.replace("Z", "+00:00"))
-                if ka_time > datetime.now(timezone.utc):
-                    logger.info(f"Skipping task {task_id} (user: {user_id}) - keep-alive until {keep_alive_until}")
-                    skipped_tasks.append({
-                        "task_arn": task_arn,
-                        "user_id": user_id,
-                        "reason": "keep_alive_active",
-                    })
-                    continue
-        except Exception as e:
-            logger.warning(f"Failed to check keep_alive for {user_id}: {e}")
-
         # Check if task is actively being used (high CPU in last 15 minutes)
-        # Pass started_at to respect the 10-minute startup grace period
-        is_idle, _ = check_task_idle_status(task_id, user_id, period_minutes=15, started_at=task_info.get("started_at"), task_def_family=task_info.get("task_def_family", "devenv-ubuntu-standard"))
+        is_idle, _ = check_task_idle_status(task_id, user_id, period_minutes=15)
         if not is_idle:
             logger.info(f"Skipping task {task_id} (user: {user_id}) - actively in use")
             skipped_tasks.append({
@@ -373,7 +313,7 @@ def schedule_shutdown(event: dict) -> dict:
 
         # Trigger warm stop
         logger.info(f"Stopping task {task_id} (user: {user_id}) - scheduled shutdown")
-        trigger_warm_stop(user_id, task_arn, subdomain=user_id)
+        trigger_warm_stop(user_id, task_arn)
         stopped_tasks.append({
             "task_arn": task_arn,
             "user_id": user_id,
@@ -429,72 +369,23 @@ def get_task_info(task_arn: str) -> dict | None:
         task = tasks[0]
         tags = {t["key"]: t["value"] for t in task.get("tags", [])}
 
-        # Extract task def family from ARN: arn:aws:ecs:...:task-definition/devenv-ubuntu-standard:5
-        td_arn = task.get("taskDefinitionArn", "")
-        td_family = td_arn.split("/")[-1].split(":")[0] if "/" in td_arn else "devenv-ubuntu-standard"
-
         return {
             "task_arn": task_arn,
             "task_id": task_arn.split("/")[-1],
-            "user_id": tags.get("subdomain", tags.get("user_id", "unknown")),
-            "email": tags.get("username", ""),
+            "user_id": tags.get("username", tags.get("user_id", "unknown")),
             "department": tags.get("department", "default"),
             "no_auto_stop": tags.get("no_auto_stop", "").lower() == "true",
             "started_at": task.get("startedAt"),
             "last_status": task.get("lastStatus"),
-            "task_def_family": td_family,
         }
     except ClientError as e:
         logger.error(f"Failed to describe task {task_arn}: {e}")
         return None
 
 
-def get_network_metrics(task_def_family: str, start_time: datetime, end_time: datetime) -> float:
-    """Get average network throughput (bytes/sec) from Container Insights."""
-    try:
-        dims = [
-            {"Name": "ClusterName", "Value": CLUSTER},
-            {"Name": "TaskDefinitionFamily", "Value": task_def_family},
-        ]
-        rx_resp = cloudwatch.get_metric_statistics(
-            Namespace="ECS/ContainerInsights", MetricName="NetworkRxBytes",
-            Dimensions=dims, StartTime=start_time, EndTime=end_time,
-            Period=300, Statistics=["Average"],
-        )
-        tx_resp = cloudwatch.get_metric_statistics(
-            Namespace="ECS/ContainerInsights", MetricName="NetworkTxBytes",
-            Dimensions=dims, StartTime=start_time, EndTime=end_time,
-            Period=300, Statistics=["Average"],
-        )
-        rx_dps = rx_resp.get("Datapoints", [])
-        tx_dps = tx_resp.get("Datapoints", [])
-        rx_avg = sum(dp["Average"] for dp in rx_dps) / len(rx_dps) if rx_dps else 0
-        tx_avg = sum(dp["Average"] for dp in tx_dps) / len(tx_dps) if tx_dps else 0
-        return (rx_avg + tx_avg) / 300  # bytes per 5-min period → bytes/sec
-    except ClientError as e:
-        logger.error(f"Failed to get network metrics: {e}")
-        return float("inf")  # Fail safe — don't mark as idle
-
-
-def has_recent_token_usage(user_id: str, minutes: int = 15) -> bool:
-    """Check if user has recent Bedrock API calls in the usage table."""
-    try:
-        usage_table = dynamodb.Table(USAGE_TABLE)
-        cutoff = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat() + "Z"
-        response = usage_table.query(
-            KeyConditionExpression="PK = :pk AND SK > :cutoff",
-            ExpressionAttributeValues={":pk": f"USER#{user_id}", ":cutoff": cutoff},
-            Limit=1,
-        )
-        return len(response.get("Items", [])) > 0
-    except ClientError as e:
-        logger.warning(f"Failed to check token usage for {user_id}: {e}")
-        return True  # Fail safe — assume active
-
-
-def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = None, started_at: datetime = None, task_def_family: str = "devenv-ubuntu-standard") -> tuple:
+def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = None, started_at: datetime = None) -> tuple:
     """
-    Check if task is idle based on CPU, network I/O, and token usage.
+    Check if task is idle based on CloudWatch CPU metrics.
     Returns (is_idle: bool, idle_minutes: int).
     """
     if period_minutes is None:
@@ -511,46 +402,12 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
     start_time = end_time - timedelta(minutes=period_minutes)
 
     try:
-        # Try custom per-task metrics first (published by idle-monitor.sh in CC/DevEnv namespace)
-        custom_response = cloudwatch.get_metric_statistics(
-            Namespace="CC/DevEnv",
-            MetricName="CpuUsage",
-            Dimensions=[
-                {"Name": "TaskId", "Value": task_id},
-                {"Name": "UserId", "Value": user_id},
-            ],
-            StartTime=start_time,
-            EndTime=end_time,
-            Period=300,
-            Statistics=["Average"],
-        )
-        custom_datapoints = custom_response.get("Datapoints", [])
-
-        if custom_datapoints:
-            # Per-task custom metrics available — use them for accurate per-user idle detection
-            custom_datapoints.sort(key=lambda x: x["Timestamp"])
-            idle_count = sum(1 for dp in custom_datapoints if dp["Average"] < IDLE_CPU_THRESHOLD)
-            if idle_count == len(custom_datapoints):
-                # CPU idle — also check network and token usage before confirming
-                network_avg = get_network_metrics(task_def_family, start_time, end_time)
-                if network_avg >= IDLE_NETWORK_THRESHOLD:
-                    logger.info(f"Task {task_id} CPU idle but network active ({network_avg:.0f} B/s)")
-                    return False, 0
-                if has_recent_token_usage(user_id):
-                    logger.info(f"Task {task_id} CPU idle but recent Bedrock API usage")
-                    return False, 0
-                idle_minutes = idle_count * 5
-                return True, idle_minutes
-            return False, 0
-
-        # Fall back to Container Insights with TaskDefinitionFamily dimension
-        # (shared across all tasks in the same family — less precise)
         response = cloudwatch.get_metric_statistics(
-            Namespace="ECS/ContainerInsights",
-            MetricName="CpuUtilized",
+            Namespace="AWS/ECS",
+            MetricName="CPUUtilization",
             Dimensions=[
                 {"Name": "ClusterName", "Value": CLUSTER},
-                {"Name": "TaskDefinitionFamily", "Value": task_def_family},
+                {"Name": "ServiceName", "Value": f"cc-user-{user_id}"},
             ],
             StartTime=start_time,
             EndTime=end_time,
@@ -561,7 +418,8 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
         datapoints = response.get("Datapoints", [])
         if not datapoints:
             # No metrics = fail safe, do NOT assume idle
-            logger.info(f"No CPU metrics for task {task_id} (user: {user_id}, family: {task_def_family}), assuming NOT idle (fail safe)")
+            # Standalone tasks may not emit ServiceName-based metrics
+            logger.info(f"No CPU metrics for task {task_id} (user: {user_id}), assuming NOT idle (fail safe)")
             return False, 0
 
         # Sort by timestamp
@@ -572,14 +430,6 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
         total_count = len(datapoints)
 
         if idle_count == total_count:
-            # CPU idle — also check network and token usage
-            network_avg = get_network_metrics(task_def_family, start_time, end_time)
-            if network_avg >= IDLE_NETWORK_THRESHOLD:
-                logger.info(f"Task {task_id} CPU idle but network active ({network_avg:.0f} B/s)")
-                return False, 0
-            if has_recent_token_usage(user_id):
-                logger.info(f"Task {task_id} CPU idle but recent Bedrock API usage")
-                return False, 0
             idle_minutes = idle_count * 5  # Each datapoint is 5 minutes
             return True, idle_minutes
         else:
@@ -603,7 +453,7 @@ def find_user_task(user_id: str) -> str | None:
     return None
 
 
-def trigger_warm_stop(user_id: str, task_arn: str, subdomain: str = ""):
+def trigger_warm_stop(user_id: str, task_arn: str):
     """Trigger warm stop asynchronously."""
     try:
         lambda_client.invoke(
@@ -613,21 +463,10 @@ def trigger_warm_stop(user_id: str, task_arn: str, subdomain: str = ""):
                 "action": "warm_stop",
                 "user_id": user_id,
                 "task_arn": task_arn,
-                "subdomain": subdomain,
             }),
         )
     except ClientError as e:
         logger.error(f"Failed to trigger warm stop for user {user_id}: {e}")
-
-
-def deregister_route(subdomain: str):
-    """Remove Nginx route from DynamoDB routing table."""
-    try:
-        routing_table = dynamodb.Table(ROUTING_TABLE)
-        routing_table.delete_item(Key={"subdomain": subdomain})
-        logger.info(f"Deregistered route for subdomain {subdomain}")
-    except ClientError as e:
-        logger.error(f"Failed to deregister route for {subdomain}: {e}")
 
 
 def update_idle_status(user_id: str, task_id: str, idle_minutes: int):

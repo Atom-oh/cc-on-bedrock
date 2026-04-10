@@ -78,7 +78,7 @@ export default function ContainerManagement({
         containerOs: user.containerOs,
         resourceTier: user.resourceTier,
         securityPolicy: user.securityPolicy,
-        storageType: user.storageType ?? "efs",
+        storageType: "ebs",
       };
 
       const res = await fetch("/api/containers", {
@@ -102,16 +102,23 @@ export default function ContainerManagement({
   };
 
   const handleStop = async (taskArn: string) => {
-    if (!confirm("Are you sure you want to stop this container?")) return;
+    if (!confirm("Are you sure you want to stop this instance?")) return;
+    // taskArn is actually instanceId in EC2 mode; find subdomain from containers list
+    const instance = containers.find((c) => c.taskArn === taskArn);
+    const subdomain = instance?.subdomain;
+    if (!subdomain) {
+      console.error("Cannot find subdomain for instance:", taskArn);
+      return;
+    }
     try {
       await fetch("/api/containers", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskArn }),
+        body: JSON.stringify({ subdomain }),
       });
       void fetchData();
     } catch (err) {
-      console.error("Failed to stop container:", err);
+      console.error("Failed to stop instance:", err);
     }
   };
 
@@ -165,68 +172,11 @@ export default function ContainerManagement({
         <StatCard
           title={t("containers.utilization")}
           value={users.length > 0 ? `${Math.round(((runningContainers.length + pendingContainers.length) / users.length) * 100)}%` : "0%"}
-          description="Containers / Users"
-        />
-        <StatCard
-          title="EFS Storage"
-          value={efsInfo ? `${(efsInfo.sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GiB` : "-"}
-          description={efsInfo ? `${efsInfo.numberOfMountTargets} mounts · ${efsInfo.state}` : "Loading..."}
+          description="Instances / Users"
         />
       </div>
 
-      {/* EFS Detail */}
-      {efsInfo && users.some(u => (u.storageType ?? "efs") === "efs") && (
-        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-          <h3 className="text-sm font-medium text-gray-300 mb-3">EFS Shared Storage</h3>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <p className="text-[10px] text-gray-500 uppercase">Total Size</p>
-              <p className="text-lg font-bold text-white">{(efsInfo.sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-gray-500 uppercase">Standard Storage</p>
-              <p className="text-lg font-bold text-blue-400">{(efsInfo.sizeStandard / (1024 * 1024 * 1024)).toFixed(2)} GiB</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-gray-500 uppercase">Infrequent Access</p>
-              <p className="text-lg font-bold text-gray-400">{(efsInfo.sizeIA / (1024 * 1024 * 1024)).toFixed(2)} GiB</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-gray-500 uppercase">Connected Containers</p>
-              <p className="text-lg font-bold text-green-400">{runningContainers.length} <span className="text-[10px] text-gray-500 font-normal">/ {efsInfo.numberOfMountTargets} mount targets</span></p>
-            </div>
-          </div>
-          <p className="mt-3 text-[10px] text-gray-600">Path: /home/coder/users/&#123;subdomain&#125;/ · Per-user isolation enabled · Transit encryption: ON</p>
-
-          {/* Per-user EFS Usage */}
-          {efsInfo.perUser && Object.keys(efsInfo.perUser).length > 0 && (
-            <div className="mt-4 pt-4 border-t border-gray-800">
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Per-User Storage (estimated)</p>
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto">
-                {Object.entries(efsInfo.perUser)
-                  .sort(([, a], [, b]) => b - a)
-                  .map(([subdomain, bytes]) => {
-                    const mb = bytes / (1024 * 1024);
-                    const pct = efsInfo.sizeBytes > 0 ? (bytes / efsInfo.sizeBytes) * 100 : 0;
-                    const isRunning = runningContainers.some((c) => c.subdomain === subdomain);
-                    return (
-                      <div key={subdomain} className="flex items-center gap-2 py-1">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRunning ? "bg-green-400" : "bg-gray-600"}`} />
-                        <span className="text-[11px] text-gray-300 w-16 truncate">{subdomain}</span>
-                        <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden max-w-[100px]">
-                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min(pct, 100)}%` }} />
-                        </div>
-                        <span className="text-[10px] text-gray-500 w-14 text-right">{mb >= 1024 ? `${(mb / 1024).toFixed(1)} GiB` : `${mb.toFixed(0)} MiB`}</span>
-                      </div>
-                    );
-                  })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Container Insights */}
+      {/* Instance Insights */}
       {containers.length > 0 && (() => {
         const osCounts: Record<string, number> = {};
         const tierCounts: Record<string, number> = {};
@@ -274,7 +224,7 @@ export default function ContainerManagement({
                   EBS: {containers.filter(c => c.storageType === "ebs").length}
                 </span>
                 <span className="px-2 py-0.5 text-xs bg-green-900/40 text-green-400 rounded">
-                  EFS: {containers.filter(c => (c.storageType ?? "efs") === "efs").length}
+                  EBS: {containers.length}
                 </span>
               </div>
             </div>
@@ -284,7 +234,7 @@ export default function ContainerManagement({
 
       {/* Actions */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-100">Containers</h2>
+        <h2 className="text-lg font-semibold text-gray-100">Instances</h2>
         <div className="flex gap-2">
           <select
             value={filterStorage}
@@ -293,7 +243,7 @@ export default function ContainerManagement({
           >
             <option value="all">All Storage</option>
             <option value="ebs">EBS</option>
-            <option value="efs">EFS</option>
+            <option value="ebs">EBS</option>
           </select>
           <button
             onClick={() => void fetchData()}
@@ -387,7 +337,7 @@ export default function ContainerManagement({
       )}
 
       {/* Containers table */}
-      <ContainersTable containers={filterStorage === "all" ? containers : containers.filter(c => filterStorage === "ebs" ? c.storageType === "ebs" : (c.storageType ?? "efs") === "efs")} onStop={handleStop} domainName={domainName} devSubdomain={devSubdomain} />
+      <ContainersTable containers={containers} onStop={handleStop} domainName={domainName} devSubdomain={devSubdomain} />
     </div>
   );
 }

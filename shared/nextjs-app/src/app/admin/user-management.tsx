@@ -121,6 +121,24 @@ export default function UserManagement() {
     }
   };
 
+  const handleUpdate = async (username: string, field: string, value: string) => {
+    try {
+      const res = await fetch("/api/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, [field]: value }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        setError(json.error ?? `Failed to update ${field}`);
+        return;
+      }
+      void fetchUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Update failed");
+    }
+  };
+
   // User insights
   const activeUsers = users.filter((u) => u.enabled);
   const withSubdomain = users.filter((u) => u.subdomain);
@@ -295,6 +313,7 @@ export default function UserManagement() {
           onResetEnvironment={handleResetEnvironment}
           onPermanentDelete={handlePermanentDelete}
           onToggle={handleToggle}
+          onUpdate={handleUpdate}
         />
       )}
     </div>

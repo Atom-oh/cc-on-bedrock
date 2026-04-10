@@ -2,7 +2,6 @@ import type {ReactNode} from 'react';
 import clsx from 'clsx';
 import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
-import useBaseUrl from '@docusaurus/useBaseUrl';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
 import Translate, {translate} from '@docusaurus/Translate';
@@ -44,10 +43,10 @@ export default function Home(): ReactNode {
       <HomepageHeader />
       <main>
         <div className="container" style={{padding: '2rem 0', textAlign: 'center'}}>
-          <img
-            src={useBaseUrl('/img/cconbedrock_arch.png')}
-            alt="CC-on-Bedrock Architecture"
-            style={{maxWidth: '100%', borderRadius: '10px', boxShadow: '0 4px 10px rgba(0,0,0,0.1)'}}
+          <img 
+            src="/img/cconbedrock_arch.png" 
+            alt="CC-on-Bedrock Architecture" 
+            style={{maxWidth: '100%', borderRadius: '10px', boxShadow: '0 4px 10px rgba(0,0,0,0.1)'}} 
           />
         </div>
       </main>

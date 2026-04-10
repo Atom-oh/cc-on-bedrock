@@ -33,7 +33,7 @@ export async function middleware(req: NextRequest) {
     }
     const groups = (token.groups as string[]) ?? [];
     // Admin-only API routes
-    const adminApiPaths = ["/api/containers", "/api/users", "/api/container-metrics", "/api/security"];
+    const adminApiPaths = ["/api/containers", "/api/users", "/api/container-metrics", "/api/security", "/api/admin"];
     if (adminApiPaths.some(p => path.startsWith(p))) {
       if (!groups.includes("admin")) {
         return NextResponse.json({ error: "Admin access required" }, { status: 403 });
@@ -92,8 +92,10 @@ export const config = {
     "/api/usage/:path*",
     "/api/container-metrics/:path*",
     "/api/security/:path*",
+    "/api/admin/:path*",
     "/api/ai/:path*",
     "/api/user/:path*",
+    "/docs/:path*",
     "/",
   ],
 };

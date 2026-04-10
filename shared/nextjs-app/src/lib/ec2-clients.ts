@@ -13,6 +13,7 @@ import {
   TerminateInstancesCommand,
   CreateTagsCommand,
   ModifyInstanceAttributeCommand,
+  ModifyNetworkInterfaceAttributeCommand,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -367,6 +368,244 @@ export async function listInstances(): Promise<InstanceInfo[]> {
 }
 
 // ─── Helpers ───
+
+// ─── Pre-defined IAM Policy Sets ───
+
+export const IAM_POLICY_SETS: Record<string, { name: string; description: string; statements: object[] }> = {
+  dynamodb: {
+    name: "DynamoDB Access",
+    description: "Read/write access to DynamoDB tables with cc-on-bedrock prefix",
+    statements: [{
+      Sid: "DynamoDBAccess",
+      Effect: "Allow",
+      Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem"],
+      Resource: `arn:aws:dynamodb:*:*:table/cc-on-bedrock-*`,
+    }],
+  },
+  s3_readwrite: {
+    name: "S3 Read/Write",
+    description: "Read/write access to user's S3 prefix",
+    statements: [{
+      Sid: "S3UserAccess",
+      Effect: "Allow",
+      Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+      Resource: [`arn:aws:s3:::cc-on-bedrock-user-data-*`, `arn:aws:s3:::cc-on-bedrock-user-data-*/*`],
+    }],
+  },
+  sqs: {
+    name: "SQS Access",
+    description: "Send/receive messages on cc-on-bedrock SQS queues",
+    statements: [{
+      Sid: "SQSAccess",
+      Effect: "Allow",
+      Action: ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+      Resource: `arn:aws:sqs:*:*:cc-on-bedrock-*`,
+    }],
+  },
+  lambda_invoke: {
+    name: "Lambda Invoke",
+    description: "Invoke cc-on-bedrock Lambda functions",
+    statements: [{
+      Sid: "LambdaInvoke",
+      Effect: "Allow",
+      Action: ["lambda:InvokeFunction"],
+      Resource: `arn:aws:lambda:*:*:function:cc-on-bedrock-*`,
+    }],
+  },
+  eks_readonly: {
+    name: "EKS Read-Only",
+    description: "Read-only access to EKS clusters for debugging",
+    statements: [{
+      Sid: "EKSReadOnly",
+      Effect: "Allow",
+      Action: ["eks:DescribeCluster", "eks:ListClusters", "eks:ListNodegroups", "eks:DescribeNodegroup"],
+      Resource: "*",
+    }],
+  },
+  cloudwatch_full: {
+    name: "CloudWatch Full",
+    description: "CloudWatch logs, metrics, and dashboards",
+    statements: [{
+      Sid: "CloudWatchFull",
+      Effect: "Allow",
+      Action: ["cloudwatch:*", "logs:*"],
+      Resource: "*",
+    }],
+  },
+  sns_publish: {
+    name: "SNS Publish",
+    description: "Publish to cc-on-bedrock SNS topics",
+    statements: [{
+      Sid: "SNSPublish",
+      Effect: "Allow",
+      Action: ["sns:Publish", "sns:ListTopics"],
+      Resource: `arn:aws:sns:*:*:cc-on-bedrock-*`,
+    }],
+  },
+  stepfunctions: {
+    name: "Step Functions",
+    description: "Execute and describe cc-on-bedrock state machines",
+    statements: [{
+      Sid: "StepFunctions",
+      Effect: "Allow",
+      Action: ["states:StartExecution", "states:DescribeExecution", "states:ListExecutions"],
+      Resource: `arn:aws:states:*:*:stateMachine:cc-on-bedrock-*`,
+    }],
+  },
+};
+
+// ─── Tier/DLP/IAM Change Functions ───
+
+/**
+ * Change instance tier (instance type). Requires stop → resize → start.
+ * If instance is running, it will be stopped first.
+ */
+export async function changeTier(
+  subdomain: string,
+  newTier: "light" | "standard" | "power",
+): Promise<{ previousType: string; newType: string; restarted: boolean }> {
+  const record = await getUserInstance(subdomain);
+  if (!record?.instanceId) throw new Error(`No instance found for ${subdomain}`);
+
+  const desc = await describeInstance(record.instanceId);
+  if (!desc) throw new Error(`Instance ${record.instanceId} not found`);
+
+  const newType = INSTANCE_TIERS[newTier].type;
+  const previousType = desc.instanceType;
+
+  if (previousType === newType) {
+    return { previousType, newType, restarted: false };
+  }
+
+  const wasRunning = desc.status === "running";
+
+  // Stop if running
+  if (wasRunning) {
+    await ec2Client.send(new StopInstancesCommand({ InstanceIds: [record.instanceId] }));
+    // Wait for stopped
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const check = await describeInstance(record.instanceId);
+      if (check?.status === "stopped") break;
+    }
+  }
+
+  // Resize
+  await ec2Client.send(new ModifyInstanceAttributeCommand({
+    InstanceId: record.instanceId,
+    InstanceType: { Value: newType },
+  }));
+
+  // Restart if was running
+  if (wasRunning) {
+    await ec2Client.send(new StartInstancesCommand({ InstanceIds: [record.instanceId] }));
+    const info = await waitForRunning(record.instanceId);
+    await registerRoute(subdomain, info.privateIp);
+  }
+
+  await updateInstanceRecord(subdomain, { instanceType: newType });
+  console.log(`[EC2] Tier changed for ${subdomain}: ${previousType} → ${newType}`);
+  return { previousType, newType, restarted: wasRunning };
+}
+
+/**
+ * Change DLP security policy on a running instance by swapping security groups.
+ * Works instantly — no restart required.
+ */
+export async function changeSecurityPolicy(
+  subdomain: string,
+  newPolicy: "open" | "restricted" | "locked",
+): Promise<{ applied: boolean }> {
+  const record = await getUserInstance(subdomain);
+  if (!record?.instanceId) throw new Error(`No instance found for ${subdomain}`);
+
+  const newSgId = SG_MAP[newPolicy];
+  if (!newSgId) throw new Error(`No security group configured for policy: ${newPolicy}`);
+
+  // Get instance ENI
+  const descResult = await ec2Client.send(new DescribeInstancesCommand({
+    InstanceIds: [record.instanceId],
+  }));
+  const inst = descResult.Reservations?.[0]?.Instances?.[0];
+  if (!inst) throw new Error(`Instance ${record.instanceId} not found`);
+
+  // Only apply to running instances (stopped instances get new SG on next start)
+  if (inst.State?.Name === "running") {
+    const eniId = inst.NetworkInterfaces?.[0]?.NetworkInterfaceId;
+    if (!eniId) throw new Error("No network interface found on instance");
+
+    await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
+      NetworkInterfaceId: eniId,
+      Groups: [newSgId],
+    }));
+    console.log(`[EC2] Security policy changed for ${subdomain}: → ${newPolicy} (SG: ${newSgId})`);
+  }
+
+  // Update tags for next start
+  await ec2Client.send(new CreateTagsCommand({
+    Resources: [record.instanceId],
+    Tags: [{ Key: "securityPolicy", Value: newPolicy }],
+  }));
+
+  await updateInstanceRecord(subdomain, { securityPolicy: newPolicy });
+  return { applied: true };
+}
+
+/**
+ * Add IAM policy set to a user's per-user role.
+ * Uses pre-defined policy sets from IAM_POLICY_SETS.
+ */
+export async function addIamPolicySet(
+  subdomain: string,
+  policySetId: string,
+): Promise<{ policyName: string; applied: boolean }> {
+  const policySet = IAM_POLICY_SETS[policySetId];
+  if (!policySet) throw new Error(`Unknown policy set: ${policySetId}`);
+
+  const roleName = `cc-on-bedrock-task-${subdomain}`;
+  const policyName = `PolicySet-${policySetId}`;
+
+  // Verify role exists
+  try {
+    await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
+  } catch {
+    throw new Error(`Per-user role not found: ${roleName}. Start the instance first.`);
+  }
+
+  // Attach policy
+  await iamClient.send(new PutRolePolicyCommand({
+    RoleName: roleName,
+    PolicyName: policyName,
+    PolicyDocument: JSON.stringify({
+      Version: "2012-10-17",
+      Statement: policySet.statements,
+    }),
+  }));
+
+  console.log(`[IAM] Policy set "${policySetId}" added to role ${roleName}`);
+  return { policyName, applied: true };
+}
+
+/**
+ * Remove IAM policy set from a user's per-user role.
+ */
+export async function removeIamPolicySet(
+  subdomain: string,
+  policySetId: string,
+): Promise<void> {
+  const roleName = `cc-on-bedrock-task-${subdomain}`;
+  const policyName = `PolicySet-${policySetId}`;
+
+  const { DeleteRolePolicyCommand } = await import("@aws-sdk/client-iam");
+  await iamClient.send(new DeleteRolePolicyCommand({
+    RoleName: roleName,
+    PolicyName: policyName,
+  }));
+
+  console.log(`[IAM] Policy set "${policySetId}" removed from role ${roleName}`);
+}
+
+// ─── Internal Helpers ───
 
 async function getUserInstance(subdomain: string): Promise<{ instanceId: string } | null> {
   try {

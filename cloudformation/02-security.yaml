@@ -68,7 +68,7 @@ Resources:
         - Name: security_policy
           AttributeDataType: String
           Mutable: true
-        - Name: litellm_api_key
+        - Name: storage_type
           AttributeDataType: String
           Mutable: true
         - Name: container_id
@@ -176,14 +176,6 @@ Resources:
           Value: cc-on-bedrock-dashboard
 
   # ---------- Secrets Manager --------------------------------------------------
-  LitellmMasterKeySecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: cc-on-bedrock/litellm-master-key
-      GenerateSecretString:
-        ExcludePunctuation: true
-        PasswordLength: 32
-
   CloudFrontSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -192,56 +184,7 @@ Resources:
         ExcludePunctuation: true
         PasswordLength: 32
 
-  ValkeyAuthSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: cc-on-bedrock/valkey-auth
-      GenerateSecretString:
-        ExcludePunctuation: true
-        PasswordLength: 32
-
   # ---------- IAM Roles --------------------------------------------------------
-
-  # LiteLLM EC2 Role
-  LitellmEc2Role:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: cc-on-bedrock-litellm-ec2
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
-      Policies:
-        - PolicyName: bedrock-invoke
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                Resource: '*'
-        - PolicyName: secrets-access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource: !Sub 'arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cc-on-bedrock/*'
-
-  LitellmEc2InstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName: cc-on-bedrock-litellm-ec2
-      Roles:
-        - !Ref LitellmEc2Role
 
   # Dashboard EC2 Role
   DashboardEc2Role:
@@ -338,29 +281,11 @@ Outputs:
     Export:
       Name: cc-on-bedrock-dashboard-cert-arn
 
-  LitellmMasterKeySecretArn:
-    Description: LiteLLM master key secret ARN
-    Value: !Ref LitellmMasterKeySecret
-    Export:
-      Name: cc-on-bedrock-litellm-master-key-arn
-
   CloudFrontSecretArn:
     Description: CloudFront secret ARN
     Value: !Ref CloudFrontSecret
     Export:
       Name: cc-on-bedrock-cloudfront-secret-arn
-
-  ValkeyAuthSecretArn:
-    Description: Valkey auth secret ARN
-    Value: !Ref ValkeyAuthSecret
-    Export:
-      Name: cc-on-bedrock-valkey-auth-secret-arn
-
-  LitellmEc2InstanceProfileName:
-    Description: LiteLLM EC2 instance profile name
-    Value: !Ref LitellmEc2InstanceProfile
-    Export:
-      Name: cc-on-bedrock-litellm-ec2-instance-profile
 
   DashboardEc2InstanceProfileName:
     Description: Dashboard EC2 instance profile name

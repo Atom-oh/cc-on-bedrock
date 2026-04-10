@@ -1,20 +1,10 @@
 # 비용 관리 (Cost Management)
 
 import CostCalculator from '@site/src/components/InteractiveDoc/CostCalculator';
-import Screenshot from '@site/src/components/Screenshot';
 
 CC-on-Bedrock은 대규모 사용자 환경에서도 효율적으로 예산을 관리할 수 있는 도구를 제공합니다.
 
 <CostCalculator />
-
-## 실시간 비용 분석
-대시보드 분석 탭을 통해 사용자별, 모델별 비용 사용 현황을 투명하게 파악할 수 있습니다.
-
-<Screenshot 
-  src="/cc-on-bedrock/img/Analytics02.png" 
-  alt="Cost Analytics" 
-  caption="비용 분석 대시보드: 사용자별 리더보드 및 실시간 지출 현황" 
-/>
 
 ## 사용량 추적 흐름 (Budget Control Flow)
 

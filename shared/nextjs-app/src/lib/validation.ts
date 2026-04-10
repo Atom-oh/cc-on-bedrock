@@ -9,13 +9,11 @@ export const startContainerSchema = z.object({
   containerOs: z.enum(["ubuntu", "al2023"]),
   resourceTier: z.enum(["light", "standard", "power"]),
   securityPolicy: z.enum(["open", "restricted", "locked"]),
-  storageType: z.enum(["ebs", "efs"]).optional().default("efs"),
 });
 
 export const stopContainerSchema = z.object({
-  taskArn: z.string().regex(/^arn:aws:ecs:[a-z0-9-]+:\d{12}:task\//, "Invalid ECS task ARN"),
+  subdomain,
   reason: z.string().max(200).optional(),
-  subdomain: subdomain.optional(),
 });
 
 export const keepAliveSchema = z.object({
@@ -29,7 +27,6 @@ export const createUserSchema = z.object({
   containerOs: z.enum(["ubuntu", "al2023"]),
   resourceTier: z.enum(["light", "standard", "power"]),
   securityPolicy: z.enum(["open", "restricted", "locked"]),
-  storageType: z.enum(["ebs", "efs"]).default("ebs"),
 });
 
 export const updateUserSchema = z.object({
@@ -37,5 +34,4 @@ export const updateUserSchema = z.object({
   containerOs: z.enum(["ubuntu", "al2023"]).optional(),
   resourceTier: z.enum(["light", "standard", "power"]).optional(),
   securityPolicy: z.enum(["open", "restricted", "locked"]).optional(),
-  storageType: z.enum(["ebs", "efs"]).optional(),
 });

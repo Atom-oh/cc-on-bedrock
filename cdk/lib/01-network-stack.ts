@@ -15,6 +15,7 @@ export class NetworkStack extends cdk.Stack {
   public readonly privateSubnets: ec2.ISubnet[];
   public readonly isolatedSubnets: ec2.ISubnet[];
   public readonly hostedZone: route53.IHostedZone;
+  public readonly dnsFirewallRuleGroupId: string;
 
   constructor(scope: Construct, id: string, props: NetworkStackProps) {
     super(scope, id, props);
@@ -86,24 +87,26 @@ export class NetworkStack extends cdk.Stack {
     }
 
     // ─── Route 53 DNS Firewall ───
-    // AWS managed threat domain lists
-    const awsThreatLists = [
-      { id: 'Malware', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsMalwareDomainList` },
-      { id: 'Botnet', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsBotnetCommandandControl` },
-      { id: 'AmazonGuardDuty', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsAmazonGuardDutyThreatList` },
-      { id: 'AggregateThreat', arn: `arn:aws:route53resolver:${cdk.Aws.REGION}:aws:firewall-domain-list/AWSManagedDomainsAggregateThreatList` },
-    ];
+    // AWS managed domain list IDs for ap-northeast-2 (stable per-region, looked up via AWS CLI)
+    // CFN schema bug: FirewallDomainListId maxLength:64 rejects ARN format, so use IDs directly
+    const domainListIds: Record<string, string> = {
+      'Malware': 'rslvr-fdl-6301b5257e0c4210',
+      'Botnet': 'rslvr-fdl-e8d1e969ad484741',
+      'AmazonGuardDuty': 'rslvr-fdl-19615996f5c5490f',
+      'AggregateThreat': 'rslvr-fdl-1997a3cdd61a4f2a',
+    };
 
     const dnsFirewallRuleGroup = new route53resolver.CfnFirewallRuleGroup(this, 'DnsFirewallRuleGroup', {
       name: 'cc-on-bedrock-dns-firewall',
-      firewallRules: awsThreatLists.map((list, i) => ({
+      firewallRules: Object.entries(domainListIds).map(([name, id], i) => ({
         priority: (i + 1) * 100,
-        firewallDomainListId: list.arn,
+        firewallDomainListId: id,
         action: 'BLOCK',
         blockResponse: 'NXDOMAIN',
-        name: `Block-${list.id}`,
       })),
     });
+
+    this.dnsFirewallRuleGroupId = dnsFirewallRuleGroup.attrId;
 
     new route53resolver.CfnFirewallRuleGroupAssociation(this, 'DnsFirewallAssociation', {
       firewallRuleGroupId: dnsFirewallRuleGroup.attrId,

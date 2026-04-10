@@ -18,9 +18,5 @@
   "copyright": {
     "message": "Copyright © 2026 CC-on-Bedrock. Built with Docusaurus.",
     "description": "The footer copyright"
-  },
-  "link.item.label.Deployment": {
-    "message": "Deployment",
-    "description": "The label of footer link with label=Deployment linking to /docs/deployment"
   }
 }

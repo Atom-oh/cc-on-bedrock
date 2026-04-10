@@ -33,15 +33,10 @@ const config = {
   ecsClusterName: app.node.tryGetContext('ecsClusterName') ?? defaultConfig.ecsClusterName,
   nodeVersion: app.node.tryGetContext('nodeVersion') ?? defaultConfig.nodeVersion,
   dailyBudgetUsd: Number(app.node.tryGetContext('dailyBudgetUsd')) || defaultConfig.dailyBudgetUsd,
-  computeMode: (app.node.tryGetContext('computeMode') as 'ecs' | 'ec2') ?? defaultConfig.computeMode,
   devenvInstanceType: app.node.tryGetContext('devenvInstanceType') ?? defaultConfig.devenvInstanceType,
-  storageType: (app.node.tryGetContext('storageType') as 'efs' | 'ebs') ?? defaultConfig.storageType,
   cloudfrontPrefixListId: app.node.tryGetContext('cloudfrontPrefixListId') ?? defaultConfig.cloudfrontPrefixListId,
 };
 
-if (!['efs', 'ebs'].includes(config.storageType)) {
-  throw new Error(`Invalid storageType: "${config.storageType}". Must be 'efs' or 'ebs'.`);
-}
 
 const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
@@ -88,6 +83,10 @@ const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   // hostedZone imported directly from config to avoid cross-stack export dependency
   taskPermissionBoundary: securityStack.taskPermissionBoundary,
   webAclArn: wafStack.webAclArn,
+  // DevEnv Cognito auth (Lambda@Edge at CloudFront edge)
+  userPool: securityStack.userPool,
+  devenvAuthClient: securityStack.devenvAuthClient,
+  devenvAuthCookieSecret: securityStack.devenvAuthCookieSecret,
   description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
 });
 ecsDevenvStack.addDependency(securityStack);
@@ -108,14 +107,14 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   efsFileSystemId: ecsDevenvStack.efsFileSystemId,
   ecsInfrastructureRoleArn: securityStack.ecsInfrastructureRole.roleArn,
   webAclArn: wafStack.webAclArn,
+  dnsFirewallRuleGroupId: networkStack.dnsFirewallRuleGroupId,
   description: 'CC-on-Bedrock: Next.js Dashboard, ALB, CloudFront',
 });
 dashboardStack.addDependency(ecsDevenvStack);
 dashboardStack.addDependency(wafStack);
 
-// Stack 07: EC2-per-user Dev Environment (computeMode: 'ec2')
-if (config.computeMode === 'ec2') {
-  const ec2DevenvStack = new Ec2DevenvStack(app, 'CcOnBedrock-Ec2Devenv', {
+// Stack 07: EC2-per-user Dev Environment
+const ec2DevenvStack = new Ec2DevenvStack(app, 'CcOnBedrock-Ec2Devenv', {
     env, config,
     vpc: networkStack.vpc,
     encryptionKey: securityStack.encryptionKey,
@@ -123,6 +122,5 @@ if (config.computeMode === 'ec2') {
     description: 'CC-on-Bedrock: EC2-per-user DevEnv (Launch Template, SG, IAM, DynamoDB)',
   });
   ec2DevenvStack.addDependency(securityStack);
-}
 
 console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));

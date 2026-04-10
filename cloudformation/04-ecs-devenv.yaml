@@ -571,74 +571,202 @@ Resources:
             FilesystemId: !Ref DevenvEfs
             TransitEncryption: ENABLED
 
-  # ---------- ALB for Dev Environment ------------------------------------------
-  DevenvAlbSg:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NLB + Nginx Routing (replaces ALB — unlimited users, L4+L7)
+  # Flow: CloudFront → NLB → Nginx → ECS Containers
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ---------- DynamoDB Routing Table --------------------------------------------
+  RoutingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: cc-routing-table
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: subdomain
+          AttributeType: S
+      KeySchema:
+        - AttributeName: subdomain
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Name
+          Value: cc-routing-table
+
+  # ---------- S3 Bucket for Nginx Config ----------------------------------------
+  NginxConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'cc-on-bedrock-nginx-config-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ---------- Nginx Security Group ----------------------------------------------
+  NginxSg:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: DevEnv ALB SG
+      GroupDescription: Nginx router SG
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourcePrefixListId: !Ref CloudFrontPrefixListId
-          Description: Allow CloudFront
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow NLB traffic (Nginx validates X-Custom-Secret)
       Tags:
         - Key: Name
-          Value: cc-devenv-alb-sg
+          Value: cc-nginx-sg
 
-  DevenvAlb:
+  # Allow Nginx → DevEnv containers on port 8080
+  DevenvFromNginxOpen:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DlpOpenSg
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref NginxSg
+      Description: Allow from Nginx router
+
+  DevenvFromNginxRestricted:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DlpRestrictedSg
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref NginxSg
+      Description: Allow from Nginx router
+
+  DevenvFromNginxLocked:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DlpLockedSg
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref NginxSg
+      Description: Allow from Nginx router
+
+  # ---------- Nginx ECS Task Definition -----------------------------------------
+  NginxTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cc-nginx-router
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: nginx
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cc-on-bedrock/nginx:latest'
+          Cpu: 512
+          Memory: 1024
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+          Environment:
+            - Name: CONFIG_BUCKET
+              Value: !Ref NginxConfigBucket
+            - Name: CONFIG_KEY
+              Value: nginx/nginx.conf
+            - Name: RELOAD_INTERVAL
+              Value: '5'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DevenvLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: nginx
+
+  # ---------- Nginx ECS Service -------------------------------------------------
+  NginxService:
+    Type: AWS::ECS::Service
+    DependsOn: NlbHttpListener
+    Properties:
+      ServiceName: cc-nginx-router
+      Cluster: !Ref DevenvCluster
+      TaskDefinition: !Ref NginxTaskDef
+      DesiredCount: 2
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref PrivateSubnetAId
+            - !Ref PrivateSubnetCId
+          SecurityGroups:
+            - !Ref NginxSg
+          AssignPublicIp: DISABLED
+      LoadBalancers:
+        - TargetGroupArn: !Ref NginxTargetGroup
+          ContainerName: nginx
+          ContainerPort: 80
+
+  # ---------- NLB (replaces ALB) ------------------------------------------------
+  DevenvNlb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: cc-devenv-alb
+      Name: cc-devenv-nlb
       Scheme: internet-facing
-      Type: application
-      SecurityGroups:
-        - !Ref DevenvAlbSg
+      Type: network
       Subnets:
         - !Ref PublicSubnetAId
         - !Ref PublicSubnetCId
       Tags:
         - Key: Name
-          Value: cc-devenv-alb
+          Value: cc-devenv-nlb
 
-  DevenvHttpsListener:
+  NginxTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: cc-nginx-tg
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: cc-nginx-tg
+
+  NlbHttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LoadBalancerArn: !Ref DevenvAlb
-      Port: 443
-      Protocol: HTTPS
-      Certificates:
-        - CertificateArn: !Ref DevEnvCertificateArn
-      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      LoadBalancerArn: !Ref DevenvNlb
+      Port: 80
+      Protocol: TCP
       DefaultActions:
-        - Type: fixed-response
-          FixedResponseConfig:
-            ContentType: text/plain
-            MessageBody: Forbidden
-            StatusCode: '403'
+        - Type: forward
+          TargetGroupArn: !Ref NginxTargetGroup
 
-  # ---------- CloudFront Distribution ------------------------------------------
+  # ---------- CloudFront Distribution -------------------------------------------
   DevenvCloudFront:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
-        Comment: CC-on-Bedrock Dev Environment
+        Comment: CC-on-Bedrock Dev Environment (NLB+Nginx)
         Enabled: true
         Origins:
-          - Id: devenv-alb
-            DomainName: !GetAtt DevenvAlb.DNSName
+          - Id: devenv-nlb
+            DomainName: !GetAtt DevenvNlb.DNSName
             CustomOriginConfig:
               HTTPPort: 80
               HTTPSPort: 443
-              OriginProtocolPolicy: https-only
+              OriginProtocolPolicy: http-only
               OriginSSLProtocols:
                 - TLSv1.2
             OriginCustomHeaders:
               - HeaderName: X-Custom-Secret
                 HeaderValue: !Sub '{{resolve:secretsmanager:${CloudFrontSecretArn}:SecretString}}'
         DefaultCacheBehavior:
-          TargetOriginId: devenv-alb
+          TargetOriginId: devenv-nlb
           ViewerProtocolPolicy: redirect-to-https
           AllowedMethods:
             - DELETE
@@ -704,6 +832,24 @@ Outputs:
     Value: !GetAtt DevenvEcrRepo.RepositoryUri
     Export:
       Name: cc-on-bedrock-devenv-ecr-uri
+
+  NlbDnsName:
+    Description: NLB DNS name
+    Value: !GetAtt DevenvNlb.DNSName
+    Export:
+      Name: cc-on-bedrock-nlb-dns
+
+  RoutingTableName:
+    Description: DynamoDB routing table name
+    Value: !Ref RoutingTable
+    Export:
+      Name: cc-on-bedrock-routing-table
+
+  NginxConfigBucketName:
+    Description: S3 bucket for Nginx config
+    Value: !Ref NginxConfigBucket
+    Export:
+      Name: cc-on-bedrock-nginx-config-bucket
 
   DlpOpenSgId:
     Description: DLP Open security group ID

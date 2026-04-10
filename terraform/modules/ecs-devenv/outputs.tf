@@ -18,8 +18,16 @@ output "cloudfront_distribution_id" {
   value = aws_cloudfront_distribution.this.id
 }
 
-output "alb_dns" {
-  value = aws_lb.this.dns_name
+output "nlb_dns" {
+  value = aws_lb.nlb.dns_name
+}
+
+output "routing_table_name" {
+  value = aws_dynamodb_table.routing.name
+}
+
+output "nginx_config_bucket" {
+  value = aws_s3_bucket.nginx_config.id
 }
 
 output "ecr_repository_url" {

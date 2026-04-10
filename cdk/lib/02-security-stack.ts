@@ -16,8 +16,10 @@ export interface SecurityStackProps extends cdk.StackProps {
 export class SecurityStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
+  public readonly devenvAuthClient: cognito.UserPoolClient;
   public readonly encryptionKey: kms.Key;
   public readonly cloudfrontSecret: secretsmanager.Secret;
+  public readonly devenvAuthCookieSecret: secretsmanager.Secret;
   public readonly dashboardEc2Role: iam.Role;
   public readonly taskPermissionBoundary: iam.ManagedPolicy;
   public readonly ecsInfrastructureRole: iam.Role;
@@ -77,6 +79,21 @@ export class SecurityStack extends cdk.Stack {
       },
     });
 
+    // DevEnv Auth — dedicated UserPoolClient for Lambda@Edge OAuth on *.dev.atomai.click
+    // Uses auth.dev.atomai.click/_auth/callback as the single callback URL
+    // (Cognito doesn't support wildcard callback URLs, and per-user URLs hit the 100 limit)
+    const devenvAuthCallbackUrl = `https://auth.${config.devSubdomain}.${config.domainName}/_auth/callback`;
+    this.devenvAuthClient = this.userPool.addClient('DevEnvAuthClient', {
+      generateSecret: true,
+      authFlows: { userPassword: false, userSrp: false },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+        callbackUrls: [devenvAuthCallbackUrl],
+        logoutUrls: [`https://auth.${config.devSubdomain}.${config.domainName}`],
+      },
+    });
+
     // Cognito Groups
     new cognito.CfnUserPoolGroup(this, 'AdminGroup', {
       userPoolId: this.userPool.userPoolId,
@@ -103,6 +120,12 @@ export class SecurityStack extends cdk.Stack {
     this.cloudfrontSecret = new secretsmanager.Secret(this, 'CloudFrontSecret', {
       secretName: 'cc-on-bedrock/cloudfront-secret',
       generateSecretString: { excludePunctuation: true, passwordLength: 32 },
+    });
+
+    // Cookie signing secret for DevEnv Lambda@Edge auth
+    this.devenvAuthCookieSecret = new secretsmanager.Secret(this, 'DevEnvAuthCookieSecret', {
+      secretName: 'cc-on-bedrock/devenv-auth-cookie-secret',
+      generateSecretString: { excludePunctuation: true, passwordLength: 64 },
     });
 
     // IAM Roles
@@ -328,7 +351,8 @@ export class SecurityStack extends cdk.Stack {
       actions: [
         'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
         'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
-        'ec2:ModifyInstanceAttribute',
+        'ec2:ModifyInstanceAttribute', 'ec2:ModifyNetworkInterfaceAttribute',
+        'ec2:ModifyVolume', 'ec2:DescribeVolumes',
       ],
       resources: ['*'],
     }));
@@ -359,5 +383,6 @@ export class SecurityStack extends cdk.Stack {
     // Outputs
     new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId, exportName: 'cc-user-pool-id' });
     new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId, exportName: 'cc-user-pool-client-id' });
+    new cdk.CfnOutput(this, 'DevEnvAuthClientId', { value: this.devenvAuthClient.userPoolClientId });
   }
 }

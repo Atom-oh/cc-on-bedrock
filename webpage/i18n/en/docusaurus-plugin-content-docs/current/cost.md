@@ -1,20 +1,10 @@
 # Cost Management
 
 import CostCalculator from '@site/src/components/InteractiveDoc/CostCalculator';
-import Screenshot from '@site/src/components/Screenshot';
 
 CC-on-Bedrock provides tools for efficient budget management in large-scale user environments.
 
 <CostCalculator />
-
-## Real-time Cost Analytics
-The Analytics tab in the dashboard provides transparent insight into cost usage by user and model.
-
-<Screenshot 
-  src="/img/Analytics02.png" 
-  alt="Cost Analytics" 
-  caption="Cost Analytics Dashboard: User leaderboard and real-time spending status" 
-/>
 
 ## Budget Control Flow
 

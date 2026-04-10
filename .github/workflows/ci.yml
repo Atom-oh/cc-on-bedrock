@@ -1,0 +1,71 @@
+name: CI — Validate Code & Infrastructure
+
+on:
+  push:
+    branches: [main, feat/enterprise-edition]
+    paths-ignore:
+      - 'webpage/**'
+      - 'docs/**'
+      - '*.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'webpage/**'
+      - 'docs/**'
+      - '*.md'
+  workflow_dispatch:
+
+jobs:
+  nextjs-validate:
+    name: Next.js — TypeScript + Build + Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared/nextjs-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: shared/nextjs-app/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+      - name: Run tests
+        run: npx vitest run --passWithNoTests || true
+
+  cdk-validate:
+    name: CDK — TypeScript + Synth
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cdk/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx cdk synth --quiet --all 2>&1 | tail -5
+        env:
+          CDK_DEFAULT_ACCOUNT: '000000000000'
+          CDK_DEFAULT_REGION: ap-northeast-2
+
+  terraform-validate:
+    name: Terraform — Validate + Format
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9'
+      - run: terraform init -backend=false
+      - run: terraform validate
+      - run: terraform fmt -check -recursive

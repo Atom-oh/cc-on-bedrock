@@ -1,12 +1,6 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import {
-  startContainerWithProgress,
-  listContainers,
-  registerContainerRoute,
-  describeContainer,
-} from "@/lib/aws-clients";
 import { startInstance, listInstances } from "@/lib/ec2-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
@@ -17,7 +11,6 @@ const dynamodb = new DynamoDBClient({ region });
 const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? process.env.DOMAIN_NAME ?? "atomai.click";
 const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? process.env.DEV_SUBDOMAIN ?? "dev";
 
-const computeMode = process.env.COMPUTE_MODE ?? "ec2";
 const VALID_TIERS = ["light", "standard", "power"] as const;
 type ResourceTier = (typeof VALID_TIERS)[number];
 
@@ -45,60 +38,42 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return new Response(JSON.stringify({ error: "Authentication required" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
+      status: 401, headers: { "Content-Type": "application/json" },
     });
   }
 
   const user = session.user;
   if (!user.subdomain) {
     return new Response(JSON.stringify({ error: "No subdomain assigned" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+      status: 400, headers: { "Content-Type": "application/json" },
     });
   }
 
-  let body: { action?: string; resourceTier?: string; containerOs?: string };
+  let body: { action?: string; resourceTier?: string };
   try {
     body = await req.json();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+      status: 400, headers: { "Content-Type": "application/json" },
     });
   }
 
   if (body.action !== "start") {
     return new Response(JSON.stringify({ error: "Only 'start' action supported" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+      status: 400, headers: { "Content-Type": "application/json" },
     });
   }
 
-  // Check for existing container/instance
+  // Check for existing running instance
   try {
-    if (computeMode === "ec2") {
-      const instances = await listInstances();
-      const existing = instances.find(i => i.subdomain === user.subdomain && i.status === "running");
-      if (existing) {
-        return new Response(JSON.stringify({ error: "You already have a running instance" }), {
-          status: 409, headers: { "Content-Type": "application/json" },
-        });
-      }
-    } else {
-      const containers = await listContainers();
-      const existing = containers.find(
-        (c) =>
-          c.subdomain === user.subdomain &&
-          (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
-      );
-      if (existing) {
-        return new Response(JSON.stringify({ error: "You already have a running container" }), {
-          status: 409, headers: { "Content-Type": "application/json" },
-        });
-      }
+    const instances = await listInstances();
+    const existing = instances.find(i => i.subdomain === user.subdomain && i.status === "running");
+    if (existing) {
+      return new Response(JSON.stringify({ error: "You already have a running instance" }), {
+        status: 409, headers: { "Content-Type": "application/json" },
+      });
     }
-  } catch (err) {
+  } catch {
     return new Response(JSON.stringify({ error: "Failed to check status" }), {
       status: 500, headers: { "Content-Type": "application/json" },
     });
@@ -109,7 +84,7 @@ export async function POST(req: NextRequest) {
     ? (body.resourceTier as ResourceTier)
     : (user.resourceTier as ResourceTier) ?? "standard";
 
-  const department = "default";
+  const department = ((user as unknown as Record<string, string>).department) ?? "default";
   const allowedTiers = await getDeptAllowedTiers(department);
   if (!allowedTiers.includes(tierToUse)) {
     return new Response(
@@ -119,17 +94,8 @@ export async function POST(req: NextRequest) {
   }
 
   const subdomain = user.subdomain;
-
-  // H2: Validate containerOs at runtime
-  const VALID_OS = ["ubuntu", "al2023"] as const;
-  const containerOs = VALID_OS.includes(body.containerOs as typeof VALID_OS[number])
-    ? (body.containerOs as "ubuntu" | "al2023")
-    : (user.containerOs ?? "ubuntu");
-
-  // H1: Use req.signal for abort detection
   const abortSignal = req.signal;
 
-  // SSE stream
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
@@ -142,129 +108,60 @@ export async function POST(req: NextRequest) {
       try {
         if (abortSignal.aborted) { controller.close(); return; }
 
-        if (computeMode === "ec2") {
-          // EC2 mode: map to same 7 steps as ECS for UI progress bar
-          const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+        const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-          send(1, "iam_role", "in_progress", { message: "Setting up permissions..." });
-          await delay(500);
-          send(1, "iam_role", "completed", { message: "Permissions ready" });
-          await delay(300);
+        send(1, "iam_role", "in_progress", { message: "Setting up permissions..." });
+        await delay(500);
+        send(1, "iam_role", "completed", { message: "Permissions ready" });
+        await delay(300);
 
-          send(2, "storage", "in_progress", { message: "Preparing storage..." });
-          await delay(500);
-          send(2, "storage", "completed", { message: "EBS volume preserved" });
-          await delay(300);
+        send(2, "storage", "in_progress", { message: "Preparing storage..." });
+        await delay(500);
+        send(2, "storage", "completed", { message: "EBS volume preserved" });
+        await delay(300);
 
-          send(3, "task_definition", "in_progress", { message: "Configuring instance..." });
-          const result = await startInstance({
-            subdomain,
-            username: user.email,
-            department,
-            securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
-            resourceTier: tierToUse as "light" | "standard" | "power",
+        send(3, "task_definition", "in_progress", { message: "Configuring instance..." });
+        const result = await startInstance({
+          subdomain,
+          username: user.email,
+          department,
+          securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+          resourceTier: tierToUse as "light" | "standard" | "power",
+        });
+        send(3, "task_definition", "completed", { message: "Instance configured" });
+        await delay(300);
+
+        send(4, "password_store", "in_progress", { message: "Securing access..." });
+        await delay(500);
+        send(4, "password_store", "completed", { message: "Password set" });
+        await delay(300);
+
+        send(5, "container_start", "in_progress", { message: "Starting instance..." });
+        await delay(500);
+        send(5, "container_start", "completed", { message: `Instance ${result.instanceId} running` });
+        await delay(300);
+
+        send(6, "route_register", "in_progress", { message: "Connecting network..." });
+        await delay(500);
+        send(6, "route_register", "completed", { message: "Route registered" });
+
+        const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
+        send(7, "health_check", "in_progress", { message: "Verifying code-server..." });
+
+        let healthy = false;
+        for (let i = 0; i < 20; i++) {
+          if (abortSignal.aborted) break;
+          await new Promise<void>((r) => {
+            const t = setTimeout(r, 3000);
+            abortSignal.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true });
           });
-          send(3, "task_definition", "completed", { message: "Instance configured" });
-          await delay(300);
+          if (abortSignal.aborted) break;
+          if (result.status === "running") { healthy = true; break; }
+          send(7, "health_check", "in_progress", { message: `Waiting... (${i + 1}/20)` });
+        }
 
-          send(4, "password_store", "in_progress", { message: "Securing access..." });
-          await delay(500);
-          send(4, "password_store", "completed", { message: "Password set" });
-          await delay(300);
-
-          send(5, "container_start", "in_progress", { message: "Starting instance..." });
-          await delay(500);
-          send(5, "container_start", "completed", { message: `Instance ${result.instanceId} running` });
-          await delay(300);
-
-          send(6, "route_register", "in_progress", { message: "Connecting network..." });
-          await delay(500);
-          send(6, "route_register", "completed", { message: "Route registered" });
-
-          const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
-          send(7, "health_check", "in_progress", { message: "Verifying code-server..." });
-
-          let healthy = false;
-          for (let i = 0; i < 20; i++) {
-            if (abortSignal.aborted) break;
-            await new Promise<void>((r) => { const t = setTimeout(r, 3000); abortSignal.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true }); });
-            if (abortSignal.aborted) break;
-            if (result.status === "running") { healthy = true; break; }
-            send(7, "health_check", "in_progress", { message: `Waiting... (${i + 1}/20)` });
-          }
-
-          if (!abortSignal.aborted) {
-            send(7, "health_check", "completed", { message: healthy ? "code-server is ready!" : "Instance started", url });
-          }
-        } else {
-          // ECS mode: multi-step provisioning
-          const taskArn = await startContainerWithProgress(
-            {
-              username: user.email,
-              subdomain,
-              department,
-              containerOs,
-              resourceTier: tierToUse,
-              securityPolicy: user.securityPolicy ?? "restricted",
-              storageType: user.storageType ?? "efs",
-            },
-            (step, name, status, message) => {
-              send(step, name, status, message ? { message } : undefined);
-            }
-          );
-
-          // Step 6: Route registration
-          send(6, "route_register", "in_progress", { message: "Waiting for IP assignment..." });
-
-          let registered = false;
-          for (let i = 0; i < 8; i++) {
-            if (abortSignal.aborted) break;
-            await new Promise<void>((r) => {
-              const timer = setTimeout(r, 5000);
-              abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
-            });
-            if (abortSignal.aborted) break;
-            try {
-              const info = await describeContainer(taskArn);
-              if (info?.privateIp) {
-                await registerContainerRoute(subdomain, info.privateIp);
-                registered = true;
-                break;
-              }
-            } catch { /* retry */ }
-            send(6, "route_register", "in_progress", { message: `Waiting for IP... (${i + 1}/8)` });
-          }
-
-          if (!abortSignal.aborted) {
-            if (registered) {
-              send(6, "route_register", "completed", { message: "Route registered" });
-            } else {
-              send(6, "route_register", "completed", { message: "Container started (route may take a moment)" });
-            }
-
-            // Step 7: Wait for code-server to be healthy before showing URL
-            send(7, "health_check", "in_progress", { message: "Waiting for code-server..." });
-            let healthy = false;
-            for (let i = 0; i < 30; i++) {
-              if (abortSignal.aborted) break;
-              await new Promise<void>((r) => {
-                const timer = setTimeout(r, 3000);
-                abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
-              });
-              if (abortSignal.aborted) break;
-              try {
-                const info = await describeContainer(taskArn);
-                if (info?.healthStatus === "HEALTHY") { healthy = true; break; }
-                send(7, "health_check", "in_progress", { message: `Health check... (${i + 1}/30)` });
-              } catch { /* retry */ }
-            }
-            const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
-            if (healthy) {
-              send(7, "health_check", "completed", { message: "code-server is ready!", url });
-            } else {
-              send(7, "health_check", "completed", { message: "Container running (health check pending)", url });
-            }
-          }
+        if (!abortSignal.aborted) {
+          send(7, "health_check", "completed", { message: healthy ? "code-server is ready!" : "Instance started", url });
         }
       } catch (err) {
         if (!abortSignal.aborted) {

@@ -100,11 +100,14 @@ http {{
             access_log off;
         }}
 
-        # All other requests require CloudFront secret
+        # All other requests require CloudFront secret + authenticated user
         location / {{
             set $cf_secret "{cloudfront_secret}";
             if ($http_x_custom_secret != $cf_secret) {{
                 return 403 '{{"error":"Forbidden"}}';
+            }}
+            if ($http_x_auth_user = "") {{
+                return 403 '{{"error":"Authentication required"}}';
             }}
             default_type application/json;
             return 503 '{{"error":"Container not running. Please start your development environment from the portal.","code":"CONTAINER_NOT_FOUND"}}';
@@ -137,6 +140,11 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
             return 403 '{{"error":"Forbidden"}}';
         }}
 
+        # Validate authenticated user matches this subdomain (defense-in-depth)
+        if ($http_x_auth_user != "{subdomain}") {{
+            return 403 '{{"error":"Not authorized for this environment"}}';
+        }}
+
         # Proxy settings
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -145,6 +153,8 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
+        # Strip auth header — don't leak to code-server
+        proxy_set_header X-Auth-User "";
 
         # Timeouts for long-running connections (Claude Code sessions)
         proxy_connect_timeout 10s;

@@ -62,7 +62,7 @@ interface UserSecurity {
   securityPolicy: string;
   containerOs: string;
   resourceTier: string;
-  hasApiKey: boolean;
+  hasContainer: boolean;
   createdAt: string;
 }
 
@@ -248,7 +248,7 @@ export default function SecurityDashboard() {
               { value: "all", label: isKo ? "전체" : "All", count: auditLogs.length },
               { value: "Bedrock", label: "Bedrock", count: auditLogs.filter((l) => l.source === "Bedrock").length },
               { value: "Cognito", label: "Cognito", count: auditLogs.filter((l) => l.source === "Cognito").length },
-              { value: "ECS", label: "ECS", count: auditLogs.filter((l) => l.source === "ECS").length },
+              { value: "EC2", label: "EC2", count: auditLogs.filter((l) => l.source === "EC2").length },
             ],
           },
         ]}
@@ -432,8 +432,8 @@ export default function SecurityDashboard() {
               { item: isKo ? "Secrets Manager" : "Secrets Manager", status: true, detail: "NextAuth, CloudFront" },
               { item: "DNS Firewall", status: true, detail: isKo ? "Restricted 규칙 적용" : "Restricted rules applied" },
               { item: isKo ? "Security Groups (3-tier DLP)" : "Security Groups (3-tier DLP)", status: true, detail: "Open/Restricted/Locked" },
-              { item: "ECS Exec", status: true, detail: "initProcessEnabled + SSM" },
-              { item: isKo ? "EFS 전송 암호화" : "EFS Transit Encryption", status: true, detail: "TLS enabled" },
+              { item: "SSM Session Manager", status: true, detail: isKo ? "SSH 비활성, SSM만 허용" : "SSH disabled, SSM only" },
+              { item: isKo ? "EBS 볼륨 암호화" : "EBS Volume Encryption", status: true, detail: "KMS encrypted" },
               { item: isKo ? "IMDSv2 강제" : "IMDSv2 Enforced", status: true, detail: "AL2023 default" },
               { item: isKo ? "IAM 기반 사용량 제어" : "IAM-based Usage Control", status: true, detail: isKo ? "사용자별 Task Role" : "Per-user Task Role" },
               { item: isKo ? "DynamoDB 사용량 추적" : "DynamoDB Usage Tracking", status: true, detail: "CloudTrail → Lambda → DDB" },
@@ -476,7 +476,7 @@ export default function SecurityDashboard() {
               }).map((u) => {
                   const policyColor = u.securityPolicy === "locked" ? "bg-red-900/30 text-red-400" : u.securityPolicy === "restricted" ? "bg-yellow-900/30 text-yellow-400" : "bg-green-900/30 text-green-400";
                   const policyIcon = u.securityPolicy === "locked" ? "🔴" : u.securityPolicy === "restricted" ? "🟡" : "🟢";
-                  const riskLevel = u.securityPolicy === "open" && u.hasApiKey ? "MEDIUM" : u.securityPolicy === "locked" ? "LOW" : u.securityPolicy === "restricted" ? "LOW" : "MEDIUM";
+                  const riskLevel = u.securityPolicy === "open" && u.hasContainer ? "MEDIUM" : u.securityPolicy === "locked" ? "LOW" : u.securityPolicy === "restricted" ? "LOW" : "MEDIUM";
                   const riskColor = riskLevel === "LOW" ? "text-green-400" : riskLevel === "MEDIUM" ? "text-yellow-400" : "text-red-400";
                   return (
                     <tr key={u.username} className="hover:bg-gray-800/20 transition-colors">
@@ -496,8 +496,8 @@ export default function SecurityDashboard() {
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
-                        <span className={`text-[10px] ${u.hasApiKey ? "text-cyan-400" : "text-gray-600"}`}>
-                          {u.hasApiKey ? "✓ Issued" : "✗ None"}
+                        <span className={`text-[10px] ${u.hasContainer ? "text-cyan-400" : "text-gray-600"}`}>
+                          {u.hasContainer ? "✓ Issued" : "✗ None"}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
@@ -539,7 +539,7 @@ export default function SecurityDashboard() {
           <div className="bg-[#111827] rounded-xl border border-gray-800/50 overflow-hidden">
             {/* Log summary */}
             <div className="px-5 py-3 border-b border-gray-800 flex items-center gap-6">
-              {["Bedrock", "Cognito", "ECS"].map((source) => {
+              {["Bedrock", "Cognito", "EC2"].map((source) => {
                 const count = auditLogs.filter((l) => l.source === source).length;
                 const errors = auditLogs.filter((l) => l.source === source && l.errorCode).length;
                 return (

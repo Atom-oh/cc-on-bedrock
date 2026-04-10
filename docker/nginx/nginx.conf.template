@@ -63,11 +63,14 @@ http {
             access_log off;
         }
 
-        # All other requests require CloudFront secret
+        # All other requests require CloudFront secret + authenticated user
         location / {
             set $cf_secret "{{CLOUDFRONT_SECRET}}";
             if ($http_x_custom_secret != $cf_secret) {
                 return 403 '{"error":"Forbidden"}';
+            }
+            if ($http_x_auth_user = "") {
+                return 403 '{"error":"Authentication required"}';
             }
             default_type application/json;
             return 503 '{"error":"Container not running. Please start your development environment from the portal.","code":"CONTAINER_NOT_FOUND"}';

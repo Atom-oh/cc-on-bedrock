@@ -65,13 +65,6 @@ resource "aws_cognito_user_pool" "this" {
   }
 
   schema {
-    name                = "litellm_api_key"
-    attribute_data_type = "String"
-    mutable             = true
-    string_attribute_constraints {}
-  }
-
-  schema {
     name                = "container_id"
     attribute_data_type = "String"
     mutable             = true
@@ -211,20 +204,6 @@ resource "aws_acm_certificate_validation" "dashboard" {
 }
 
 # ---- Secrets Manager ---------------------------------------------------------
-resource "random_password" "litellm_master_key" {
-  length  = 32
-  special = false
-}
-
-resource "aws_secretsmanager_secret" "litellm_master_key" {
-  name = "cc-on-bedrock/litellm-master-key"
-}
-
-resource "aws_secretsmanager_secret_version" "litellm_master_key" {
-  secret_id     = aws_secretsmanager_secret.litellm_master_key.id
-  secret_string = random_password.litellm_master_key.result
-}
-
 resource "random_password" "cloudfront_secret" {
   length  = 32
   special = false
@@ -237,20 +216,6 @@ resource "aws_secretsmanager_secret" "cloudfront_secret" {
 resource "aws_secretsmanager_secret_version" "cloudfront_secret" {
   secret_id     = aws_secretsmanager_secret.cloudfront_secret.id
   secret_string = random_password.cloudfront_secret.result
-}
-
-resource "random_password" "valkey_auth" {
-  length  = 32
-  special = false
-}
-
-resource "aws_secretsmanager_secret" "valkey_auth" {
-  name = "cc-on-bedrock/valkey-auth"
-}
-
-resource "aws_secretsmanager_secret_version" "valkey_auth" {
-  secret_id     = aws_secretsmanager_secret.valkey_auth.id
-  secret_string = random_password.valkey_auth.result
 }
 
 # ---- IAM Roles ---------------------------------------------------------------
@@ -275,46 +240,6 @@ data "aws_iam_policy_document" "ec2_assume" {
       identifiers = ["ec2.amazonaws.com"]
     }
   }
-}
-
-# ---- LiteLLM EC2 Role -------------------------------------------------------
-resource "aws_iam_role" "litellm_ec2" {
-  name               = "cc-on-bedrock-litellm-ec2"
-  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
-}
-
-resource "aws_iam_role_policy_attachment" "litellm_ssm" {
-  role       = aws_iam_role.litellm_ec2.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_role_policy_attachment" "litellm_ecr" {
-  role       = aws_iam_role.litellm_ec2.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-}
-
-resource "aws_iam_role_policy" "litellm_bedrock" {
-  name   = "bedrock-invoke"
-  role   = aws_iam_role.litellm_ec2.id
-  policy = data.aws_iam_policy_document.bedrock.json
-}
-
-data "aws_iam_policy_document" "litellm_secrets" {
-  statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = ["arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/*"]
-  }
-}
-
-resource "aws_iam_role_policy" "litellm_secrets" {
-  name   = "secrets-access"
-  role   = aws_iam_role.litellm_ec2.id
-  policy = data.aws_iam_policy_document.litellm_secrets.json
-}
-
-resource "aws_iam_instance_profile" "litellm_ec2" {
-  name = "cc-on-bedrock-litellm-ec2"
-  role = aws_iam_role.litellm_ec2.name
 }
 
 # ---- Dashboard EC2 Role -----------------------------------------------------
