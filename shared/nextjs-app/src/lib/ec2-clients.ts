@@ -12,6 +12,10 @@ import {
   DescribeInstancesCommand,
   TerminateInstancesCommand,
   CreateTagsCommand,
+  CreateSnapshotCommand,
+  DescribeSnapshotsCommand,
+  RegisterImageCommand,
+  DeregisterImageCommand,
   ModifyInstanceAttributeCommand,
   ModifyNetworkInterfaceAttributeCommand,
 } from "@aws-sdk/client-ec2";
@@ -23,6 +27,7 @@ import {
   DynamoDBClient,
   PutItemCommand,
   GetItemCommand,
+  UpdateItemCommand,
   ScanCommand,
   DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
@@ -78,6 +83,7 @@ export interface StartInstanceInput {
   department: string;
   securityPolicy: "open" | "restricted" | "locked";
   resourceTier?: "light" | "standard" | "power";
+  containerOs?: "ubuntu" | "al2023";
 }
 
 export interface InstanceInfo {
@@ -88,6 +94,7 @@ export interface InstanceInfo {
   privateIp: string;
   instanceType: string;
   securityPolicy: string;
+  containerOs?: string;
   launchTime?: string;
 }
 
@@ -145,7 +152,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         privateIp: info.privateIp,
       });
 
-      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: input.securityPolicy, status: "running" };
+      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: input.securityPolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
     }
 
     if (desc && desc.status === "running") {
@@ -158,6 +165,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         privateIp: desc.privateIp,
         instanceType: desc.instanceType,
         securityPolicy: input.securityPolicy,
+        containerOs: existing.containerOs ?? "ubuntu",
       };
     }
   }
@@ -165,15 +173,24 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // No existing instance — create new from Launch Template
   console.log(`[EC2] Creating new instance for ${input.subdomain}`);
 
-  // Get AMI ID from SSM
+  // Get AMI ID from SSM (per-OS parameter with fallback)
+  const osType = input.containerOs ?? "ubuntu";
   let amiId: string | undefined;
   try {
     const param = await ssmClient.send(new GetParameterCommand({
-      Name: "/cc-on-bedrock/devenv/ami-id",
+      Name: `/cc-on-bedrock/devenv/ami-id/${osType}`,
     }));
     amiId = param.Parameter?.Value;
   } catch {
-    throw new Error("AMI ID not found in SSM parameter /cc-on-bedrock/devenv/ami-id. Run scripts/build-ami.sh first.");
+    // Fallback: legacy single parameter
+    try {
+      const fallback = await ssmClient.send(new GetParameterCommand({
+        Name: "/cc-on-bedrock/devenv/ami-id",
+      }));
+      amiId = fallback.Parameter?.Value;
+    } catch {
+      throw new Error(`AMI not found for OS '${osType}'. Run: scripts/build-ami.sh ${osType}`);
+    }
   }
 
   const sg = SG_MAP[input.securityPolicy] || SG_MAP.open;
@@ -200,12 +217,10 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       Tags: [
         { Key: "Name", Value: `cc-devenv-${input.subdomain}` },
         { Key: "subdomain", Value: input.subdomain },
-        { Key: "cc:user", Value: input.username },
-        { Key: "cc:department", Value: input.department },
-        { Key: "cc:project", Value: "cc-on-bedrock" },
-        { Key: "cc:subdomain", Value: input.subdomain },
-        { Key: "cc:cost-center", Value: input.department },
+        { Key: "username", Value: input.username },
+        { Key: "department", Value: input.department },
         { Key: "securityPolicy", Value: input.securityPolicy },
+        { Key: "containerOs", Value: osType },
         { Key: "managed_by", Value: "cc-on-bedrock" },
       ],
     }],
@@ -267,6 +282,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       username: input.username,
       department: input.department,
       securityPolicy: input.securityPolicy,
+      containerOs: osType,
       instanceType: info.instanceType,
       privateIp: info.privateIp,
       status: "running",
@@ -283,6 +299,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     privateIp: info.privateIp,
     instanceType: info.instanceType,
     securityPolicy: input.securityPolicy,
+    containerOs: osType,
   };
 }
 
@@ -337,6 +354,265 @@ export async function terminateInstance(subdomain: string): Promise<void> {
 }
 
 /**
+ * Switch a user's instance OS. Snapshots the current root EBS for recovery,
+ * terminates the old instance, and creates a new one with the target OS AMI.
+ */
+export async function switchOs(
+  subdomain: string,
+  newOs: "ubuntu" | "al2023",
+): Promise<{ instanceInfo: InstanceInfo; snapshotId: string }> {
+  const record = await getUserInstance(subdomain);
+  if (!record?.instanceId) throw new Error(`No instance found for ${subdomain}`);
+
+  const currentOs = record.containerOs ?? "ubuntu";
+  if (currentOs === newOs) throw new Error(`Instance is already running ${newOs}`);
+
+  // 1. Get instance details for volume ID
+  const desc = await ec2Client.send(new DescribeInstancesCommand({
+    InstanceIds: [record.instanceId],
+  }));
+  const instance = desc.Reservations?.[0]?.Instances?.[0];
+  if (!instance) throw new Error(`Instance ${record.instanceId} not found in EC2`);
+
+  // 2. Stop if running
+  if (instance.State?.Name === "running") {
+    console.log(`[EC2] Stopping ${record.instanceId} for OS switch`);
+    await deregisterRoute(subdomain);
+    await ec2Client.send(new StopInstancesCommand({ InstanceIds: [record.instanceId] }));
+    // Wait for stopped
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const check = await describeInstance(record.instanceId);
+      if (check?.status === "stopped") break;
+    }
+  }
+
+  // 3. Find root EBS volume
+  const rootDevice = instance.BlockDeviceMappings?.find(
+    b => b.DeviceName === instance.RootDeviceName
+  );
+  const volumeId = rootDevice?.Ebs?.VolumeId;
+  if (!volumeId) throw new Error("Root EBS volume not found");
+
+  // 4. Create snapshot for recovery
+  console.log(`[EC2] Creating snapshot of ${volumeId} for ${subdomain} (${currentOs} → ${newOs})`);
+  const snap = await ec2Client.send(new CreateSnapshotCommand({
+    VolumeId: volumeId,
+    Description: `OS switch backup: ${subdomain} ${currentOs} → ${newOs}`,
+    TagSpecifications: [{
+      ResourceType: "snapshot",
+      Tags: [
+        { Key: "Name", Value: `cc-devenv-${subdomain}-${currentOs}` },
+        { Key: "subdomain", Value: subdomain },
+        { Key: "previousOs", Value: currentOs },
+        { Key: "purpose", Value: "os-switch" },
+        { Key: "managed_by", Value: "cc-on-bedrock" },
+      ],
+    }],
+  }));
+  const snapshotId = snap.SnapshotId!;
+  console.log(`[EC2] Snapshot ${snapshotId} created for ${subdomain}`);
+
+  // 5. Save snapshot to DynamoDB (append to previousSnapshots)
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+      UpdateExpression: "SET previousSnapshots = list_append(if_not_exists(previousSnapshots, :empty), :snap), updatedAt = :now",
+      ExpressionAttributeValues: marshall({
+        ":snap": [{ snapshotId, os: currentOs, date: new Date().toISOString().slice(0, 10) }],
+        ":empty": [],
+        ":now": new Date().toISOString(),
+      }),
+    }));
+  } catch (e) {
+    console.error(`[EC2] Failed to save snapshot record: ${e}`);
+  }
+
+  // 6. Terminate old instance
+  try {
+    await ec2Client.send(new ModifyInstanceAttributeCommand({
+      InstanceId: record.instanceId,
+      DisableApiTermination: { Value: false },
+    }));
+  } catch { /* may not have protection */ }
+  await ec2Client.send(new TerminateInstancesCommand({
+    InstanceIds: [record.instanceId],
+  }));
+  // Delete DynamoDB record so startInstance creates fresh
+  await ddbClient.send(new DeleteItemCommand({
+    TableName: INSTANCE_TABLE,
+    Key: marshall({ user_id: subdomain }),
+  }));
+
+  // 7. Create new instance with new OS
+  console.log(`[EC2] Creating new ${newOs} instance for ${subdomain}`);
+  const instanceInfo = await startInstance({
+    subdomain,
+    username: record.username ?? "",
+    department: record.department ?? "default",
+    securityPolicy: (record.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+    containerOs: newOs,
+  });
+
+  return { instanceInfo, snapshotId };
+}
+
+/**
+ * Restore a user's instance from a previous OS snapshot.
+ * Creates an AMI from the snapshot and launches a new instance.
+ */
+export async function restoreFromSnapshot(
+  subdomain: string,
+  snapshotId: string,
+): Promise<InstanceInfo> {
+  // Verify snapshot exists and belongs to this user
+  const snapDesc = await ec2Client.send(new DescribeSnapshotsCommand({
+    SnapshotIds: [snapshotId],
+  }));
+  const snapshot = snapDesc.Snapshots?.[0];
+  if (!snapshot) throw new Error(`Snapshot ${snapshotId} not found`);
+
+  const snapTags = Object.fromEntries((snapshot.Tags ?? []).map(t => [t.Key, t.Value]));
+  if (snapTags.subdomain !== subdomain) throw new Error("Snapshot does not belong to this user");
+
+  const previousOs = snapTags.previousOs ?? "ubuntu";
+
+  // 1. Stop/terminate current instance if exists
+  const record = await getUserInstance(subdomain);
+  if (record?.instanceId) {
+    await deregisterRoute(subdomain);
+    try {
+      await ec2Client.send(new ModifyInstanceAttributeCommand({
+        InstanceId: record.instanceId,
+        DisableApiTermination: { Value: false },
+      }));
+    } catch { /* may not have protection */ }
+    await ec2Client.send(new TerminateInstancesCommand({
+      InstanceIds: [record.instanceId],
+    }));
+    await ddbClient.send(new DeleteItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+    }));
+    // Wait for termination
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const check = await describeInstance(record.instanceId);
+      if (!check || check.status === "terminated") break;
+    }
+  }
+
+  // 2. Register AMI from snapshot
+  const amiName = `cc-devenv-restore-${subdomain}-${Date.now()}`;
+  console.log(`[EC2] Registering AMI from snapshot ${snapshotId} for ${subdomain}`);
+  const ami = await ec2Client.send(new RegisterImageCommand({
+    Name: amiName,
+    Architecture: "arm64",
+    RootDeviceName: "/dev/sda1",
+    VirtualizationType: "hvm",
+    EnaSupport: true,
+    BlockDeviceMappings: [{
+      DeviceName: "/dev/sda1",
+      Ebs: {
+        SnapshotId: snapshotId,
+        VolumeType: "gp3",
+        DeleteOnTermination: false,
+        Encrypted: true,
+      },
+    }],
+  }));
+  const restoredAmiId = ami.ImageId!;
+  console.log(`[EC2] Registered AMI ${restoredAmiId} from snapshot ${snapshotId}`);
+
+  // 3. Launch instance from restored AMI (bypass normal SSM AMI lookup)
+  const sg = SG_MAP[(record?.securityPolicy ?? "restricted")] || SG_MAP.open;
+  const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
+  const tier = INSTANCE_TIERS["standard"];
+  const instanceProfileName = await ensureUserInstanceProfile(subdomain, record?.username ?? "", record?.department ?? "default");
+  const codeserverPassword = await ensureCodeserverPassword(subdomain);
+
+  const result = await ec2Client.send(new RunInstancesCommand({
+    ImageId: restoredAmiId,
+    IamInstanceProfile: { Name: instanceProfileName },
+    InstanceType: tier.type as never,
+    MetadataOptions: { HttpTokens: "required", HttpPutResponseHopLimit: 2 },
+    MinCount: 1, MaxCount: 1,
+    SubnetId: subnet,
+    SecurityGroupIds: sg ? [sg] : undefined,
+    TagSpecifications: [{
+      ResourceType: "instance",
+      Tags: [
+        { Key: "Name", Value: `cc-devenv-${subdomain}` },
+        { Key: "subdomain", Value: subdomain },
+        { Key: "username", Value: record?.username ?? "" },
+        { Key: "department", Value: record?.department ?? "default" },
+        { Key: "securityPolicy", Value: record?.securityPolicy ?? "restricted" },
+        { Key: "containerOs", Value: previousOs },
+        { Key: "managed_by", Value: "cc-on-bedrock" },
+        { Key: "restoredFrom", Value: snapshotId },
+      ],
+    }],
+    UserData: Buffer.from([
+      "#!/bin/bash",
+      `echo "USER_SUBDOMAIN=${subdomain}" >> /etc/environment`,
+      `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
+      `mkdir -p /home/coder/.config/code-server`,
+      `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
+      `bind-addr: 0.0.0.0:8080`,
+      `auth: password`,
+      `password: ${codeserverPassword}`,
+      `cert: false`,
+      `CSCFG`,
+      `chown -R coder:coder /home/coder/.config`,
+      `systemctl restart code-server || systemctl start code-server`,
+    ].join("\n")).toString("base64"),
+  }));
+
+  const instanceId = result.Instances?.[0]?.InstanceId;
+  if (!instanceId) throw new Error("Failed to create restored instance");
+
+  const info = await waitForRunning(instanceId);
+  await registerRoute(subdomain, info.privateIp);
+
+  await ddbClient.send(new PutItemCommand({
+    TableName: INSTANCE_TABLE,
+    Item: marshall({
+      user_id: subdomain,
+      instanceId,
+      username: record?.username ?? "",
+      department: record?.department ?? "default",
+      securityPolicy: record?.securityPolicy ?? "restricted",
+      containerOs: previousOs,
+      instanceType: info.instanceType,
+      privateIp: info.privateIp,
+      status: "running",
+      restoredFrom: snapshotId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  }));
+
+  // Cleanup: deregister the temporary AMI (snapshot remains)
+  try {
+    await ec2Client.send(new DeregisterImageCommand({ ImageId: restoredAmiId }));
+  } catch { /* non-critical */ }
+
+  return {
+    instanceId,
+    subdomain,
+    username: record?.username ?? "",
+    status: "running",
+    privateIp: info.privateIp,
+    instanceType: info.instanceType,
+    securityPolicy: record?.securityPolicy ?? "restricted",
+    containerOs: previousOs,
+  };
+}
+
+/**
  * List all devenv instances.
  */
 export async function listInstances(): Promise<InstanceInfo[]> {
@@ -376,6 +652,7 @@ export async function listInstances(): Promise<InstanceInfo[]> {
       privateIp: ec2Info.privateIp,
       instanceType: ec2Info.instanceType,
       securityPolicy: r.securityPolicy ?? "open",
+      containerOs: r.containerOs ?? "ubuntu",
       launchTime: r.createdAt,
     };
   });
@@ -621,7 +898,16 @@ export async function removeIamPolicySet(
 
 // ─── Internal Helpers ───
 
-async function getUserInstance(subdomain: string): Promise<{ instanceId: string } | null> {
+interface UserInstanceRecord {
+  instanceId: string;
+  username?: string;
+  department?: string;
+  securityPolicy?: string;
+  containerOs?: string;
+  [key: string]: unknown;
+}
+
+async function getUserInstance(subdomain: string): Promise<UserInstanceRecord | null> {
   try {
     const result = await ddbClient.send(new GetItemCommand({
       TableName: INSTANCE_TABLE,
@@ -629,7 +915,7 @@ async function getUserInstance(subdomain: string): Promise<{ instanceId: string 
     }));
     if (!result.Item) return null;
     const item = unmarshall(result.Item);
-    return { instanceId: item.instanceId };
+    return item as UserInstanceRecord;
   } catch {
     return null;
   }

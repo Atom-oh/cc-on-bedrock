@@ -57,7 +57,7 @@ def _resolve_department(subdomain: str) -> str:
         for reservation in resp.get("Reservations", []):
             for inst in reservation.get("Instances", []):
                 tags = {t["Key"]: t["Value"] for t in inst.get("Tags", [])}
-                dept = tags.get("cc:department", tags.get("department", "default"))
+                dept = tags.get("department", "default")
                 _dept_cache[subdomain] = dept
                 return dept
     except Exception as e:
