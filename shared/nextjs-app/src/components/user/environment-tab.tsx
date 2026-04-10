@@ -301,18 +301,10 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
           </div>
 
           <div className="mb-6">
-            <label className="block text-sm text-gray-400 mb-2">스토리지 타입</label>
-            <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => setRequestStorage("ebs")}
-                className={`p-3 rounded-lg border text-left transition-all ${requestStorage === "ebs" ? "border-blue-500 bg-blue-900/20" : "border-gray-700 bg-[#0d1117] hover:border-gray-600"}`}>
-                <p className="text-sm font-medium text-gray-200">EBS (Fast SSD)</p>
-                <p className="text-xs text-gray-500">고성능 블록 스토리지</p>
-              </button>
-              <button onClick={() => setRequestStorage("efs")}
-                className={`p-3 rounded-lg border text-left transition-all ${requestStorage === "efs" ? "border-blue-500 bg-blue-900/20" : "border-gray-700 bg-[#0d1117] hover:border-gray-600"}`}>
-                <p className="text-sm font-medium text-gray-200">EFS (Shared)</p>
-                <p className="text-xs text-gray-500">공유 네트워크 스토리지</p>
-              </button>
+            <label className="block text-sm text-gray-400 mb-2">스토리지</label>
+            <div className="p-3 rounded-lg border border-blue-500 bg-blue-900/20 text-left">
+              <p className="text-sm font-medium text-gray-200">EBS (Fast SSD)</p>
+              <p className="text-xs text-gray-500">Stop/Start 시 데이터 보존 · 고성능 블록 스토리지</p>
             </div>
           </div>
 
@@ -393,7 +385,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
             <p className="text-xs text-gray-500 mb-1">Storage</p>
             <p className="text-sm">
               <span className={user.storageType === "ebs" ? "text-blue-400" : "text-green-400"}>
-                {(user.storageType ?? "efs").toUpperCase()}
+                EBS
               </span>
             </p>
           </div>

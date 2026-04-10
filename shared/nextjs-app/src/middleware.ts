@@ -94,6 +94,7 @@ export const config = {
     "/api/security/:path*",
     "/api/ai/:path*",
     "/api/user/:path*",
+    "/docs/:path*",
     "/",
   ],
 };

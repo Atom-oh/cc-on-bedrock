@@ -9,7 +9,6 @@ describe('createUserSchema', () => {
     containerOs: 'ubuntu' as const,
     resourceTier: 'standard' as const,
     securityPolicy: 'restricted' as const,
-    storageType: 'ebs' as const,
   };
 
   it('accepts valid input', () => {
@@ -22,13 +21,6 @@ describe('createUserSchema', () => {
     const result = createUserSchema.safeParse(rest);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.department).toBe('default');
-  });
-
-  it('defaults storageType to "ebs"', () => {
-    const { storageType, ...rest } = validInput;
-    const result = createUserSchema.safeParse(rest);
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.storageType).toBe('ebs');
   });
 
   it('rejects invalid email', () => {
@@ -85,11 +77,6 @@ describe('createUserSchema', () => {
     const result = createUserSchema.safeParse({ ...validInput, securityPolicy: 'none' });
     expect(result.success).toBe(false);
   });
-
-  it('rejects invalid storageType', () => {
-    const result = createUserSchema.safeParse({ ...validInput, storageType: 'ssd' });
-    expect(result.success).toBe(false);
-  });
 });
 
 describe('updateUserSchema', () => {
@@ -131,15 +118,15 @@ describe('startContainerSchema', () => {
 });
 
 describe('stopContainerSchema', () => {
-  it('accepts valid task ARN', () => {
+  it('accepts valid subdomain', () => {
     const result = stopContainerSchema.safeParse({
-      taskArn: 'arn:aws:ecs:ap-northeast-2:180294183052:task/cc-on-bedrock-devenv/abc123',
+      subdomain: 'user01',
     });
     expect(result.success).toBe(true);
   });
 
-  it('rejects invalid ARN format', () => {
-    const result = stopContainerSchema.safeParse({ taskArn: 'not-an-arn' });
+  it('rejects invalid subdomain', () => {
+    const result = stopContainerSchema.safeParse({ subdomain: '../hack' });
     expect(result.success).toBe(false);
   });
 });

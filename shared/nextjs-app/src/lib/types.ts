@@ -37,7 +37,7 @@ export interface CreateUserInput {
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
-  storageType: "ebs" | "efs";
+  storageType?: "ebs" | "efs";
 }
 
 export interface UpdateUserInput {
@@ -90,7 +90,7 @@ export interface SystemHealth {
   model_count?: number;
 }
 
-// ─── ECS / Container Types ───
+// ─── EC2 / Instance Types ───
 
 export interface ContainerInfo {
   taskArn: string;

@@ -65,6 +65,7 @@ const ko: Record<string, string> = {
   "nav.tokens": "토큰 사용량",
   "nav.budgets": "예산 설정",
   "nav.approvals": "승인 관리",
+  "nav.docs": "가이드",
   "nav.signout": "로그아웃",
   "nav.admin": "관리자",
   "nav.user": "사용자",
@@ -214,7 +215,7 @@ const ko: Record<string, string> = {
 
   // Monitoring
   "monitoring.title": "운영 모니터링",
-  "monitoring.subtitle": "Bedrock 상태, ECS 현황, 활성 세션, 리소스 사용",
+  "monitoring.subtitle": "Bedrock 상태, EC2 현황, 활성 세션, 리소스 사용",
   "monitoring.serviceHealth": "서비스 상태",
   "monitoring.resourceInsights": "리소스 인사이트",
   "monitoring.containerDist": "인스턴스 분포",
@@ -357,6 +358,7 @@ const en: Record<string, string> = {
   "nav.tokens": "Token Usage",
   "nav.budgets": "Budget Settings",
   "nav.approvals": "Approvals",
+  "nav.docs": "Guide",
   "nav.signout": "Sign out",
   "nav.admin": "Admin",
   "nav.user": "User",
@@ -506,7 +508,7 @@ const en: Record<string, string> = {
 
   // Monitoring
   "monitoring.title": "Operations Monitoring",
-  "monitoring.subtitle": "Bedrock health, ECS status, active sessions, resource usage",
+  "monitoring.subtitle": "Bedrock health, EC2 status, active sessions, resource usage",
   "monitoring.serviceHealth": "Service Health",
   "monitoring.resourceInsights": "Resource Insights",
   "monitoring.containerDist": "Instance Distribution",
@@ -519,7 +521,7 @@ const en: Record<string, string> = {
   "monitoring.pending": "Pending",
   "monitoring.totalVcpu": "Total vCPU",
   "monitoring.totalMemory": "Total Memory",
-  "monitoring.allContainers": "All Containers",
+  "monitoring.allContainers": "All Instances",
   "monitoring.allocatedCpu": "Allocated CPU",
   "monitoring.allocatedRam": "Allocated RAM",
   "monitoring.allStates": "All states",

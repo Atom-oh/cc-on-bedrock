@@ -49,15 +49,15 @@ graph TB
 
     subgraph Stack04["Stack 04: ECS Cluster"]
         DevEnv_ALB["ALB<br/>Host-based Routing"]
-        ECS_Cluster["ECS Cluster<br/>EC2 Mode"]
-        Nginx["Nginx Service<br/>Reverse Proxy"]
+        ECS_Cluster["ECS Cluster<br/>cc-on-bedrock-devenv"]
+        Nginx["Nginx Service<br/>(Fargate, Reverse Proxy)"]
+        DashSvc["Dashboard Service<br/>(EC2 Launch Type)"]
         DevEnv_SGs["Security Groups<br/>open / restricted / locked"]
     end
 
     subgraph Stack05["Stack 05: Dashboard"]
         Dash_ALB["ALB"]
-        Dash_ASG["EC2 ASG<br/>t4g.xlarge"]
-        NextJS["Next.js Standalone<br/>PM2 + S3 Deploy"]
+        DashContainer["Dashboard Container<br/>Next.js (ECR, port 3000)"]
     end
 
     subgraph Stack07["Stack 07: EC2 DevEnv (ADR-004)"]
@@ -84,12 +84,11 @@ graph TB
     CF_DevEnv -->|X-Custom-Secret| DevEnv_ALB
 
     %% Dashboard Flow
-    Dash_ALB --> Dash_ASG
-    Dash_ASG --> NextJS
-    NextJS -->|Cognito Admin API| Cognito
-    NextJS -->|EC2 Start/Stop| EC2_Instances
-    NextJS -->|DynamoDB Query| DDB
-    NextJS -->|Bedrock Converse API| Bedrock
+    Dash_ALB --> DashContainer
+    DashContainer -->|Cognito Admin API| Cognito
+    DashContainer -->|EC2 Start/Stop| EC2_Instances
+    DashContainer -->|DynamoDB Query| DDB
+    DashContainer -->|Bedrock Converse API| Bedrock
 
     %% Dev Environment Flow (EC2 → Bedrock Direct)
     DevEnv_ALB -->|Host: user.dev.*| Nginx
@@ -109,12 +108,14 @@ graph TB
     Lambda1 -->|Write| DDB
     Lambda2 -->|Read/Check| DDB
 
-    %% ECS Cluster (Nginx only)
+    %% ECS Cluster (Nginx + Dashboard)
     ECS_Cluster --> Nginx
+    ECS_Cluster --> DashSvc
+    DashSvc --> DashContainer
 
     %% Infrastructure
     EC2_Instances --> CW
-    NextJS --> CW
+    DashContainer --> CW
 
     %% DNS
     R53 -->|CNAME| CF_Dashboard
@@ -123,7 +124,7 @@ graph TB
     %% Network placement
     Dash_ALB -.-> PubA
     DevEnv_ALB -.-> PubA
-    Dash_ASG -.-> PriA
+    DashContainer -.-> PriA
     ECS_Cluster -.-> PriA
     EC2_Instances -.-> PriA
 
@@ -142,9 +143,9 @@ graph TB
 graph LR
     S1["01 Network<br/>VPC, Subnets, NAT,<br/>VPC Endpoints, R53,<br/>DNS Firewall"] --> S2["02 Security<br/>Cognito, ACM, KMS,<br/>Secrets, Per-user IAM"]
     S2 --> S3["03 Usage Tracking<br/>DynamoDB, Lambda,<br/>EventBridge, CloudTrail"]
-    S2 --> S4["04 ECS Cluster<br/>Nginx Service,<br/>ALB, CloudFront"]
+    S2 --> S4["04 ECS Cluster<br/>Nginx (Fargate),<br/>ASG, NLB, CloudFront"]
     S2 --> S7["07 EC2 DevEnv<br/>Per-user EC2,<br/>Instance Profile, SG"]
-    S4 --> S5["05 Dashboard<br/>Next.js, ALB,<br/>CloudFront"]
+    S4 --> S5["05 Dashboard<br/>ECS Ec2Service,<br/>ALB, CloudFront"]
     S3 --> S5
     S7 --> S4
 ```
@@ -155,7 +156,7 @@ graph LR
 sequenceDiagram
     participant User as Developer
     participant CF as CloudFront
-    participant Dash as Dashboard
+    participant Dash as Dashboard<br/>(ECS Ec2Service)
     participant Cognito as Cognito<br/>Hosted UI
     participant EC2 as EC2 Instance
     participant Nginx as Nginx<br/>(ECS)
@@ -217,9 +218,8 @@ graph TB
         NAT1["NAT GW"]
         NAT2["NAT GW"]
 
-        ECS_EC2["ECS Cluster<br/>(Nginx)"]
+        ECS_EC2["ECS Cluster<br/>(Nginx Fargate +<br/>Dashboard Ec2Service)"]
         DevEnv_EC2["Per-user EC2<br/>(DevEnv)"]
-        Dash_EC2["Dashboard EC2"]
 
         ALB1 -.-> PS_A
         ALB2 -.-> PS_A
@@ -228,7 +228,6 @@ graph TB
 
         ECS_EC2 -.-> PR_A
         DevEnv_EC2 -.-> PR_A
-        Dash_EC2 -.-> PR_A
     end
 
     Internet["Internet<br/>CloudFront"] --> ALB1

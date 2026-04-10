@@ -8,15 +8,14 @@ import {
   GetItemCommand,
   UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
-import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
+import { EC2Client, ModifyVolumeCommand } from "@aws-sdk/client-ec2";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const USER_VOLUMES_TABLE = process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes";
-const EBS_LIFECYCLE_LAMBDA = process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle";
 
 const dynamodb = new DynamoDBClient({ region });
-const lambda = new LambdaClient({ region });
+const ec2 = new EC2Client({ region });
 
 interface PendingResizeRequest {
   userId: string;
@@ -158,33 +157,25 @@ export async function POST(req: NextRequest) {
       })
     );
 
-    // If approved, invoke EBS lifecycle Lambda to perform the resize
+    // If approved, call ec2:ModifyVolume directly to resize
     if (approved && item.volumeId) {
       try {
-        const payload = {
-          action: "modify-volume",
-          userId,
-          volumeId: item.volumeId,
-          targetSizeGb: item.requestedSizeGb,
-        };
-
-        await lambda.send(
-          new InvokeCommand({
-            FunctionName: EBS_LIFECYCLE_LAMBDA,
-            InvocationType: "Event", // Async invocation
-            Payload: Buffer.from(JSON.stringify(payload)),
+        await ec2.send(
+          new ModifyVolumeCommand({
+            VolumeId: item.volumeId,
+            Size: item.requestedSizeGb,
           })
         );
-
-        console.log(`[admin/ebs-resize] Invoked EBS lifecycle Lambda for ${userId}`);
-      } catch (lambdaErr) {
-        console.error("[admin/ebs-resize] Lambda invoke failed:", lambdaErr);
-        // Don't fail the request - the resize was approved, Lambda execution is separate
+        console.log(`[admin/ebs-resize] ModifyVolume ${item.volumeId} → ${item.requestedSizeGb}GB for ${userId}`);
+      } catch (ec2Err) {
+        console.error("[admin/ebs-resize] ModifyVolume failed:", ec2Err);
+        return NextResponse.json(
+          { success: false, error: `Volume resize failed: ${ec2Err instanceof Error ? ec2Err.message : "Unknown error"}` },
+          { status: 500 }
+        );
       }
     } else if (approved && !item.volumeId) {
-      // Mark as approved but note that volume doesn't exist yet
-      // The resize will happen when the user's container is next started
-      console.log(`[admin/ebs-resize] Approved resize for ${userId} (no volume yet)`);
+      console.log(`[admin/ebs-resize] Approved resize for ${userId} (volume will be resized on next start)`);
     }
 
     return NextResponse.json({

@@ -72,7 +72,7 @@ const EC2_PRICING: Record<string, number> = {
   "m7g.2xlarge": 0.4104,  // 8 vCPU, 32 GiB
   "t4g.xlarge": 0.1792,   // 4 vCPU, 16 GiB
 };
-const ECS_INSTANCE_TYPE = "m7g.4xlarge";
+const CLUSTER_INSTANCE_TYPE = "m7g.4xlarge";
 const DASHBOARD_INSTANCE_TYPE = "t4g.xlarge";
 
 function formatNumber(n: number): string {
@@ -232,7 +232,7 @@ export default function MonitoringDashboard({
   const totalServices = healthStatuses.length;
 
   const handleStopContainer = async (taskArn: string) => {
-    if (!confirm("Are you sure you want to stop this container?")) return;
+    if (!confirm("Are you sure you want to stop this instance?")) return;
     try {
       await fetch("/api/containers", {
         method: "DELETE",
@@ -288,7 +288,7 @@ export default function MonitoringDashboard({
       {/* Filters */}
       {containers.length > 0 && (
         <FilterBar
-          searchPlaceholder={locale === "ko" ? "사용자, 컨테이너 검색..." : "Search users, containers..."}
+          searchPlaceholder={locale === "ko" ? "사용자, 인스턴스 검색..." : "Search users, instances..."}
           searchValue={searchText}
           onSearchChange={setSearchText}
           filters={[
@@ -412,7 +412,7 @@ export default function MonitoringDashboard({
         {/* Infrastructure Cost Breakdown */}
         {(() => {
           const devCount = ec2Metrics?.instanceCount ?? 0;
-          const devCostHr = devCount * (EC2_PRICING[ECS_INSTANCE_TYPE] ?? 0);
+          const devCostHr = devCount * (EC2_PRICING[CLUSTER_INSTANCE_TYPE] ?? 0);
           const dashCostHr = EC2_PRICING[DASHBOARD_INSTANCE_TYPE] ?? 0;
           const bedrockCostHr = (bedrockMetrics?.estimatedCostPerMin ?? 0) * 60;
           const totalCostHr = bedrockCostHr + devCostHr + dashCostHr;
@@ -431,7 +431,7 @@ export default function MonitoringDashboard({
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dev Instances</p>
                   <p className="text-sm font-semibold text-cyan-400">${devCostHr.toFixed(2)}</p>
-                  <p className="text-[10px] text-gray-600">{devCount}× {ECS_INSTANCE_TYPE}</p>
+                  <p className="text-[10px] text-gray-600">{devCount}× {CLUSTER_INSTANCE_TYPE}</p>
                 </div>
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dashboard EC2</p>

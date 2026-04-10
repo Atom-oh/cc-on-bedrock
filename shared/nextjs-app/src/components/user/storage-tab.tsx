@@ -415,7 +415,7 @@ export default function StorageTab({ user, container }: StorageTabProps) {
             <div>
               <h2 className="text-lg font-semibold text-gray-100">Keep-Alive</h2>
               <p className="text-xs text-gray-500 mt-1">
-                Extend idle timeout by 1 hour to prevent automatic volume detachment.
+                Extend idle timeout by 1 hour to prevent automatic instance stop.
               </p>
             </div>
             <button
@@ -429,7 +429,7 @@ export default function StorageTab({ user, container }: StorageTabProps) {
             <div>
               <p className="text-sm font-medium text-gray-200">Auto Keep-Alive</p>
               <p className="text-xs text-gray-500 mt-0.5">
-                Automatically extend every 30 minutes while container is running.
+                Automatically extend every 30 minutes while instance is running.
               </p>
             </div>
             <button

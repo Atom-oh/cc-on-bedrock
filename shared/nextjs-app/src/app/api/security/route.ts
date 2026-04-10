@@ -164,7 +164,7 @@ export async function GET(req: NextRequest) {
         const startTime = new Date(Date.now() - hours * 3600000);
 
         // Fetch CloudTrail events for key services
-        const [bedrockEvents, cognitoEvents, ecsEvents] = await Promise.all([
+        const [bedrockEvents, cognitoEvents, ec2Events] = await Promise.all([
           ctClient.send(new LookupEventsCommand({
             LookupAttributes: [{ AttributeKey: "EventSource", AttributeValue: "bedrock.amazonaws.com" }],
             StartTime: startTime, MaxResults: 20,
@@ -174,7 +174,7 @@ export async function GET(req: NextRequest) {
             StartTime: startTime, MaxResults: 20,
           })).catch(() => ({ Events: [] })),
           ctClient.send(new LookupEventsCommand({
-            LookupAttributes: [{ AttributeKey: "EventSource", AttributeValue: "ecs.amazonaws.com" }],
+            LookupAttributes: [{ AttributeKey: "EventSource", AttributeValue: "ec2.amazonaws.com" }],
             StartTime: startTime, MaxResults: 20,
           })).catch(() => ({ Events: [] })),
         ]);
@@ -196,7 +196,7 @@ export async function GET(req: NextRequest) {
         const allEvents = [
           ...formatEvents(bedrockEvents.Events, "Bedrock"),
           ...formatEvents(cognitoEvents.Events, "Cognito"),
-          ...formatEvents(ecsEvents.Events, "ECS"),
+          ...formatEvents(ec2Events.Events, "EC2"),
         ].sort((a, b) => b.time.localeCompare(a.time));
 
         return NextResponse.json({ success: true, data: allEvents });
