@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Providers from "./providers";
-import Sidebar from "@/components/sidebar";
+import AppShell from "@/components/app-shell";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -24,12 +24,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className={`${inter.className} bg-[#0a0f1a]`}>
         <Providers>
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <main className="flex-1 overflow-y-auto bg-[#0a0f1a]">
-              <div className="p-6 lg:p-8">{children}</div>
-            </main>
-          </div>
+          <AppShell>{children}</AppShell>
         </Providers>
       </body>
     </html>

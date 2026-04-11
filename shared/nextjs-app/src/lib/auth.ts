@@ -1,6 +1,9 @@
 import type { NextAuthOptions, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import CognitoProvider from "next-auth/providers/cognito";
+import CredentialsProvider from "next-auth/providers/credentials";
+import { CognitoIdentityProviderClient, InitiateAuthCommand, GetUserCommand } from "@aws-sdk/client-cognito-identity-provider";
+import { createHmac } from "crypto";
 import type { UserSession } from "./types";
 
 declare module "next-auth" {
@@ -39,26 +42,91 @@ export const authOptions: NextAuthOptions = {
         };
       },
     }),
+    CredentialsProvider({
+      id: "cognito-credentials",
+      name: "Email & Password",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) return null;
+        const cognitoClient = new CognitoIdentityProviderClient({
+          region: process.env.AWS_REGION ?? "ap-northeast-2",
+        });
+        const clientId = process.env.COGNITO_CLIENT_ID!;
+        const clientSecret = process.env.COGNITO_CLIENT_SECRET!;
+        // Compute SECRET_HASH for Cognito app client with secret
+        const secretHash = createHmac("sha256", clientSecret)
+          .update(credentials.email + clientId)
+          .digest("base64");
+        try {
+          const authResult = await cognitoClient.send(new InitiateAuthCommand({
+            AuthFlow: "USER_PASSWORD_AUTH",
+            ClientId: clientId,
+            AuthParameters: {
+              USERNAME: credentials.email,
+              PASSWORD: credentials.password,
+              SECRET_HASH: secretHash,
+            },
+          }));
+          const accessToken = authResult.AuthenticationResult?.AccessToken;
+          if (!accessToken) return null;
+          // Fetch user attributes
+          const userResult = await cognitoClient.send(new GetUserCommand({ AccessToken: accessToken }));
+          const attrs: Record<string, string> = {};
+          for (const attr of userResult.UserAttributes ?? []) {
+            if (attr.Name && attr.Value) attrs[attr.Name] = attr.Value;
+          }
+          return {
+            id: attrs["sub"] ?? "",
+            email: attrs["email"] ?? credentials.email,
+            name: attrs["name"] ?? attrs["email"] ?? credentials.email,
+            accessToken,
+            idToken: authResult.AuthenticationResult?.IdToken,
+            groups: [], // Will be populated from idToken in jwt callback
+            ...attrs,
+          };
+        } catch (err) {
+          console.error("[auth] Cognito InitiateAuth failed:", (err as Error).message);
+          return null;
+        }
+      },
+    }),
   ],
   callbacks: {
-    async jwt({ token, account, profile }): Promise<JWT> {
-      if (account && profile) {
+    async jwt({ token, account, profile, user }): Promise<JWT> {
+      // OAuth flow (CognitoProvider)
+      if (account?.provider === "cognito" && profile) {
         token.accessToken = account.access_token;
-        // Cognito groups come in the id_token
-        const cognitoGroups =
-          (profile as Record<string, unknown>)["cognito:groups"];
-        token.groups = Array.isArray(cognitoGroups)
-          ? (cognitoGroups as string[])
-          : [];
-        // Custom attributes from Cognito
+        const cognitoGroups = (profile as Record<string, unknown>)["cognito:groups"];
+        token.groups = Array.isArray(cognitoGroups) ? (cognitoGroups as string[]) : [];
         const p = profile as Record<string, unknown>;
         token.subdomain = (p["custom:subdomain"] as string) ?? undefined;
         token.containerOs = (p["custom:container_os"] as string) ?? undefined;
         token.resourceTier = (p["custom:resource_tier"] as string) ?? undefined;
-        token.securityPolicy =
-          (p["custom:security_policy"] as string) ?? undefined;
+        token.securityPolicy = (p["custom:security_policy"] as string) ?? undefined;
         token.containerId = (p["custom:container_id"] as string) ?? undefined;
         token.storageType = (p["custom:storage_type"] as string) ?? undefined;
+      }
+      // Credentials flow (cognito-credentials) — extract from user object + idToken
+      if (account?.provider === "cognito-credentials" && user) {
+        const u = user as unknown as Record<string, unknown>;
+        token.accessToken = (u.accessToken as string) ?? undefined;
+        token.subdomain = (u["custom:subdomain"] as string) ?? undefined;
+        token.containerOs = (u["custom:container_os"] as string) ?? undefined;
+        token.resourceTier = (u["custom:resource_tier"] as string) ?? undefined;
+        token.securityPolicy = (u["custom:security_policy"] as string) ?? undefined;
+        token.containerId = (u["custom:container_id"] as string) ?? undefined;
+        token.storageType = (u["custom:storage_type"] as string) ?? undefined;
+        // Decode groups from idToken
+        const idToken = u.idToken as string | undefined;
+        if (idToken) {
+          try {
+            const payload = JSON.parse(Buffer.from(idToken.split(".")[1], "base64").toString());
+            token.groups = Array.isArray(payload["cognito:groups"]) ? payload["cognito:groups"] : [];
+          } catch { token.groups = []; }
+        }
       }
       return token;
     },
