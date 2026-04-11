@@ -1,0 +1,15 @@
+[Unit]
+Description=CC-on-Bedrock MCP Config Sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cc-on-bedrock/sync-mcp-config.sh
+User=root
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
