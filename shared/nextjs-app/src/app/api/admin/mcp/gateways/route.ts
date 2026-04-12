@@ -17,6 +17,7 @@ const GATEWAY_MANAGER_FUNCTION = process.env.GATEWAY_MANAGER_FUNCTION ?? "cc-on-
 
 const dynamodb = new DynamoDBClient({ region });
 const lambdaClient = new LambdaClient({ region });
+const DEPT_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$/;
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -65,8 +66,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { dept_id } = body as { dept_id: string };
 
-    if (!dept_id) {
-      return NextResponse.json({ error: "dept_id is required" }, { status: 400 });
+    if (!dept_id || !DEPT_PATTERN.test(dept_id)) {
+      return NextResponse.json({ error: "Invalid dept_id (alphanumeric and hyphens only, 1-63 chars)" }, { status: 400 });
     }
 
     // Check if gateway already exists
@@ -122,8 +123,8 @@ export async function DELETE(req: NextRequest) {
     const body = await req.json();
     const { dept_id } = body as { dept_id: string };
 
-    if (!dept_id) {
-      return NextResponse.json({ error: "dept_id is required" }, { status: 400 });
+    if (!dept_id || !DEPT_PATTERN.test(dept_id)) {
+      return NextResponse.json({ error: "Invalid dept_id (alphanumeric and hyphens only, 1-63 chars)" }, { status: 400 });
     }
 
     // Invoke gateway-manager Lambda for cleanup

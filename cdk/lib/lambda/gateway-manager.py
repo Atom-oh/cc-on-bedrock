@@ -27,6 +27,7 @@ MCP_CATALOG_TABLE = os.environ.get("MCP_CATALOG_TABLE", "cc-mcp-catalog")
 DEPT_MCP_CONFIG_TABLE = os.environ.get("DEPT_MCP_CONFIG_TABLE", "cc-dept-mcp-config")
 DEPT_BUDGETS_TABLE = os.environ.get("DEPT_BUDGETS_TABLE", "cc-department-budgets")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+PERMISSION_BOUNDARY_NAME = os.environ.get("PERMISSION_BOUNDARY_NAME", "cc-on-bedrock-task-boundary")
 
 ddb = boto3.resource("dynamodb", region_name=REGION)
 ddb_client = boto3.client("dynamodb", region_name=REGION)
@@ -39,7 +40,7 @@ catalog_table = ddb.Table(MCP_CATALOG_TABLE)
 budgets_table = ddb.Table(DEPT_BUDGETS_TABLE)
 
 
-def handler(event, context):
+def lambda_handler(event, context):
     """Main handler — routes DDB Streams events or direct invocations."""
     # Direct invocation from Admin API
     if "action" in event:
@@ -93,6 +94,13 @@ def handle_stream_record(record):
         if event_name == "INSERT":
             logger.info(f"Creating gateway for department: {dept_id}")
             create_department_gateway(dept_id)
+        elif event_name == "MODIFY":
+            status = new_image.get("status", {}).get("S", "")
+            if status == "DELETING":
+                logger.info(f"Deleting gateway for department (MODIFY→DELETING): {dept_id}")
+                gateway_id = new_image.get("gatewayId", {}).get("S", "")
+                if gateway_id:
+                    cleanup_gateway(dept_id, gateway_id)
         elif event_name == "REMOVE":
             logger.info(f"Deleting gateway for department: {dept_id}")
             gateway_id = old_image.get("gatewayId", {}).get("S", "")
@@ -130,6 +138,7 @@ def create_department_gateway(dept_id):
 
     # Ensure gateway IAM role exists
     gateway_role_arn = ensure_gateway_role(dept_id)
+    gateway_id = None
 
     try:
         resp = agentcore.create_gateway(
@@ -155,6 +164,19 @@ def create_department_gateway(dept_id):
 
     except Exception as e:
         logger.error(f"Failed to create gateway for {dept_id}: {e}")
+        # Compensating transaction: rollback completed steps
+        if gateway_id:
+            try:
+                agentcore.delete_gateway(gatewayIdentifier=gateway_id)
+                logger.info(f"Rollback: deleted gateway {gateway_id}")
+            except Exception as rollback_err:
+                logger.error(f"Rollback gateway delete failed: {rollback_err}")
+        if gateway_role_arn:
+            try:
+                cleanup_gateway_role(dept_id)
+                logger.info(f"Rollback: deleted IAM role for {dept_id}")
+            except Exception as rollback_err:
+                logger.error(f"Rollback role delete failed: {rollback_err}")
         update_gateway_status(dept_id, "FAILED", str(e))
         notify_error(f"Gateway creation failed for dept {dept_id}: {e}")
         raise
@@ -368,9 +390,11 @@ def ensure_gateway_role(dept_id):
         }],
     }
 
+    boundary_arn = f"arn:aws:iam::{ACCOUNT_ID}:policy/{PERMISSION_BOUNDARY_NAME}"
     iam_client.create_role(
         RoleName=role_name,
         AssumeRolePolicyDocument=json.dumps(trust_policy),
+        PermissionsBoundary=boundary_arn,
         Description=f"AgentCore Gateway role for department: {dept_id}",
         Tags=[
             {"Key": "project", "Value": "cc-on-bedrock"},
