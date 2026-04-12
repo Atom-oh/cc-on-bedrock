@@ -39,12 +39,21 @@ graph TB
         IAM["IAM Roles<br/>Per-user Task Role,<br/>Permission Boundary,<br/>Dashboard EC2"]
     end
 
-    subgraph Stack03["Stack 03: Usage Tracking"]
+    subgraph Stack03["Stack 03: Usage Tracking + MCP Gateway"]
         DDB["DynamoDB<br/>cc-on-bedrock-usage"]
         Lambda1["Lambda<br/>bedrock-usage-tracker"]
         Lambda2["Lambda<br/>budget-check (5min)"]
         EB["EventBridge Rules<br/>CloudTrail → Lambda"]
         CT["CloudTrail<br/>Bedrock API Logs"]
+        McpCatalog["DynamoDB<br/>cc-mcp-catalog"]
+        McpConfig["DynamoDB<br/>cc-dept-mcp-config<br/>(Streams enabled)"]
+        GwManager["Lambda<br/>gateway-manager<br/>(DDB Streams trigger)"]
+    end
+
+    subgraph AgentCore["AgentCore (Outside CDK, ADR-007)"]
+        CommonGW["Common Gateway<br/>cconbedrock-gateway<br/>(8 MCP tools)"]
+        DeptGW["Department Gateways<br/>cconbedrock-{dept}-gateway<br/>(per-dept MCP tools)"]
+        McpLambdas["MCP Lambda Targets<br/>ECS / CloudWatch / DDB<br/>+ dept-specific"]
     end
 
     subgraph Stack04["Stack 04: ECS Cluster"]
@@ -113,6 +122,17 @@ graph TB
     ECS_Cluster --> DashSvc
     DashSvc --> DashContainer
 
+    %% MCP Gateway Flow (ADR-007)
+    DashContainer -->|Admin MCP Mgmt| McpCatalog
+    DashContainer -->|Assign MCP| McpConfig
+    McpConfig -->|DDB Streams| GwManager
+    GwManager -->|Create/Sync| CommonGW
+    GwManager -->|Create/Sync| DeptGW
+    CommonGW --> McpLambdas
+    DeptGW --> McpLambdas
+    EC2_Instances -->|Claude Code<br/>MCP Protocol| CommonGW
+    EC2_Instances -->|Claude Code<br/>MCP Protocol| DeptGW
+
     %% Infrastructure
     EC2_Instances --> CW
     DashContainer --> CW
@@ -132,9 +152,11 @@ graph TB
     classDef stack fill:#f9f,stroke:#333,stroke-width:2px
     classDef aws fill:#ff9900,stroke:#333,color:#fff
     classDef user fill:#4a90d9,stroke:#333,color:#fff
+    classDef agentcore fill:#4CAF50,stroke:#333,color:#fff
     class Stack01,Stack02,Stack03,Stack04,Stack05,Stack07 stack
     class Bedrock,Bedrock_VPCE,ECR,CW aws
     class AdminUser,DevUser user
+    class CommonGW,DeptGW,McpLambdas agentcore
 ```
 
 ## Stack Dependencies
@@ -142,13 +164,107 @@ graph TB
 ```mermaid
 graph LR
     S1["01 Network<br/>VPC, Subnets, NAT,<br/>VPC Endpoints, R53,<br/>DNS Firewall"] --> S2["02 Security<br/>Cognito, ACM, KMS,<br/>Secrets, Per-user IAM"]
-    S2 --> S3["03 Usage Tracking<br/>DynamoDB, Lambda,<br/>EventBridge, CloudTrail"]
+    S2 --> S3["03 Usage Tracking<br/>DynamoDB, Lambda,<br/>EventBridge, CloudTrail,<br/>MCP Gateway Mgr (ADR-007)"]
     S2 --> S4["04 ECS Cluster<br/>Nginx (Fargate),<br/>ASG, NLB, CloudFront"]
     S2 --> S7["07 EC2 DevEnv<br/>Per-user EC2,<br/>Instance Profile, SG"]
     S4 --> S5["05 Dashboard<br/>ECS Ec2Service,<br/>ALB, CloudFront"]
     S3 --> S5
     S7 --> S4
 ```
+
+## Department MCP Gateway (ADR-007)
+
+2-tier AgentCore Gateway architecture for department-isolated MCP tools.
+
+```mermaid
+graph LR
+    subgraph Admin["Admin Dashboard /admin/mcp"]
+        Catalog["MCP Catalog<br/>(cc-mcp-catalog)"]
+        Assign["Department<br/>Assignments"]
+    end
+
+    subgraph DDB["DynamoDB"]
+        McpCfg["cc-dept-mcp-config<br/>(Streams enabled)"]
+    end
+
+    subgraph GwMgr["Gateway Manager Lambda"]
+        Create["create_gateway"]
+        AddTarget["create_target"]
+        Sync["synchronize"]
+    end
+
+    subgraph Gateways["AgentCore Gateways"]
+        CmnGW["Common Gateway<br/>(monitoring, 8 tools)"]
+        EngGW["Engineering GW<br/>(github, jira)"]
+        DataGW["Data Team GW<br/>(athena, s3)"]
+    end
+
+    subgraph Targets["MCP Lambda Targets"]
+        EcsMcp["ECS MCP"]
+        CwMcp["CloudWatch MCP"]
+        DdbMcp["DynamoDB MCP"]
+        GhMcp["GitHub MCP"]
+        AthMcp["Athena MCP"]
+    end
+
+    subgraph EC2Boot["EC2 Boot (systemd)"]
+        SyncScript["sync-mcp-config.sh"]
+        McpJson["~/.claude/<br/>mcp_servers.json"]
+    end
+
+    subgraph ClaudeCode["Claude Code Session"]
+        LocalMcp["Local MCP<br/>(awslabs-core, agentcore)"]
+        GwMcp["Gateway MCP<br/>(common + dept)"]
+    end
+
+    Assign -->|PUT /api/admin/mcp/assignments| McpCfg
+    McpCfg -->|DDB Streams| Create
+    McpCfg -->|DDB Streams| AddTarget
+    AddTarget --> Sync
+
+    Create --> CmnGW
+    Create --> EngGW
+    Create --> DataGW
+
+    CmnGW --> EcsMcp
+    CmnGW --> CwMcp
+    CmnGW --> DdbMcp
+    EngGW --> GhMcp
+    DataGW --> AthMcp
+
+    SyncScript -->|DDB Query| McpCfg
+    SyncScript --> McpJson
+    McpJson --> LocalMcp
+    McpJson --> GwMcp
+
+    style CmnGW fill:#4CAF50,color:#fff
+    style EngGW fill:#2196F3,color:#fff
+    style DataGW fill:#9C27B0,color:#fff
+```
+
+**Security: 3-Layer IAM Isolation**
+
+```mermaid
+graph TB
+    User["Per-user Role<br/>cc-on-bedrock-task-{subdomain}"]
+    Boundary["Permission Boundary<br/>cc-on-bedrock-task-boundary<br/>(InvokeGateway allowed)"]
+    Inline["Inline Policy<br/>InvokeGateway on<br/>common-gw + dept-gw ARNs"]
+    GwRole["Gateway Role<br/>cc-on-bedrock-agentcore-gateway-{dept}<br/>(Lambda Invoke only)"]
+    LambdaRole["Lambda Role<br/>cc-on-bedrock-mcp-lambda-{id}<br/>(scoped AWS resources)"]
+
+    User --> Boundary
+    User --> Inline
+    Inline -->|Allowed| GwRole
+    GwRole -->|Invoke| LambdaRole
+
+    style User fill:#ff9900,color:#fff
+    style Boundary fill:#f44336,color:#fff
+    style Inline fill:#2196F3,color:#fff
+    style GwRole fill:#4CAF50,color:#fff
+    style LambdaRole fill:#9C27B0,color:#fff
+```
+
+Key resources (Stack 03): `cc-mcp-catalog` DDB, `cc-dept-mcp-config` DDB (Streams), `gateway-manager` Lambda
 
 ## User Access Flow
 
@@ -170,10 +286,11 @@ sequenceDiagram
     Dash->>EC2: 6. RunInstances / StartInstances
     Note over EC2: Per-user EC2 (ARM64)
     Dash-->>Nginx: 7. Register IP in cc-routing-table
-    Dash-->>User: 8. Link: user.dev.whchoi.net
-    User->>Nginx: 9. Host-based routing
-    Nginx->>EC2: 10. Reverse proxy to instance
-    Note over EC2: code-server (password auth)<br/>EBS root volume preserves state
+    Dash-->>User: 8. Link: user.dev.whchoi.net/?folder=/home/coder
+    User->>Nginx: 9. Host-based routing (multi-port)
+    Note over Nginx: ?folder= → :8080 (code-server)<br/>/api/ → :8000 (API server)<br/>/ → :3000 (Frontend dev)
+    Nginx->>EC2: 10. Reverse proxy to instance port
+    Note over EC2: code-server :8080 (password auth)<br/>Frontend :3000 / API :8000 (optional)<br/>EBS root volume preserves state
     EC2->>Bedrock: 11. Claude Code → Instance Profile → Bedrock VPC Endpoint
     Bedrock-->>EC2: 12. Streamed response
     Note over EC2: 45min idle → auto-stop

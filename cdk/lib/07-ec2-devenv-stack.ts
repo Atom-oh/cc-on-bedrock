@@ -42,27 +42,30 @@ export class Ec2DevenvStack extends cdk.Stack {
     const { config, vpc, encryptionKey } = props;
 
     // ─── DLP Security Groups (no SSH, SSM only) ───
+    // Allowed DevEnv ports: 8080 (code-server), 3000 (frontend), 8000 (API)
+    const devenvPorts = [
+      { port: 8080, desc: 'code-server' },
+      { port: 3000, desc: 'frontend dev server' },
+      { port: 8000, desc: 'API server' },
+    ];
+
     this.sgOpen = new ec2.SecurityGroup(this, 'DevenvSgOpen', {
       vpc,
-      description: 'DevEnv Open: code-server + all outbound',
+      description: 'DevEnv Open: code-server + frontend + API + all outbound',
       allowAllOutbound: true,
     });
-    this.sgOpen.addIngressRule(
-      ec2.Peer.ipv4(config.vpcCidr),
-      ec2.Port.tcp(8080),
-      'code-server from VPC (via Nginx)',
-    );
+    for (const { port, desc } of devenvPorts) {
+      this.sgOpen.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(port), `${desc} from VPC (via Nginx)`);
+    }
 
     this.sgRestricted = new ec2.SecurityGroup(this, 'DevenvSgRestricted', {
       vpc,
-      description: 'DevEnv Restricted: code-server, limited outbound',
+      description: 'DevEnv Restricted: code-server + frontend + API, limited outbound',
       allowAllOutbound: false,
     });
-    this.sgRestricted.addIngressRule(
-      ec2.Peer.ipv4(config.vpcCidr),
-      ec2.Port.tcp(8080),
-      'code-server from VPC',
-    );
+    for (const { port, desc } of devenvPorts) {
+      this.sgRestricted.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(port), `${desc} from VPC`);
+    }
     // Restricted outbound: HTTPS only (for Bedrock, ECR, SSM)
     this.sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'HTTPS outbound');
     this.sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(53), 'DNS');
@@ -70,14 +73,12 @@ export class Ec2DevenvStack extends cdk.Stack {
 
     this.sgLocked = new ec2.SecurityGroup(this, 'DevenvSgLocked', {
       vpc,
-      description: 'DevEnv Locked: code-server only, no outbound except AWS',
+      description: 'DevEnv Locked: code-server + frontend + API, no outbound except AWS',
       allowAllOutbound: false,
     });
-    this.sgLocked.addIngressRule(
-      ec2.Peer.ipv4(config.vpcCidr),
-      ec2.Port.tcp(8080),
-      'code-server from VPC',
-    );
+    for (const { port, desc } of devenvPorts) {
+      this.sgLocked.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(port), `${desc} from VPC`);
+    }
     // Locked: only VPC endpoints (HTTPS to VPC CIDR)
     this.sgLocked.addEgressRule(
       ec2.Peer.ipv4(config.vpcCidr),

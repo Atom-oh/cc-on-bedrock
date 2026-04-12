@@ -60,9 +60,12 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
   const effectiveSubdomain = verifiedSubdomain !== undefined ? verifiedSubdomain : (user.subdomain ?? null);
   const hasSubdomain = !!effectiveSubdomain;
 
-  const codeServerUrl = effectiveSubdomain
+  const devenvBaseUrl = effectiveSubdomain
     ? `https://${effectiveSubdomain}.${devSubdomain}.${domainName}`
     : null;
+  const codeServerUrl = devenvBaseUrl ? `${devenvBaseUrl}/?folder=/home/coder` : null;
+  const frontendUrl = devenvBaseUrl;  // root → port 3000
+  const apiUrl = devenvBaseUrl ? `${devenvBaseUrl}/api/` : null;  // /api/ → port 8000
 
   // Fetch usage data
   useEffect(() => {
@@ -391,42 +394,52 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
           </div>
         </div>
 
-        {/* VSCode URL Card */}
+        {/* DevEnv URL Cards */}
         {container?.status === "RUNNING" && (container?.healthStatus === "HEALTHY" || container?.healthStatus === "UNKNOWN") && codeServerUrl && (
-          <div className="bg-[#0d1117] rounded-lg p-4 mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-500 mb-1">VSCode URL</p>
-              <a
-                href={codeServerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-400 hover:text-blue-300 break-all"
-              >
-                {codeServerUrl}
-              </a>
-            </div>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(codeServerUrl);
-                setUrlCopied(true);
-                setTimeout(() => setUrlCopied(false), 2000);
-              }}
-              className="ml-3 p-2 text-gray-400 hover:text-gray-200 rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-1"
-              aria-label="Copy URL to clipboard"
-            >
-              {urlCopied ? (
-                <>
+          <div className="space-y-2 mb-4">
+            {/* code-server IDE */}
+            <div className="bg-[#0d1117] rounded-lg p-4 flex items-center justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded">IDE</span>
+                  <p className="text-xs text-gray-500">code-server (port 8080)</p>
+                </div>
+                <a href={codeServerUrl} target="_blank" rel="noopener noreferrer"
+                  className="text-sm text-blue-400 hover:text-blue-300 break-all">{codeServerUrl}</a>
+              </div>
+              <button onClick={() => { navigator.clipboard.writeText(codeServerUrl); setUrlCopied(true); setTimeout(() => setUrlCopied(false), 2000); }}
+                className="ml-3 p-2 text-gray-400 hover:text-gray-200 rounded-lg hover:bg-gray-800 transition-colors"
+                aria-label="Copy IDE URL">
+                {urlCopied ? (
                   <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
-                  <span className="text-xs text-green-400">Copied!</span>
-                </>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              )}
-            </button>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            {/* Frontend Preview + API */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-[#0d1117] rounded-lg p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase bg-green-500/15 text-green-400 border border-green-500/20 rounded">WEB</span>
+                  <p className="text-xs text-gray-500">port 3000</p>
+                </div>
+                <a href={frontendUrl!} target="_blank" rel="noopener noreferrer"
+                  className="text-xs text-gray-400 hover:text-gray-300 break-all">{frontendUrl}</a>
+              </div>
+              <div className="bg-[#0d1117] rounded-lg p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase bg-orange-500/15 text-orange-400 border border-orange-500/20 rounded">API</span>
+                  <p className="text-xs text-gray-500">port 8000</p>
+                </div>
+                <a href={apiUrl!} target="_blank" rel="noopener noreferrer"
+                  className="text-xs text-gray-400 hover:text-gray-300 break-all">{apiUrl}</a>
+              </div>
+            </div>
           </div>
         )}
 
@@ -523,7 +536,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                   </svg>
-                  {t("user.openCodeServer") || "Open code-server"}
+                  {t("user.openCodeServer") || "Open IDE"}
                 </a>
               )}
             </>

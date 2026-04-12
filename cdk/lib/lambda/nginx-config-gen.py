@@ -120,15 +120,28 @@ http {{
 }}
 """
 
-# Upstream block template
-UPSTREAM_TEMPLATE = """    # Upstream for {subdomain}
-    upstream user_{subdomain} {{
-        server {container_ip}:{port} max_fails=3 fail_timeout=5s;
+# Upstream block template — 3 upstreams per user (code-server, frontend, API)
+UPSTREAM_TEMPLATE = """    # Upstreams for {subdomain}
+    upstream codeserver_{subdomain} {{
+        server {container_ip}:8080 max_fails=3 fail_timeout=5s;
         keepalive 32;
+    }}
+    upstream frontend_{subdomain} {{
+        server {container_ip}:3000 max_fails=3 fail_timeout=5s;
+        keepalive 16;
+    }}
+    upstream userapi_{subdomain} {{
+        server {container_ip}:8000 max_fails=3 fail_timeout=5s;
+        keepalive 16;
     }}
 """
 
-# Server block template
+# Server block template — multi-port routing (code-server 8080, frontend 3000, API 8000)
+# Routing rules:
+#   ?folder=... → code-server (8080)  — code-server IDE
+#   /api/...    → userapi (8000)      — user's API server
+#   /           → frontend (3000)     — user's frontend dev server
+#   code-server internal paths (_static, stable-, vscode-remote-resource) → code-server
 SERVER_TEMPLATE = """    # Server block for {subdomain}
     server {{
         listen 80;
@@ -145,7 +158,7 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
             return 403 '{{"error":"Not authorized for this environment"}}';
         }}
 
-        # Proxy settings
+        # Common proxy settings
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -153,7 +166,6 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        # Strip auth header — don't leak to code-server
         proxy_set_header X-Auth-User "";
 
         # Timeouts for long-running connections (Claude Code sessions)
@@ -161,17 +173,68 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         proxy_send_timeout 3600s;
         proxy_read_timeout 3600s;
 
-        # Custom loading page for 502/503/504 (code-server not ready yet)
-        proxy_intercept_errors on;
-        error_page 502 503 504 = @loading;
-
-        location @loading {{
-            default_type text/html;
-            return 503 '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>Starting...</title><style>*{{margin:0;padding:0;box-sizing:border-box}}body{{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Noto Sans,Helvetica,Arial,sans-serif}}.c{{text-align:center;max-width:400px;padding:2rem}}.spinner{{width:48px;height:48px;border:4px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 1.5rem}}@keyframes spin{{to{{transform:rotate(360deg)}}}}h1{{font-size:1.25rem;font-weight:600;margin-bottom:.5rem;color:#e6edf3}}p{{font-size:.875rem;color:#8b949e;line-height:1.5}}.badge{{display:inline-flex;align-items:center;gap:6px;margin-top:1rem;padding:4px 12px;background:#161b22;border:1px solid #30363d;border-radius:999px;font-size:.75rem;color:#8b949e}}.dot{{width:6px;height:6px;background:#f0883e;border-radius:50%;animation:pulse 1.5s ease-in-out infinite}}@keyframes pulse{{0%,100%{{opacity:.4}}50%{{opacity:1}}}}</style></head><body><div class="c"><div class="spinner"></div><h1>Development environment is starting</h1><p>code-server is booting up. This page will automatically refresh.</p><div class="badge"><span class="dot"></span>Warming up</div></div></body></html>';
+        # ─── code-server named location ───
+        location @codeserver {{
+            proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
 
+        location @loading_codeserver {{
+            default_type text/html;
+            return 503 '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>Starting...</title><style>*{{margin:0;padding:0;box-sizing:border-box}}body{{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Noto Sans,Helvetica,Arial,sans-serif}}.c{{text-align:center;max-width:400px;padding:2rem}}.spinner{{width:48px;height:48px;border:4px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 1.5rem}}@keyframes spin{{to{{transform:rotate(360deg)}}}}h1{{font-size:1.25rem;font-weight:600;margin-bottom:.5rem;color:#e6edf3}}p{{font-size:.875rem;color:#8b949e;line-height:1.5}}.badge{{display:inline-flex;align-items:center;gap:6px;margin-top:1rem;padding:4px 12px;background:#161b22;border:1px solid #30363d;border-radius:999px;font-size:.75rem;color:#8b949e}}.dot{{width:6px;height:6px;background:#f0883e;border-radius:50%;animation:pulse 1.5s ease-in-out infinite}}@keyframes pulse{{0%,100%{{opacity:.4}}50%{{opacity:1}}}}</style></head><body><div class="c"><div class="spinner"></div><h1>code-server is starting</h1><p>Your IDE is booting up. This page will automatically refresh.</p><div class="badge"><span class="dot"></span>Warming up</div></div></body></html>';
+        }}
+
+        # ─── code-server internal paths (WebSocket, assets, extensions) ───
+        location /_static/ {{
+            proxy_pass http://codeserver_{subdomain};
+        }}
+        location /healthz {{
+            proxy_pass http://codeserver_{subdomain};
+        }}
+        location ~ ^/stable-[a-f0-9]+/ {{
+            proxy_pass http://codeserver_{subdomain};
+        }}
+        location ~ ^/vscode-remote-resource/ {{
+            proxy_pass http://codeserver_{subdomain};
+        }}
+        location ~ ^/out/ {{
+            proxy_pass http://codeserver_{subdomain};
+        }}
+        location ~ ^/webview/ {{
+            proxy_pass http://codeserver_{subdomain};
+        }}
+
+        # ─── User API server (port 8000) ───
+        location /api/ {{
+            proxy_pass http://userapi_{subdomain};
+            proxy_connect_timeout 10s;
+            proxy_send_timeout 300s;
+            proxy_read_timeout 300s;
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @noservice_api;
+        }}
+
+        location @noservice_api {{
+            default_type application/json;
+            return 502 '{{"error":"API server is not running on port 8000. Start your API server to access this endpoint.","hint":"Run your server on port 8000 (e.g. uvicorn main:app --port 8000)"}}';
+        }}
+
+        # ─── Default: ?folder= → code-server, otherwise → Frontend (port 3000) ───
         location / {{
-            proxy_pass http://user_{subdomain};
+            # ?folder= parameter → code-server IDE
+            if ($arg_folder) {{
+                error_page 418 = @codeserver;
+                return 418;
+            }}
+            proxy_pass http://frontend_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @noservice_frontend;
+        }}
+
+        location @noservice_frontend {{
+            default_type text/html;
+            return 502 '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>No Frontend</title><style>*{{margin:0;padding:0;box-sizing:border-box}}body{{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Noto Sans,Helvetica,Arial,sans-serif}}.c{{text-align:center;max-width:480px;padding:2rem}}h1{{font-size:1.25rem;font-weight:600;margin-bottom:.75rem;color:#e6edf3}}p{{font-size:.875rem;color:#8b949e;line-height:1.6;margin-bottom:1rem}}code{{background:#161b22;padding:2px 8px;border-radius:4px;font-size:.8rem;color:#79c0ff}}a{{color:#58a6ff;text-decoration:none}}a:hover{{text-decoration:underline}}</style></head><body><div class="c"><h1>Frontend server is not running</h1><p>Start your frontend dev server on <strong>port 3000</strong> to view it here.</p><p><code>npm run dev -- --port 3000</code></p><p style="margin-top:1.5rem;font-size:.8rem"><a href="/?folder=/home/coder">Open code-server IDE instead</a></p></div></body></html>';
         }}
     }}
 """
@@ -244,13 +307,12 @@ def generate_nginx_config() -> str:
 
     logger.info(f"Found {len(routes)} active routes")
 
-    # Generate upstream entries
+    # Generate upstream entries (3 upstreams per user: code-server, frontend, API)
     upstream_entries = []
     for route in routes:
         upstream_entries.append(UPSTREAM_TEMPLATE.format(
             subdomain=route["subdomain"],
             container_ip=route["container_ip"],
-            port=route["port"],
         ))
 
     # Generate server entries

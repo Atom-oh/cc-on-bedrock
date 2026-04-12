@@ -2,370 +2,531 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-interface CatalogItem {
-  id: string;
+type McpItem = {
+  mcpId: string;
   name: string;
   description: string;
   category: string;
-  tier: "common" | "department";
-  toolSchema: unknown[];
-  version: string;
+  lambdaArn: string;
+  tools: string[];
   enabled: boolean;
-}
+};
 
-interface Assignment {
-  catalogId: string;
+type Assignment = {
+  mcpId: string;
+  department: string;
   enabled: boolean;
-  targetId: string;
-  status: string;
-  addedAt: string;
-  addedBy: string;
-}
+  assignedAt: string;
+};
 
-interface GatewayInfo {
-  deptId: string;
+type Gateway = {
+  department: string;
   gatewayId: string;
   gatewayUrl: string;
-  gatewayName: string;
   status: string;
-  targetCount: number;
+  createdAt: string;
   lastSyncAt: string;
-  errorMessage: string;
-}
-
-type TabType = "catalog" | "assignments" | "gateways";
-
-const CATEGORY_COLORS: Record<string, string> = {
-  monitoring: "bg-blue-500/20 text-blue-400",
-  development: "bg-green-500/20 text-green-400",
-  data: "bg-purple-500/20 text-purple-400",
-  communication: "bg-yellow-500/20 text-yellow-400",
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  ACTIVE: "bg-green-500/20 text-green-400",
-  CREATING: "bg-yellow-500/20 text-yellow-400",
-  SYNCING: "bg-blue-500/20 text-blue-400",
-  PENDING: "bg-gray-500/20 text-gray-400",
-  FAILED: "bg-red-500/20 text-red-400",
-};
+type Tab = "catalog" | "assignments" | "gateways";
 
 export default function McpManagement() {
-  const [activeTab, setActiveTab] = useState<TabType>("catalog");
-  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
-  const [gateways, setGateways] = useState<GatewayInfo[]>([]);
+  const [tab, setTab] = useState<Tab>("catalog");
+  const [catalog, setCatalog] = useState<McpItem[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [gateways, setGateways] = useState<Gateway[]>([]);
   const [selectedDept, setSelectedDept] = useState("");
-  const [departments, setDepartments] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [editItem, setEditItem] = useState<McpItem | null>(null);
+  const [form, setForm] = useState({
+    mcpId: "", name: "", description: "", category: "department", lambdaArn: "", tools: "",
+  });
 
   const fetchCatalog = useCallback(async () => {
-    try {
-      const res = await fetch("/api/admin/mcp/catalog");
-      const json = await res.json();
-      if (json.success) setCatalog(json.data ?? []);
-    } catch (err) {
-      console.error("Failed to fetch catalog:", err);
-    }
+    const res = await fetch("/api/admin/mcp/catalog");
+    const data = await res.json();
+    if (data.success) setCatalog(data.data);
   }, []);
 
   const fetchGateways = useCallback(async () => {
-    try {
-      const res = await fetch("/api/admin/mcp/gateways");
-      const json = await res.json();
-      if (json.success) setGateways(json.data ?? []);
-    } catch (err) {
-      console.error("Failed to fetch gateways:", err);
-    }
+    const res = await fetch("/api/admin/mcp/gateways");
+    const data = await res.json();
+    if (data.success) setGateways(data.data);
   }, []);
 
-  const fetchAssignments = useCallback(async (deptId: string) => {
-    if (!deptId) return;
-    try {
-      const res = await fetch(`/api/admin/mcp/assignments?dept_id=${deptId}`);
-      const json = await res.json();
-      if (json.success) setAssignments(json.data ?? []);
-    } catch (err) {
-      console.error("Failed to fetch assignments:", err);
-    }
-  }, []);
-
-  const fetchDepartments = useCallback(async () => {
-    try {
-      const res = await fetch("/api/admin/budgets?type=department");
-      const json = await res.json();
-      if (json.success && json.data?.departments) {
-        setDepartments(json.data.departments.map((d: { department: string }) => d.department));
-      }
-    } catch (err) {
-      console.error("Failed to fetch departments:", err);
-    }
+  const fetchAssignments = useCallback(async (dept: string) => {
+    if (!dept) return;
+    const res = await fetch(`/api/admin/mcp/assignments?department=${dept}`);
+    const data = await res.json();
+    if (data.success) setAssignments(data.data);
   }, []);
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      await Promise.all([fetchCatalog(), fetchGateways(), fetchDepartments()]);
-      setLoading(false);
-    };
-    void load();
-    const interval = setInterval(() => {
-      void fetchGateways();
-    }, 15000);
-    return () => clearInterval(interval);
-  }, [fetchCatalog, fetchGateways, fetchDepartments]);
+    fetchCatalog();
+    fetchGateways();
+  }, [fetchCatalog, fetchGateways]);
 
   useEffect(() => {
-    if (selectedDept) void fetchAssignments(selectedDept);
+    if (selectedDept) fetchAssignments(selectedDept);
   }, [selectedDept, fetchAssignments]);
 
-  const handleAssign = async (catalogId: string, action: "assign" | "remove") => {
-    if (!selectedDept) return;
-    try {
-      const res = await fetch("/api/admin/mcp/assignments", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dept_id: selectedDept, catalog_id: catalogId, action }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        await fetchAssignments(selectedDept);
-        await fetchGateways();
-      }
-    } catch (err) {
-      console.error("Failed to update assignment:", err);
-    }
+  const handleAssign = async (mcpId: string, action: "assign" | "remove") => {
+    setLoading(true);
+    await fetch("/api/admin/mcp/assignments", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department: selectedDept, mcpId, action }),
+    });
+    await fetchAssignments(selectedDept);
+    setLoading(false);
   };
 
-  const handleCreateGateway = async (deptId: string) => {
-    try {
-      const res = await fetch("/api/admin/mcp/gateways", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dept_id: deptId }),
-      });
-      const json = await res.json();
-      if (json.success) await fetchGateways();
-    } catch (err) {
-      console.error("Failed to create gateway:", err);
-    }
+  const handleCreateGateway = async (department: string) => {
+    setLoading(true);
+    await fetch("/api/admin/mcp/gateways", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department }),
+    });
+    await fetchGateways();
+    setLoading(false);
   };
 
-  const handleDeleteGateway = async (deptId: string) => {
-    if (!confirm(`Delete gateway for ${deptId}? This will remove all MCP targets.`)) return;
-    try {
-      const res = await fetch("/api/admin/mcp/gateways", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dept_id: deptId }),
-      });
-      const json = await res.json();
-      if (json.success) await fetchGateways();
-    } catch (err) {
-      console.error("Failed to delete gateway:", err);
-    }
+  const handleDeleteGateway = async (department: string) => {
+    if (!confirm(`Delete gateway for ${department}?`)) return;
+    setLoading(true);
+    await fetch("/api/admin/mcp/gateways", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department }),
+    });
+    await fetchGateways();
+    setLoading(false);
   };
 
-  const handleSyncGateway = async (deptId: string) => {
-    try {
-      await fetch("/api/admin/mcp/gateways/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dept_id: deptId }),
-      });
-      await fetchGateways();
-    } catch (err) {
-      console.error("Failed to sync gateway:", err);
-    }
+  const handleSync = async (department: string) => {
+    setLoading(true);
+    await fetch("/api/admin/mcp/gateways/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department }),
+    });
+    setLoading(false);
   };
 
-  if (loading) {
-    return <div className="text-gray-400 text-center py-12">Loading MCP configuration...</div>;
-  }
-
-  const tabs: { id: TabType; label: string; count: number }[] = [
-    { id: "catalog", label: "MCP Catalog", count: catalog.length },
-    { id: "assignments", label: "Department Assignments", count: assignments.length },
-    { id: "gateways", label: "Gateway Status", count: gateways.length },
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "catalog", label: "MCP Catalog" },
+    { key: "assignments", label: "Department Assignments" },
+    { key: "gateways", label: "Gateway Status" },
   ];
 
-  const deptCatalog = catalog.filter((c) => c.tier === "department" && c.enabled);
-  const assignedIds = new Set(assignments.filter((a) => a.enabled).map((a) => a.catalogId));
+  const statusColor = (s: string) => {
+    if (s === "ACTIVE") return "bg-green-500/20 text-green-400";
+    if (s === "CREATING") return "bg-yellow-500/20 text-yellow-400";
+    if (s === "DELETING") return "bg-red-500/20 text-red-400";
+    return "bg-gray-500/20 text-gray-400";
+  };
+
+  const assignedMcpIds = new Set(assignments.filter((a) => a.enabled).map((a) => a.mcpId));
+
+  const openCreateModal = () => {
+    setEditItem(null);
+    setForm({ mcpId: "", name: "", description: "", category: "department", lambdaArn: "", tools: "" });
+    setShowModal(true);
+  };
+
+  const openEditModal = (item: McpItem) => {
+    setEditItem(item);
+    setForm({
+      mcpId: item.mcpId,
+      name: item.name,
+      description: item.description,
+      category: item.category,
+      lambdaArn: item.lambdaArn,
+      tools: item.tools.join(", "),
+    });
+    setShowModal(true);
+  };
+
+  const handleSubmitCatalog = async () => {
+    setLoading(true);
+    const toolsArray = form.tools
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    if (editItem) {
+      await fetch("/api/admin/mcp/catalog", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mcpId: editItem.mcpId,
+          name: form.name,
+          description: form.description,
+          category: form.category,
+          lambdaArn: form.lambdaArn,
+          tools: toolsArray,
+        }),
+      });
+    } else {
+      await fetch("/api/admin/mcp/catalog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mcpId: form.mcpId,
+          name: form.name,
+          description: form.description,
+          category: form.category,
+          lambdaArn: form.lambdaArn,
+          tools: toolsArray,
+        }),
+      });
+    }
+
+    await fetchCatalog();
+    setShowModal(false);
+    setLoading(false);
+  };
 
   return (
     <div>
-      {/* Tab navigation */}
-      <div className="flex space-x-1 mb-6 bg-gray-800/50 rounded-lg p-1">
-        {tabs.map((tab) => (
+      {/* Tabs */}
+      <div role="tablist" className="flex gap-1 mb-6 border-b border-gray-700">
+        {tabs.map((t) => (
           <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-              activeTab === tab.id
-                ? "bg-gray-700 text-white"
-                : "text-gray-400 hover:text-gray-200"
+            key={t.key}
+            role="tab"
+            aria-selected={tab === t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === t.key
+                ? "border-blue-500 text-blue-400"
+                : "border-transparent text-gray-400 hover:text-gray-200"
             }`}
           >
-            {tab.label}
-            <span className="ml-2 text-xs text-gray-500">({tab.count})</span>
+            {t.label}
           </button>
         ))}
       </div>
 
-      {/* Tab content */}
-      {activeTab === "catalog" && (
-        <div className="space-y-4">
+      {/* Catalog Tab */}
+      {tab === "catalog" && (
+        <div>
+          <div className="mb-4 flex justify-end">
+            <button
+              onClick={openCreateModal}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+            >
+              + Add MCP
+            </button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {catalog.map((item) => (
-              <div key={item.id} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-                <div className="flex items-start justify-between mb-2">
-                  <h3 className="text-sm font-semibold text-gray-100">{item.name}</h3>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                    item.tier === "common" ? "bg-blue-500/20 text-blue-400" : "bg-gray-600/30 text-gray-300"
-                  }`}>
-                    {item.tier}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-400 mb-3">{item.description}</p>
-                <div className="flex items-center justify-between">
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${CATEGORY_COLORS[item.category] ?? "bg-gray-600/30 text-gray-300"}`}>
-                    {item.category}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    {item.toolSchema.length} tool{item.toolSchema.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
+          {catalog.map((item) => (
+            <div
+              key={item.mcpId}
+              onClick={() => openEditModal(item)}
+              className="bg-gray-800 rounded-lg p-4 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-gray-100">{item.name}</h3>
+                <span
+                  className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    item.category === "common"
+                      ? "bg-blue-500/20 text-blue-400"
+                      : "bg-purple-500/20 text-purple-400"
+                  }`}
+                >
+                  {item.category}
+                </span>
               </div>
-            ))}
+              <p className="text-xs text-gray-400 mb-3">{item.description}</p>
+              {item.tools.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {item.tools.map((tool) => (
+                    <span
+                      key={tool}
+                      className="px-1.5 py-0.5 bg-gray-700 rounded text-xs text-gray-300"
+                    >
+                      {tool}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {catalog.length === 0 && (
+            <p className="text-gray-500 col-span-3 text-center py-8">
+              No MCP items in catalog. Run seed-mcp-catalog.py to populate.
+            </p>
+          )}
           </div>
         </div>
       )}
 
-      {activeTab === "assignments" && (
-        <div className="space-y-4">
-          {/* Department selector */}
-          <div className="flex items-center gap-4 mb-4">
+      {/* Assignments Tab */}
+      {tab === "assignments" && (
+        <div>
+          <div className="mb-4 flex gap-3 items-center">
+            <label htmlFor="dept-select" className="text-sm text-gray-300">
+              Department:
+            </label>
             <select
+              id="dept-select"
               value={selectedDept}
               onChange={(e) => setSelectedDept(e.target.value)}
-              className="bg-gray-800 border border-gray-600 text-gray-200 rounded-md px-3 py-2 text-sm"
+              className="bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200"
             >
-              <option value="">Select department...</option>
-              {departments.map((d) => (
-                <option key={d} value={d}>{d}</option>
+              <option value="">Select department</option>
+              {gateways.map((gw) => (
+                <option key={gw.department} value={gw.department}>
+                  {gw.department}
+                </option>
               ))}
             </select>
-            {selectedDept && !gateways.some((g) => g.deptId === selectedDept && g.gatewayId) && (
-              <button
-                onClick={() => handleCreateGateway(selectedDept)}
-                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm"
-              >
-                Create Gateway
-              </button>
-            )}
           </div>
 
           {selectedDept ? (
-            <div className="space-y-3">
-              {deptCatalog.map((item) => {
-                const isAssigned = assignedIds.has(item.id);
-                const assignment = assignments.find((a) => a.catalogId === item.id);
-                return (
-                  <div key={item.id} className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3 border border-gray-700">
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={isAssigned}
-                        onChange={() => handleAssign(item.id, isAssigned ? "remove" : "assign")}
-                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500"
-                      />
-                      <div>
-                        <span className="text-sm text-gray-200">{item.name}</span>
-                        <span className="ml-2 text-xs text-gray-500">{item.description}</span>
-                      </div>
-                    </div>
-                    {assignment && (
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[assignment.status] ?? STATUS_COLORS.PENDING}`}>
-                        {assignment.status}
-                      </span>
-                    )}
+            <div className="space-y-2">
+              {catalog.map((item) => (
+                <div
+                  key={item.mcpId}
+                  className="flex items-center justify-between bg-gray-800 rounded-lg px-4 py-3 border border-gray-700"
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id={`assign-${item.mcpId}`}
+                      checked={assignedMcpIds.has(item.mcpId)}
+                      onChange={() =>
+                        handleAssign(
+                          item.mcpId,
+                          assignedMcpIds.has(item.mcpId) ? "remove" : "assign"
+                        )
+                      }
+                      disabled={loading}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700"
+                    />
+                    <label
+                      htmlFor={`assign-${item.mcpId}`}
+                      className="text-sm text-gray-200"
+                    >
+                      {item.name}
+                    </label>
+                    <span className="text-xs text-gray-500">{item.description}</span>
                   </div>
-                );
-              })}
-              {deptCatalog.length === 0 && (
-                <p className="text-gray-500 text-sm text-center py-8">No department-tier MCP items in catalog</p>
-              )}
+                  <span
+                    className={`px-2 py-0.5 rounded text-xs ${
+                      item.category === "common"
+                        ? "bg-blue-500/20 text-blue-400"
+                        : "bg-purple-500/20 text-purple-400"
+                    }`}
+                  >
+                    {item.category}
+                  </span>
+                </div>
+              ))}
             </div>
           ) : (
-            <p className="text-gray-500 text-sm text-center py-8">Select a department to manage MCP assignments</p>
+            <p className="text-gray-500 text-center py-8">
+              Select a department to manage MCP assignments
+            </p>
           )}
         </div>
       )}
 
-      {activeTab === "gateways" && (
-        <div className="space-y-4">
-          {gateways.length === 0 ? (
-            <p className="text-gray-500 text-sm text-center py-8">No gateways configured</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="text-xs text-gray-400 uppercase bg-gray-800/30">
-                  <tr>
-                    <th className="px-4 py-3">Department</th>
-                    <th className="px-4 py-3">Gateway Name</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Targets</th>
-                    <th className="px-4 py-3">Last Sync</th>
-                    <th className="px-4 py-3">Actions</th>
+      {/* Gateways Tab */}
+      {tab === "gateways" && (
+        <div>
+          <div className="mb-4 flex justify-end">
+            <button
+              onClick={() => {
+                const dept = prompt("Department name:");
+                if (dept) handleCreateGateway(dept);
+              }}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+              disabled={loading}
+            >
+              + Create Gateway
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-400 border-b border-gray-700">
+                  <th className="pb-2 pr-4">Department</th>
+                  <th className="pb-2 pr-4">Status</th>
+                  <th className="pb-2 pr-4">Gateway ID</th>
+                  <th className="pb-2 pr-4">Created</th>
+                  <th className="pb-2 pr-4">Last Sync</th>
+                  <th className="pb-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {gateways.map((gw) => (
+                  <tr key={gw.department} className="border-b border-gray-800">
+                    <td className="py-2 pr-4 text-gray-200 font-medium">
+                      {gw.department}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor(gw.status)}`}
+                      >
+                        {gw.status}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-4 text-gray-400 text-xs font-mono">
+                      {gw.gatewayId || "—"}
+                    </td>
+                    <td className="py-2 pr-4 text-gray-400 text-xs">
+                      {gw.createdAt ? new Date(gw.createdAt).toLocaleDateString() : "—"}
+                    </td>
+                    <td className="py-2 pr-4 text-gray-400 text-xs">
+                      {gw.lastSyncAt ? new Date(gw.lastSyncAt).toLocaleString() : "—"}
+                    </td>
+                    <td className="py-2 flex gap-2">
+                      <button
+                        onClick={() => handleSync(gw.department)}
+                        className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+                        disabled={loading}
+                      >
+                        Sync
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGateway(gw.department)}
+                        className="px-2 py-1 text-xs bg-red-900/50 hover:bg-red-900 text-red-400 rounded"
+                        disabled={loading}
+                      >
+                        Delete
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-700">
-                  {gateways.map((gw) => (
-                    <tr key={gw.deptId} className="hover:bg-gray-800/30">
-                      <td className="px-4 py-3">
-                        <span className="font-medium text-gray-200">
-                          {gw.deptId === "common" ? "Common (All)" : gw.deptId}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-400 font-mono text-xs">
-                        {gw.gatewayName || "-"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[gw.status] ?? STATUS_COLORS.PENDING}`}>
-                          {gw.status}
-                        </span>
-                        {gw.errorMessage && (
-                          <span className="ml-2 text-xs text-red-400" title={gw.errorMessage}>!</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-gray-400">{gw.targetCount}</td>
-                      <td className="px-4 py-3 text-gray-500 text-xs">
-                        {gw.lastSyncAt ? new Date(gw.lastSyncAt).toLocaleString() : "-"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleSyncGateway(gw.deptId)}
-                            className="text-xs text-blue-400 hover:text-blue-300"
-                          >
-                            Re-sync
-                          </button>
-                          {gw.deptId !== "common" && (
-                            <button
-                              onClick={() => handleDeleteGateway(gw.deptId)}
-                              className="text-xs text-red-400 hover:text-red-300"
-                            >
-                              Delete
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                ))}
+              </tbody>
+            </table>
+            {gateways.length === 0 && (
+              <p className="text-gray-500 text-center py-8">
+                No gateways created yet
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-lg border border-gray-700">
+            <h2 className="text-lg font-semibold text-gray-100 mb-4">
+              {editItem ? "Edit MCP" : "Add MCP"}
+            </h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSubmitCatalog();
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label htmlFor="modal-mcpId" className="block text-sm text-gray-300 mb-1">
+                  MCP ID
+                </label>
+                <input
+                  id="modal-mcpId"
+                  type="text"
+                  required
+                  disabled={!!editItem}
+                  value={form.mcpId}
+                  onChange={(e) => setForm({ ...form, mcpId: e.target.value })}
+                  placeholder="e.g. jira-tools"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200 disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-name" className="block text-sm text-gray-300 mb-1">
+                  Name
+                </label>
+                <input
+                  id="modal-name"
+                  type="text"
+                  required
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Jira Integration"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-desc" className="block text-sm text-gray-300 mb-1">
+                  Description
+                </label>
+                <input
+                  id="modal-desc"
+                  type="text"
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  placeholder="Short description"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-category" className="block text-sm text-gray-300 mb-1">
+                  Category
+                </label>
+                <select
+                  id="modal-category"
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                >
+                  <option value="common">Common</option>
+                  <option value="department">Department</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="modal-arn" className="block text-sm text-gray-300 mb-1">
+                  Lambda ARN
+                </label>
+                <input
+                  id="modal-arn"
+                  type="text"
+                  value={form.lambdaArn}
+                  onChange={(e) => setForm({ ...form, lambdaArn: e.target.value })}
+                  placeholder="arn:aws:lambda:..."
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-tools" className="block text-sm text-gray-300 mb-1">
+                  Tools (comma-separated)
+                </label>
+                <input
+                  id="modal-tools"
+                  type="text"
+                  value={form.tools}
+                  onChange={(e) => setForm({ ...form, tools: e.target.value })}
+                  placeholder="list_issues, create_ticket, search"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors disabled:opacity-50"
+                >
+                  {loading ? "Saving..." : editItem ? "Update" : "Create"}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>
