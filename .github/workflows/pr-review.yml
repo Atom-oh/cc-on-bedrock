@@ -16,7 +16,7 @@ env:
 jobs:
   review:
     name: AI Code Review
-    runs-on: ubuntu-latest
+    runs-on: cc-bedrock-arm
     timeout-minutes: 10
 
     steps:
