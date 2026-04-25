@@ -504,9 +504,9 @@ export default function McpManagement() {
         <div>
           <div className="mb-4 flex items-center justify-between">
             <div className="flex gap-3 items-center">
-              <label htmlFor="mkt-scope" className="text-sm text-gray-300">Scope:</label>
+              <label htmlFor="mkt-scope-filter" className="text-sm text-gray-300">Scope:</label>
               <select
-                id="mkt-scope"
+                id="mkt-scope-filter"
                 value={mktScope}
                 onChange={(e) => setMktScope(e.target.value)}
                 className="bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200"
@@ -635,7 +635,7 @@ export default function McpManagement() {
                 />
               </div>
               <div>
-                <label htmlFor="mkt-scope" className="block text-sm text-gray-300 mb-1">Scope</label>
+                <label htmlFor="mkt-scope-select" className="block text-sm text-gray-300 mb-1">Scope</label>
                 <select
                   id="mkt-scope-select"
                   value={mktForm.scope}

@@ -164,11 +164,19 @@ if [ -n "$CLAUDE_BIN" ]; then
 
   MKT_URLS=$(echo "$COMMON_MKT" "$DEPT_MKT" | jq -r '.Items[] | select(.enabled.BOOL==true) | .url.S' 2>/dev/null || true)
 
-  for URL in $MKT_URLS; do
-    sudo -u coder "$CLAUDE_BIN" /plugin marketplace add "$URL" 2>/dev/null && \
+  GITHUB_URL_RE='^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/?$'
+  while IFS= read -r URL; do
+    [ -z "$URL" ] && continue
+    if ! [[ "$URL" =~ $GITHUB_URL_RE ]]; then
+      log "WARN: Skipping invalid marketplace URL: $URL"
+      continue
+    fi
+    # Pipe slash command via stdin (claude CLI accepts REPL input on stdin in non-TTY mode)
+    OUTPUT=$(printf '/plugin marketplace add %s\n' "$URL" \
+      | sudo -u coder "$CLAUDE_BIN" --print 2>&1) && \
       log "Added marketplace: $URL" || \
-      log "WARN: Failed to add marketplace: $URL"
-  done
+      log "WARN: Failed to add marketplace: $URL ($(echo "$OUTPUT" | head -1))"
+  done <<< "$MKT_URLS"
 
   [ -z "$MKT_URLS" ] && log "No plugin marketplaces configured"
 else

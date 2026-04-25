@@ -31,8 +31,9 @@ PATTERNS=(
 
 for pattern in "${PATTERNS[@]}"; do
   if echo "$CONTENT" | grep -qE "$pattern"; then
-    echo '{"decision":"block","reason":"Secret detected in file content. Remove the secret before writing."}'
-    exit 0
+    # PreToolUse block signal: exit code 2 + reason on stderr
+    echo "Secret detected in file content (pattern: ${pattern}). Remove the secret before writing." >&2
+    exit 2
   fi
 done
 

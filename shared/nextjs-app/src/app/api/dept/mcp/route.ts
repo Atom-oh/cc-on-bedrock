@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
 
   const groups = session.user.groups ?? [];
   const isDeptManager = groups.includes("dept-manager") || groups.includes("admin");
+  const isAdmin = groups.includes("admin");
   if (!isDeptManager) {
     return NextResponse.json({ error: "Dept-manager access required" }, { status: 403 });
   }
@@ -32,9 +33,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "department is required" }, { status: 400 });
   }
 
-  // Note: cross-department access control relies on the frontend sending
-  // the user's own department. Full server-side enforcement requires
-  // Cognito custom:department attribute lookup (same as /api/dept/route.ts).
+  // Server-side cross-department guard: non-admin dept-managers can only read
+  // their own department (derived from email domain, same pattern as /api/dept/route.ts).
+  if (!isAdmin) {
+    const userDept = session.user.email.split("@")[1]?.split(".")[0] ?? "default";
+    if (department !== userDept) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
 
   try {
     // Get gateway status

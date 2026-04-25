@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import {
+  ConditionalCheckFailedException,
   DynamoDBClient,
   QueryCommand,
   PutItemCommand,
@@ -15,8 +16,26 @@ const DEPT_MCP_CONFIG_TABLE =
   process.env.DEPT_MCP_CONFIG_TABLE ?? "cc-dept-mcp-config";
 const dynamodb = new DynamoDBClient({ region });
 
+const ID_PATTERN = /^[a-z0-9-]{1,64}$/;
+const SCOPE_PATTERN = /^[a-z0-9-]{1,64}$/;
+const GITHUB_URL_PATTERN =
+  /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/?$/;
+
 function scopeToPK(scope: string): string {
   return scope === "common" ? "COMMON" : `DEPT#${scope}`;
+}
+
+function validateIdAndScope(
+  id: unknown,
+  scope: unknown
+): { id: string; scope: string } | { error: string } {
+  if (typeof id !== "string" || !ID_PATTERN.test(id)) {
+    return { error: "id must be lowercase alphanumeric with hyphens (max 64)" };
+  }
+  if (typeof scope !== "string" || (scope !== "common" && !SCOPE_PATTERN.test(scope))) {
+    return { error: "scope must be 'common' or a valid department slug" };
+  }
+  return { id, scope };
 }
 
 export async function GET(req: NextRequest) {
@@ -95,16 +114,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!/^[a-z0-9-]+$/.test(id)) {
+    const validated = validateIdAndScope(id, scope);
+    if ("error" in validated) {
+      return NextResponse.json({ error: validated.error }, { status: 400 });
+    }
+
+    if (typeof name !== "string" || name.length === 0 || name.length > 128) {
       return NextResponse.json(
-        { error: "id must be lowercase alphanumeric with hyphens" },
+        { error: "name must be 1-128 characters" },
         { status: 400 }
       );
     }
 
-    if (!url.startsWith("https://github.com/")) {
+    if (!GITHUB_URL_PATTERN.test(url)) {
       return NextResponse.json(
-        { error: "URL must be a GitHub repository (https://github.com/...)" },
+        { error: "URL must match https://github.com/<owner>/<repo>" },
+        { status: 400 }
+      );
+    }
+
+    if (description !== undefined && (typeof description !== "string" || description.length > 512)) {
+      return NextResponse.json(
+        { error: "description must be at most 512 characters" },
         { status: 400 }
       );
     }
@@ -112,28 +143,39 @@ export async function POST(req: NextRequest) {
     const now = new Date().toISOString();
     const adminEmail = session.user.email ?? "unknown";
 
-    await dynamodb.send(
-      new PutItemCommand({
-        TableName: DEPT_MCP_CONFIG_TABLE,
-        Item: marshall(
-          {
-            PK: scopeToPK(scope),
-            SK: `MKTPLACE#${id}`,
-            name,
-            url,
-            description: description ?? "",
-            enabled: true,
-            addedBy: adminEmail,
-            addedAt: now,
-          },
-          { removeUndefinedValues: true }
-        ),
-      })
-    );
+    try {
+      await dynamodb.send(
+        new PutItemCommand({
+          TableName: DEPT_MCP_CONFIG_TABLE,
+          Item: marshall(
+            {
+              PK: scopeToPK(validated.scope),
+              SK: `MKTPLACE#${validated.id}`,
+              name,
+              url,
+              description: description ?? "",
+              enabled: true,
+              addedBy: adminEmail,
+              addedAt: now,
+            },
+            { removeUndefinedValues: true }
+          ),
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        })
+      );
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) {
+        return NextResponse.json(
+          { error: `Marketplace '${validated.id}' already exists in scope '${validated.scope}'` },
+          { status: 409 }
+        );
+      }
+      throw err;
+    }
 
     return NextResponse.json({
       success: true,
-      message: `Marketplace ${id} added to ${scope}`,
+      message: `Marketplace ${validated.id} added to ${validated.scope}`,
     });
   } catch (err) {
     console.error(
@@ -174,9 +216,28 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    if (url && !url.startsWith("https://github.com/")) {
+    const validated = validateIdAndScope(id, scope);
+    if ("error" in validated) {
+      return NextResponse.json({ error: validated.error }, { status: 400 });
+    }
+
+    if (url !== undefined && !GITHUB_URL_PATTERN.test(url)) {
       return NextResponse.json(
-        { error: "URL must be a GitHub repository (https://github.com/...)" },
+        { error: "URL must match https://github.com/<owner>/<repo>" },
+        { status: 400 }
+      );
+    }
+
+    if (name !== undefined && (typeof name !== "string" || name.length === 0 || name.length > 128)) {
+      return NextResponse.json(
+        { error: "name must be 1-128 characters" },
+        { status: 400 }
+      );
+    }
+
+    if (description !== undefined && (typeof description !== "string" || description.length > 512)) {
+      return NextResponse.json(
+        { error: "description must be at most 512 characters" },
         { status: 400 }
       );
     }
@@ -189,12 +250,12 @@ export async function PUT(req: NextRequest) {
       updates.push("enabled = :enabled");
       values[":enabled"] = enabled;
     }
-    if (name) {
+    if (name !== undefined) {
       updates.push("#n = :name");
       names["#n"] = "name";
       values[":name"] = name;
     }
-    if (url) {
+    if (url !== undefined) {
       updates.push("#u = :url");
       names["#u"] = "url";
       values[":url"] = url;
@@ -211,21 +272,32 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    await dynamodb.send(
-      new UpdateItemCommand({
-        TableName: DEPT_MCP_CONFIG_TABLE,
-        Key: marshall({ PK: scopeToPK(scope), SK: `MKTPLACE#${id}` }),
-        UpdateExpression: `SET ${updates.join(", ")}`,
-        ...(Object.keys(names).length > 0 && {
-          ExpressionAttributeNames: names,
-        }),
-        ExpressionAttributeValues: marshall(values),
-      })
-    );
+    try {
+      await dynamodb.send(
+        new UpdateItemCommand({
+          TableName: DEPT_MCP_CONFIG_TABLE,
+          Key: marshall({ PK: scopeToPK(validated.scope), SK: `MKTPLACE#${validated.id}` }),
+          UpdateExpression: `SET ${updates.join(", ")}`,
+          ConditionExpression: "attribute_exists(PK) AND attribute_exists(SK)",
+          ...(Object.keys(names).length > 0 && {
+            ExpressionAttributeNames: names,
+          }),
+          ExpressionAttributeValues: marshall(values),
+        })
+      );
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) {
+        return NextResponse.json(
+          { error: `Marketplace '${validated.id}' not found in scope '${validated.scope}'` },
+          { status: 404 }
+        );
+      }
+      throw err;
+    }
 
     return NextResponse.json({
       success: true,
-      message: `Marketplace ${id} updated`,
+      message: `Marketplace ${validated.id} updated`,
     });
   } catch (err) {
     console.error(
@@ -259,16 +331,21 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
+    const validated = validateIdAndScope(id, scope);
+    if ("error" in validated) {
+      return NextResponse.json({ error: validated.error }, { status: 400 });
+    }
+
     await dynamodb.send(
       new DeleteItemCommand({
         TableName: DEPT_MCP_CONFIG_TABLE,
-        Key: marshall({ PK: scopeToPK(scope), SK: `MKTPLACE#${id}` }),
+        Key: marshall({ PK: scopeToPK(validated.scope), SK: `MKTPLACE#${validated.id}` }),
       })
     );
 
     return NextResponse.json({
       success: true,
-      message: `Marketplace ${id} removed from ${scope}`,
+      message: `Marketplace ${validated.id} removed from ${validated.scope}`,
     });
   } catch (err) {
     console.error(

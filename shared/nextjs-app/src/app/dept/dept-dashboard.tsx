@@ -115,14 +115,25 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
       // Fetch MCP assignments + marketplaces for the selected department
       if (selectedDepartment && selectedDepartment !== "all") {
         try {
-          const mcpRes = await fetch(`/api/dept/mcp?department=${selectedDepartment}`);
-          if (mcpRes.ok) {
+          const mcpRes = await fetch(
+            `/api/dept/mcp?department=${encodeURIComponent(selectedDepartment)}`
+          );
+          if (!mcpRes.ok) {
+            console.warn(`[dept-dashboard] /api/dept/mcp HTTP ${mcpRes.status}`);
+            setMcpAssignments([]);
+            setMcpGatewayStatus("unknown");
+            setMarketplaces([]);
+          } else {
             const mcpData = await mcpRes.json();
+            if (!mcpData.success) {
+              console.warn("[dept-dashboard] /api/dept/mcp returned success=false", mcpData.error);
+            }
             setMcpAssignments(mcpData.data?.assignments ?? []);
             setMcpGatewayStatus(mcpData.data?.gatewayStatus ?? "none");
             setMarketplaces(mcpData.data?.marketplaces ?? []);
           }
-        } catch {
+        } catch (err) {
+          console.error("[dept-dashboard] Failed to fetch MCP assignments:", err);
           setMcpAssignments([]);
           setMcpGatewayStatus("unknown");
           setMarketplaces([]);
