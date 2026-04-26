@@ -1,12 +1,16 @@
 name: AI Code Review
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize]
 
 jobs:
   review:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: cc-on-bedrock-claude-arm
+    concurrency:
+      group: pr-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       pull-requests: write
       contents: read
@@ -16,8 +20,9 @@ jobs:
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Get PR diff
@@ -26,23 +31,29 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
-          gh pr view "$PR_NUMBER" --json title,body --jq '{title: .title, body: .body}' > /tmp/pr-info.json
-          echo "Diff: $(wc -l < /tmp/pr-diff.txt) lines"
+          TOTAL_LINES=$(wc -l < /tmp/pr-diff.txt)
+          echo "total_lines=$TOTAL_LINES" >> "$GITHUB_ENV"
+          echo "Diff: $TOTAL_LINES lines"
 
       - name: Review with Claude Code
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          PR_TITLE=$(cat /tmp/pr-info.json | python3 -c "import json,sys; print(json.load(sys.stdin).get('title',''))" 2>/dev/null || echo "")
-          DIFF=$(head -3000 /tmp/pr-diff.txt)
+          set -euo pipefail
+          MAX_LINES=3000
+          TRUNCATED=""
+          if [ "$total_lines" -gt "$MAX_LINES" ]; then
+            TRUNCATED="⚠️ Diff가 ${total_lines}줄 중 ${MAX_LINES}줄만 포함됨. 나머지는 리뷰되지 않았습니다."
+          fi
+          head -"$MAX_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-truncated.txt
 
-          claude -p "You are reviewing PR #${PR_NUMBER}: ${PR_TITLE}
+          cat <<PROMPT_EOF > /tmp/prompt.txt
+          You are reviewing PR #${PR_NUMBER}: ${PR_TITLE}
+          ${TRUNCATED:+
+          ${TRUNCATED}}
 
-          Read CLAUDE.md for project context. Then review this diff:
-
-          \`\`\`diff
-          ${DIFF}
-          \`\`\`
+          Read CLAUDE.md for project context. Then review the diff provided via stdin.
 
           Provide:
           1. **Summary** — what this PR does (2-3 sentences)
@@ -55,28 +66,36 @@ jobs:
           - This is a multi-user Claude Code dev environment platform (CDK + Terraform + CloudFormation)
           - Check: Cognito auth bypass, SSM/Secrets Manager secret exposure, IAM over-privilege
           - Check: EC2 DevEnv isolation (per-user), DLP policy enforcement, KMS key rotation
-          - Check: CDK cross-stack references (should use SSM not CF exports), portability rules
-          - Check: Docker image security (no hardcoded secrets, proper USER directive)
+          - Check: CDK cross-stack references (should use SSM not CF exports), portability rules, Docker security
           - Be concise. Write in Korean with English technical terms.
           - Output ONLY the review markdown, no preamble.
           - IMPORTANT: The very last line of your output MUST be exactly one of:
             VERDICT: PASS
             VERDICT: FAIL
-          Use FAIL if there are any CRITICAL or MAJOR issues. Use PASS otherwise." --output-format text > /tmp/review.md
+          Use FAIL if there are any CRITICAL or MAJOR issues. Use PASS otherwise.
+          PROMPT_EOF
 
+          cat /tmp/pr-diff-truncated.txt | claude -p "$(cat /tmp/prompt.txt)" --output-format text > /tmp/review.md
+
+          if [ ! -s /tmp/review.md ]; then
+            echo "ERROR: review output is empty" >&2
+            echo "VERDICT: FAIL" > /tmp/review.md
+            echo "리뷰 생성 실패 — Claude CLI가 빈 응답을 반환했습니다." >> /tmp/review.md
+          fi
           echo "Review generated: $(wc -c < /tmp/review.md) bytes"
 
       - name: Check for blocking issues
         id: gate
         run: |
-          VERDICT_LINE=$(tail -5 /tmp/review.md | grep -i "^VERDICT:" | tail -1)
-          echo "Verdict line: $VERDICT_LINE"
-          if echo "$VERDICT_LINE" | grep -qi "FAIL"; then
+          if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=$VERDICT_LINE" >> "$GITHUB_OUTPUT"
-          else
+            echo "reason=VERDICT: FAIL" >> "$GITHUB_OUTPUT"
+          elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
             echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=No VERDICT line found — fail-closed" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post review comment
@@ -92,14 +111,14 @@ jobs:
           else
             STATUS_BADGE="**Status: PASSED** — No blocking issues found"
           fi
-          sed -i '/^VERDICT:/d' /tmp/review.md
+          sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
             echo "## AI Code Review (Claude Code + Opus 4.7)"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
-            cat /tmp/review.md
+            cat /tmp/review-clean.md
             echo ""
             echo "---"
             echo "_Automated review by Claude Code CLI with Bedrock Opus 4.7_"
@@ -107,9 +126,11 @@ jobs:
           EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
           if [ -n "$EXISTING" ]; then
-            gh api "repos/$REPO/issues/comments/$EXISTING" -X DELETE 2>/dev/null || true
+            gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH -f body="$(cat /tmp/comment.md)" 2>/dev/null || \
+            gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
           fi
-          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
 
       - name: Fail if CRITICAL or MAJOR
         if: steps.gate.outputs.result == 'fail'
