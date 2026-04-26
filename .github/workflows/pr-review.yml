@@ -1,92 +1,118 @@
-name: PR Review (Claude Code)
+name: AI Code Review
 
 on:
   pull_request:
     types: [opened, synchronize]
 
-permissions:
-  contents: read
-  id-token: write
-  pull-requests: write
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  AWS_REGION: ap-northeast-2
-
 jobs:
   review:
-    name: AI Code Review
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    runs-on: cc-on-bedrock-claude-arm
+    permissions:
+      pull-requests: write
+      contents: read
+    env:
+      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-7
+      CLAUDE_CODE_USE_BEDROCK: 1
+      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
+      AWS_REGION: us-east-1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Generate PR diff
+      - name: Get PR diff
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/pr-diff.txt
-          LINES=$(wc -l < /tmp/pr-diff.txt)
-          echo "Total diff: $LINES lines"
-          if [ "$LINES" -gt 5000 ]; then
-            head -5000 /tmp/pr-diff.txt > /tmp/pr-diff-review.txt
-            echo "TRUNCATED=true" >> "$GITHUB_ENV"
-          else
-            cp /tmp/pr-diff.txt /tmp/pr-diff-review.txt
-            echo "TRUNCATED=false" >> "$GITHUB_ENV"
-          fi
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          gh pr view "$PR_NUMBER" --json title,body --jq '{title: .title, body: .body}' > /tmp/pr-info.json
+          echo "Diff: $(wc -l < /tmp/pr-diff.txt) lines"
 
       - name: Review with Claude Code
         env:
-          CLAUDE_CODE_USE_BEDROCK: "1"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          cat /tmp/pr-diff-review.txt | claude -p "You are an expert code reviewer for a CDK + Next.js + ECS project (TypeScript, Python).
+          PR_TITLE=$(cat /tmp/pr-info.json | python3 -c "import json,sys; print(json.load(sys.stdin).get('title',''))" 2>/dev/null || echo "")
+          DIFF=$(head -3000 /tmp/pr-diff.txt)
 
-          Review the PR diff provided via stdin. Focus on:
-          1. Bugs and logic errors
-          2. Security vulnerabilities (injection, credential exposure, IAM over-privilege)
-          3. Performance issues (N+1 queries, memory leaks, unnecessary re-renders)
-          4. AWS best practices (IAM least privilege, resource limits, error handling)
+          claude -p "You are reviewing PR #${PR_NUMBER}: ${PR_TITLE}
+
+          Read CLAUDE.md for project context. Then review this diff:
+
+          \`\`\`diff
+          ${DIFF}
+          \`\`\`
+
+          Provide:
+          1. **Summary** — what this PR does (2-3 sentences)
+          2. **Issues** — bugs, security risks, logic errors (CRITICAL/MAJOR/MINOR)
+          3. **Suggestions** — improvements
+          4. **Verdict** — LGTM / Changes Requested
 
           Rules:
-          - Only flag real, actionable issues — not style preferences
-          - Reference specific files and line numbers
-          - Be concise: 1-2 sentences per finding
-          - If no issues found, say 'No critical issues found' with a brief summary
-          - Use Korean for explanations, English for code references
-          - Output in markdown format" > /tmp/review.md
+          - Read CLAUDE.md to understand project conventions
+          - This is a multi-user Claude Code dev environment platform (CDK + Terraform + CloudFormation)
+          - Check: Cognito auth bypass, SSM/Secrets Manager secret exposure, IAM over-privilege
+          - Check: EC2 DevEnv isolation (per-user), DLP policy enforcement, KMS key rotation
+          - Check: CDK cross-stack references (should use SSM not CF exports), portability rules
+          - Check: Docker image security (no hardcoded secrets, proper USER directive)
+          - Be concise. Write in Korean with English technical terms.
+          - Output ONLY the review markdown, no preamble.
+          - IMPORTANT: The very last line of your output MUST be exactly one of:
+            VERDICT: PASS
+            VERDICT: FAIL
+          Use FAIL if there are any CRITICAL or MAJOR issues. Use PASS otherwise." --output-format text > /tmp/review.md
+
+          echo "Review generated: $(wc -c < /tmp/review.md) bytes"
+
+      - name: Check for blocking issues
+        id: gate
+        run: |
+          VERDICT_LINE=$(tail -5 /tmp/review.md | grep -i "^VERDICT:" | tail -1)
+          echo "Verdict line: $VERDICT_LINE"
+          if echo "$VERDICT_LINE" | grep -qi "FAIL"; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=$VERDICT_LINE" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+            echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Post review comment
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GATE_RESULT: ${{ steps.gate.outputs.result }}
         run: |
+          MARKER="<!-- bedrock-pr-review -->"
+          if [ "$GATE_RESULT" = "fail" ]; then
+            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
+          else
+            STATUS_BADGE="**Status: PASSED** — No blocking issues found"
+          fi
+          sed -i '/^VERDICT:/d' /tmp/review.md
           {
-            echo "## Claude Code Review"
+            echo "$MARKER"
+            echo "## AI Code Review (Claude Code + Opus 4.7)"
+            echo ""
+            echo "$STATUS_BADGE"
             echo ""
             cat /tmp/review.md
-            if [ "$TRUNCATED" = "true" ]; then
-              echo ""
-              echo "> Note: Diff was truncated to 5000 lines for review."
-            fi
             echo ""
             echo "---"
-            echo "*Automated review by Claude Code on Bedrock*"
+            echo "_Automated review by Claude Code CLI with Bedrock Opus 4.7_"
           } > /tmp/comment.md
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api "repos/$REPO/issues/comments/$EXISTING" -X DELETE 2>/dev/null || true
+          fi
           gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+
+      - name: Fail if CRITICAL or MAJOR
+        if: steps.gate.outputs.result == 'fail'
+        run: |
+          echo "AI Review failed: ${{ steps.gate.outputs.reason }}"
+          exit 1
