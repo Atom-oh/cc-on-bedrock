@@ -19,6 +19,8 @@ Proposed (2026-05-11)
 ## Decision
 **Local Governance Mode**를 새로운 배포 프로파일로 도입하며, **(1) IAM + Application Inference Profile 방식**을 채택한다.
 
+자격증명 발급은 **Cognito + STS Issuer Lambda** 방식을 사용한다. 핵심 거버넌스 메커니즘은 **합산 normalized 토큰 한도 초과 시 IAM Deny policy 부착으로 차단**이다.
+
 ### Rationale
 
 | 차원 | IAM + Inference Profile | LLM Gateway |
@@ -40,31 +42,76 @@ Proposed (2026-05-11)
 
 ```
 [로컬 PC]
-  Claude Code (CLAUDE_CODE_USE_BEDROCK=1)
+  Claude Code (CLAUDE_CODE_USE_BEDROCK=1, AWS_PROFILE=cc-bedrock)
     │
-    │ AWS SigV4 (단기 STS 자격증명, TTL 1h)
+    │ AWS SigV4 (STS 자격증명, TTL 8h, MaxSessionDuration 12h)
     ▼
 [AWS]
   Cognito 로그인 → Dashboard → STS Issuer Lambda
     │                              │
-    │                              └─ AssumeRole → cc-on-bedrock-local-user-{username}
-    │                                              (Bedrock 모델 제한 + Guardrail + IAM tags)
+    │                              └─ AssumeRole → cc-on-bedrock-local-user-{sub}
+    │                                              ├─ Bedrock 모델 제한
+    │                                              ├─ Guardrail 강제
+    │                                              ├─ IAM 태그 (username/dept/project)
+    │                                              └─ Deny policy (한도 초과 시 동적 부착)
     ▼
   Bedrock InvokeModel (Application Inference Profile)
     │
     ├─ Bedrock Invocation Logging → CloudWatch Logs
     │     └─ Subscription → bedrock-usage-tracker.py → DynamoDB
-    │                                                    └─ Dashboard
+    │                                                    ├─ Dashboard
+    │                                                    └─ Stream → token-limit-enforcer
+    │                                                                  ↓
+    │                                                          Deny policy 부착
     ├─ CloudTrail → 감사
     └─ Application Inference Profile 태그 → CUR 2.0 → 부서별 청구
 ```
 
+## Token Limit Enforcement (핵심)
+
+### Normalized Token 정의
+서로 다른 모델의 비용 부담을 한 축으로 합산하기 위해 **normalized tokens** 사용:
+
+| 모델 | input weight | output weight | 근거 |
+|---|---|---|---|
+| Opus 4.6 | 1.0 | 5.0 | $15/$75 per 1M |
+| Sonnet 4.6 | 0.2 | 1.0 | $3/$15 per 1M |
+| Haiku 4.5 | 0.053 | 0.267 | $0.80/$4 per 1M |
+
+`normalized = input_tokens * w_in + output_tokens * w_out`
+
+### 한도 정책 (DynamoDB `cc-on-bedrock-limits`)
+- 사용자 단위: `PK=USER#{sub}` × `period={daily|weekly|monthly}` × `max_normalized_tokens`
+- 부서 단위: `PK=DEPT#{dept}` × `period` × `max_normalized_tokens`
+- 호출은 **사용자 한도 AND 부서 한도 둘 다** 통과해야 허용 (AND 조건)
+- 부서 한도는 ADR-006 부서 예산과 독립적인 축 (달러 vs 토큰)
+
+### 강제 메커니즘
+1. **Real-time path** (1-3분 지연): Invocation Logging → tracker Lambda → DynamoDB → **Stream** → `token-limit-enforcer` Lambda → 합산 조회 → 한도 도달 시 user role에 `BedrockLocalLimitExceeded` Deny policy attach
+2. **Backup path** (5분 cycle): 기존 `budget-check.py` 확장 — 토큰 한도도 함께 검사 (Stream 실패 대비)
+3. **Reset**: EventBridge 스케줄러
+   - 일일: 매일 00:00 KST
+   - 주간: 월요일 00:00 KST
+   - 월간: 매월 1일 00:00 KST
+   - 동작: Deny policy detach + DynamoDB 카운터 TTL 만료/리셋
+
+### 차단 latency 한계 (명시)
+Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차단 latency는 약 1-3분**. 한도 직전까지 사용한 사용자는 한도를 약간 초과해 호출이 성공할 수 있음(over-shoot). 이를 방지하려면 LLM Gateway 방식이 필요하나 본 ADR 범위 밖. 한도 설정 시 ~5% 마진을 두는 운영 가이드 적용.
+
+### UX
+- 대시보드: 남은 normalized token, 사용률 % 게이지, reset 까지 남은 시간
+- 임계값 알림: 80%, 95% 도달 시 SNS → 이메일/Slack
+- 차단 시: Claude Code가 받는 `AccessDeniedException` 메시지에 reset 시각·대시보드 링크 포함
+
 ## Changes
 
 ### 새로 추가
-- **`cdk/lib/08-local-governance-stack.ts`** — STS Issuer Lambda, per-user role factory, Application Inference Profile per dept
-- **STS Issuer Lambda** (`cdk/lib/lambda/sts-issuer.py`) — Cognito ID 토큰 검증 → `sts:AssumeRole` → 1h 자격증명 반환
-- **Dashboard 페이지** `shared/nextjs-app/app/local/page.tsx` — "Get Credentials" 버튼, `aws configure` 스니펫 출력
+- **`cdk/lib/08-local-governance-stack.ts`** — STS Issuer Lambda, per-user role factory(MaxSessionDuration=12h), Application Inference Profile per dept, `cc-on-bedrock-limits` 테이블, `token-limit-enforcer` Lambda (DynamoDB Stream consumer)
+- **STS Issuer Lambda** (`cdk/lib/lambda/sts-issuer.py`) — Cognito ID 토큰 검증 → `sts:AssumeRole`(DurationSeconds=28800) → 8h 자격증명 반환
+- **Token Limit Enforcer Lambda** (`cdk/lib/lambda/token-limit-enforcer.py`) — DynamoDB Stream에서 usage 업데이트 수신 → 합산 normalized tokens 조회 → 한도 초과 시 user role에 Deny policy attach
+- **Limit Reset Lambda** (`cdk/lib/lambda/limit-reset.py`) — EventBridge cron(일/주/월) → Deny detach + 카운터 리셋
+- **Dashboard 페이지** `shared/nextjs-app/app/local/page.tsx` — "Get Credentials" 버튼, `aws configure` 스니펫, 남은 토큰 게이지
+- **Dashboard 관리 페이지** `shared/nextjs-app/app/admin/limits/page.tsx` — 사용자/부서 normalized token 한도 CRUD
 - **CLI 도우미** `tools/cc-bedrock-local.sh` — 자격증명 갱신 + `claude` 실행 wrapper
 
 ### 재사용 (변경 없음)
@@ -84,16 +131,17 @@ Proposed (2026-05-11)
 - Guardrail: 부서 Guardrail ID 강제 (IAM condition `bedrock:GuardrailIdentifier`)
 
 ## Security
-- 자격증명 TTL: 1시간 (단기 강제), Cognito refresh로 갱신
+- 자격증명 TTL: **8시간**, `MaxSessionDuration=12h`. IAM은 호출 시점 평가이므로 Deny 부착은 이미 발급된 세션에도 즉시 적용됨
 - Local PC 도난 대비: 부서 관리자 콘솔에서 즉시 role disable 가능
 - VPN/IP 제한 옵션: IAM condition `aws:SourceIp` 부서 정책에 따라
 - 모델 제한: 승인된 모델 ARN 외 호출 시 IAM Deny
 - 감사: 모든 호출 CloudTrail에 기록, principal = user role
+- 한도 초과 차단: `token-limit-enforcer`가 부착하는 Deny policy는 reset 스케줄까지 유지
 
 ## Limitations
-- **실시간 쿼터 강제 불가** — 5분 단위 IAM Deny가 최단 (ADR-011과 동일)
+- **차단 latency 1-3분** — Bedrock Invocation Logging 지연이 하한 (게이트웨이 없이는 단축 불가). 한도 ~5% 마진 운영 필요
 - **프롬프트 단위 DLP** — Bedrock Guardrails에 의존 (커스텀 룰 한계)
-- **자격증명 유출 시** — 최대 1시간 노출, role disable로 즉시 차단
+- **자격증명 유출 시** — 최대 8시간 노출. 다만 한도 Deny 또는 role disable이 호출 시점 평가되므로 즉시 차단 가능
 
 ## Future Work
 - Phase 2: LLM Gateway 옵션 (Fargate Serverless) — 실시간 쿼터/고급 DLP 필요 조직 대상 별도 ADR
