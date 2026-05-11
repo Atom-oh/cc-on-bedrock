@@ -155,6 +155,26 @@ cdk deploy CcOnBedrock-Dashboard
 cdk destroy --all
 ```
 
+**Local Governance Mode 배포** (EC2 DevEnv 없이 거버넌스만, ADR-014):
+```bash
+# EC2/ECS DevEnv 스택을 skip하고 Local Governance Stack(08)을 배포
+cdk deploy --all \
+  -c domainName=your-domain.com \
+  -c governanceOnly=true
+
+# 배포되는 스택:
+# 1. CcOnBedrock-Network
+# 2. CcOnBedrock-Security
+# 3. CcOnBedrock-UsageTracking  (DynamoDB Streams 활성화)
+# 4. CcOnBedrock-Dashboard
+# 5. CcOnBedrock-LocalGovernance  (STS Issuer + Token Limit Enforcer + Reset)
+# 6. CcOnBedrock-Waf
+
+# 사용자 온보딩은 docs/runbooks/local-governance-onboarding.md 참고
+```
+
+EC2 모드와 병행하려면 `governanceOnly` 플래그를 생략하면 됩니다. 두 모드는 같은 거버넌스 레이어(usage tracking, limits, dashboard)를 공유합니다.
+
 ### 3.2 Terraform 배포
 
 ```bash

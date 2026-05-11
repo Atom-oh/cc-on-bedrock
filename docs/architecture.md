@@ -333,6 +333,63 @@ graph LR
     style VPCE fill:#ff9900,color:#fff
 ```
 
+## Local Governance Mode (ADR-014)
+
+EC2 DevEnv 없이 거버넌스만 가져가는 배포 프로파일. 사용자는 로컬 PC에서 Claude Code를 실행하고, 대시보드는 Cognito 로그인 후 단기 STS 자격증명을 발급한다.
+
+```mermaid
+graph LR
+    subgraph LocalPC["로컬 PC"]
+        Claude["Claude Code<br/>CLAUDE_CODE_USE_BEDROCK=1<br/>AWS_PROFILE=cc-bedrock"]
+        Wrapper["tools/cc-bedrock-local.sh"]
+    end
+
+    subgraph AWS["AWS"]
+        Dashboard["Next.js Dashboard<br/>(Cognito 인증)"]
+        STSIssuer["Lambda<br/>sts-issuer<br/>(Function URL)"]
+        UserRole["IAM Role<br/>cc-on-bedrock-local-user-{sub}<br/>MaxSessionDuration=12h"]
+        Bedrock["Amazon Bedrock<br/>Application Inference Profile"]
+        Logs["CloudWatch Logs<br/>Invocation Logging"]
+        Tracker["Lambda<br/>bedrock-usage-tracker"]
+        DDB["DynamoDB<br/>cc-on-bedrock-usage<br/>(Streams)"]
+        Enforcer["Lambda<br/>token-limit-enforcer"]
+        Limits["DynamoDB<br/>cc-on-bedrock-limits"]
+        Reset["Lambda<br/>limit-reset<br/>(EventBridge cron)"]
+    end
+
+    Wrapper -->|"OIDC login"| Dashboard
+    Dashboard -->|"sts:AssumeRole 8h"| STSIssuer
+    STSIssuer -->|"creds"| Wrapper
+    Wrapper -.->|"~/.aws/credentials"| Claude
+    Claude -->|"SigV4 InvokeModel"| Bedrock
+
+    Bedrock -.-> Logs
+    Logs -->|"Subscription"| Tracker
+    Tracker -->|"normalized tokens"| DDB
+    DDB -->|"Stream"| Enforcer
+    Enforcer -->|"Read/Update"| Limits
+    Enforcer -.->|"한도 초과 시<br/>PutRolePolicy Deny"| UserRole
+    Reset -.->|"일/주/월 cron"| Limits
+    Reset -.->|"DeleteRolePolicy"| UserRole
+
+    style Bedrock fill:#ff9900,color:#fff
+    style DDB fill:#4053d6,color:#fff
+    style Limits fill:#4053d6,color:#fff
+    style UserRole fill:#d13212,color:#fff
+```
+
+**핵심 거버넌스 메커니즘**:
+- **합산 normalized token 한도** (Opus 1.0 / Sonnet 0.2 / Haiku 0.053 가중치)
+- 사용자 AND 부서 한도 (AND 조건, period = daily/weekly/monthly)
+- 한도 도달 시 user role에 IAM Deny policy 동적 부착 — IAM은 호출 시점 평가이므로 8h 세션 중에도 즉시 차단
+- 차단 latency 1-3분 (Invocation Logging 지연이 하한, ADR-014 Limitations)
+- backup path: 기존 `budget-check.py`(5분 cycle)가 Stream 실패 대비
+
+**배포 프로파일**:
+- `cdk deploy --all --context governanceOnly=true` → EC2/ECS DevEnv 스택 skip
+- 거버넌스 인프라(Usage Tracking, Limits, Dashboard)만 배포
+- EC2 모드와 공존 가능(둘 다 deploy해서 사용자가 선택). 사용량 attribute는 role prefix로 구분 (`task-` vs `local-user-`)
+
 ## Network Layout
 
 ```mermaid
@@ -420,6 +477,7 @@ graph TD
 ## Usage Tracking & Budget Enforcement
 
 > See [ADR-006](decisions/ADR-006-department-budget-management.md) for department budget management decision.
+> See [ADR-014](decisions/ADR-014-local-governance-mode.md) for normalized token limit enforcement (Local Governance Mode).
 
 ```mermaid
 graph LR
