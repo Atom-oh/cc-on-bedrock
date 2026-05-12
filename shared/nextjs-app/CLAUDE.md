@@ -18,6 +18,8 @@
 - `src/app/admin/approvals/` - EBS 확장 등 승인 요청 관리
 - `src/app/admin/dlp/` - DLP 정책 관리 (도메인 차단/허용)
 - `src/app/admin/mcp/` - MCP 카탈로그/게이트웨이 관리 (서버 할당, 동기화)
+- `src/app/admin/limits/` - **Local Governance Mode** normalized token 한도 CRUD (사용자/부서, period별, ADR-014)
+- `src/app/local/` - **Local Governance Mode** 사용자 페이지 (STS 자격증명 발급, aws configure 스니펫, 남은 토큰 게이지, ADR-014)
 - `src/app/docs/` - 내장 문서 (getting-started, user-guide, admin-guide, architecture, security, faq)
 - `src/app/login/` - 로그인 페이지 (direct form, no Cognito redirect)
 
@@ -38,6 +40,8 @@
 - `src/app/api/admin/mcp/gateways/route.ts` - MCP 게이트웨이 관리 (Admin)
 - `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 동기화 트리거 (Admin)
 - `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-부서 할당 (Admin, ADR-007)
+- `src/app/api/admin/limits/route.ts` - Local Governance normalized token 한도 CRUD (Admin, ADR-014)
+- `src/app/api/admin/limits/reset/route.ts` - 사용자 한도 강제 reset + Deny policy detach (Admin, ADR-014)
 
 ### User Self-Service
 - `src/app/api/user/container/route.ts` - EC2 인스턴스 시작/중지
@@ -50,6 +54,8 @@
 - `src/app/api/user/keep-alive/route.ts` - 유휴 타임아웃 연장 (EBS)
 - `src/app/api/user/resource-review/route.ts` - AI 리소스 리뷰 (EBS 확장 전 사용량 분석)
 - `src/app/api/user/container-request/route.ts` - 인스턴스 생성 요청
+- `src/app/api/local/credentials/route.ts` - STS Issuer Lambda 호출, 8h Bedrock 자격증명 반환 (Local Governance, ADR-014)
+- `src/app/api/local/limits/route.ts` - 본인 사용자의 normalized token 한도/사용량/Deny 상태 조회 (Local Governance, ADR-014)
 
 ### Common
 - `src/app/api/ai/route.ts` - Bedrock Converse API (Tool Use, 5 tools, max 5 iterations)
@@ -111,3 +117,4 @@
 - API routes에서 session 검증 필수
 - ARIA 접근성: 탭(tablist/tab/tabpanel), 프로그레스바(progressbar), 폼(htmlFor/id), 알림(aria-live)
 - Bedrock 사용량 메트릭은 DynamoDB `cc-on-bedrock-usage` 테이블에서 조회 (CloudWatch AWS/Bedrock은 계정 전체이므로 사용하지 않음)
+- Local Governance Mode UI(`/local`, `/admin/limits`)는 `governanceOnly` 배포 또는 EC2 모드 공존 시에만 노출; 환경변수 `NEXT_PUBLIC_LOCAL_MODE_ENABLED=true`로 사이드바 표시 제어
