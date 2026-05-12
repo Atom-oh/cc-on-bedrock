@@ -1,7 +1,7 @@
 # ADR-015: Dollar Budget × Normalized Token Limit Integration
 
 ## Status
-Proposed (2026-05-12)
+Accepted (2026-05-12) — implemented in `cdk/lib/lambda/budget-check.py` (canonical policy names + Local Governance role coverage)
 
 ## Context
 ADR-006은 부서 단위 **달러 월간 예산**을 정의하고, 초과 시 5분 cycle의 `budget-check.py`가 부서 전체 사용자에게 IAM Deny를 부착한다. ADR-014는 Local Governance Mode에 **normalized token 한도**(사용자/부서, daily/weekly/monthly)를 도입하고, DynamoDB Stream 기반으로 1-3분 내 Deny를 부착한다.

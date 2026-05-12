@@ -1,7 +1,19 @@
 # ADR-013: Unified CloudFront + Single Auth Mechanism
 
-- **Status:** Implemented (2026-04-16)
-- **Supersedes:** ADR-012 (DevEnv Cognito OAuth Lambda@Edge)
+## Status
+Superseded by [ADR-016](ADR-016-cloudfront-split.md) (2026-05-12). Originally Implemented (2026-04-16). Supersedes ADR-012 (DevEnv Cognito OAuth Lambda@Edge).
+
+> **Supersession note (2026-05-12):** The unified CloudFront design caused two
+> operational issues: (1) ACM wildcard certs only cover one sub-domain depth so
+> `*.atomai.click` could not also cover `*.dev.atomai.click` as a SAN, blocking
+> `CcOnBedrock-Dashboard` updates (2026-04-17 rollback); (2) the unified
+> distribution sitting in Stack 05 forced a synth-time dependency on Stack 04
+> SGs and NLB DNS, preventing `governanceOnly=true` (ADR-014) from skipping the
+> ECS DevEnv stack. ADR-016 splits the CloudFront concerns back into two
+> distributions but **preserves the single-sign-on outcome** by keeping the
+> NextAuth cookie domain at `.atomai.click`. The session-validator Lambda@Edge
+> still pre-validates `*.dev.*` viewer requests; only the origin-router and the
+> unified SAN cert are eliminated.
 
 ## Context
 

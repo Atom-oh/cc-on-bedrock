@@ -1207,16 +1207,15 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
   const profileName = roleName;
 
-  // Cost allocation tags for AWS Billing integration
-  // Bedrock IAM Cost Allocation (2026-04): tags on IAM roles are used by
-  // Cost Explorer + CUR 2.0 to attribute Bedrock inference costs per user.
-  // Activate these as cost allocation tags in Billing Console.
+  // Cost allocation tags for AWS Billing integration (ADR-011 canonical schema).
+  // Same key set is emitted by sts-issuer.py for Local Governance role tags so CUR 2.0
+  // sees a unified attribution surface across EC2 DevEnv and Local Governance modes.
   const costAllocationTags = [
-    { Key: "cc:user", Value: username },
-    { Key: "cc:department", Value: department },
-    { Key: "cc:project", Value: "cc-on-bedrock" },
-    { Key: "cc:subdomain", Value: subdomain },
-    { Key: "cc:cost-center", Value: department },
+    { Key: "username", Value: username },
+    { Key: "department", Value: department },
+    { Key: "project", Value: "cc-on-bedrock" },
+    { Key: "subdomain", Value: subdomain },
+    { Key: "cost-center", Value: department },
   ];
 
   // Check if role already exists

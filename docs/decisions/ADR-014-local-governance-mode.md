@@ -1,7 +1,7 @@
 # ADR-014: Local Governance Mode (EC2-less, IAM + Inference Profile)
 
 ## Status
-Proposed (2026-05-11)
+Accepted (2026-05-12) — implemented in Stack 08 (`cdk/lib/08-local-governance-stack.ts`), referenced as binding dependency by ADR-015 and ADR-016
 
 ## Context
 기존 CC-on-Bedrock은 EC2 per-user DevEnv(ADR-004)를 핵심으로 한다. 그러나 일부 조직은:
@@ -138,10 +138,31 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 - 감사: 모든 호출 CloudTrail에 기록, principal = user role
 - 한도 초과 차단: `token-limit-enforcer`가 부착하는 Deny policy는 reset 스케줄까지 유지
 
+## Consequences
+
+### Positive
+- **EC2 운영 부담 제거** — AMI 관리, 하이버네이션, 디스크 lifecycle, idle 비용 없음 (governanceOnly 프로파일)
+- **사용자 도구체인 유지** — 개발자가 본인 IDE/플러그인/디버거를 그대로 쓰면서 Bedrock만 회사 자격으로 호출
+- **기존 추적 파이프라인 재사용** — `bedrock-usage-tracker.py` + DynamoDB + dashboard 그대로. 신규 인프라는 STS Issuer Lambda + per-user IAM role 팩토리 + limits 테이블만 추가
+- **즉각 차단 가능** — IAM이 호출 시점 평가이므로 Deny policy 부착이 이미 발급된 세션에도 즉시 적용
+- **부서별 cost attribution** — Application Inference Profile + IAM role 태그(`username`/`department`/`project`)로 CUR 2.0에 부서별 청구 분리
+- **EC2 모드와 공존** — 동일 계정에서 두 프로파일 병행 운영 가능 (기본 배포), 또는 `governanceOnly=true`로 Local 단독 배포
+
+### Negative
+- **차단 latency 1-3분** — Bedrock Invocation Logging 지연이 하한 (게이트웨이 없이 단축 불가). 한도 ~5% 안전 마진 운영 필요
+- **프롬프트 단위 DLP** — Bedrock Guardrails에 의존, 커스텀 inline 룰 한계
+- **자격증명 유출 노출창 8h** — Deny policy 또는 role disable로 즉시 차단은 가능하나 노출창 자체는 STS TTL에 종속
+- **IAM role 인플레이션** — 사용자당 1개 role 누적. AWS 계정 IAM role 한도(기본 1,000)에 근접 시 페이즈드 cleanup 필요
+- **개발자 PC가 신뢰 경계** — 멀티유저 PC, 키체인 미사용 환경에서는 추가 통제(VPN, MFA on STS Issuer endpoint) 필요
+
+### Out of Scope
+- **실시간(<1초) 쿼터 enforcement** — 필요 시 ADR-014 Phase 2 (LLM Gateway, Fargate) 별도 검토
+- **프롬프트 텍스트 감사 저장** — 비용/PII 관점에서 의도적 미포함 (`textDataDeliveryEnabled=false`)
+
 ## Limitations
-- **차단 latency 1-3분** — Bedrock Invocation Logging 지연이 하한 (게이트웨이 없이는 단축 불가). 한도 ~5% 마진 운영 필요
-- **프롬프트 단위 DLP** — Bedrock Guardrails에 의존 (커스텀 룰 한계)
-- **자격증명 유출 시** — 최대 8시간 노출. 다만 한도 Deny 또는 role disable이 호출 시점 평가되므로 즉시 차단 가능
+- **차단 latency 1-3분** — 위 Negative 항목 참조
+- **프롬프트 단위 DLP** — 위 Negative 항목 참조
+- **자격증명 유출 시** — 위 Negative 항목 참조
 
 ## Future Work
 - Phase 2: LLM Gateway 옵션 (Fargate Serverless) — 실시간 쿼터/고급 DLP 필요 조직 대상 별도 ADR
