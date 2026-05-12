@@ -19,20 +19,29 @@ from decimal import Decimal
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 DEPT_BUDGETS_TABLE = os.environ.get("DEPT_BUDGETS_TABLE", "cc-department-budgets")
 USER_BUDGETS_TABLE = os.environ.get("USER_BUDGETS_TABLE", "cc-user-budgets")
+LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")  # ADR-014
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
 DAILY_BUDGET = float(os.environ.get("DAILY_BUDGET_USD", "50"))
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task"
+LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # ADR-014 Local Governance Mode
 MAX_SCAN_PAGES = 100
+# Legacy policy names (kept for backward-compat cleanup)
 DENY_POLICY_NAME = "BudgetExceededDeny"
 DEPT_DENY_POLICY_NAME = "DeptBudgetExceededDeny"
+# ADR-015 canonical policy names
+LOCAL_TOKEN_DENY_POLICY_NAME = "cc-bedrock-local-token-deny"
 
 dynamodb = boto3.resource("dynamodb")
 dynamodb_client = boto3.client("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 dept_budgets_table = dynamodb.Table(DEPT_BUDGETS_TABLE)
 user_budgets_table = dynamodb.Table(USER_BUDGETS_TABLE)
+try:
+    limits_table = dynamodb.Table(LIMITS_TABLE)
+except Exception:
+    limits_table = None
 iam_client = boto3.client("iam")
 cognito_client = boto3.client("cognito-idp")
 sns_client = boto3.client("sns")
@@ -207,9 +216,46 @@ def get_user_department(subdomain: str) -> str:
         return "default"
 
 
+# Per-handler-invocation cache of Local Governance roles indexed by `username` tag.
+# Reset at handler entry. Built lazily on first dept-over-budget event in that invocation.
+_local_role_index: dict = {}
+_local_role_index_built = False
+
+
+def _build_local_role_index():
+    """Scan all cc-on-bedrock-local-user-* roles once and index by `username` tag.
+    Idempotent within a single handler invocation."""
+    global _local_role_index, _local_role_index_built
+    if _local_role_index_built:
+        return
+    _local_role_index = {}
+    try:
+        paginator = iam_client.get_paginator("list_roles")
+        for page in paginator.paginate(PathPrefix="/"):
+            for role in page.get("Roles", []):
+                rname = role.get("RoleName", "")
+                if not rname.startswith(LOCAL_ROLE_PREFIX):
+                    continue
+                try:
+                    tags_resp = iam_client.list_role_tags(RoleName=rname)
+                    uname = next(
+                        (t["Value"] for t in tags_resp.get("Tags", []) if t["Key"] == "username"),
+                        None,
+                    )
+                except Exception:
+                    uname = None
+                if uname:
+                    _local_role_index.setdefault(uname, []).append(rname)
+    except Exception as e:
+        print(f"[DEPT-DENY] local role index build failed: {e}")
+    _local_role_index_built = True
+
+
 def attach_dept_deny_policy(subdomain: str):
-    """Attach department budget exceeded IAM Deny Policy to user's Task Role."""
-    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
+    """Attach department budget exceeded IAM Deny Policy.
+    ADR-015 §3: applies to BOTH the per-user EC2 Task Role and any Local Governance role
+    whose `username` tag matches the subdomain.
+    """
     deny_policy = json.dumps({
         "Version": "2012-10-17",
         "Statement": [{
@@ -224,34 +270,44 @@ def attach_dept_deny_policy(subdomain: str):
             "Resource": "*",
         }],
     })
-    try:
-        iam_client.put_role_policy(
-            RoleName=role_name,
-            PolicyName=DEPT_DENY_POLICY_NAME,
-            PolicyDocument=deny_policy,
-        )
-        print(f"[DEPT-DENY] Attached to {role_name}")
-        return True
-    except Exception as e:
-        print(f"[DEPT-DENY] Failed for {role_name}: {e}")
-        return False
+    _build_local_role_index()
+    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    any_attached = False
+    for role_name in role_names:
+        try:
+            iam_client.put_role_policy(
+                RoleName=role_name,
+                PolicyName=DEPT_DENY_POLICY_NAME,
+                PolicyDocument=deny_policy,
+            )
+            print(f"[DEPT-DENY] Attached to {role_name}")
+            any_attached = True
+        except iam_client.exceptions.NoSuchEntityException:
+            # EC2 task role may not exist for a Local-only user — silently skip.
+            continue
+        except Exception as e:
+            print(f"[DEPT-DENY] Failed for {role_name}: {e}")
+    return any_attached
 
 
 def remove_dept_deny_policy(subdomain: str):
-    """Remove department budget IAM Deny Policy from user's Task Role."""
-    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
-    try:
-        iam_client.delete_role_policy(
-            RoleName=role_name,
-            PolicyName=DEPT_DENY_POLICY_NAME,
-        )
-        print(f"[DEPT-ALLOW] Removed dept deny from {role_name}")
-        return True
-    except iam_client.exceptions.NoSuchEntityException:
-        return False
-    except Exception as e:
-        print(f"[DEPT-ALLOW] Failed for {role_name}: {e}")
-        return False
+    """Remove department budget IAM Deny Policy from both EC2 Task Role and matching Local roles."""
+    _build_local_role_index()
+    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    any_removed = False
+    for role_name in role_names:
+        try:
+            iam_client.delete_role_policy(
+                RoleName=role_name,
+                PolicyName=DEPT_DENY_POLICY_NAME,
+            )
+            print(f"[DEPT-ALLOW] Removed dept deny from {role_name}")
+            any_removed = True
+        except iam_client.exceptions.NoSuchEntityException:
+            continue
+        except Exception as e:
+            print(f"[DEPT-ALLOW] Failed for {role_name}: {e}")
+    return any_removed
 
 
 def attach_deny_policy(subdomain: str):
@@ -314,6 +370,219 @@ def check_deny_exists(subdomain: str) -> bool:
         return False
 
 
+# ──────────────────────────────────────────────────────────
+# ADR-014 / ADR-015 — Local Governance Mode helpers
+# ──────────────────────────────────────────────────────────
+
+def _resolve_role_candidates(user_key: str):
+    """Return list of plausible role names for a user_key.
+    EC2 mode uses subdomain → cc-on-bedrock-task-{subdomain};
+    Local mode uses Cognito sub → cc-on-bedrock-local-user-{sub_short}.
+    """
+    import re as _re
+    safe = _re.sub(r"[^A-Za-z0-9_-]", "-", user_key)[:40]
+    return [
+        f"{TASK_ROLE_PREFIX}-{user_key}",
+        f"{LOCAL_ROLE_PREFIX}{safe}",
+    ]
+
+
+def _has_local_token_deny(role_name: str) -> bool:
+    try:
+        iam_client.get_role_policy(
+            RoleName=role_name,
+            PolicyName=LOCAL_TOKEN_DENY_POLICY_NAME,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _attach_local_token_deny(role_name: str, reason: str) -> bool:
+    doc = json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Sid": "TokenLimitExceededDenyBackup",
+            "Effect": "Deny",
+            "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+                "bedrock:Converse",
+                "bedrock:ConverseStream",
+            ],
+            "Resource": "*",
+        }],
+    })
+    try:
+        iam_client.put_role_policy(
+            RoleName=role_name,
+            PolicyName=LOCAL_TOKEN_DENY_POLICY_NAME,
+            PolicyDocument=doc,
+        )
+        print(f"[LOCAL-TOKEN-DENY backup] attached → {role_name} ({reason})")
+        return True
+    except iam_client.exceptions.NoSuchEntityException:
+        return False
+    except Exception as e:
+        print(f"[LOCAL-TOKEN-DENY backup] failed for {role_name}: {e}")
+        return False
+
+
+def _scan_limits_counters():
+    """Return cumulative normalized usage keyed by (entity_type, key, period).
+    entity_type ∈ {USER, DEPT}. We sum all COUNTER#{period}#... rows.
+    """
+    if limits_table is None:
+        return {}
+    totals = {}
+    last_key = None
+    pages = 0
+    while True:
+        params = {
+            "FilterExpression": "begins_with(SK, :p)",
+            "ExpressionAttributeValues": {":p": "COUNTER#"},
+        }
+        if last_key:
+            params["ExclusiveStartKey"] = last_key
+        try:
+            r = limits_table.scan(**params)
+        except Exception as e:
+            print(f"[LIMITS] scan counters failed: {e}")
+            return {}
+        for item in r.get("Items", []):
+            pk = item.get("PK", "")
+            sk = item.get("SK", "")  # COUNTER#{period}#{bucket}
+            parts = sk.split("#")
+            if len(parts) < 3:
+                continue
+            period = parts[1]
+            if pk.startswith("USER#"):
+                key = ("USER", pk[5:], period)
+            elif pk.startswith("DEPT#"):
+                key = ("DEPT", pk[5:], period)
+            else:
+                continue
+            totals[key] = totals.get(key, Decimal("0")) + Decimal(str(item.get("normalized", 0)))
+        last_key = r.get("LastEvaluatedKey")
+        pages += 1
+        if not last_key or pages >= MAX_SCAN_PAGES:
+            break
+    return totals
+
+
+def _scan_limits_limits():
+    """Return per-(entity_type,key,period) max_normalized. Returns {} on failure."""
+    if limits_table is None:
+        return {}
+    out = {}
+    last_key = None
+    pages = 0
+    while True:
+        params = {
+            "FilterExpression": "begins_with(SK, :p)",
+            "ExpressionAttributeValues": {":p": "LIMIT#"},
+        }
+        if last_key:
+            params["ExclusiveStartKey"] = last_key
+        try:
+            r = limits_table.scan(**params)
+        except Exception as e:
+            print(f"[LIMITS] scan limits failed: {e}")
+            return {}
+        for item in r.get("Items", []):
+            pk = item.get("PK", "")
+            sk = item.get("SK", "")  # LIMIT#{period}
+            parts = sk.split("#")
+            if len(parts) < 2:
+                continue
+            period = parts[1]
+            mx = Decimal(str(item.get("max_normalized", 0)))
+            if mx <= 0:
+                continue
+            if pk.startswith("USER#"):
+                out[("USER", pk[5:], period)] = mx
+            elif pk.startswith("DEPT#"):
+                out[("DEPT", pk[5:], period)] = mx
+    return out
+
+
+def check_token_limits_backup():
+    """ADR-015: Backup token-limit check. Token-limit-enforcer Lambda (DDB Stream)
+    is the primary; this 5-min cycle covers Stream consumer failures.
+
+    Per ADR-015 §5: if cc-bedrock-local-token-deny is already attached, skip token
+    check for that role (no duplicate attach).
+    """
+    counters = _scan_limits_counters()
+    limits = _scan_limits_limits()
+    if not counters or not limits:
+        return {"attached": 0, "checked": 0, "skipped": 0}
+
+    # Collect (entity_type, key) → first-tripped (period, used, max)
+    tripped = {}
+    for (etype, key, period), used in counters.items():
+        mx = limits.get((etype, key, period))
+        if mx and used >= mx:
+            existing = tripped.get((etype, key))
+            if not existing or used / mx > existing[1] / existing[2]:
+                tripped[(etype, key)] = (period, used, mx)
+
+    attached = 0
+    skipped = 0
+    checked = 0
+
+    # USER trips → attach on the user's local role
+    for (etype, key), (period, used, mx) in tripped.items():
+        if etype != "USER":
+            continue
+        # Local role name pattern
+        import re as _re
+        role = f"{LOCAL_ROLE_PREFIX}{_re.sub(r'[^A-Za-z0-9_-]', '-', key)[:40]}"
+        checked += 1
+        if _has_local_token_deny(role):
+            skipped += 1
+            continue
+        if _attach_local_token_deny(role, f"backup: USER {period} {used}/{mx}"):
+            attached += 1
+
+    # DEPT trips → attach on every local role in that dept (best-effort by listing)
+    if tripped:
+        dept_trips = {k: v for k, v in tripped.items() if k[0] == "DEPT"}
+        if dept_trips:
+            try:
+                paginator = iam_client.get_paginator("list_roles")
+                for page in paginator.paginate(PathPrefix="/"):
+                    for role in page.get("Roles", []):
+                        rname = role["RoleName"]
+                        if not rname.startswith(LOCAL_ROLE_PREFIX):
+                            continue
+                        # read tags to find department
+                        try:
+                            tags_resp = iam_client.list_role_tags(RoleName=rname)
+                            dept = next(
+                                (t["Value"] for t in tags_resp.get("Tags", []) if t["Key"] == "department"),
+                                None,
+                            )
+                        except Exception:
+                            dept = None
+                        if not dept:
+                            continue
+                        tr = dept_trips.get(("DEPT", dept))
+                        if not tr:
+                            continue
+                        period, used, mx = tr
+                        checked += 1
+                        if _has_local_token_deny(rname):
+                            skipped += 1
+                            continue
+                        if _attach_local_token_deny(rname, f"backup: DEPT {dept} {period} {used}/{mx}"):
+                            attached += 1
+            except Exception as e:
+                print(f"[LIMITS] dept-wide list_roles failed: {e}")
+
+    return {"attached": attached, "skipped": skipped, "checked": checked}
+
+
 def set_cognito_budget_flag(username: str, exceeded: bool):
     """Set budget_exceeded flag in Cognito user attributes."""
     if not USER_POOL_ID:
@@ -370,6 +639,11 @@ def check_department_budgets(user_spend):
 
 def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
+    # Reset per-invocation Local-role index so each 5-min run picks up newly issued/revoked roles.
+    global _local_role_index, _local_role_index_built
+    _local_role_index = {}
+    _local_role_index_built = False
+
     user_spend = get_today_usage()
     all_known_users = set(user_spend.keys())
     user_budgets = get_user_budgets()
@@ -492,6 +766,13 @@ def handler(event, context):
             if remove_dept_deny_policy(user):
                 dept_released += 1
 
+    # ─── ADR-015: Local Governance token-limit backup check ───
+    try:
+        token_backup = check_token_limits_backup()
+    except Exception as e:
+        print(f"[LIMITS] backup check failed: {e}")
+        token_backup = {"error": str(e)}
+
     return {
         "checked": len(user_spend),
         "over_budget": len(over_budget),
@@ -503,5 +784,6 @@ def handler(event, context):
         "dept_over_budget": len(dept_over_budget),
         "dept_denied": dept_denied,
         "dept_released": dept_released,
+        "token_backup": token_backup,
         "timestamp": datetime.utcnow().isoformat(),
     }
