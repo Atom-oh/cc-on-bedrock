@@ -16,12 +16,21 @@ import gzip
 import base64
 import re
 import boto3
+from botocore.exceptions import ClientError
 from datetime import datetime
 from decimal import Decimal
+
+# Subdomain shape per Cognito naming (lowercase alnum + hyphens, 3-32 chars).
+# Used as a sanity guard before keying DynamoDB by the `username` tag.
+_USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
+# Tokens that must never be treated as a username (would happen if a future
+# IAM role like cc-on-bedrock-task-execution is created accidentally).
+_RESERVED_USERNAMES = {"execution", "boundary", "runner", "service", "system", "root"}
 
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task-"
+LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # Local Governance Mode (ADR-014)
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
@@ -110,15 +119,63 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
 
     # EC2 per-user mode: role name is cc-on-bedrock-task-{subdomain}
     if role_name.startswith(TASK_ROLE_PREFIX):
-        user = role_name[len(TASK_ROLE_PREFIX):]
-        dept = _resolve_department(user)
-        _task_cache[cache_key] = (user, dept)
-        print(f"Resolved {role_name} → {user}({dept})")
+        candidate = role_name[len(TASK_ROLE_PREFIX):]
+        if not _is_valid_username(candidate):
+            print(f"Skipping non-user task role: {role_name} (subdomain={candidate!r})")
+            return None, None
+        dept = _resolve_department(candidate)
+        _task_cache[cache_key] = (candidate, dept)
+        print(f"Resolved {role_name} → {candidate}({dept})")
+        return candidate, dept
+
+    # Local Governance Mode (ADR-014): role name is cc-on-bedrock-local-user-{cognito_sub}.
+    # Username (Cognito username == dashboard subdomain) and department are stored in role tags
+    # by sts-issuer.py. We key DynamoDB by username so /user page lookups (PK=USER#{subdomain}) hit.
+    if role_name.startswith(LOCAL_ROLE_PREFIX):
+        cognito_sub = role_name[len(LOCAL_ROLE_PREFIX):]
+        (user_tag, dept_tag), cacheable = _resolve_user_dept_from_role_tags(role_name)
+        # Prefer username tag if it looks like a valid subdomain; otherwise fall back to cognito_sub.
+        user = user_tag if _is_valid_username(user_tag) else cognito_sub
+        dept = dept_tag or _resolve_department(user) or "default"
+        # Only cache on confirmed results — transient IAM errors must NOT poison the warm container.
+        if cacheable:
+            _task_cache[cache_key] = (user, dept)
+        print(f"Resolved {role_name} → {user}({dept}) [local{'' if cacheable else ', uncached'}]")
         return user, dept
 
     # Not a cc-on-bedrock per-user role — skip tracking
     print(f"Skipping non-user role: {role_name}")
     return None, None
+
+
+def _is_valid_username(candidate: str) -> bool:
+    """Sanity guard: must match Cognito subdomain shape and not collide with reserved tokens."""
+    if not candidate or candidate in _RESERVED_USERNAMES:
+        return False
+    return bool(_USERNAME_RE.match(candidate))
+
+
+def _resolve_user_dept_from_role_tags(role_name: str) -> tuple:
+    """Read username + department tags from a Local Governance IAM role (ADR-014).
+    Returns ((username, department), cacheable). cacheable=False on transient errors so the
+    caller skips caching and retries on the next event.
+    """
+    try:
+        resp = boto3.client("iam").get_role(RoleName=role_name)
+        tags = {t["Key"]: t["Value"] for t in resp.get("Role", {}).get("Tags", [])}
+        return (tags.get("username", ""), tags.get("department", "")), True
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        # NoSuchEntity is terminal — role truly doesn't exist, fall back to cognito_sub and cache.
+        if code == "NoSuchEntity":
+            print(f"IAM role not found: {role_name}")
+            return ("", ""), True
+        # Throttling/AccessDenied/InternalFailure → transient; do NOT cache.
+        print(f"IAM GetRole transient error for {role_name}: {code}")
+        return ("", ""), False
+    except Exception as e:
+        print(f"IAM role tag lookup failed for {role_name}: {e}")
+        return ("", ""), False
 
 
 def get_model_pricing(model_id: str) -> dict:

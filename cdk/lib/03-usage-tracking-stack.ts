@@ -38,6 +38,7 @@ export class UsageTrackingStack extends cdk.Stack {
     });
 
     // DynamoDB Table for usage tracking
+    // Stream NEW_IMAGE: consumed by token-limit-enforcer Lambda (ADR-014 Local Governance Mode)
     this.usageTable = new dynamodb.Table(this, 'UsageTable', {
       tableName: 'cc-on-bedrock-usage',
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
@@ -48,6 +49,7 @@ export class UsageTrackingStack extends cdk.Stack {
       pointInTimeRecovery: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       timeToLiveAttribute: 'ttl',
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
     });
 
     // GSI for department-level queries
@@ -94,12 +96,14 @@ export class UsageTrackingStack extends cdk.Stack {
       actions: ['cognito-idp:ListUsers'],
       resources: [userPool.userPoolArn],
     }));
+    // ADR-014: read Local Governance user role tags (username, department) to attribute usage
     trackerLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['cognito-idp:ListUsers'],
-      resources: [userPool.userPoolArn],
+      actions: ['iam:GetRole'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
     }));
 
-    // EventBridge Rule: Bedrock API calls from CloudTrail (only cc-on-bedrock-task-* roles)
+    // EventBridge Rule: Bedrock API calls from CloudTrail
+    // ADR-014: cover both EC2 DevEnv (cc-on-bedrock-task-*) and Local Governance (cc-on-bedrock-local-user-*) roles
     const bedrockRule = new events.Rule(this, 'BedrockApiRule', {
       ruleName: 'cc-on-bedrock-usage-tracking',
       description: 'Track Bedrock InvokeModel/Converse API calls for usage analytics',
@@ -117,7 +121,10 @@ export class UsageTrackingStack extends cdk.Stack {
           userIdentity: {
             sessionContext: {
               sessionIssuer: {
-                userName: [{ prefix: 'cc-on-bedrock-task-' }],
+                userName: [
+                  { prefix: 'cc-on-bedrock-task-' },
+                  { prefix: 'cc-on-bedrock-local-user-' },
+                ],
               },
             },
           },
@@ -140,6 +147,7 @@ export class UsageTrackingStack extends cdk.Stack {
         ECS_CLUSTER_NAME: config.ecsClusterName,
         DAILY_BUDGET_USD: String(config.dailyBudgetUsd),
         USER_BUDGETS_TABLE: 'cc-user-budgets',
+        LIMITS_TABLE: 'cc-on-bedrock-limits',  // ADR-014 Local Governance backup path
         SNS_TOPIC_ARN: alertTopic.topicArn,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
       },
@@ -161,10 +169,25 @@ export class UsageTrackingStack extends cdk.Stack {
       actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminUpdateUserAttributes'],
       resources: [userPool.userPoolArn],
     }));
-    // IAM: Attach/Remove Deny Policy on per-user Task Roles
+    // IAM: Attach/Remove Deny Policy on per-user Task Roles + Local Governance roles (ADR-014/015)
     budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:GetRolePolicy'],
-      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`,
+      ],
+    }));
+    // IAM list/tag discovery for dept-level backup attach (ADR-015 §5)
+    budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['iam:ListRoles', 'iam:ListRoleTags'],
+      resources: ['*'],
+    }));
+    // DynamoDB: limits table (ADR-014 backup path)
+    budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:Scan', 'dynamodb:GetItem'],
+      resources: [
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-limits`,
+      ],
     }));
     // SNS: send budget alerts
     alertTopic.grantPublish(budgetCheckLambda);
@@ -396,10 +419,13 @@ export class UsageTrackingStack extends cdk.Stack {
     });
 
     // Subscription filter: Bedrock logs → usage-tracker Lambda
+    // ADR-014: pass through both EC2 DevEnv (cc-on-bedrock-task-*) and Local Governance (cc-on-bedrock-local-user-*) ARNs
     new logs.SubscriptionFilter(this, 'BedrockLogsToUsageTracker', {
       logGroup: bedrockLogGroup,
       destination: new logsDest.LambdaDestination(trackerLambda),
-      filterPattern: logs.FilterPattern.stringValue('$.identity.arn', '=', '*cc-on-bedrock-task*'),
+      filterPattern: logs.FilterPattern.literal(
+        '{ ($.identity.arn = "*cc-on-bedrock-task-*") || ($.identity.arn = "*cc-on-bedrock-local-user-*") }',
+      ),
     });
 
     // Approval Requests Table (container request workflow)
