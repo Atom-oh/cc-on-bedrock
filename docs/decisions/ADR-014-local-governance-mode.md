@@ -153,3 +153,4 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 - ADR-011: Bedrock IAM Cost Allocation (재사용 정책)
 - ADR-006: Department Budget Management (재사용)
 - ADR-008: Enterprise SSO Federation
+- ADR-015: Dollar Budget × Normalized Token Limit Integration (두 축 통합)
