@@ -10,6 +10,7 @@ import LimitManagement from "@/app/admin/limits/limit-management";
 interface DepartmentBudget {
   department: string;
   monthlyBudget: number;
+  perUserMonthlyBudget: number;   // ADR-023
   currentSpend: number;
   updatedAt: string;
 }
@@ -27,7 +28,9 @@ interface EditModal {
   type: "department" | "user";
   id: string;
   currentBudget: number;
+  currentPerUser?: number;
   currentLimit?: number;
+  currentDept?: string;
 }
 
 const DEPT_COLORS = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#f97316", "#6366f1"];
@@ -43,7 +46,9 @@ export default function BudgetManagement() {
   const [createId, setCreateId] = useState("");
   const [createDept, setCreateDept] = useState("");
   const [newBudget, setNewBudget] = useState("");
+  const [newPerUser, setNewPerUser] = useState("");   // ADR-023 dept perUserMonthlyBudget
   const [newLimit, setNewLimit] = useState("");
+  const [showAdvancedTokenLimit, setShowAdvancedTokenLimit] = useState(false);
   const [activeSection, setActiveSection] = useState<"departments" | "users" | "limits">("departments");
 
   const fetchData = useCallback(async () => {
@@ -67,10 +72,16 @@ export default function BudgetManagement() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const openEditModal = (type: "department" | "user", id: string, currentBudget: number, currentLimit?: number) => {
-    setEditModal({ type, id, currentBudget, currentLimit });
+  const openEditModal = (
+    type: "department" | "user",
+    id: string,
+    currentBudget: number,
+    extra?: { currentPerUser?: number; currentLimit?: number; currentDept?: string },
+  ) => {
+    setEditModal({ type, id, currentBudget, ...extra });
     setNewBudget(String(currentBudget));
-    setNewLimit(currentLimit !== undefined ? String(currentLimit) : "");
+    setNewPerUser(extra?.currentPerUser !== undefined ? String(extra.currentPerUser) : "");
+    setNewLimit(extra?.currentLimit !== undefined ? String(extra.currentLimit) : "");
   };
 
   const handleSave = async () => {
@@ -78,8 +89,13 @@ export default function BudgetManagement() {
     setSaving(true);
     try {
       const body: Record<string, unknown> = { type: editModal.type, id: editModal.id };
-      if (newBudget) body.monthlyBudget = Number(newBudget);
-      if (editModal.type === "user" && newLimit) body.dailyTokenLimit = Number(newLimit);
+      if (newBudget !== "") body.monthlyBudget = Number(newBudget);
+      if (editModal.type === "department" && newPerUser !== "") {
+        body.perUserMonthlyBudget = Number(newPerUser);
+      }
+      if (editModal.type === "user" && showAdvancedTokenLimit && newLimit) {
+        body.dailyTokenLimit = Number(newLimit);
+      }
 
       const res = await fetch("/api/admin/budgets", {
         method: "PUT",
@@ -100,6 +116,14 @@ export default function BudgetManagement() {
     }
   };
 
+  // ADR-023 mirror of Lambda `_effective_user_budget`.
+  const getEffectiveUserBudget = (user: UserBudget): { value: number; source: "user" | "dept" | "global" } => {
+    if (user.monthlyBudget > 0) return { value: user.monthlyBudget, source: "user" };
+    const dept = departments.find(d => d.department === user.department);
+    if (dept && dept.perUserMonthlyBudget > 0) return { value: dept.perUserMonthlyBudget, source: "dept" };
+    return { value: 0, source: "global" };
+  };
+
   const handleCreate = async () => {
     if (!createModal || !createId.trim()) return;
     setSaving(true);
@@ -109,7 +133,10 @@ export default function BudgetManagement() {
         id: createId.trim(),
         monthlyBudget: Number(newBudget) || 0,
       };
-      if (createModal.type === "user") {
+      if (createModal.type === "department" && newPerUser) {
+        body.perUserMonthlyBudget = Number(newPerUser);
+      }
+      if (createModal.type === "user" && showAdvancedTokenLimit && newLimit) {
         body.dailyTokenLimit = Number(newLimit) || 100000;
       }
 
@@ -124,6 +151,7 @@ export default function BudgetManagement() {
         setCreateId("");
         setCreateDept("");
         setNewBudget("");
+        setNewPerUser("");
         setNewLimit("");
         void fetchData();
       } else {
@@ -331,13 +359,17 @@ export default function BudgetManagement() {
 
               {users.length > 0 && (
                 <div className="overflow-x-auto">
+                  <p className="text-xs text-gray-500 mb-2">
+                    <strong className="text-gray-400">Effective Budget</strong> = explicit individual override (blue) or department per-user default (purple).
+                    Empty individual override means the user inherits the dept default automatically (ADR-023).
+                  </p>
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-gray-500 border-b border-gray-700">
                         <th className="pb-2 font-medium">User</th>
                         <th className="pb-2 font-medium">Department</th>
-                        <th className="pb-2 font-medium text-right">Daily Token Limit</th>
-                        <th className="pb-2 font-medium text-right">Monthly Budget</th>
+                        <th className="pb-2 font-medium text-right">Effective Budget</th>
+                        <th className="pb-2 font-medium text-right">Individual Override</th>
                         <th className="pb-2 font-medium text-right">Current Spend</th>
                         <th className="pb-2 font-medium text-right">Actions</th>
                       </tr>
@@ -352,12 +384,26 @@ export default function BudgetManagement() {
                               {isOver && <span className="ml-2 text-xs text-red-400 font-medium">OVER</span>}
                             </td>
                             <td className="py-3 text-gray-400">{user.department}</td>
-                            <td className="py-3 text-right text-gray-300">{formatTokens(user.dailyTokenLimit)}</td>
-                            <td className="py-3 text-right text-gray-300">{formatCurrency(user.monthlyBudget)}</td>
+                            <td className="py-3 text-right">
+                              {(() => {
+                                const eff = getEffectiveUserBudget(user);
+                                return (
+                                  <span className="text-gray-300">
+                                    {eff.value > 0 ? formatCurrency(eff.value) : <span className="text-gray-600">unlimited</span>}
+                                    {eff.source !== "global" && (
+                                      <span className={`ml-2 text-[10px] uppercase tracking-wide ${eff.source === "user" ? "text-blue-400" : "text-purple-400"}`}>
+                                        {eff.source === "user" ? "override" : "dept default"}
+                                      </span>
+                                    )}
+                                  </span>
+                                );
+                              })()}
+                            </td>
+                            <td className="py-3 text-right text-gray-300">{user.monthlyBudget > 0 ? formatCurrency(user.monthlyBudget) : <span className="text-gray-600">—</span>}</td>
                             <td className="py-3 text-right text-gray-300">{formatCurrency(user.currentSpend)}</td>
                             <td className="py-3 text-right">
                               <button
-                                onClick={() => openEditModal("user", user.userId, user.monthlyBudget, user.dailyTokenLimit)}
+                                onClick={() => openEditModal("user", user.userId, user.monthlyBudget, { currentLimit: user.dailyTokenLimit, currentDept: user.department })}
                                 className="px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
                               >
                                 Edit
@@ -400,31 +446,62 @@ export default function BudgetManagement() {
                 />
               </div>
               <div>
-                <label htmlFor="create-budget" className="block text-sm font-medium text-gray-400 mb-1">Monthly Budget (USD)</label>
+                <label htmlFor="create-budget" className="block text-sm font-medium text-gray-400 mb-1">
+                  {createModal.type === "department" ? "Total Budget (USD, dept-wide cap)" : "Monthly Budget Override (USD)"}
+                </label>
                 <input
                   id="create-budget"
                   type="number"
                   value={newBudget}
                   onChange={(e) => setNewBudget(e.target.value)}
                   className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="500.00"
+                  placeholder={createModal.type === "department" ? "1000.00" : "0 (inherit dept default)"}
                   min="0"
                   step="0.01"
                 />
               </div>
+              {createModal.type === "department" && (
+                <div>
+                  <label htmlFor="create-peruser" className="block text-sm font-medium text-gray-400 mb-1">Per-User Default (USD)</label>
+                  <input
+                    id="create-peruser"
+                    type="number"
+                    value={newPerUser}
+                    onChange={(e) => setNewPerUser(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="200.00"
+                    min="0"
+                    step="0.01"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Auto-applied to each member with no explicit override.</p>
+                </div>
+              )}
               {createModal.type === "user" && (
                 <div>
-                  <label htmlFor="create-limit" className="block text-sm font-medium text-gray-400 mb-1">Daily Token Limit</label>
-                  <input
-                    id="create-limit"
-                    type="number"
-                    value={newLimit}
-                    onChange={(e) => setNewLimit(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="100000"
-                    min="0"
-                    step="1000"
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedTokenLimit(v => !v)}
+                    className="text-xs text-gray-500 hover:text-gray-300"
+                  >
+                    {showAdvancedTokenLimit ? "▼ Hide" : "▶ Show"} advanced (legacy token limit)
+                  </button>
+                  {showAdvancedTokenLimit && (
+                    <div className="mt-2">
+                      <label htmlFor="create-limit" className="block text-sm font-medium text-gray-400 mb-1">
+                        Daily Token Limit <span className="text-gray-600">(ADR-014 normalized tokens)</span>
+                      </label>
+                      <input
+                        id="create-limit"
+                        type="number"
+                        value={newLimit}
+                        onChange={(e) => setNewLimit(e.target.value)}
+                        className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="100000"
+                        min="0"
+                        step="1000"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -450,31 +527,69 @@ export default function BudgetManagement() {
             </p>
             <div className="space-y-4">
               <div>
-                <label htmlFor="edit-budget" className="block text-sm font-medium text-gray-400 mb-1">Monthly Budget (USD)</label>
+                <label htmlFor="edit-budget" className="block text-sm font-medium text-gray-400 mb-1">
+                  {editModal.type === "department" ? "Total Budget (USD, dept-wide cap)" : "Monthly Budget Override (USD)"}
+                </label>
                 <input
                   id="edit-budget"
                   type="number"
                   value={newBudget}
                   onChange={(e) => setNewBudget(e.target.value)}
                   className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="100.00"
+                  placeholder={editModal.type === "department" ? "1000.00" : "0 (inherit dept default)"}
                   min="0"
                   step="0.01"
                 />
+                {editModal.type === "user" && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Empty / 0 → inherits the department per-user default (ADR-023).
+                  </p>
+                )}
               </div>
+              {editModal.type === "department" && (
+                <div>
+                  <label htmlFor="edit-peruser" className="block text-sm font-medium text-gray-400 mb-1">Per-User Default (USD)</label>
+                  <input
+                    id="edit-peruser"
+                    type="number"
+                    value={newPerUser}
+                    onChange={(e) => setNewPerUser(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="200.00"
+                    min="0"
+                    step="0.01"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Example — <code className="text-gray-400">engineering</code>: total $1000, per-user $200 → every engineering member auto-capped at $200.
+                  </p>
+                </div>
+              )}
               {editModal.type === "user" && (
                 <div>
-                  <label htmlFor="edit-limit" className="block text-sm font-medium text-gray-400 mb-1">Daily Token Limit</label>
-                  <input
-                    id="edit-limit"
-                    type="number"
-                    value={newLimit}
-                    onChange={(e) => setNewLimit(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="100000"
-                    min="0"
-                    step="1000"
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedTokenLimit(v => !v)}
+                    className="text-xs text-gray-500 hover:text-gray-300"
+                  >
+                    {showAdvancedTokenLimit ? "▼ Hide" : "▶ Show"} advanced (legacy token limit)
+                  </button>
+                  {showAdvancedTokenLimit && (
+                    <div className="mt-2">
+                      <label htmlFor="edit-limit" className="block text-sm font-medium text-gray-400 mb-1">
+                        Daily Token Limit <span className="text-gray-600">(ADR-014 normalized tokens)</span>
+                      </label>
+                      <input
+                        id="edit-limit"
+                        type="number"
+                        value={newLimit}
+                        onChange={(e) => setNewLimit(e.target.value)}
+                        className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="100000"
+                        min="0"
+                        step="1000"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -108,9 +108,15 @@ def get_monthly_usage_by_department():
 
 
 def get_department_budgets():
-    """Fetch all department monthly budgets from cc-department-budgets table (with pagination)."""
+    """Fetch all department budgets from cc-department-budgets table (with pagination).
+
+    ADR-023: returns per-dept dict with BOTH the total cap and the per-member default.
+      monthlyBudget         — total dept cap (legacy field, drives dept-deny attach)
+      perUserMonthlyBudget  — default per-member USD budget (used when user has no
+                              explicit cc-user-budgets row, before global DAILY_BUDGET).
+    """
     try:
-        budgets = {}
+        budgets: dict = {}
         last_key = None
         pages = 0
         while True:
@@ -120,8 +126,10 @@ def get_department_budgets():
             result = dept_budgets_table.scan(**params)
             for item in result.get("Items", []):
                 dept_id = item.get("dept_id", item.get("department", "default"))
-                monthly_limit = float(item.get("monthlyBudget", item.get("monthly_limit", 0)))
-                budgets[dept_id] = monthly_limit
+                budgets[dept_id] = {
+                    "monthlyBudget": float(item.get("monthlyBudget", item.get("monthly_limit", 0)) or 0),
+                    "perUserMonthlyBudget": float(item.get("perUserMonthlyBudget", 0) or 0),
+                }
             last_key = result.get("LastEvaluatedKey")
             pages += 1
             if not last_key or pages >= MAX_SCAN_PAGES:
@@ -130,6 +138,36 @@ def get_department_budgets():
     except Exception as e:
         print(f"[DEPT] Failed to fetch department budgets: {e}")
         return {}
+
+
+def _dept_total_budget(dept_budgets: dict, dept: str) -> float:
+    """Backward-compat accessor: returns dept's `monthlyBudget` (total cap) as float."""
+    entry = dept_budgets.get(dept)
+    if not entry:
+        return 0.0
+    if isinstance(entry, dict):
+        return float(entry.get("monthlyBudget", 0) or 0)
+    return float(entry or 0)
+
+
+def _dept_per_user_default(dept_budgets: dict, dept: str) -> float:
+    """ADR-023 helper: returns dept's `perUserMonthlyBudget` default for new members."""
+    entry = dept_budgets.get(dept)
+    if not isinstance(entry, dict):
+        return 0.0
+    return float(entry.get("perUserMonthlyBudget", 0) or 0)
+
+
+def _effective_user_budget(user_budgets: dict, dept_budgets: dict, user: str, dept: str) -> float:
+    """ADR-023: resolve per-user effective USD budget for daily over-budget check.
+    Priority: user explicit > dept perUserMonthlyBudget > global DAILY_BUDGET env."""
+    user_explicit = float(user_budgets.get(user, {}).get("monthlyBudget", 0) or 0)
+    if user_explicit > 0:
+        return user_explicit
+    dept_default = _dept_per_user_default(dept_budgets, dept)
+    if dept_default > 0:
+        return dept_default
+    return float(DAILY_BUDGET)
 
 
 def get_user_budgets():
@@ -618,7 +656,7 @@ def check_department_budgets(user_spend):
     dept_over_budget = []  # 100%+
 
     for dept, data in dept_monthly.items():
-        monthly_limit = dept_budgets.get(dept, 0)
+        monthly_limit = _dept_total_budget(dept_budgets, dept)
         if monthly_limit <= 0:
             continue  # No limit set for this department
 
@@ -650,6 +688,7 @@ def handler(event, context):
     user_spend = get_today_usage()
     all_known_users = set(user_spend.keys())
     user_budgets = get_user_budgets()
+    dept_budgets = get_department_budgets()  # ADR-023: needed for perUserMonthlyBudget fallback
     over_budget = []
     warnings = []
     denied = 0
@@ -661,9 +700,8 @@ def handler(event, context):
 
     # ─── Per-user daily budget check ───
     for user, data in user_spend.items():
-        # Use per-user budget if set, otherwise fall back to global default
-        user_limit = user_budgets.get(user, {}).get("monthlyBudget", 0)
-        effective_budget = user_limit if user_limit > 0 else DAILY_BUDGET
+        # ADR-023: user explicit > dept.perUserMonthlyBudget > global DAILY_BUDGET
+        effective_budget = _effective_user_budget(user_budgets, dept_budgets, user, data["department"])
         pct = (data["cost"] / effective_budget) * 100 if effective_budget > 0 else 0
 
         if pct >= 100:
