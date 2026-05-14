@@ -40,6 +40,7 @@ PERIODS = ("daily", "weekly", "monthly")
 
 ddb = boto3.resource("dynamodb")
 limits = ddb.Table(LIMITS_TABLE)
+ddb_client = boto3.client("dynamodb")  # for BatchGetItem (resource API has no batch_get_item)
 iam = boto3.client("iam")
 sns = boto3.client("sns") if SNS_TOPIC_ARN else None
 
@@ -113,7 +114,10 @@ def _decimal(n) -> Decimal:
 # Limit lookup
 # ──────────────────────────────────────────────────────────
 
-def _get_user_limit(sub: str, period: str) -> dict:
+def _get_user_limit(sub: str, period: str, cache: dict | None = None) -> dict:
+    """Look up USER#{sub}/LIMIT#{period} — cache hit avoids GetItem (review #4)."""
+    if cache is not None:
+        return cache.get((f"USER#{sub}", f"LIMIT#{period}"), {})
     try:
         r = limits.get_item(Key={"PK": f"USER#{sub}", "SK": f"LIMIT#{period}"})
         return r.get("Item") or {}
@@ -122,15 +126,55 @@ def _get_user_limit(sub: str, period: str) -> dict:
         return {}
 
 
-def _get_dept_limit(dept: str, period: str) -> dict:
+def _get_dept_limit(dept: str, period: str, cache: dict | None = None) -> dict:
     if not dept:
         return {}
+    if cache is not None:
+        return cache.get((f"DEPT#{dept}", f"LIMIT#{period}"), {})
     try:
         r = limits.get_item(Key={"PK": f"DEPT#{dept}", "SK": f"LIMIT#{period}"})
         return r.get("Item") or {}
     except Exception as e:
         print(f"dept_limit fetch failed: {e}")
         return {}
+
+
+def _prefetch_limits(records: list) -> dict:
+    """ADR-021 follow-up (review #4): one BatchGetItem per invocation instead of
+    up to 6 GetItem per stream record (3 periods × USER+DEPT). Returns a dict
+    keyed by (pk, sk) → item. Empty dict on failure — callers fall back to
+    individual GetItem via `cache=None` path."""
+    keys: set[tuple[str, str]] = set()
+    for rec in records:
+        new = _img_to_dict(rec.get("dynamodb", {}).get("NewImage") or {})
+        pk = new.get("PK", "")
+        if not pk.startswith("USER#"):
+            continue
+        sub = pk[len("USER#"):]
+        dept = new.get("department", "")
+        for period in PERIODS:
+            keys.add((f"USER#{sub}", f"LIMIT#{period}"))
+            if dept:
+                keys.add((f"DEPT#{dept}", f"LIMIT#{period}"))
+    if not keys:
+        return {}
+    cache: dict = {}
+    keys_list = list(keys)
+    while keys_list:
+        chunk, keys_list = keys_list[:100], keys_list[100:]
+        try:
+            resp = ddb_client.batch_get_item(RequestItems={
+                LIMITS_TABLE: {
+                    "Keys": [{"PK": {"S": pk}, "SK": {"S": sk}} for pk, sk in chunk],
+                }
+            })
+            for raw in resp.get("Responses", {}).get(LIMITS_TABLE, []):
+                item = {k: _from_ddb(v) for k, v in raw.items()}
+                cache[(item.get("PK", ""), item.get("SK", ""))] = item
+        except Exception as e:
+            print(f"prefetch_limits batch_get failed: {e}")
+            # Continue — process_record will fall back to individual GetItem
+    return cache
 
 
 def _add_counter(pk: str, sk: str, delta: Decimal, ttl: int) -> Decimal:
@@ -272,7 +316,7 @@ def _img_to_dict(img: dict) -> dict:
     return {k: _from_ddb(v) for k, v in (img or {}).items()}
 
 
-def process_record(rec: dict):
+def process_record(rec: dict, limit_cache: dict | None = None):
     if rec.get("eventName") not in ("INSERT", "MODIFY"):
         return
     new = _img_to_dict(rec.get("dynamodb", {}).get("NewImage"))
@@ -319,9 +363,9 @@ def process_record(rec: dict):
         else:
             dept_total = Decimal("0")
 
-        user_limit_item = _get_user_limit(sub, period)
+        user_limit_item = _get_user_limit(sub, period, limit_cache)
         user_max = _decimal(user_limit_item.get("max_normalized", 0))
-        dept_limit_item = _get_dept_limit(dept, period)
+        dept_limit_item = _get_dept_limit(dept, period, limit_cache)
         dept_max = _decimal(dept_limit_item.get("max_normalized", 0))
 
         # Evaluate
@@ -349,9 +393,13 @@ def process_record(rec: dict):
 
 def handler(event, context):
     failures = []
-    for rec in event.get("Records", []):
+    records = event.get("Records", [])
+    # ADR-021 follow-up (review #4): one BatchGetItem instead of N+1 GetItem.
+    # With batchSize=10 and 3 periods × (USER+DEPT), this collapses ~60 reads → 1.
+    limit_cache = _prefetch_limits(records)
+    for rec in records:
         try:
-            process_record(rec)
+            process_record(rec, limit_cache)
         except Exception as e:
             print(f"record processing failed: {e}")
             failures.append({"itemIdentifier": rec.get("eventID")})
