@@ -23,8 +23,6 @@ import {
   LogOut,
   ChevronRight,
   Globe,
-  KeyRound,
-  Gauge,
 } from "lucide-react";
 
 interface NavItem {
@@ -54,7 +52,6 @@ const navItems: NavItem[] = [
   { href: "/admin/instances", labelKey: "nav.containers", icon: Server, adminOnly: true },
   { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
   { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
-  { href: "/admin/limits", labelKey: "nav.tokenLimits", icon: Gauge, adminOnly: true, localModeOnly: true },
   { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
   { href: "/admin/dlp", labelKey: "nav.dlpManagement", icon: ShieldCheck, adminOnly: true },
   { href: "/docs", labelKey: "nav.docs", icon: BookOpen, showForAll: true },

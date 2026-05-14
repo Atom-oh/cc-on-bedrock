@@ -5,6 +5,7 @@ import { useI18n } from "@/lib/i18n";
 import StatCard from "@/components/cards/stat-card";
 import DonutChart from "@/components/charts/donut-chart";
 import HorizontalBarChart from "@/components/charts/horizontal-bar-chart";
+import LimitManagement from "@/app/admin/limits/limit-management";
 
 interface DepartmentBudget {
   department: string;
@@ -43,7 +44,7 @@ export default function BudgetManagement() {
   const [createDept, setCreateDept] = useState("");
   const [newBudget, setNewBudget] = useState("");
   const [newLimit, setNewLimit] = useState("");
-  const [activeSection, setActiveSection] = useState<"departments" | "users">("departments");
+  const [activeSection, setActiveSection] = useState<"departments" | "users" | "limits">("departments");
 
   const fetchData = useCallback(async () => {
     try {
@@ -231,6 +232,16 @@ export default function BudgetManagement() {
           >
             User Token Limits ({users.length})
           </button>
+          <button
+            onClick={() => setActiveSection("limits")}
+            className={`px-6 py-3 text-sm font-medium border-b-2 transition-all ${
+              activeSection === "limits"
+                ? "border-blue-500 text-blue-400 bg-blue-900/10"
+                : "border-transparent text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            Normalized Token Limits (Local Mode)
+          </button>
         </div>
 
         <div className="p-6">
@@ -361,6 +372,9 @@ export default function BudgetManagement() {
               )}
             </>
           )}
+
+          {/* Normalized Token Limits (Local Governance Mode, ADR-014) */}
+          {activeSection === "limits" && <LimitManagement />}
         </div>
       </div>
 
