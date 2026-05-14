@@ -12,12 +12,20 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_REGION: ap-northeast-2
+  # Pin the model explicitly so the workflow does not silently break when the
+  # claude CLI default changes or the model is unavailable in the AWS account.
+  # Opus 4.7 is verified active in ap-northeast-2 (inference-profile/global.anthropic.claude-opus-4-7).
+  ANTHROPIC_MODEL: global.anthropic.claude-opus-4-7
+  CLAUDE_CODE_USE_BEDROCK: "1"
 
 jobs:
   review:
     name: AI Code Review
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: pr-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
 
     steps:
       - uses: actions/checkout@v4
@@ -41,9 +49,33 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/pr-diff.txt
+          # Fetch full diff, then strip generated artefacts / lockfiles / build
+          # output hunks before review so the model sees only meaningful changes.
+          # Each diff hunk starts with `diff --git a/<path> b/<path>` — awk
+          # toggles a skip flag per hunk based on the path.
+          git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/pr-diff-raw.txt
+          awk '
+            /^diff --git/ {
+              # $3 is "a/<path>" — strip leading "a/" to get the path
+              path = substr($3, 3)
+              skip = (path ~ /(^|\/)tsconfig\.tsbuildinfo$/) ||
+                     (path ~ /\.tsbuildinfo$/) ||
+                     (path ~ /(^|\/)package-lock\.json$/) ||
+                     (path ~ /(^|\/)yarn\.lock$/) ||
+                     (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
+                     (path ~ /^cdk\/lib\/\.gen\//) ||
+                     (path ~ /^cdk\/lib\/lambda\/devenv-session-validator-built\//) ||
+                     (path ~ /^cdk\.out\//) ||
+                     (path ~ /^shared\/nextjs-app\/\.next\//) ||
+                     (path ~ /^Screenshot /)
+            }
+            !skip
+          ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
+
+          RAW=$(wc -l < /tmp/pr-diff-raw.txt)
           LINES=$(wc -l < /tmp/pr-diff.txt)
-          echo "Total diff: $LINES lines"
+          echo "Diff: $LINES lines (raw $RAW, filtered $((RAW - LINES)))"
+
           if [ "$LINES" -gt 5000 ]; then
             head -5000 /tmp/pr-diff.txt > /tmp/pr-diff-review.txt
             echo "TRUNCATED=true" >> "$GITHUB_ENV"
@@ -51,11 +83,14 @@ jobs:
             cp /tmp/pr-diff.txt /tmp/pr-diff-review.txt
             echo "TRUNCATED=false" >> "$GITHUB_ENV"
           fi
+          echo "REVIEW_LINES=$LINES" >> "$GITHUB_ENV"
 
       - name: Review with Claude Code
-        env:
-          CLAUDE_CODE_USE_BEDROCK: "1"
         run: |
+          # fail-soft: capture stderr and any non-zero exit so the post-comment
+          # step always has something to publish. Without this the step exits 1
+          # via the default `bash -e {0}` shell, leaving the PR with zero signal.
+          set +e
           cat /tmp/pr-diff-review.txt | claude -p "You are an expert code reviewer for a CDK + Next.js + ECS project (TypeScript, Python).
 
           Review the PR diff provided via stdin. Focus on:
@@ -70,23 +105,65 @@ jobs:
           - Be concise: 1-2 sentences per finding
           - If no issues found, say 'No critical issues found' with a brief summary
           - Use Korean for explanations, English for code references
-          - Output in markdown format" > /tmp/review.md
+          - Output in markdown format" > /tmp/review.md 2> /tmp/claude-err.log
+          CLAUDE_EXIT=$?
+          set -e
+
+          if [ "$CLAUDE_EXIT" -ne 0 ] || [ ! -s /tmp/review.md ]; then
+            echo "Claude CLI failed (exit=$CLAUDE_EXIT)" >&2
+            cat /tmp/claude-err.log >&2 || true
+            {
+              echo "## AI Review Tool Error"
+              echo ""
+              echo "Claude CLI exited with status \`$CLAUDE_EXIT\`. Output size: \`$(wc -c < /tmp/review.md) bytes\`."
+              echo ""
+              if [ -s /tmp/claude-err.log ]; then
+                echo "**stderr:**"
+                echo '```'
+                head -40 /tmp/claude-err.log
+                echo '```'
+                echo ""
+              fi
+              echo "**Common causes:**"
+              echo "- Bedrock model \`${ANTHROPIC_MODEL}\` not active or access-denied in \`${AWS_REGION}\` (IAM role lacks invoke permission)"
+              echo "- Diff still too large for the model input window after filtering (review_lines=\`${REVIEW_LINES}\`)"
+              echo "- \`claude\` CLI install failed or version incompatible with \`--output-format\` flags"
+              echo "- Network egress blocked to \`bedrock-runtime.${AWS_REGION}.amazonaws.com\`"
+              echo ""
+              echo "PR can still be merged manually if reviewers are satisfied; this is an informational reviewer, not a blocking check."
+            } > /tmp/review.md
+          fi
+          echo "Review generated: $(wc -c < /tmp/review.md) bytes"
 
       - name: Post review comment
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
+          MARKER="<!-- bedrock-pr-review -->"
           {
+            echo "$MARKER"
             echo "## Claude Code Review"
             echo ""
             cat /tmp/review.md
-            if [ "$TRUNCATED" = "true" ]; then
+            if [ "${TRUNCATED:-false}" = "true" ]; then
               echo ""
               echo "> Note: Diff was truncated to 5000 lines for review."
             fi
             echo ""
             echo "---"
-            echo "*Automated review by Claude Code on Bedrock*"
+            echo "_Automated review by Claude Code on Bedrock (model: \`${ANTHROPIC_MODEL}\`)_"
           } > /tmp/comment.md
-          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+
+          # Idempotent: PATCH existing review comment if found (marker match),
+          # else post a new one. Avoids comment spam on every push to the PR.
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH \
+              -f body="$(cat /tmp/comment.md)" 2>/dev/null \
+              || gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+          fi
