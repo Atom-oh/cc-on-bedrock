@@ -8,6 +8,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -18,6 +19,10 @@ export interface LocalGovernanceStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   usageTable: dynamodb.Table;
   taskPermissionBoundary: iam.ManagedPolicy;
+  // ADR-022: the provisioner Lambda calls AdminGetUser / AdminUpdateUserAttributes /
+  // ListUsersInGroup. CloudTrail redacts username + custom attrs in events, so the
+  // Lambda has to re-fetch via the userPool ARN granted here.
+  userPool: cognito.UserPool;
 }
 
 /**
@@ -38,7 +43,7 @@ export class LocalGovernanceStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: LocalGovernanceStackProps) {
     super(scope, id, props);
-    const { config, encryptionKey, usageTable, taskPermissionBoundary } = props;
+    const { config, encryptionKey, usageTable, taskPermissionBoundary, userPool } = props;
 
     // ──────────────────────────────────────────────────────────
     // SNS alert topic
@@ -132,6 +137,99 @@ export class LocalGovernanceStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'StsIssuerFunctionArn', {
       value: this.stsIssuerFunction.functionArn,
       exportName: 'cc-on-bedrock-sts-issuer-arn',
+    });
+
+    // ──────────────────────────────────────────────────────────
+    // User Role Provisioner Lambda (ADR-022)
+    // Pre-creates Local Governance role + EC2 task role/profile + canonical
+    // custom:subdomain + custom:dept_manager_sub on each Cognito user event so
+    // every entry point (seed script, dashboard, console, SDK) converges on
+    // the same downstream state — removes the IAM-propagation race at first use.
+    // ──────────────────────────────────────────────────────────
+    const provisioner = new lambda.Function(this, 'UserRoleProvisioner', {
+      functionName: 'cc-on-bedrock-user-role-provisioner',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'user-role-provisioner.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      environment: {
+        ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
+        PERMISSION_BOUNDARY_NAME: 'cc-on-bedrock-task-boundary',
+        // Trust principal of the per-user Local Gov role is the STS Issuer Lambda role
+        // (only Lambda that AssumeRoles into it). Same value sts-issuer.py uses.
+        ASSUMER_ROLE_ARN: this.stsIssuerFunction.role!.roleArn,
+        MAX_SESSION_DURATION_SECONDS: '3600',
+        // CloudTrail redacts user attributes — Lambda re-fetches via AdminGetUser.
+        USER_POOL_ID: userPool.userPoolId,
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    // Per-user IAM (Local Gov)
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamLocalUserRoleMgmt',
+      actions: [
+        'iam:CreateRole', 'iam:GetRole', 'iam:UpdateAssumeRolePolicy',
+        'iam:PutRolePolicy', 'iam:TagRole', 'iam:UntagRole', 'iam:ListRoleTags',
+      ],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
+    }));
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamPermissionBoundaryRead',
+      actions: ['iam:GetPolicy', 'iam:GetPolicyVersion'],
+      resources: [taskPermissionBoundary.managedPolicyArn],
+    }));
+    // Per-user IAM (EC2 task) + instance profile. PassRole is required because
+    // AddRoleToInstanceProfile treats it as passing the role into ec2.amazonaws.com.
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamEc2TaskRoleMgmt',
+      actions: [
+        'iam:CreateRole', 'iam:GetRole', 'iam:UpdateAssumeRolePolicy',
+        'iam:PutRolePolicy', 'iam:TagRole', 'iam:UntagRole', 'iam:ListRoleTags',
+        'iam:CreateInstanceProfile', 'iam:GetInstanceProfile',
+        'iam:AddRoleToInstanceProfile', 'iam:PassRole',
+      ],
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`,
+      ],
+    }));
+    // Cognito reads (recover redacted attrs) + writes (set canonical
+    // custom:subdomain + custom:dept_manager_sub).
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'CognitoUserReadWrite',
+      actions: [
+        'cognito-idp:AdminGetUser',
+        'cognito-idp:ListUsers',
+        'cognito-idp:ListUsersInGroup',
+        'cognito-idp:AdminUpdateUserAttributes',
+      ],
+      resources: [userPool.userPoolArn],
+    }));
+
+    // EventBridge rule on CloudTrail management events from Cognito-IDP.
+    // AdminAddUserToGroup is included so that promoting a user into the
+    // dept-manager group triggers a refresh of custom:dept_manager_sub for
+    // every member of that department (ADR-022 §dept-manager attribute).
+    new events.Rule(this, 'CognitoUserCreatedRule', {
+      ruleName: 'cc-on-bedrock-cognito-user-created',
+      description: 'Trigger UserRoleProvisioner on AdminCreateUser / SignUp / AdminAddUserToGroup (ADR-022)',
+      eventPattern: {
+        source: ['aws.cognito-idp'],
+        detailType: ['AWS API Call via CloudTrail'],
+        detail: {
+          eventSource: ['cognito-idp.amazonaws.com'],
+          eventName: ['AdminCreateUser', 'SignUp', 'AdminAddUserToGroup'],
+        },
+      },
+      targets: [new targets.LambdaFunction(provisioner)],
+    });
+
+    new cdk.CfnOutput(this, 'UserRoleProvisionerArn', {
+      value: provisioner.functionArn,
+      description: 'User Role Provisioner Lambda ARN (ADR-022)',
+      exportName: 'cc-on-bedrock-user-role-provisioner-arn',
     });
 
     // ──────────────────────────────────────────────────────────

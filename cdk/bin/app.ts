@@ -159,6 +159,7 @@ const localGovStack = new LocalGovernanceStack(app, 'CcOnBedrock-LocalGovernance
   encryptionKey: securityStack.encryptionKey,
   usageTable: usageTrackingStack.usageTable,
   taskPermissionBoundary: securityStack.taskPermissionBoundary,
+  userPool: securityStack.userPool,
   description: 'CC-on-Bedrock: Local Governance Mode (STS Issuer, token limits, IAM Deny enforcement)',
 });
 localGovStack.addDependency(securityStack);

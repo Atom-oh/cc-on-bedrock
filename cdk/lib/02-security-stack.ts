@@ -57,6 +57,10 @@ export class SecurityStack extends cdk.Stack {
         department: new cognito.StringAttribute({ mutable: true }),
         budget_exceeded: new cognito.StringAttribute({ mutable: true }),
         storage_type: new cognito.StringAttribute({ mutable: true }),
+        // ADR-022: sub of this user's department manager. Populated by the
+        // user-role-provisioner Lambda on AdminCreateUser / AdminAddUserToGroup.
+        // Self-pointing for the manager themselves; empty for admin (no dept).
+        dept_manager_sub: new cognito.StringAttribute({ mutable: true }),
       },
     });
 

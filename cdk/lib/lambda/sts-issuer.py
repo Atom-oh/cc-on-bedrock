@@ -37,145 +37,29 @@ Output contract (JSON):
 """
 import json
 import os
-import re
 import time
 import boto3
 from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 
+# Role creation / trust-policy / inline-policy helpers live in role_factory so the
+# pre-provisioner Lambda (user-role-provisioner.py) reuses the exact same logic
+# (ADR-022). With pre-provisioning in place, ensure_role's exists-branch runs at
+# first login and AssumeRole succeeds on attempt #1.
+from role_factory import ensure_role
+
 REGION = os.environ["AWS_REGION"]
 ACCOUNT_ID = os.environ["ACCOUNT_ID"]
 LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
-PERMISSION_BOUNDARY_NAME = os.environ.get("PERMISSION_BOUNDARY_NAME", "cc-on-bedrock-task-boundary")
-ASSUMER_ROLE_ARN = os.environ["ASSUMER_ROLE_ARN"]  # this Lambda's own role ARN
 # AWS role chaining hard-caps assumed-role sessions at 1h whenever the caller is itself
-# an assumed-role. The STS Issuer Lambda's execution role IS an assumed role (lambda.amazonaws.com
-# assumes the function role), so any AssumeRole here is bound by the chaining cap regardless of
-# MaxSessionDuration on the target role. Both defaults are pinned to 3600s; CLI helper auto-refreshes
-# when remaining TTL < 10min (ADR-014 §session refresh).
+# an assumed-role. The STS Issuer Lambda's execution role IS an assumed role, so the
+# 3600s default holds; the CLI helper auto-refreshes when remaining TTL < 10min.
 SESSION_DURATION_SECONDS = int(os.environ.get("SESSION_DURATION_SECONDS", "3600"))
-MAX_SESSION_DURATION_SECONDS = int(os.environ.get("MAX_SESSION_DURATION_SECONDS", "3600"))
-# ADR-021: per-model IAM restriction removed. Model usage gating happens at runtime via
-# token-limit-enforcer (ADR-014) and budget-check (ADR-015). INFERENCE_PROFILE_PREFIX is
-# only used for the informational `inferenceProfileArn` field in the response.
 INFERENCE_PROFILE_PREFIX = os.environ.get("INFERENCE_PROFILE_PREFIX", "cc-on-bedrock")
 
-iam = boto3.client("iam")
 sts = boto3.client("sts")
 ddb = boto3.resource("dynamodb")
 limits_table = ddb.Table(LIMITS_TABLE)
-
-ROLE_PREFIX = "cc-on-bedrock-local-user-"
-
-
-def _sub_to_role_suffix(sub: str) -> str:
-    """Cognito sub (UUID) → IAM-safe short suffix.
-    IAM role names allow [A-Za-z0-9+=,.@_-], max 64 chars. We keep dashes
-    and take the full sub to ensure uniqueness."""
-    safe = re.sub(r"[^A-Za-z0-9_-]", "-", sub)
-    return safe[:48]  # ROLE_PREFIX(24) + 48 = 72 → trim to 40 to keep total <= 64
-    # actually ROLE_PREFIX is 24 chars, so 64-24=40 budget. Trim:
-
-
-def _role_name(sub: str) -> str:
-    suffix = re.sub(r"[^A-Za-z0-9_-]", "-", sub)[:40]
-    return f"{ROLE_PREFIX}{suffix}"
-
-
-def _allowed_model_arns():
-    """ADR-021: wildcard ARNs covering all Claude-family models across every region prefix
-    (anthropic.*, global.anthropic.*, us.anthropic.*, apac.anthropic.*, eu.anthropic.*).
-    Per-model spend gating is delegated to token-limit-enforcer (ADR-014) + budget-check (ADR-015).
-    """
-    return [
-        "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
-        f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
-        f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",
-    ]
-
-
-def _trust_policy() -> dict:
-    # NOTE: sts:TagSession is required because we call AssumeRole with Tags=[...].
-    # Without it, AWS rejects with AccessDenied even when the principal is allowed
-    # to AssumeRole — both actions must be present in the trust policy.
-    return {
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Principal": {"AWS": ASSUMER_ROLE_ARN},
-            "Action": ["sts:AssumeRole", "sts:TagSession"],
-        }],
-    }
-
-
-def _inline_policy(department: str) -> dict:
-    """Bedrock InvokeModel on all Claude models (ADR-021) + read-only Bedrock metadata.
-    `department` is preserved for role tagging / future hooks but no longer narrows the policy."""
-    del department  # unused since ADR-021 — kept in signature for caller compatibility
-    return {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Sid": "BedrockInvoke",
-                "Effect": "Allow",
-                "Action": [
-                    "bedrock:InvokeModel",
-                    "bedrock:InvokeModelWithResponseStream",
-                    "bedrock:Converse",
-                    "bedrock:ConverseStream",
-                ],
-                "Resource": _allowed_model_arns(),
-            },
-            {
-                "Sid": "BedrockListReadOnly",
-                "Effect": "Allow",
-                "Action": [
-                    "bedrock:ListFoundationModels",
-                    "bedrock:ListInferenceProfiles",
-                    "bedrock:GetInferenceProfile",
-                ],
-                "Resource": "*",
-            },
-        ],
-    }
-
-
-def _ensure_role(sub: str, username: str, department: str, project: str) -> str:
-    """Create or update the per-user role; returns role ARN."""
-    role_name = _role_name(sub)
-    tags = [
-        {"Key": "username", "Value": username},
-        {"Key": "department", "Value": department or "default"},
-        {"Key": "project", "Value": project or "default"},
-        {"Key": "mode", "Value": "local"},
-        {"Key": "managed_by", "Value": "cc-on-bedrock"},
-    ]
-    try:
-        iam.get_role(RoleName=role_name)
-        # exists — update trust, inline policy, tags
-        iam.update_assume_role_policy(
-            RoleName=role_name,
-            PolicyDocument=json.dumps(_trust_policy()),
-        )
-        iam.tag_role(RoleName=role_name, Tags=tags)
-    except iam.exceptions.NoSuchEntityException:
-        iam.create_role(
-            RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps(_trust_policy()),
-            MaxSessionDuration=MAX_SESSION_DURATION_SECONDS,
-            PermissionsBoundary=f"arn:aws:iam::{ACCOUNT_ID}:policy/{PERMISSION_BOUNDARY_NAME}",
-            Tags=tags,
-            Description=f"CC-on-Bedrock Local Governance role for {username} ({department})",
-        )
-        # IAM eventual consistency: AssumeRole is retried with exponential backoff in
-        # handler() via _assume_role_with_retry — no fixed sleep here.
-
-    iam.put_role_policy(
-        RoleName=role_name,
-        PolicyName="BedrockInvokeInline",
-        PolicyDocument=json.dumps(_inline_policy(department)),
-    )
-    return f"arn:aws:iam::{ACCOUNT_ID}:role/{role_name}"
 
 
 def _get_limit_status(sub: str) -> dict:
@@ -214,11 +98,11 @@ def _env_snippet() -> str:
     )
 
 
-def _assume_role_with_retry(role_arn: str, session_name: str, duration: int, tags: list, max_attempts: int = 4):
-    """AssumeRole with exponential backoff (1s + 2s + 4s = 7s worst case) to absorb IAM
-    role propagation delay after CreateRole + PutRolePolicy. Replaces the fixed
-    time.sleep(8) post-create. Retries only on AccessDenied (the symptom of IAM
-    propagation lag); any other STS error is raised immediately."""
+def _assume_role_with_retry(role_arn: str, session_name: str, duration: int, tags: list, max_attempts: int = 6):
+    """AssumeRole with exponential backoff (1+2+4+8+16 = 31s worst case) to absorb IAM
+    role propagation delay. With the ADR-022 pre-provisioner running on AdminCreateUser,
+    this almost never retries; the longer budget is defense in depth for the rare case
+    the event was missed or the user logs in immediately after Dashboard /api/users POST."""
     delay = 1.0
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
@@ -262,7 +146,14 @@ def handler(event, context):
         return _http(400, {"error": "sub is required"})
 
     try:
-        role_arn = _ensure_role(sub, username, department, project)
+        ensure_result = ensure_role(sub, username, department, project)
+        role_arn = ensure_result["roleArn"]
+        if ensure_result["created"]:
+            # Pre-provisioner missed this user (rare; usually CloudTrail delay or
+            # event filter mismatch). Sleep briefly so the retry loop has a higher
+            # chance of succeeding on attempt #1.
+            print(f"WARN ensure_role created role inline (pre-provisioner missed sub={sub}); sleeping 3s")
+            time.sleep(3)
     except Exception as e:
         print(f"ensure_role failed: {e}")
         return _http(500, {"error": f"role provisioning failed: {e}"})
