@@ -20,7 +20,8 @@ from botocore.exceptions import ClientError
 from datetime import datetime
 from decimal import Decimal
 
-# Subdomain shape per Cognito naming (lowercase alnum + hyphens, 3-32 chars).
+# Subdomain shape per Cognito naming: lowercase alphanumerics + hyphens, 3-32 chars total.
+# Regex math: 1 boundary char + 1..30 middle chars + 1 boundary char = min 3, max 32.
 # Used as a sanity guard before keying DynamoDB by the `username` tag.
 _USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
 # Tokens that must never be treated as a username (would happen if a future

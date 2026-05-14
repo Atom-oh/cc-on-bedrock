@@ -224,7 +224,9 @@ _local_role_index_built = False
 
 def _build_local_role_index():
     """Scan all cc-on-bedrock-local-user-* roles once and index by `username` tag.
-    Idempotent within a single handler invocation."""
+    Idempotent within a single handler invocation. The `built` flag is set in `finally`
+    so a partial index from a mid-scan exception still prevents redundant re-scans
+    within the same invocation (best-effort attribution > re-scan on every dept-over-budget hit)."""
     global _local_role_index, _local_role_index_built
     if _local_role_index_built:
         return
@@ -248,7 +250,8 @@ def _build_local_role_index():
                     _local_role_index.setdefault(uname, []).append(rname)
     except Exception as e:
         print(f"[DEPT-DENY] local role index build failed: {e}")
-    _local_role_index_built = True
+    finally:
+        _local_role_index_built = True
 
 
 def attach_dept_deny_policy(subdomain: str):

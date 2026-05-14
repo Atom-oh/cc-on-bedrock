@@ -38,7 +38,9 @@ Output contract (JSON):
 import json
 import os
 import re
+import time
 import boto3
+from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 
 REGION = os.environ["AWS_REGION"]
@@ -46,8 +48,13 @@ ACCOUNT_ID = os.environ["ACCOUNT_ID"]
 LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
 PERMISSION_BOUNDARY_NAME = os.environ.get("PERMISSION_BOUNDARY_NAME", "cc-on-bedrock-task-boundary")
 ASSUMER_ROLE_ARN = os.environ["ASSUMER_ROLE_ARN"]  # this Lambda's own role ARN
-SESSION_DURATION_SECONDS = int(os.environ.get("SESSION_DURATION_SECONDS", "28800"))  # 8h
-MAX_SESSION_DURATION_SECONDS = int(os.environ.get("MAX_SESSION_DURATION_SECONDS", "43200"))  # 12h
+# AWS role chaining hard-caps assumed-role sessions at 1h whenever the caller is itself
+# an assumed-role. The STS Issuer Lambda's execution role IS an assumed role (lambda.amazonaws.com
+# assumes the function role), so any AssumeRole here is bound by the chaining cap regardless of
+# MaxSessionDuration on the target role. Both defaults are pinned to 3600s; CLI helper auto-refreshes
+# when remaining TTL < 10min (ADR-014 §session refresh).
+SESSION_DURATION_SECONDS = int(os.environ.get("SESSION_DURATION_SECONDS", "3600"))
+MAX_SESSION_DURATION_SECONDS = int(os.environ.get("MAX_SESSION_DURATION_SECONDS", "3600"))
 # ADR-021: per-model IAM restriction removed. Model usage gating happens at runtime via
 # token-limit-enforcer (ADR-014) and budget-check (ADR-015). INFERENCE_PROFILE_PREFIX is
 # only used for the informational `inferenceProfileArn` field in the response.
@@ -160,9 +167,8 @@ def _ensure_role(sub: str, username: str, department: str, project: str) -> str:
             Tags=tags,
             Description=f"CC-on-Bedrock Local Governance role for {username} ({department})",
         )
-        # IAM eventual consistency: small wait before AssumeRole
-        import time
-        time.sleep(8)
+        # IAM eventual consistency: AssumeRole is retried with exponential backoff in
+        # handler() via _assume_role_with_retry — no fixed sleep here.
 
     iam.put_role_policy(
         RoleName=role_name,
@@ -208,6 +214,33 @@ def _env_snippet() -> str:
     )
 
 
+def _assume_role_with_retry(role_arn: str, session_name: str, duration: int, tags: list, max_attempts: int = 4):
+    """AssumeRole with exponential backoff (1s + 2s + 4s = 7s worst case) to absorb IAM
+    role propagation delay after CreateRole + PutRolePolicy. Replaces the fixed
+    time.sleep(8) post-create. Retries only on AccessDenied (the symptom of IAM
+    propagation lag); any other STS error is raised immediately."""
+    delay = 1.0
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return sts.assume_role(
+                RoleArn=role_arn,
+                RoleSessionName=session_name,
+                DurationSeconds=duration,
+                Tags=tags,
+            )
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code != "AccessDenied":
+                raise
+            last_exc = e
+            if attempt < max_attempts - 1:
+                time.sleep(delay)
+                delay *= 2
+    assert last_exc is not None
+    raise last_exc
+
+
 def handler(event, context):
     """Handle Function URL invocation (Dashboard → STS Issuer)."""
     # Function URL payload arrives via event['body']; direct invoke uses event itself
@@ -235,11 +268,11 @@ def handler(event, context):
         return _http(500, {"error": f"role provisioning failed: {e}"})
 
     try:
-        resp = sts.assume_role(
-            RoleArn=role_arn,
-            RoleSessionName=f"local-{username[:32]}",
-            DurationSeconds=SESSION_DURATION_SECONDS,
-            Tags=[
+        resp = _assume_role_with_retry(
+            role_arn,
+            f"local-{username[:32]}",
+            SESSION_DURATION_SECONDS,
+            [
                 {"Key": "username", "Value": username},
                 {"Key": "department", "Value": department or "default"},
                 {"Key": "mode", "Value": "local"},
