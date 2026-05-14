@@ -11,16 +11,16 @@
  * simpler cookie-only validator — no OAuth flow, no JWKS, no token exchange.
  *
  * Config: NEXTAUTH_SECRET is stored in SSM Parameter Store and read on cold start.
- * Static values (__DEV_DOMAIN__, __DASHBOARD_URL__, __SSM_REGION__) are baked in at CDK synth time.
+ * Static values (dev.atomai.click, https://cconbedrock-dashboard.atomai.click, ap-northeast-2) are baked in at CDK synth time.
  */
 
 const crypto = require('crypto');
 const https = require('https');
 
 // Static config (replaced by sed at CDK synth time)
-const DEV_DOMAIN = '__DEV_DOMAIN__';
-const DASHBOARD_LOGIN_URL = '__DASHBOARD_URL__/login';
-const SSM_REGION = '__SSM_REGION__';
+const DEV_DOMAIN = 'dev.atomai.click';
+const DASHBOARD_LOGIN_URL = 'https://cconbedrock-dashboard.atomai.click/login';
+const SSM_REGION = 'ap-northeast-2';
 const SSM_PARAM_NAME = '/cc-on-bedrock/nextauth-secret';
 
 // Config cache (loaded from SSM on cold start)

@@ -8,7 +8,13 @@
       "Bash(terraform validate:*)",
       "Bash(terraform fmt:*)",
       "Bash(bash tests/:*)",
-      "Bash(bash scripts/:*)"
+      "Bash(bash scripts/:*)",
+      "Bash(npx cdk deploy CcOnBedrock-*:*)",
+      "Bash(aws cloudfront *:*)",
+      "Bash(aws cloudformation delete-stack:*)",
+      "Bash(aws route53 change-resource-record-sets:*)",
+      "Bash(aws ecs update-service:*)",
+      "Bash(bash scripts/deploy-adr-014-016.sh*)"
     ],
     "deny": []
   },

@@ -22,7 +22,9 @@ import {
   BookOpen,
   LogOut,
   ChevronRight,
-  Globe
+  Globe,
+  KeyRound,
+  Gauge,
 } from "lucide-react";
 
 interface NavItem {
@@ -32,11 +34,17 @@ interface NavItem {
   adminOnly?: boolean;
   deptManagerOnly?: boolean;
   showForAll?: boolean;
+  localModeOnly?: boolean;
 }
+
+// ADR-014: Local Governance Mode menu items only render when the env flag is set.
+const LOCAL_MODE_ENABLED =
+  (process.env.NEXT_PUBLIC_LOCAL_MODE_ENABLED ?? "").toLowerCase() === "true";
 
 const navItems: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home },
   { href: "/user", labelKey: "nav.myEnv", icon: Terminal, showForAll: true },
+  // ADR-014: Local Mode is now merged into the /user Environment tab; no separate sidebar entry.
   { href: "/dept", labelKey: "nav.department", icon: Building2, deptManagerOnly: true },
   { href: "/ai", labelKey: "nav.ai", icon: Sparkles },
   { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
@@ -46,6 +54,7 @@ const navItems: NavItem[] = [
   { href: "/admin/instances", labelKey: "nav.containers", icon: Server, adminOnly: true },
   { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
   { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
+  { href: "/admin/limits", labelKey: "nav.tokenLimits", icon: Gauge, adminOnly: true, localModeOnly: true },
   { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
   { href: "/admin/dlp", labelKey: "nav.dlpManagement", icon: ShieldCheck, adminOnly: true },
   { href: "/docs", labelKey: "nav.docs", icon: BookOpen, showForAll: true },
@@ -62,6 +71,7 @@ export default function Sidebar() {
   const filteredItems = navItems.filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
     if (item.deptManagerOnly && !isDeptManager) return false;
+    if (item.localModeOnly && !LOCAL_MODE_ENABLED) return false;
     return true;
   });
 

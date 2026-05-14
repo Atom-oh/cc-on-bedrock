@@ -13,7 +13,12 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
 - `modules/security/` - Cognito (Hosted UI), ACM, KMS, Secrets Manager, IAM
 - `modules/ecs-devenv/` - ECS Cluster, NLB + Nginx Fargate, DynamoDB Routing Table, DLP SGs, Lambda (nginx-config-gen), EC2 DevEnv (Launch Template, per-user IAM)
 - `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront
-- ※ Usage Tracking (DynamoDB, Lambda, EventBridge) 모듈 추가 필요
+
+## Drift vs CDK (parity gaps)
+- ※ Usage Tracking (DynamoDB **Streams**, Lambda, EventBridge) 모듈 — CDK Stack 03 미반영
+- ※ Local Governance (ADR-014) — STS Issuer, token-limit-enforcer, limit-reset, `cc-on-bedrock-limits` table 미반영
+- ※ ADR-016 CloudFront split 미반영 — 현재 `modules/dashboard/`가 단일 CloudFront. CDK는 Dashboard CF (Stack 05) + DevEnv CF (Stack 04)로 분리되어 있음. `*.dev.<domain>` 인증서는 us-east-1 ACM 별도 필요
+- ※ `governanceOnly` 플래그 동등 변수 미구현
 
 ## Commands
 ```bash

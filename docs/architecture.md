@@ -9,8 +9,9 @@ graph TB
         DevUser["Developer User"]
     end
 
-    subgraph CloudFront["CloudFront (Unified, ADR-013)"]
-        CF_Unified["CloudFront<br/>dashboard + *.dev<br/>Lambda@Edge: Session Validator + Origin Router"]
+    subgraph CloudFrontLayer["CloudFront (Split per concern, ADR-016)"]
+        CF_Dashboard["Dashboard CF<br/>(dashboard.*)<br/>Stack 05"]
+        CF_DevEnv["DevEnv CF<br/>(*.dev.*)<br/>Stack 04<br/>Lambda@Edge: Session Validator"]
     end
 
     subgraph Stack01["Stack 01: Network"]
@@ -55,12 +56,12 @@ graph TB
         McpLambdas["MCP Lambda Targets<br/>ECS / CloudWatch / DDB<br/>+ dept-specific"]
     end
 
-    subgraph Stack04["Stack 04: ECS Cluster"]
-        DevEnv_ALB["ALB<br/>Host-based Routing"]
+    subgraph Stack04["Stack 04: ECS DevEnv + DevEnv CloudFront (ADR-016)"]
+        DevEnv_NLB["NLB<br/>(internet-facing, CloudFront only)"]
         ECS_Cluster["ECS Cluster<br/>cc-on-bedrock-devenv"]
         Nginx["Nginx Service<br/>(Fargate, Reverse Proxy)"]
-        DashSvc["Dashboard Service<br/>(EC2 Launch Type)"]
         DevEnv_SGs["Security Groups<br/>open / restricted / locked"]
+        RoutingTable_S4["DynamoDB<br/>cc-routing-table"]
     end
 
     subgraph Stack05["Stack 05: Dashboard"]
@@ -75,6 +76,14 @@ graph TB
         RoutingTable["DynamoDB<br/>cc-routing-table"]
     end
 
+    subgraph Stack08["Stack 08: Local Governance (ADR-014)"]
+        STSIssuer["STS Issuer Lambda<br/>(Function URL, IAM auth)"]
+        TokenEnforcer["Token Limit Enforcer Lambda<br/>(usage table Stream consumer)"]
+        LimitReset["Limit Reset Lambda<br/>(EventBridge cron)"]
+        LimitsDDB["DynamoDB<br/>cc-on-bedrock-limits"]
+        LocalUserRole["Per-user IAM Role<br/>cc-on-bedrock-local-user-{sub}"]
+    end
+
     subgraph AWS_Services["AWS Services"]
         Bedrock["Amazon Bedrock<br/>Opus 4.6 / Sonnet 4.6"]
         Bedrock_VPCE["Bedrock<br/>VPC Endpoint"]
@@ -82,13 +91,14 @@ graph TB
         CW["CloudWatch<br/>CloudWatch Agent"]
     end
 
-    %% User Access Flow (single CF, ADR-013)
-    AdminUser -->|HTTPS| CF_Unified
-    DevUser -->|HTTPS| CF_Unified
+    %% User Access Flow (ADR-016: separate CloudFront per concern)
+    AdminUser -->|HTTPS| CF_Dashboard
+    DevUser -->|HTTPS| CF_DevEnv
 
-    %% CloudFront Origin Routing (Lambda@Edge)
-    CF_Unified -->|Host=dashboard.*| Dash_ALB
-    CF_Unified -->|Host=*.dev.*| DevEnv_ALB
+    %% CloudFront → Origin
+    CF_Dashboard -->|origin| Dash_ALB
+    CF_DevEnv -->|origin + X-Custom-Secret| DevEnv_NLB
+    DevEnv_NLB --> Nginx
 
     %% Dashboard Flow
     Dash_ALB --> DashContainer
@@ -98,7 +108,6 @@ graph TB
     DashContainer -->|Bedrock Converse API| Bedrock
 
     %% Dev Environment Flow (EC2 → Bedrock Direct)
-    DevEnv_ALB -->|Host: user.dev.*| Nginx
     Nginx -->|Reverse Proxy| EC2_Instances
     EC2_Instances --> EC2_EBS
     EC2_Instances -->|Instance Profile → IMDS| Bedrock_VPCE
@@ -115,10 +124,8 @@ graph TB
     Lambda1 -->|Write| DDB
     Lambda2 -->|Read/Check| DDB
 
-    %% ECS Cluster (Nginx + Dashboard)
+    %% ECS Cluster (Stack 04: Nginx only — Dashboard ECS Ec2Service is in Stack 05)
     ECS_Cluster --> Nginx
-    ECS_Cluster --> DashSvc
-    DashSvc --> DashContainer
 
     %% MCP Gateway Flow (ADR-007)
     DashContainer -->|Admin MCP Mgmt| McpCatalog
@@ -135,13 +142,12 @@ graph TB
     EC2_Instances --> CW
     DashContainer --> CW
 
-    %% DNS (both records → unified CF)
-    R53 -->|dashboard.*| CF_Unified
-    R53 -->|*.dev.*| CF_Unified
+    %% DNS (each record points to its own CF — ADR-016)
+    R53 -->|dashboard.*| CF_Dashboard
+    R53 -->|*.dev.*| CF_DevEnv
 
     %% Network placement
     Dash_ALB -.-> PubA
-    DevEnv_ALB -.-> PubA
     DashContainer -.-> PriA
     ECS_Cluster -.-> PriA
     EC2_Instances -.-> PriA
@@ -151,7 +157,7 @@ graph TB
     classDef aws fill:#ff9900,stroke:#333,color:#fff
     classDef user fill:#4a90d9,stroke:#333,color:#fff
     classDef agentcore fill:#4CAF50,stroke:#333,color:#fff
-    class Stack01,Stack02,Stack03,Stack04,Stack05,Stack07 stack
+    class Stack01,Stack02,Stack03,Stack04,Stack05,Stack07,Stack08 stack
     class Bedrock,Bedrock_VPCE,ECR,CW aws
     class AdminUser,DevUser user
     class CommonGW,DeptGW,McpLambdas agentcore
@@ -162,13 +168,17 @@ graph TB
 ```mermaid
 graph LR
     S1["01 Network<br/>VPC, Subnets, NAT,<br/>VPC Endpoints, R53,<br/>DNS Firewall"] --> S2["02 Security<br/>Cognito, ACM, KMS,<br/>Secrets, Per-user IAM"]
-    S2 --> S3["03 Usage Tracking<br/>DynamoDB, Lambda,<br/>EventBridge, CloudTrail,<br/>MCP Gateway Mgr (ADR-007)"]
-    S2 --> S4["04 ECS Cluster<br/>Nginx (Fargate),<br/>ASG, NLB"]
+    S2 --> S3["03 Usage Tracking<br/>DynamoDB (+ Stream),<br/>Lambda, EventBridge,<br/>MCP Gateway Mgr (ADR-007)"]
+    S2 --> S4["04 ECS DevEnv<br/>Nginx (Fargate), NLB,<br/>DevEnv CF (ADR-016)"]
     S2 --> S7["07 EC2 DevEnv<br/>Per-user EC2,<br/>Instance Profile, SG"]
-    S4 --> S5["05 Dashboard<br/>ECS Ec2Service, ALB,<br/>Unified CF (ADR-013)"]
+    S2 --> S5["05 Dashboard<br/>ECS Ec2Service, ALB,<br/>Dashboard CF (ADR-016)"]
     S3 --> S5
-    S7 --> S4
+    S3 --> S8["08 Local Governance<br/>STS Issuer, Token Limit Enforcer,<br/>Limit Reset (ADR-014)"]
+    S6["06 WAF (us-east-1)<br/>WebACL for CF"] -.-> S4
+    S6 -.-> S5
 ```
+
+Note: Stack 04 is skipped when `--context governanceOnly=true` (ADR-014 Local Governance Mode).
 
 ## Department MCP Gateway (ADR-007)
 
@@ -269,28 +279,31 @@ Key resources (Stack 03): `cc-mcp-catalog` DDB, `cc-dept-mcp-config` DDB (Stream
 ```mermaid
 sequenceDiagram
     participant User as Developer
-    participant CF as CloudFront
+    participant DashCF as Dashboard CF
+    participant DevCF as DevEnv CF
     participant Dash as Dashboard<br/>(ECS Ec2Service)
     participant Cognito as Cognito<br/>Hosted UI
     participant EC2 as EC2 Instance
-    participant Nginx as Nginx<br/>(ECS)
+    participant Nginx as Nginx<br/>(ECS, behind NLB)
     participant Bedrock as Amazon Bedrock
 
-    User->>CF: 1. Access dashboard
-    CF->>Dash: 2. Forward (X-Custom-Secret)
+    User->>DashCF: 1. Access dashboard.<domain>
+    DashCF->>Dash: 2. Forward (X-Custom-Secret)
     Dash->>Cognito: 3. OAuth redirect
     Cognito->>Dash: 4. Auth code → token
     User->>Dash: 5. Start instance (tier select)
     Dash->>EC2: 6. RunInstances / StartInstances
     Note over EC2: Per-user EC2 (ARM64)
     Dash-->>Nginx: 7. Register IP in cc-routing-table
-    Dash-->>User: 8. Link: user.dev.whchoi.net/?folder=/home/coder
-    User->>Nginx: 9. Host-based routing (multi-port)
+    Dash-->>User: 8. Link: user.dev.<domain>/?folder=/home/coder
+    User->>DevCF: 9. Access user.dev.<domain>
+    Note over DevCF: Lambda@Edge: validate NextAuth cookie (.atomai.click)
+    DevCF->>Nginx: 10. Forward via NLB (X-Custom-Secret)
     Note over Nginx: ?folder= → :8080 (code-server)<br/>/api/ → :8000 (API server)<br/>/ → :3000 (Frontend dev)
-    Nginx->>EC2: 10. Reverse proxy to instance port
+    Nginx->>EC2: 11. Reverse proxy to instance port
     Note over EC2: code-server :8080 (password auth)<br/>Frontend :3000 / API :8000 (optional)<br/>EBS root volume preserves state
-    EC2->>Bedrock: 11. Claude Code → Instance Profile → Bedrock VPC Endpoint
-    Bedrock-->>EC2: 12. Streamed response
+    EC2->>Bedrock: 12. Claude Code → Instance Profile → Bedrock VPC Endpoint
+    Bedrock-->>EC2: 13. Streamed response
     Note over EC2: 45min idle → auto-stop
 ```
 

@@ -39,8 +39,8 @@ Switch via `cdk deploy --all --context governanceOnly=true` to enable Local Gove
 | **01-Network** | VPC (10.100.0.0/16), Public/Private Subnets (2 AZ), NAT Gateway x2, VPC Endpoints x8, DNS Firewall |
 | **02-Security** | Cognito (Hosted UI + OAuth 2.0), ACM, KMS, Secrets Manager, IAM Roles, SNS |
 | **03-Usage Tracking** | DynamoDB (Streams), Lambda (usage-tracker + budget-check + gateway-manager), EventBridge, CloudTrail, MCP Catalog/Config tables |
-| **04-ECS DevEnv** | ECS Cluster, NLB + Nginx, DynamoDB Routing Table — *skipped when `governanceOnly=true`* |
-| **05-Dashboard** | Dashboard ECS Ec2Service, ALB, Unified CloudFront (Dashboard + DevEnv), Lambda@Edge |
+| **04-ECS DevEnv** | ECS Cluster, NLB + Nginx, DynamoDB Routing Table, DevEnv CloudFront (`*.dev.<domain>`, ADR-016) + Lambda@Edge session-validator — *skipped when `governanceOnly=true`* |
+| **05-Dashboard** | Dashboard ECS Ec2Service, ALB, Dashboard CloudFront (`<dashboardSubdomain>.<domain>` only, ADR-016) |
 | **06-WAF** | WAF WebACL (CloudFront, ALB) |
 | **07-EC2 DevEnv** | EC2-per-user DevEnv: Launch Template, DLP SG, IAM Role, Instance Profile, DynamoDB (cc-user-instances) — *skipped when `governanceOnly=true`* |
 | **08-Local Governance** | STS Issuer Lambda + Function URL, per-user IAM role factory (MaxSessionDuration=12h), Application Inference Profile per dept, `cc-on-bedrock-limits` table, token-limit-enforcer (DDB Stream), limit-reset (EventBridge cron) — ADR-014 |
@@ -292,8 +292,8 @@ ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
 | **01-Network** | VPC (10.100.0.0/16), Public/Private Subnet (2 AZ), NAT Gateway x2, VPC Endpoint x8, DNS Firewall |
 | **02-Security** | Cognito (Hosted UI + OAuth 2.0), ACM, KMS, Secrets Manager, IAM Roles, SNS |
 | **03-Usage Tracking** | DynamoDB (Streams), Lambda (usage-tracker + budget-check + gateway-manager), EventBridge, CloudTrail, MCP Catalog/Config 테이블 |
-| **04-ECS DevEnv** | ECS Cluster, NLB + Nginx, DynamoDB Routing Table — *`governanceOnly=true`일 때 skip* |
-| **05-Dashboard** | Dashboard ECS Ec2Service, ALB, Unified CloudFront (Dashboard + DevEnv), Lambda@Edge |
+| **04-ECS DevEnv** | ECS Cluster, NLB + Nginx, DynamoDB Routing Table, DevEnv CloudFront (`*.dev.<domain>`, ADR-016) + Lambda@Edge session-validator — *`governanceOnly=true`일 때 skip* |
+| **05-Dashboard** | Dashboard ECS Ec2Service, ALB, Dashboard CloudFront (`<dashboardSubdomain>.<domain>` 전용, ADR-016) |
 | **06-WAF** | WAF WebACL (CloudFront, ALB) |
 | **07-EC2 DevEnv** | EC2-per-user DevEnv: Launch Template, DLP SG, IAM Role, Instance Profile, DynamoDB (cc-user-instances) — *`governanceOnly=true`일 때 skip* |
 | **08-Local Governance** | STS Issuer Lambda + Function URL, per-user IAM role factory (MaxSessionDuration=12h), Application Inference Profile per dept, `cc-on-bedrock-limits` 테이블, token-limit-enforcer (DDB Stream), limit-reset (EventBridge cron) — ADR-014 |

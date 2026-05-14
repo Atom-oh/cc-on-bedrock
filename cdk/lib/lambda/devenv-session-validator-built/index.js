@@ -11,16 +11,16 @@
  * simpler cookie-only validator — no OAuth flow, no JWKS, no token exchange.
  *
  * Config: NEXTAUTH_SECRET is stored in SSM Parameter Store and read on cold start.
- * Static values (__DEV_DOMAIN__, __DASHBOARD_URL__, __SSM_REGION__) are baked in at CDK synth time.
+ * Static values (dev.atomai.click, https://cconbedrock-dashboard.atomai.click, ap-northeast-2) are baked in at CDK synth time.
  */
 
 const crypto = require('crypto');
 const https = require('https');
 
 // Static config (replaced by sed at CDK synth time)
-const DEV_DOMAIN = '__DEV_DOMAIN__';
-const DASHBOARD_LOGIN_URL = '__DASHBOARD_URL__/login';
-const SSM_REGION = '__SSM_REGION__';
+const DEV_DOMAIN = 'dev.atomai.click';
+const DASHBOARD_LOGIN_URL = 'https://cconbedrock-dashboard.atomai.click/login';
+const SSM_REGION = 'ap-northeast-2';
 const SSM_PARAM_NAME = '/cc-on-bedrock/nextauth-secret';
 
 // Config cache (loaded from SSM on cold start)
@@ -31,104 +31,31 @@ let configPromise = null;
 
 function loadConfig() {
   if (configPromise) return configPromise;
-  configPromise = (async () => {
-    try {
-      const secret = await ssmGetParameter(SSM_REGION, SSM_PARAM_NAME);
+  configPromise = new Promise((resolve, reject) => {
+    const params = new URLSearchParams({
+      Action: 'GetParameter',
+      Name: SSM_PARAM_NAME,
+      WithDecryption: 'true',
+      Version: '2014-11-06',
+    });
+    const options = {
+      hostname: `ssm.${SSM_REGION}.amazonaws.com`,
+      path: `/?${params}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-amz-json-1.1', 'X-Amz-Target': 'AmazonSSM.GetParameter' },
+    };
+    // Use AWS SDK-style request signing via IAM role credentials
+    const AWS = require('/var/runtime/node_modules/aws-sdk');
+    const ssm = new AWS.SSM({ region: SSM_REGION });
+    ssm.getParameter({ Name: SSM_PARAM_NAME, WithDecryption: true }, (err, data) => {
+      if (err) { configPromise = null; return reject(err); }
+      const secret = data.Parameter.Value;
       // Derive encryption key same as NextAuth: HKDF(SHA-256, secret, '', info, 32)
       encryptionKey = crypto.hkdfSync('sha256', secret, '', 'NextAuth.js Generated Encryption Key', 32);
-      return encryptionKey;
-    } catch (e) {
-      configPromise = null;
-      throw e;
-    }
-  })();
-  return configPromise;
-}
-
-// Self-contained SigV4 signed SSM:GetParameter — avoids any SDK dependency
-// (Lambda@Edge Node 20 runtime does not ship aws-sdk v2; v3 needs bundling).
-function ssmGetParameter(region, name) {
-  const accessKey = process.env.AWS_ACCESS_KEY_ID;
-  const secretKey = process.env.AWS_SECRET_ACCESS_KEY;
-  const sessionToken = process.env.AWS_SESSION_TOKEN || '';
-  if (!accessKey || !secretKey) {
-    return Promise.reject(new Error('Lambda IAM credentials not present in env'));
-  }
-  const service = 'ssm';
-  const host = `ssm.${region}.amazonaws.com`;
-  const target = 'AmazonSSM.GetParameter';
-  const body = JSON.stringify({ Name: name, WithDecryption: true });
-
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
-
-  const payloadHash = crypto.createHash('sha256').update(body).digest('hex');
-  const baseHeaders = {
-    'content-type': 'application/x-amz-json-1.1',
-    host,
-    'x-amz-date': amzDate,
-    'x-amz-target': target,
-  };
-  if (sessionToken) baseHeaders['x-amz-security-token'] = sessionToken;
-  const sortedHeaderNames = Object.keys(baseHeaders).sort();
-  const canonicalHeaders = sortedHeaderNames.map(h => `${h}:${baseHeaders[h]}\n`).join('');
-  const signedHeaders = sortedHeaderNames.join(';');
-  const canonicalRequest = `POST\n/\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    credentialScope,
-    crypto.createHash('sha256').update(canonicalRequest).digest('hex'),
-  ].join('\n');
-
-  const kDate = crypto.createHmac('sha256', 'AWS4' + secretKey).update(dateStamp).digest();
-  const kRegion = crypto.createHmac('sha256', kDate).update(region).digest();
-  const kService = crypto.createHmac('sha256', kRegion).update(service).digest();
-  const kSigning = crypto.createHmac('sha256', kService).update('aws4_request').digest();
-  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex');
-
-  const authHeader =
-    `AWS4-HMAC-SHA256 Credential=${accessKey}/${credentialScope}, ` +
-    `SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: host,
-      port: 443,
-      path: '/',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-amz-json-1.1',
-        'X-Amz-Target': target,
-        'X-Amz-Date': amzDate,
-        Authorization: authHeader,
-        ...(sessionToken ? { 'X-Amz-Security-Token': sessionToken } : {}),
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          return reject(new Error(`SSM HTTP ${res.statusCode}: ${data}`));
-        }
-        try {
-          const parsed = JSON.parse(data);
-          if (!parsed.Parameter || !parsed.Parameter.Value) {
-            return reject(new Error(`SSM response missing Parameter.Value: ${data}`));
-          }
-          resolve(parsed.Parameter.Value);
-        } catch (e) {
-          reject(e);
-        }
-      });
+      resolve(encryptionKey);
     });
-    req.on('error', reject);
-    req.setTimeout(3000, () => req.destroy(new Error('SSM request timeout')));
-    req.write(body);
-    req.end();
   });
+  return configPromise;
 }
 
 // ─── JWE Decryption (NextAuth v4 uses A256GCM with direct key agreement) ───

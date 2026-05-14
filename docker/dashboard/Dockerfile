@@ -8,6 +8,11 @@ WORKDIR /app
 COPY shared/nextjs-app/package.json shared/nextjs-app/package-lock.json ./
 RUN npm ci --ignore-scripts
 
+# Next.js NEXT_PUBLIC_* vars are inlined at build time, not runtime.
+# Pass them in via --build-arg so they make it into the bundle.
+ARG NEXT_PUBLIC_LOCAL_MODE_ENABLED=true
+ENV NEXT_PUBLIC_LOCAL_MODE_ENABLED=$NEXT_PUBLIC_LOCAL_MODE_ENABLED
+
 # Copy source and build
 COPY shared/nextjs-app/ ./
 RUN npm run build
@@ -27,6 +32,9 @@ ENV HOSTNAME=0.0.0.0
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+
+# Copy tools/cc-bedrock-local.sh so /api/install/cli can serve it at runtime (ADR-014)
+COPY tools/cc-bedrock-local.sh ./public/tools/cc-bedrock-local.sh
 
 # Non-root user for security
 RUN addgroup --system --gid 1001 nodejs && \

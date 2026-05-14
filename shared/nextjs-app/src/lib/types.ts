@@ -311,7 +311,7 @@ export interface PasswordInfo {
 
 // ─── User Portal Tab Types ───
 
-export type UserPortalTab = "environment" | "storage" | "settings";
+export type UserPortalTab = "environment" | "local" | "storage" | "settings";
 
 export const TIER_CONFIG = {
   light: { label: "Light", cpu: "1 vCPU", memory: "3.75 GB", costMultiplier: 1 },

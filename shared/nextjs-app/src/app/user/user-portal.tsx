@@ -9,11 +9,16 @@ import SettingsTab from "@/components/user/settings-tab";
 import WelcomeOnboarding from "@/components/user/welcome-onboarding";
 import FirstLaunchGuide from "@/components/user/first-launch-guide";
 
+// ADR-014: Local Governance Mode (Claude Code on local PC via STS). Tab visible
+// when NEXT_PUBLIC_LOCAL_MODE_ENABLED=true is set on the Dashboard container.
+const LOCAL_MODE_ENABLED =
+  (process.env.NEXT_PUBLIC_LOCAL_MODE_ENABLED ?? "").toLowerCase() === "true";
+
 interface UserPortalProps {
   user: UserSession;
 }
 
-const TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: React.ReactNode }[] = [
+const ALL_TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: React.ReactNode }[] = [
   {
     id: "environment",
     label: "Environment",
@@ -46,6 +51,10 @@ const TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: React.
     ),
   },
 ];
+
+// ADR-014: Local (Bedrock) was a separate tab — now merged into Environment.
+// Keeping ALL_TABS → TABS without filtering for now (local tab removed entirely).
+const TABS = ALL_TABS;
 
 export default function UserPortal({ user }: UserPortalProps) {
   const { t } = useI18n();
@@ -119,13 +128,16 @@ export default function UserPortal({ user }: UserPortalProps) {
     );
   }
 
-  // Onboarding: no subdomain assigned yet
-  if (!user.subdomain) {
+  // Onboarding: no subdomain assigned yet.
+  // - LOCAL_MODE_ENABLED: fall through to Environment tab (now hosts Local section
+  //   at the top above the Container Request flow).
+  // - Otherwise: show classic welcome onboarding.
+  if (!user.subdomain && !LOCAL_MODE_ENABLED) {
     return <WelcomeOnboarding email={user.email} />;
   }
 
   // First launch: subdomain assigned but never started a container
-  if (!container && !loading && !hasEverStarted) {
+  if (user.subdomain && !container && !loading && !hasEverStarted) {
     return (
       <FirstLaunchGuide
         subdomain={user.subdomain}

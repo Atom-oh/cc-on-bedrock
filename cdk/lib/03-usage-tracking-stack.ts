@@ -70,6 +70,33 @@ export class UsageTrackingStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // CLI bearer tokens for Local Governance Mode (ADR-014).
+    // PK: HASH#{sha256(token)}  Attributes: sub, username, department, project, expiresAt
+    // TTL ('expiresAt' epoch seconds) auto-purges; user can revoke by deleting the row.
+    // Issued by /api/user/cli-script (NextAuth-protected), consumed by
+    // /api/local/credentials Bearer auth path that maps token → user identity.
+    const cliTokensTable = new dynamodb.Table(this, 'CliTokensTable', {
+      tableName: 'cc-on-bedrock-cli-tokens',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      timeToLiveAttribute: 'expiresAt',
+    });
+    // GSI for "list this user's tokens" UX (revoke flow).
+    cliTokensTable.addGlobalSecondaryIndex({
+      indexName: 'sub-index',
+      partitionKey: { name: 'sub', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'issuedAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+    new cdk.CfnOutput(this, 'CliTokensTableName', {
+      value: cliTokensTable.tableName,
+      exportName: 'cc-cli-tokens-table-name',
+    });
+
     // Lambda for processing CloudTrail events
     const trackerLambda = new lambda.Function(this, 'BedrockUsageTracker', {
       functionName: 'cc-on-bedrock-usage-tracker',
