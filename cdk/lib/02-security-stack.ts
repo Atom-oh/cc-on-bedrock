@@ -77,6 +77,25 @@ export class SecurityStack extends cdk.Stack {
       },
     });
 
+    // ADR-014: Public app client for the cc-bedrock-local CLI (USER_PASSWORD_AUTH).
+    // No secret so the CLI can authenticate from end-user machines without embedding
+    // shared credentials. Access tokens from this client are verified by the
+    // Dashboard's /api/local/credentials route via cognito-idp:GetUser.
+    const cliPublicClient = this.userPool.addClient('CliPublicClient', {
+      userPoolClientName: 'cc-on-bedrock-cli-public',
+      generateSecret: false,
+      authFlows: { userPassword: true, userSrp: true },
+      refreshTokenValidity: cdk.Duration.days(30),
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      preventUserExistenceErrors: true,
+    });
+    new cdk.CfnOutput(this, 'CliPublicClientId', {
+      value: cliPublicClient.userPoolClientId,
+      description: 'Cognito app client id for cc-bedrock-local CLI (no secret)',
+      exportName: 'cc-cli-public-client-id',
+    });
+
     // Cognito Groups
     new cognito.CfnUserPoolGroup(this, 'AdminGroup', {
       userPoolId: this.userPool.userPoolId,
@@ -106,11 +125,16 @@ export class SecurityStack extends cdk.Stack {
     });
 
     // IAM Roles
+    // ADR-021: Bedrock IAM uses wildcard Claude family (region-prefix agnostic).
+    // Pattern covers `anthropic.claude-*`, `global.anthropic.claude-*`, `us.anthropic.claude-*`,
+    // `apac.anthropic.claude-*`, `eu.anthropic.claude-*`, and future region prefixes.
+    // Per-model spend control is delegated to token-limit-enforcer (ADR-014) + budget-check (ADR-015).
     const bedrockPolicy = new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
       resources: [
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:*::foundation-model/*anthropic.claude-*',
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:application-inference-profile/*`,
       ],
     });
 
@@ -122,12 +146,16 @@ export class SecurityStack extends cdk.Stack {
     this.taskPermissionBoundary = new iam.ManagedPolicy(this, 'TaskPermissionBoundary', {
       managedPolicyName: 'cc-on-bedrock-task-boundary',
       statements: [
+        // ADR-021: wildcard Claude family in Permission Boundary too — boundary must be
+        // at least as permissive as any role's inline policy, else effective permission = ∅.
+        // Per-model usage gating is handled at runtime by token-limit-enforcer (ADR-014).
         new iam.PolicyStatement({
           sid: 'BedrockClaude',
           actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
           resources: [
-            'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+            'arn:aws:bedrock:*::foundation-model/*anthropic.claude-*',
             `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+            `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:application-inference-profile/*`,
           ],
         }),
         new iam.PolicyStatement({
@@ -284,14 +312,22 @@ export class SecurityStack extends cdk.Stack {
         }),
         new iam.PolicyStatement({
           sid: 'DynamoDBAccess',
-          actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:BatchGetItem'],
+          actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem', 'dynamodb:BatchGetItem'],
           resources: [
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage`,
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage/*`,
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-department-budgets`,
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests`,
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets`,
+            // ADR-014: Local Governance limits table (CRUD on LIMIT/DENY items, read counters)
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-limits`,
           ],
+        }),
+        // ADR-014: admin reset endpoint detaches Deny policy from local-user roles
+        new iam.PolicyStatement({
+          sid: 'IamLocalUserRoleReset',
+          actions: ['iam:DeleteRolePolicy', 'iam:GetRolePolicy'],
+          resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
         }),
         new iam.PolicyStatement({
           sid: 'RoutingTableAccess',

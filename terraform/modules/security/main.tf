@@ -221,12 +221,15 @@ resource "aws_secretsmanager_secret_version" "cloudfront_secret" {
 # ---- IAM Roles ---------------------------------------------------------------
 
 # Bedrock policy document (shared)
+# ADR-021: wildcard Claude family — covers anthropic./global./us./apac./eu./future region prefixes.
+# Per-model spend control is delegated to runtime enforcers (ADR-014 token limits, ADR-015 dollar budget).
 data "aws_iam_policy_document" "bedrock" {
   statement {
-    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"]
     resources = [
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+      "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
     ]
   }
 }

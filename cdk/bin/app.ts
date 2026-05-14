@@ -8,8 +8,31 @@ import { EcsDevenvStack } from '../lib/04-ecs-devenv-stack';
 import { DashboardStack } from '../lib/05-dashboard-stack';
 import { WafStack } from '../lib/06-waf-stack';
 import { Ec2DevenvStack } from '../lib/07-ec2-devenv-stack';
+import { LocalGovernanceStack } from '../lib/08-local-governance-stack';
 
 const app = new cdk.App();
+
+// ADR-014: Local Governance Mode toggle.
+//   --context governanceOnly=true   → skip EC2/ECS DevEnv stacks, deploy Local Governance
+const governanceOnly = (app.node.tryGetContext('governanceOnly') === true)
+  || (String(app.node.tryGetContext('governanceOnly') ?? '').toLowerCase() === 'true');
+
+// ADR-016: separate CloudFront distributions per concern.
+//
+// Cert context names (kept stable for backward-compat with cdk.context.json):
+//   dashboardCertArn   — ALB cert (ap-northeast-2 regional); flips ALB protocol HTTPS/HTTP only
+//   cloudfrontCertArn  — Dashboard CloudFront cert (us-east-1)
+//   devEnvCertArn      — DevEnv CloudFront cert (us-east-1)  [ADR-016]
+//   unifiedCertArn     — DEPRECATED (ADR-013)
+const devenvCertArn = (
+  app.node.tryGetContext('devEnvCertArn') as string | undefined
+) ?? (app.node.tryGetContext('devenvCertArn') as string | undefined);
+if (app.node.tryGetContext('unifiedCertArn')) {
+  console.warn(
+    '[deprecation] unifiedCertArn context is deprecated by ADR-016. ' +
+    'Use cloudfrontCertArn (Dashboard CF) and devEnvCertArn (DevEnv CF) instead.',
+  );
+}
 
 // Read config overrides from CDK context
 const config = {
@@ -74,42 +97,50 @@ const wafStack = new WafStack(app, 'CcOnBedrock-WAF', {
   description: 'CC-on-Bedrock: WAF WebACL for CloudFront distributions',
 });
 
-// Stack 04: ECS Dev Environment (NLB + Nginx only — CF moved to Stack 05, ADR-013)
-const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
-  env, config,
-  vpc: networkStack.vpc,
-  encryptionKey: securityStack.encryptionKey,
-  taskPermissionBoundary: securityStack.taskPermissionBoundary,
-  webAclArn: wafStack.webAclArn,
-  description: 'CC-on-Bedrock: ECS Cluster, NLB, Nginx Routing',
-});
-ecsDevenvStack.addDependency(securityStack);
-ecsDevenvStack.addDependency(wafStack);
+// Stack 04: ECS DevEnv (NLB + Nginx + DevEnv CloudFront, ADR-016)
+// Skipped when governanceOnly=true (ADR-014). After ADR-016 split, Stack 05 (Dashboard)
+// no longer depends on Stack 04's SGs/NLB DNS, so this gating is now clean.
+let ecsDevenvStack: EcsDevenvStack | undefined;
+if (!governanceOnly) {
+  ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
+    env, config,
+    crossRegionReferences: true,
+    vpc: networkStack.vpc,
+    encryptionKey: securityStack.encryptionKey,
+    taskPermissionBoundary: securityStack.taskPermissionBoundary,
+    webAclArn: wafStack.webAclArn,
+    devenvCertificateArn: devenvCertArn,
+    description: 'CC-on-Bedrock: ECS Cluster, NLB, Nginx Routing, DevEnv CloudFront',
+  });
+  ecsDevenvStack.addDependency(securityStack);
+  ecsDevenvStack.addDependency(wafStack);
+}
 
-// Stack 05: Dashboard + Unified CloudFront (ADR-013: Dashboard + DevEnv in single CF)
+// Stack 05: Dashboard CloudFront (ADR-016 — dashboard subdomain only)
 const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   env, config, crossRegionReferences: true,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
   dashboardCertificateArn: app.node.tryGetContext('dashboardCertArn'),
   cloudfrontCertificateArn: app.node.tryGetContext('cloudfrontCertArn'),
-  unifiedCertificateArn: app.node.tryGetContext('unifiedCertArn'),
   // hostedZone imported directly from config to avoid cross-stack export dependency
   userPool: securityStack.userPool,
-  sgOpen: ecsDevenvStack.sgOpen,
-  sgRestricted: ecsDevenvStack.sgRestricted,
-  sgLocked: ecsDevenvStack.sgLocked,
+  // SG props only meaningful in EC2 mode (dashboard container provisions per-user EC2)
+  sgOpen: ecsDevenvStack?.sgOpen,
+  sgRestricted: ecsDevenvStack?.sgRestricted,
+  sgLocked: ecsDevenvStack?.sgLocked,
   ecsInfrastructureRoleArn: securityStack.ecsInfrastructureRole.roleArn,
   webAclArn: wafStack.webAclArn,
   dnsFirewallRuleGroupId: networkStack.dnsFirewallRuleGroupId,
-  nlbDnsName: cdk.Fn.importValue('cc-devenv-nlb-dns'),
-  description: 'CC-on-Bedrock: Unified Dashboard + DevEnv CloudFront',
+  description: 'CC-on-Bedrock: Dashboard CloudFront (ADR-016 split)',
 });
-dashboardStack.addDependency(ecsDevenvStack);
+if (ecsDevenvStack) dashboardStack.addDependency(ecsDevenvStack);
 dashboardStack.addDependency(wafStack);
 
 // Stack 07: EC2-per-user Dev Environment
-const ec2DevenvStack = new Ec2DevenvStack(app, 'CcOnBedrock-Ec2Devenv', {
+// Skipped when governanceOnly=true (ADR-014)
+if (!governanceOnly) {
+  const ec2DevenvStack = new Ec2DevenvStack(app, 'CcOnBedrock-Ec2Devenv', {
     env, config,
     vpc: networkStack.vpc,
     encryptionKey: securityStack.encryptionKey,
@@ -117,5 +148,23 @@ const ec2DevenvStack = new Ec2DevenvStack(app, 'CcOnBedrock-Ec2Devenv', {
     description: 'CC-on-Bedrock: EC2-per-user DevEnv (Launch Template, SG, IAM, DynamoDB)',
   });
   ec2DevenvStack.addDependency(securityStack);
+}
 
-console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));
+// Stack 08: Local Governance Mode (ADR-014)
+// Deployed in both modes — Local mode users coexist with EC2 mode users.
+// In governanceOnly mode it is the primary user surface.
+// ADR-021: allowedModels prop removed — IAM uses wildcard Claude family; runtime token limits gate spend.
+const localGovStack = new LocalGovernanceStack(app, 'CcOnBedrock-LocalGovernance', {
+  env, config,
+  encryptionKey: securityStack.encryptionKey,
+  usageTable: usageTrackingStack.usageTable,
+  taskPermissionBoundary: securityStack.taskPermissionBoundary,
+  description: 'CC-on-Bedrock: Local Governance Mode (STS Issuer, token limits, IAM Deny enforcement)',
+});
+localGovStack.addDependency(securityStack);
+localGovStack.addDependency(usageTrackingStack);
+
+console.log('CC-on-Bedrock CDK App initialized', {
+  governanceOnly,
+  config: { projectPrefix: config.projectPrefix, domainName: config.domainName },
+});

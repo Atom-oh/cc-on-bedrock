@@ -23,18 +23,27 @@ export interface DashboardStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
+  /** Cert covering the dashboard subdomain only (region us-east-1 for CloudFront). */
   dashboardCertificateArn?: string;
+  /** @deprecated kept as fallback alias for dashboardCertificateArn. */
   cloudfrontCertificateArn?: string;
+  /**
+   * @deprecated ADR-013 unified-CF cert. ADR-016 splits CloudFront per concern; this
+   * field is ignored. Use dashboardCertificateArn (Stack 05) and devenvCertArn (Stack 04).
+   */
   unifiedCertificateArn?: string;
   hostedZone?: route53.IHostedZone;
   userPool: cognito.UserPool;
-  sgOpen: ec2.ISecurityGroup;
-  sgRestricted: ec2.ISecurityGroup;
-  sgLocked: ec2.ISecurityGroup;
+  /** DevEnv DLP SGs — optional. Required for EC2 mode dashboard container env vars
+   *  (creating per-user EC2 instances). Pass undefined in governanceOnly mode. */
+  sgOpen?: ec2.ISecurityGroup;
+  sgRestricted?: ec2.ISecurityGroup;
+  sgLocked?: ec2.ISecurityGroup;
   ecsInfrastructureRoleArn?: string;
   webAclArn?: string;
   dnsFirewallRuleGroupId?: string;
-  nlbDnsName: string;
+  /** @deprecated ADR-016: DevEnv CloudFront now owns its own NLB origin in Stack 04. */
+  nlbDnsName?: string;
 }
 
 export class DashboardStack extends cdk.Stack {
@@ -43,8 +52,9 @@ export class DashboardStack extends cdk.Stack {
 
     const { config, vpc, encryptionKey,
             dashboardCertificateArn, cloudfrontCertificateArn,
-            userPool, webAclArn, nlbDnsName } = props;
-    const unifiedCertArn = props.unifiedCertificateArn;
+            userPool, webAclArn } = props;
+    // ADR-016: unifiedCertificateArn / nlbDnsName intentionally not destructured;
+    // they are retained as deprecated props but no longer participate in the build.
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
@@ -69,6 +79,7 @@ export class DashboardStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/*`],
     }));
 
+    // ADR-021: wildcard Claude family — region-prefix agnostic
     dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'BedrockAccess',
       actions: [
@@ -76,8 +87,9 @@ export class DashboardStack extends cdk.Stack {
         'bedrock:Converse', 'bedrock:ConverseStream',
       ],
       resources: [
-        `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-*`,
-        `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+        `arn:aws:bedrock:*::foundation-model/*anthropic.claude-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:application-inference-profile/*`,
       ],
     }));
 
@@ -190,6 +202,9 @@ export class DashboardStack extends cdk.Stack {
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-usage`,
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dlp-domain-lists`,
+        // ADR-014: CLI bearer tokens (issued by /api/user/cli-script, verified by /api/local/credentials)
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-cli-tokens`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-cli-tokens/index/*`,
       ],
     }));
     corePolicy.addStatements(new iam.PolicyStatement({
@@ -297,9 +312,9 @@ export class DashboardStack extends cdk.Stack {
         INSTANCE_TABLE: 'cc-user-instances',
         LAUNCH_TEMPLATE: 'cc-on-bedrock-devenv',
         PRIVATE_SUBNET_IDS: cdk.Fn.join(',', vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds),
-        SG_DEVENV_OPEN: props.sgOpen.securityGroupId,
-        SG_DEVENV_RESTRICTED: props.sgRestricted.securityGroupId,
-        SG_DEVENV_LOCKED: props.sgLocked.securityGroupId,
+        SG_DEVENV_OPEN: props.sgOpen?.securityGroupId ?? '',
+        SG_DEVENV_RESTRICTED: props.sgRestricted?.securityGroupId ?? '',
+        SG_DEVENV_LOCKED: props.sgLocked?.securityGroupId ?? '',
         S3_SYNC_BUCKET: `${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
         ROUTING_TABLE: 'cc-routing-table',
         DLP_DOMAIN_LIST_TABLE: 'cc-dlp-domain-lists',
@@ -308,6 +323,16 @@ export class DashboardStack extends cdk.Stack {
         KMS_KEY_ARN: encryptionKey.keyArn,
         HIBERNATE_ENABLED: 'true',  // ADR-010: EC2 Hibernation support
         COOKIE_DOMAIN: `.${config.domainName}`,  // ADR-013: shared cookie for unified auth
+        // ADR-014: Local Governance Mode wiring (consumed by /api/local/credentials, /api/local/limits, /admin/limits)
+        STS_ISSUER_FUNCTION_NAME: 'cc-on-bedrock-sts-issuer',
+        LIMITS_TABLE: 'cc-on-bedrock-limits',
+        NEXT_PUBLIC_LOCAL_MODE_ENABLED: 'true',
+        // ADR-014: CLI bearer tokens (issued by /api/user/cli-script, verified by /api/local/credentials Bearer path)
+        CLI_TOKENS_TABLE: 'cc-on-bedrock-cli-tokens',
+        CLI_TOKEN_TTL_DAYS: '30',
+        // ADR-014 installer (/api/install): CLI public Cognito app client (no secret)
+        COGNITO_CLI_CLIENT_ID: cdk.Fn.importValue('cc-cli-public-client-id'),
+        COGNITO_REGION: cdk.Aws.REGION,
       },
       secrets: {
         NEXTAUTH_SECRET: ecs.Secret.fromSecretsManager(nextAuthSecret),
@@ -375,85 +400,27 @@ export class DashboardStack extends cdk.Stack {
       },
     });
 
-    // ─── Lambda@Edge: Unified Auth + Origin Routing (ADR-013) ───
-    const devDomain = `${config.devSubdomain}.${config.domainName}`;
-    const dashboardUrl = `https://${config.dashboardSubdomain}.${config.domainName}`;
-
-    // NextAuth secret SSM parameter (for session validator to decrypt JWE cookies)
+    // NextAuth secret SSM parameter — shared with the DevEnv CF session-validator
+    // (defined in Stack 04 per ADR-016). Lambda@Edge reads this at runtime.
     const nextAuthSecretValue = nextAuthSecret.secretValue.unsafeUnwrap();
     new ssm.StringParameter(this, 'NextAuthSecretParam', {
       parameterName: '/cc-on-bedrock/nextauth-secret',
-      description: 'NextAuth secret for Lambda@Edge session validation',
+      description: 'NextAuth secret for Lambda@Edge session validation (consumed by DevEnv CF)',
       stringValue: nextAuthSecretValue,
     });
 
-    // Session Validator — validates NextAuth cookie for *.dev.* requests
-    const sessionValidatorFn = new cloudfront.experimental.EdgeFunction(this, 'SessionValidator', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda/devenv-session-validator'), {
-        bundling: {
-          image: cdk.DockerImage.fromRegistry('node:20-alpine'),
-          command: [
-            'sh', '-c',
-            `sed -e "s|__DEV_DOMAIN__|${devDomain}|g" \
-                 -e "s|__DASHBOARD_URL__|${dashboardUrl}|g" \
-                 -e "s|__SSM_REGION__|ap-northeast-2|g" \
-                 /asset-input/index.js > /asset-output/index.js`,
-          ],
-        },
-      }),
-      timeout: cdk.Duration.seconds(5),
-      memorySize: 128,
-      description: 'NextAuth session validation for *.dev.atomai.click (ADR-013)',
-    });
-    sessionValidatorFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ssm:GetParameter'],
-      resources: [`arn:aws:ssm:ap-northeast-2:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/nextauth-secret`],
-    }));
-
-    // Origin Router — routes *.dev.* to NLB, everything else to ALB (default)
-    // NLB DNS and CF secret come from CloudFormation tokens (Fn::ImportValue, Secrets Manager)
-    // that only resolve at deploy time, so they CANNOT be baked in via sed at build time.
-    // Store them in SSM and load at Lambda runtime (same cold-start caching as session-validator).
-    const cloudfrontSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedCfSecret',
-      `arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/cloudfront-secret-lZMDiE`);
-    const originConfigParam = new ssm.StringParameter(this, 'OriginRouterConfigParam', {
-      parameterName: '/cc-on-bedrock/devenv-origin-config',
-      description: 'NLB DNS + CF secret for Lambda@Edge origin router (ADR-013)',
-      stringValue: cdk.Fn.sub('{"nlbDns":"${NlbDns}","cfSecret":"${CfSecret}"}', {
-        NlbDns: nlbDnsName,
-        CfSecret: cloudfrontSecret.secretValue.unsafeUnwrap(),
-      }),
-    });
-
-    const originRouterFn = new cloudfront.experimental.EdgeFunction(this, 'OriginRouter', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda/devenv-origin-router'), {
-        bundling: {
-          image: cdk.DockerImage.fromRegistry('node:20-alpine'),
-          command: [
-            'sh', '-c',
-            `sed -e "s|__DEV_DOMAIN__|${devDomain}|g" \
-                 -e "s|__SSM_REGION__|ap-northeast-2|g" \
-                 /asset-input/index.js > /asset-output/index.js`,
-          ],
-        },
-      }),
-      timeout: cdk.Duration.seconds(5),
-      memorySize: 128,
-      description: 'Host-based origin routing for unified CloudFront (ADR-013)',
-    });
-    originRouterFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ssm:GetParameter'],
-      resources: [originConfigParam.parameterArn],
-    }));
-
-    // ─── Unified CloudFront Distribution (Dashboard + DevEnv) ───
-    const certArn = unifiedCertArn || cloudfrontCertificateArn;
+    // ─── Dashboard CloudFront Distribution (ADR-016 — dashboard subdomain only) ───
+    // session-validator + origin-router Lambdas were moved to Stack 04 (DevEnv CF)
+    // because pre-validation is only required for *.dev.* hosts. The dashboard's own
+    // NextAuth middleware handles its session checks.
+    //
+    // Note on cert contexts:
+    //   - dashboardCertificateArn  → ALB cert (ap-northeast-2 regional), only flips ALB
+    //                                origin protocol HTTPS vs HTTP. NOT used by CloudFront.
+    //   - cloudfrontCertificateArn → Dashboard CF cert (us-east-1), used here.
+    const certArn = cloudfrontCertificateArn;
     const domainNames = certArn
-      ? [`${config.dashboardSubdomain}.${config.domainName}`, `*.${config.devSubdomain}.${config.domainName}`]
+      ? [`${config.dashboardSubdomain}.${config.domainName}`]
       : undefined;
 
     const distribution = new cloudfront.Distribution(this, 'DashboardCf', {
@@ -468,27 +435,18 @@ export class DashboardStack extends cdk.Stack {
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
-        edgeLambdas: [
-          { eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST, functionVersion: sessionValidatorFn.currentVersion },
-          { eventType: cloudfront.LambdaEdgeEventType.ORIGIN_REQUEST, functionVersion: originRouterFn.currentVersion },
-        ],
       },
-      comment: 'CC-on-Bedrock Unified (Dashboard + DevEnv)',
+      comment: 'CC-on-Bedrock Dashboard (ADR-016 split)',
       ...(certArn ? {
         domainNames,
         certificate: acm.Certificate.fromCertificateArn(this, 'CfCert', certArn),
       } : {}),
     });
 
-    // Route 53 Records — Dashboard + DevEnv wildcard (both point to unified CF)
+    // Route 53 Record — Dashboard subdomain only (DevEnv wildcard moved to Stack 04)
     new route53.ARecord(this, 'DashboardRecord', {
       zone: hostedZone,
       recordName: config.dashboardSubdomain,
-      target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
-    });
-    new route53.ARecord(this, 'DevEnvWildcard', {
-      zone: hostedZone,
-      recordName: `*.${config.devSubdomain}`,
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
     });
 

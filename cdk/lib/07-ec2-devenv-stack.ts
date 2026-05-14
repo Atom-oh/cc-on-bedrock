@@ -97,7 +97,7 @@ export class Ec2DevenvStack extends cdk.Stack {
       ...(props.taskPermissionBoundary ? { permissionsBoundary: props.taskPermissionBoundary } : {}),
     });
 
-    // Bedrock access — all Claude models (foundation + global/us/eu inference profiles)
+    // ADR-021: wildcard Claude family — covers anthropic./global./us./apac./eu./future prefixes
     this.devenvRole.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockAccess',
       actions: [
@@ -105,8 +105,9 @@ export class Ec2DevenvStack extends cdk.Stack {
         'bedrock:Converse', 'bedrock:ConverseStream',
       ],
       resources: [
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:*::foundation-model/*anthropic.claude-*',
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:application-inference-profile/*`,
       ],
     }));
 

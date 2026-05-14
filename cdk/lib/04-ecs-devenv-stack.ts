@@ -13,6 +13,12 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as fs from 'fs';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 
@@ -22,6 +28,12 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   taskPermissionBoundary?: iam.IManagedPolicy;
   webAclArn?: string;
+  /** ADR-016: us-east-1 ACM certificate ARN covering *.{devSubdomain}.{domain}.
+   *  Required to attach a custom domain to the DevEnv CloudFront distribution.
+   *  When omitted, the DevEnv distribution skips alias config (default CF domain only). */
+  devenvCertificateArn?: string;
+  /** Hosted zone for *.dev record. If omitted, looked up from config.hostedZoneId. */
+  hostedZone?: route53.IHostedZone;
 }
 
 export class EcsDevenvStack extends cdk.Stack {
@@ -45,8 +57,7 @@ export class EcsDevenvStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       ...(props.taskPermissionBoundary ? { permissionsBoundary: props.taskPermissionBoundary } : {}),
     });
-    // Bedrock: All Claude models (Opus, Sonnet, Haiku)
-    // Both foundation-model and inference-profile ARNs required
+    // Bedrock: All Claude models — wildcard prefix covers global./apac./us./eu./bare anthropic (ADR-021)
     ecsTaskRole.addToPolicy(new iam.PolicyStatement({
       actions: [
         'bedrock:InvokeModel',
@@ -55,12 +66,9 @@ export class EcsDevenvStack extends cdk.Stack {
         'bedrock:ConverseStream',
       ],
       resources: [
-        // Foundation model ARNs
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-        // Global inference profile ARNs
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
-        // APAC inference profile ARNs
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/apac.anthropic.claude-*`,
+        'arn:aws:bedrock:*::foundation-model/*anthropic.claude-*',
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:application-inference-profile/*`,
       ],
     }));
     // SSM permissions for ECS Exec
@@ -377,6 +385,94 @@ export class EcsDevenvStack extends cdk.Stack {
 
     // Grant Nginx S3 read access for config
     userDataBucket.grantRead(ecsTaskRole);
+
+    // ─── DevEnv CloudFront (ADR-016) ────────────────────────────
+    // Separate distribution for *.dev.<domain>. NLB origin with X-Custom-Secret
+    // injection. session-validator Lambda@Edge enforces NextAuth cookie.
+    const devDomain = `${config.devSubdomain}.${config.domainName}`;
+    const dashboardUrl = `https://${config.dashboardSubdomain}.${config.domainName}`;
+
+    // Pre-substitute template placeholders at synth time (no docker bundling required).
+    // Result is written to .gen/<stack>/devenv-session-validator/index.js and picked up
+    // by lambda.Code.fromAsset.
+    const validatorSrc = fs.readFileSync(
+      path.join(__dirname, 'lambda/devenv-session-validator/index.js'),
+      'utf8',
+    )
+      .replace(/__DEV_DOMAIN__/g, devDomain)
+      .replace(/__DASHBOARD_URL__/g, dashboardUrl)
+      .replace(/__SSM_REGION__/g, 'ap-northeast-2');
+    const validatorOutDir = path.join(__dirname, '.gen', 'ecs-devenv', 'devenv-session-validator');
+    fs.mkdirSync(validatorOutDir, { recursive: true });
+    fs.writeFileSync(path.join(validatorOutDir, 'index.js'), validatorSrc);
+
+    const sessionValidatorFn = new cloudfront.experimental.EdgeFunction(this, 'DevenvSessionValidator', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(validatorOutDir),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      description: 'NextAuth session validator for *.dev.<domain> (ADR-016)',
+    });
+    // Lambda@Edge reads the NextAuth secret SSM parameter (created in Stack 05)
+    sessionValidatorFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:aws:ssm:ap-northeast-2:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/nextauth-secret`],
+    }));
+
+    const devenvCert = props.devenvCertificateArn
+      ? acm.Certificate.fromCertificateArn(this, 'DevenvCfCert', props.devenvCertificateArn)
+      : undefined;
+
+    // ADR-016 v2: construct ID 'DevenvCfV2' (not 'DevenvCf') — old physical resource
+    // E1ZJ5UWCRSNA9D was deleted out-of-band on 2026-05-12. Renaming forces CFN to
+    // CREATE a new distribution instead of trying to UpdateDistribution on a missing one.
+    const devenvDistribution = new cloudfront.Distribution(this, 'DevenvCfV2', {
+      webAclId: props.webAclArn,
+      defaultBehavior: {
+        // NLB origin; Nginx validates X-Custom-Secret to reject non-CF traffic
+        origin: new origins.HttpOrigin(nlb.loadBalancerDnsName, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          customHeaders: {
+            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
+          },
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+        edgeLambdas: [
+          { eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST, functionVersion: sessionValidatorFn.currentVersion },
+        ],
+      },
+      comment: 'CC-on-Bedrock DevEnv (*.dev.<domain>) — ADR-016 split',
+      ...(devenvCert ? {
+        domainNames: [`*.${config.devSubdomain}.${config.domainName}`],
+        certificate: devenvCert,
+      } : {}),
+    });
+
+    // Route 53 *.dev.<domain> wildcard alias (moved from Stack 05 per ADR-016)
+    const hostedZone = config.hostedZoneId
+      ? route53.HostedZone.fromHostedZoneAttributes(this, 'ImportedHostedZoneForDevenv', {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.domainName,
+        })
+      : props.hostedZone;
+    if (hostedZone) {
+      new route53.ARecord(this, 'DevEnvWildcard', {
+        zone: hostedZone,
+        recordName: `*.${config.devSubdomain}`,
+        target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(devenvDistribution)),
+      });
+    }
+
+    new cdk.CfnOutput(this, 'DevenvCfDomainSplit', {
+      value: devenvDistribution.distributionDomainName,
+      description: 'DevEnv CloudFront distribution domain (ADR-016 split)',
+      // Intentionally no exportName — avoids collision with legacy export
+      // 'cc-devenv-cf-domain' still resident in deployed Stack 04 state.
+    });
 
     // Outputs
     new cdk.CfnOutput(this, 'ClusterName', { value: this.cluster.clusterName, exportName: 'cc-ecs-cluster-name' });
