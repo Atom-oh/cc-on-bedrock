@@ -73,10 +73,11 @@ fi
 
 log "Department: ${DEPT}, Region: ${REGION}"
 
-# Query DynamoDB for department Gateway URL
+# Query DynamoDB for department Gateway URL (jq for safe JSON key construction)
+DEPT_KEY=$(jq -n --arg dept "$DEPT" '{"PK":{"S":("DEPT#"+$dept)},"SK":{"S":"GATEWAY"}}')
 DEPT_GW=$(aws dynamodb get-item \
   --table-name cc-dept-mcp-config \
-  --key '{"PK":{"S":"DEPT#'"${DEPT}"'"},"SK":{"S":"GATEWAY"}}' \
+  --key "$DEPT_KEY" \
   --query 'Item.gatewayUrl.S' --output text --region "$REGION" 2>/dev/null || echo "None")
 
 # Query common Gateway URL
@@ -157,7 +158,7 @@ if [ -n "$CLAUDE_BIN" ]; then
   DEPT_MKT=$(aws dynamodb query \
     --table-name cc-dept-mcp-config \
     --key-condition-expression "PK = :pk AND begins_with(SK, :sk)" \
-    --expression-attribute-values '{":pk":{"S":"DEPT#'"${DEPT}"'"},":sk":{"S":"MKTPLACE#"}}' \
+    --expression-attribute-values "$(jq -n --arg dept "$DEPT" '{":pk":{"S":("DEPT#"+$dept)},":sk":{"S":"MKTPLACE#"}}')" \
     --projection-expression "#u,enabled" \
     --expression-attribute-names '{"#u":"url"}' \
     --region "$REGION" --output json 2>/dev/null || echo '{"Items":[]}')

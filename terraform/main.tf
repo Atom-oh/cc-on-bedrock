@@ -27,7 +27,7 @@ module "security" {
   hosted_zone_id = module.network.hosted_zone_id
 }
 
-# ---- 03 ECS Dev Environment --------------------------------------------------
+# ---- 04 ECS DevEnv (Cluster + NLB + Nginx) -----------------------------------
 module "ecs_devenv" {
   source = "./modules/ecs-devenv"
 
@@ -35,11 +35,7 @@ module "ecs_devenv" {
   vpc_cidr                = module.network.vpc_cidr
   public_subnet_ids       = module.network.public_subnet_ids
   private_subnet_ids      = module.network.private_subnet_ids
-  isolated_subnet_ids     = module.network.isolated_subnet_ids
   kms_key_arn             = module.security.kms_key_arn
-  kms_key_id              = module.security.kms_key_id
-  devenv_certificate_arn  = module.security.devenv_certificate_arn
-  hosted_zone_id          = module.network.hosted_zone_id
   domain_name             = var.domain_name
   dev_subdomain           = var.dev_subdomain
   cloudfront_secret_value = module.security.cloudfront_secret_value

@@ -236,91 +236,129 @@ fi
 
 aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
 
-# Common EC2 setup: CWAgent config, code-server service, hibernate resume
+# Common EC2 setup: CWAgent config, code-server service, hibernate resume, MCP sync
 echo "Running common EC2 setup..."
+COMMON_SETUP_SCRIPT=$(cat << 'SETUPEOF'
+#!/bin/bash
+set -euo pipefail
+
+# Configure CloudWatch Agent for memory and disk metrics
+mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCFG'
+{
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}" },
+    "aggregation_dimensions": [["InstanceId"]],
+    "metrics_collected": {
+      "mem": {
+        "measurement": ["mem_used_percent", "mem_used", "mem_total"],
+        "metrics_collection_interval": 60
+      },
+      "disk": {
+        "measurement": ["disk_used_percent", "disk_used", "disk_total"],
+        "resources": ["/"],
+        "metrics_collection_interval": 60
+      },
+      "diskio": {
+        "measurement": ["read_bytes", "write_bytes"],
+        "resources": ["*"],
+        "metrics_collection_interval": 60
+      }
+    }
+  }
+}
+CWCFG
+systemctl enable amazon-cloudwatch-agent
+
+# code-server systemd service
+cat > /etc/systemd/system/code-server.service << 'CSSVC'
+[Unit]
+Description=code-server
+After=network.target
+
+[Service]
+Type=simple
+User=coder
+Environment=CLAUDE_CODE_USE_BEDROCK=1
+ExecStart=/usr/bin/code-server --bind-addr 0.0.0.0:8080 --auth password
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+CSSVC
+systemctl daemon-reload
+
+# Pre-create code-server config
+sudo -u coder mkdir -p /home/coder/.config/code-server /home/coder/workspace
+cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'
+bind-addr: 0.0.0.0:8080
+auth: password
+password: changeme
+cert: false
+CSCFG
+chown -R coder:coder /home/coder/.config /home/coder/workspace
+systemctl enable code-server
+
+# ADR-010: Restart agents after hibernate resume
+cat > /etc/systemd/system/hibernate-resume-agents.service << 'HRSVC'
+[Unit]
+Description=Restart SSM, CloudWatch, code-server agents after hibernate resume
+After=hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c "systemctl restart amazon-ssm-agent; systemctl restart amazon-cloudwatch-agent 2>/dev/null; systemctl restart code-server 2>/dev/null; logger -t hibernate-resume agents-restarted"
+
+[Install]
+WantedBy=hibernate.target
+HRSVC
+systemctl daemon-reload
+systemctl enable hibernate-resume-agents.service
+
+echo "Common EC2 setup complete"
+SETUPEOF
+)
+
 COMMAND_ID=$(aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
   --document-name "AWS-RunShellScript" \
-  --parameters 'commands=[
-    "# Configure CloudWatch Agent for memory and disk metrics",
-    "mkdir -p /opt/aws/amazon-cloudwatch-agent/etc",
-    "cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCFG",
-    "{",
-    "  \"metrics\": {",
-    "    \"namespace\": \"CWAgent\",",
-    "    \"append_dimensions\": { \"InstanceId\": \"${aws:InstanceId}\" },",
-    "    \"aggregation_dimensions\": [[\"InstanceId\"]],",
-    "    \"metrics_collected\": {",
-    "      \"mem\": {",
-    "        \"measurement\": [\"mem_used_percent\", \"mem_used\", \"mem_total\"],",
-    "        \"metrics_collection_interval\": 60",
-    "      },",
-    "      \"disk\": {",
-    "        \"measurement\": [\"disk_used_percent\", \"disk_used\", \"disk_total\"],",
-    "        \"resources\": [\"/\"],",
-    "        \"metrics_collection_interval\": 60",
-    "      },",
-    "      \"diskio\": {",
-    "        \"measurement\": [\"read_bytes\", \"write_bytes\"],",
-    "        \"resources\": [\"*\"],",
-    "        \"metrics_collection_interval\": 60",
-    "      }",
-    "    }",
-    "  }",
-    "}",
-    "CWCFG",
-    "systemctl enable amazon-cloudwatch-agent",
-    "# code-server systemd service",
-    "cat > /etc/systemd/system/code-server.service << EOF",
-    "[Unit]",
-    "Description=code-server",
-    "After=network.target",
-    "",
-    "[Service]",
-    "Type=simple",
-    "User=coder",
-    "Environment=CLAUDE_CODE_USE_BEDROCK=1",
-    "ExecStart=/usr/bin/code-server --bind-addr 0.0.0.0:8080 --auth password",
-    "Restart=always",
-    "RestartSec=5",
-    "",
-    "[Install]",
-    "WantedBy=multi-user.target",
-    "EOF",
-    "systemctl daemon-reload",
-    "# Pre-create code-server config",
-    "sudo -u coder mkdir -p /home/coder/.config/code-server /home/coder/workspace",
-    "cat > /home/coder/.config/code-server/config.yaml << CSCFG",
-    "bind-addr: 0.0.0.0:8080",
-    "auth: password",
-    "password: changeme",
-    "cert: false",
-    "CSCFG",
-    "chown -R coder:coder /home/coder/.config /home/coder/workspace",
-    "systemctl enable code-server",
-    "# ADR-010: Restart agents after hibernate resume",
-    "cat > /etc/systemd/system/hibernate-resume-agents.service << HRSVC",
-    "[Unit]",
-    "Description=Restart SSM, CloudWatch, code-server agents after hibernate resume",
-    "After=hibernate.target",
-    "",
-    "[Service]",
-    "Type=oneshot",
-    "ExecStart=/bin/bash -c 'systemctl restart amazon-ssm-agent; systemctl restart amazon-cloudwatch-agent 2>/dev/null; systemctl restart code-server 2>/dev/null; logger -t hibernate-resume agents-restarted'",
-    "",
-    "[Install]",
-    "WantedBy=hibernate.target",
-    "HRSVC",
-    "systemctl daemon-reload",
-    "systemctl enable hibernate-resume-agents.service",
-    "echo Common EC2 setup complete"
-  ]' \
+  --parameters "{\"commands\":[$(echo "$COMMON_SETUP_SCRIPT" | jq -Rs .)]}" \
   --timeout-seconds 300 \
   --query 'Command.CommandId' \
   --output text \
   --region "$REGION")
 
 aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
+
+# Install MCP/Plugin sync scripts and systemd services
+echo "Installing MCP sync scripts..."
+MCP_INSTALL_SCRIPT=$(mktemp /tmp/mcp-install-XXXXX.sh)
+cat > "$MCP_INSTALL_SCRIPT" << 'MCPINSTALLEOF'
+#!/bin/bash
+set -euo pipefail
+mkdir -p /opt/cc-on-bedrock
+MCPINSTALLEOF
+
+# Append sync-mcp-config.sh as a heredoc write
+{
+  echo 'cat > /opt/cc-on-bedrock/sync-mcp-config.sh << '"'"'SYNCEOF'"'"''
+  cat "$PROJECT_ROOT/docker/devenv/scripts/sync-mcp-config.sh"
+  echo 'SYNCEOF'
+  echo 'chmod +x /opt/cc-on-bedrock/sync-mcp-config.sh'
+  echo ''
+  echo 'cat > /etc/systemd/system/cc-mcp-sync.service << '"'"'SVCEOF'"'"''
+  cat "$PROJECT_ROOT/docker/devenv/systemd/cc-mcp-sync.service"
+  echo 'SVCEOF'
+  echo ''
+  echo 'systemctl daemon-reload'
+  echo 'systemctl enable cc-mcp-sync.service'
+  echo 'echo "MCP sync scripts installed"'
+} >> "$MCP_INSTALL_SCRIPT"
+
+run_script "$MCP_INSTALL_SCRIPT"
+rm -f "$MCP_INSTALL_SCRIPT"
 
 # Stop instance before creating AMI (clean state)
 echo "Stopping instance for AMI creation..."

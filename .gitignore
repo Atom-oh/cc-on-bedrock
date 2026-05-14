@@ -19,6 +19,7 @@ cdk/node_modules/
 terraform/.terraform/
 terraform/*.tfstate*
 terraform/.terraform.lock.hcl
+terraform/modules/**/.build/
 
 # IDE
 .vscode/
@@ -56,3 +57,4 @@ docs/superpowers/plans/
 docs-*.png
 *.mov
 docusaurus-*.png
+Screenshot*.png

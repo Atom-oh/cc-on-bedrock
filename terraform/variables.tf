@@ -77,8 +77,9 @@ variable "sonnet_model_id" {
 
 # ---- Compute -----------------------------------------------------------------
 variable "ecs_host_instance_type" {
-  type    = string
-  default = "m7g.4xlarge"
+  description = "ECS host instance type (Dashboard only in EC2 mode)"
+  type        = string
+  default     = "t4g.xlarge"
 }
 
 variable "dashboard_instance_type" {

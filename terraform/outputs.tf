@@ -30,19 +30,24 @@ output "ecs_cluster_name" {
   value       = module.ecs_devenv.cluster_name
 }
 
-output "efs_id" {
-  description = "EFS file system ID"
-  value       = module.ecs_devenv.efs_id
+output "devenv_nlb_dns" {
+  description = "Dev environment NLB DNS name"
+  value       = module.ecs_devenv.nlb_dns
 }
 
-output "devenv_cloudfront_domain" {
-  description = "Dev environment CloudFront domain"
-  value       = module.ecs_devenv.cloudfront_domain
+output "routing_table_name" {
+  description = "DynamoDB routing table name"
+  value       = module.ecs_devenv.routing_table_name
 }
 
 output "devenv_ecr_url" {
   description = "DevEnv ECR repository URL"
   value       = module.ecs_devenv.ecr_repository_url
+}
+
+output "nginx_ecr_url" {
+  description = "Nginx ECR repository URL"
+  value       = module.ecs_devenv.nginx_ecr_repository_url
 }
 
 # Dashboard

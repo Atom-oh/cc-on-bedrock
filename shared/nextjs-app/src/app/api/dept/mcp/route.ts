@@ -27,20 +27,19 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
-  const department = searchParams.get("department");
+  const deptParam = searchParams.get("department");
+
+  // Admin can query any department; dept-manager is scoped to their own
+  const userDept = session.user.email?.split("@")[1]?.split(".")[0] ?? "default";
+  const department = isAdmin ? (deptParam ?? userDept) : userDept;
 
   if (!department) {
     return NextResponse.json({ error: "department is required" }, { status: 400 });
   }
 
-  // Server-side cross-department guard: non-admin dept-managers can only read
-  // their own department (derived from email domain, same pattern as /api/dept/route.ts).
-  if (!isAdmin) {
-    const userDept = session.user.email.split("@")[1]?.split(".")[0] ?? "default";
-    if (department !== userDept) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-  }
+  // Cross-department guard is already enforced above by deriving `department` from `userDept`
+  // for non-admins (`isAdmin ? deptParam : userDept`). PR #11's redundant secondary check was
+  // removed during merge with feat/dept-mcp-completion@91b06e5 which introduced the cleaner pattern.
 
   try {
     // Get gateway status

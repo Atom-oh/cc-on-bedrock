@@ -38,6 +38,8 @@
 - `src/app/api/admin/mcp/gateways/route.ts` - MCP 게이트웨이 관리 (Admin)
 - `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 동기화 트리거 (Admin)
 - `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-부서 할당 (Admin, ADR-007)
+- `src/app/api/admin/mcp/marketplaces/route.ts` - 부서별 플러그인 마켓플레이스 관리 (Admin)
+- `src/app/api/dept/mcp/route.ts` - 부서 MCP 할당 현황 조회 (Dept Manager, read-only)
 
 ### User Self-Service
 - `src/app/api/user/container/route.ts` - EC2 인스턴스 시작/중지

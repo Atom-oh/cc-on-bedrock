@@ -6,18 +6,6 @@ output "cluster_arn" {
   value = aws_ecs_cluster.this.arn
 }
 
-output "efs_id" {
-  value = aws_efs_file_system.this.id
-}
-
-output "cloudfront_domain" {
-  value = aws_cloudfront_distribution.this.domain_name
-}
-
-output "cloudfront_distribution_id" {
-  value = aws_cloudfront_distribution.this.id
-}
-
 output "nlb_dns" {
   value = aws_lb.nlb.dns_name
 }
@@ -26,12 +14,28 @@ output "routing_table_name" {
   value = aws_dynamodb_table.routing.name
 }
 
-output "nginx_config_bucket" {
-  value = aws_s3_bucket.nginx_config.id
+output "routing_table_arn" {
+  value = aws_dynamodb_table.routing.arn
+}
+
+output "nginx_config_lambda_arn" {
+  value = aws_lambda_function.nginx_config.arn
+}
+
+output "user_data_bucket_name" {
+  value = aws_s3_bucket.user_data.id
+}
+
+output "user_data_bucket_arn" {
+  value = aws_s3_bucket.user_data.arn
 }
 
 output "ecr_repository_url" {
   value = aws_ecr_repository.devenv.repository_url
+}
+
+output "nginx_ecr_repository_url" {
+  value = aws_ecr_repository.nginx.repository_url
 }
 
 output "dlp_sg_open_id" {
@@ -44,20 +48,4 @@ output "dlp_sg_restricted_id" {
 
 output "dlp_sg_locked_id" {
   value = aws_security_group.dlp_locked.id
-}
-
-output "user_data_bucket_name" {
-  value = aws_s3_bucket.user_data.id
-}
-
-output "user_data_bucket_arn" {
-  value = aws_s3_bucket.user_data.arn
-}
-
-output "user_volumes_table_name" {
-  value = aws_dynamodb_table.user_volumes.name
-}
-
-output "user_volumes_table_arn" {
-  value = aws_dynamodb_table.user_volumes.arn
 }

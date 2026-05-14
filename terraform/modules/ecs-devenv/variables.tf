@@ -14,23 +14,7 @@ variable "private_subnet_ids" {
   type = list(string)
 }
 
-variable "isolated_subnet_ids" {
-  type = list(string)
-}
-
 variable "kms_key_arn" {
-  type = string
-}
-
-variable "kms_key_id" {
-  type = string
-}
-
-variable "devenv_certificate_arn" {
-  type = string
-}
-
-variable "hosted_zone_id" {
   type = string
 }
 
@@ -47,7 +31,13 @@ variable "cloudfront_secret_value" {
   sensitive = true
 }
 
+variable "cloudfront_prefix_list_id" {
+  description = "CloudFront managed prefix list ID (region-specific)"
+  type        = string
+  default     = "pl-22a6434b" # ap-northeast-2 (Seoul)
+}
+
 variable "ecs_host_instance_type" {
   type    = string
-  default = "m7g.4xlarge"
+  default = "t4g.xlarge"
 }

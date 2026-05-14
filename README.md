@@ -57,25 +57,21 @@ Slack/External (shared, multi-client):
 Both share: AgentCore Memory (per-user session isolation)
 ```
 
-## Container Architecture
+## EC2 Per-User Architecture (ADR-004)
 
 Each user gets:
-- **1 ECS Task** — Isolated container (code-server + Claude Code + Kiro)
-- **1 ENI** — Unique Private IP (awsvpc network mode)
-- **1 IAM Role** — Per-user (`cc-on-bedrock-task-{subdomain}`) for budget control
-- **1 ALB Target Group** — Host-based routing (`{subdomain}.dev.whchoi.net`)
-- **1 EFS Directory** — Per-user isolation (`/users/{subdomain}/`)
+- **1 EC2 Instance** — Dedicated ARM64 (code-server + Claude Code + Kiro), Stop/Start preserves state
+- **1 IAM Role** — Per-user (`cc-on-bedrock-task-{subdomain}`) for budget control + Bedrock usage tracking
+- **1 EBS Volume** — Persistent root volume (gp3, expandable 20→100 GiB)
+- **CWAgent** — Memory/Disk/DiskIO metrics to CloudWatch
 
-### Task Definition Specifications
+### Instance Tier Specifications
 
-| Task Definition | OS | vCPU | Memory | Use Case |
-|----------------|-----|------|--------|----------|
-| devenv-ubuntu-light | Ubuntu 24.04 | 1 | 4 GiB | Lightweight, docs |
-| devenv-ubuntu-standard | Ubuntu 24.04 | 2 | 8 GiB | General dev (default) |
-| devenv-ubuntu-power | Ubuntu 24.04 | 4 | 12 GiB | Large builds, ML |
-| devenv-al2023-light | Amazon Linux 2023 | 1 | 4 GiB | AWS-native lightweight |
-| devenv-al2023-standard | Amazon Linux 2023 | 2 | 8 GiB | AWS-native general |
-| devenv-al2023-power | Amazon Linux 2023 | 4 | 12 GiB | AWS-native large |
+| Tier | OS | Instance Type | vCPU | Memory | Use Case |
+|------|-----|-------------|------|--------|----------|
+| light | Ubuntu 24.04 / AL2023 | t4g.medium | 2 | 4 GiB | Lightweight, docs |
+| standard | Ubuntu 24.04 / AL2023 | t4g.large | 2 | 8 GiB | General dev (default) |
+| power | Ubuntu 24.04 / AL2023 | m7g.xlarge | 4 | 16 GiB | Large builds, ML |
 
 ## Security — 7 Layers
 
@@ -92,10 +88,10 @@ Each user gets:
 ## Budget Control Flow
 
 ```
-ECS Task (Claude Code) → Bedrock API call
-  → CloudTrail (auto-logged)
-  → EventBridge Rule (match bedrock:InvokeModel)
-  → Lambda: usage-tracker → DynamoDB (per-user cost)
+EC2 Instance (Claude Code) → Bedrock API call
+  → Bedrock Invocation Logging → CloudWatch Logs
+  → Subscription Filter (cc-on-bedrock-task-* roles only)
+  → Lambda: usage-tracker → DynamoDB (USER#{subdomain} per-user cost)
 
 Every 5 min: Lambda: budget-check
   → DynamoDB Scan (today's cost per user)
@@ -193,10 +189,10 @@ docs/              Architecture, specs, plans, deployment guide
 .kiro/             Kiro agent settings, steering docs
 tools/             Scripts, prompts
 docker/            Docker images (devenv Ubuntu/AL2023)
-cdk/               AWS CDK TypeScript (5 active stacks)
+cdk/               AWS CDK TypeScript (7 stacks)
 terraform/         Terraform HCL (4 modules)
 cloudformation/    CloudFormation YAML (4 templates) + deploy.sh
-shared/nextjs-app/ Next.js dashboard (9 pages, 16 API routes)
+shared/nextjs-app/ Next.js dashboard (9+ pages, 25+ API routes)
 agent/             AgentCore agent (Strands + MCP Gateway)
 scripts/           ECR repos, deployment verification, test users
 tests/             Container integration tests, E2E tests
@@ -296,25 +292,21 @@ Slack/외부 (멀티 클라이언트 공유):
 양쪽 공유: AgentCore Memory (사용자별 세션 격리)
 ```
 
-## 컨테이너 구조
+## EC2 사용자별 아키텍처 (ADR-004)
 
 각 사용자에게 할당:
-- **ECS Task 1개** — 격리된 컨테이너 (code-server + Claude Code + Kiro)
-- **ENI 1개** — 고유 Private IP (awsvpc 네트워크 모드)
-- **IAM Role 1개** — 사용자별 (`cc-on-bedrock-task-{subdomain}`) 예산 제어
-- **ALB Target Group 1개** — Host 기반 라우팅 (`{subdomain}.dev.whchoi.net`)
-- **EFS 디렉토리 1개** — 사용자별 격리 (`/users/{subdomain}/`)
+- **EC2 인스턴스 1개** — 전용 ARM64 (code-server + Claude Code + Kiro), Stop/Start로 상태 보존
+- **IAM Role 1개** — 사용자별 (`cc-on-bedrock-task-{subdomain}`) 예산 제어 + Bedrock 사용량 추적
+- **EBS 볼륨 1개** — 영구 루트 볼륨 (gp3, 20→100 GiB 확장 가능)
+- **CWAgent** — Memory/Disk/DiskIO 메트릭 CloudWatch 수집
 
-### Task Definition 사양
+### 인스턴스 사양
 
-| Task Definition | OS | vCPU | Memory | 용도 |
-|----------------|-----|------|--------|------|
-| devenv-ubuntu-light | Ubuntu 24.04 | 1 | 4 GiB | 경량 작업, 문서 |
-| devenv-ubuntu-standard | Ubuntu 24.04 | 2 | 8 GiB | 일반 개발 (기본) |
-| devenv-ubuntu-power | Ubuntu 24.04 | 4 | 12 GiB | 대규모 빌드, ML |
-| devenv-al2023-light | Amazon Linux 2023 | 1 | 4 GiB | AWS 네이티브 경량 |
-| devenv-al2023-standard | Amazon Linux 2023 | 2 | 8 GiB | AWS 네이티브 일반 |
-| devenv-al2023-power | Amazon Linux 2023 | 4 | 12 GiB | AWS 네이티브 대규모 |
+| 티어 | OS | 인스턴스 타입 | vCPU | Memory | 용도 |
+|------|-----|-------------|------|--------|------|
+| light | Ubuntu 24.04 / AL2023 | t4g.medium | 2 | 4 GiB | 경량 작업, 문서 |
+| standard | Ubuntu 24.04 / AL2023 | t4g.large | 2 | 8 GiB | 일반 개발 (기본) |
+| power | Ubuntu 24.04 / AL2023 | m7g.xlarge | 4 | 16 GiB | 대규모 빌드, ML |
 
 ## 보안 — 7계층
 

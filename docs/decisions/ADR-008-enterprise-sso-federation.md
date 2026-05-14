@@ -1,7 +1,7 @@
 # ADR-008: Enterprise SSO Federation (SAML / OIDC / Social)
 
 ## Status
-Proposed
+Suspended (2026-04-26) — 실제 IdP(Azure AD/Okta) 메타데이터 필요. 고객 환경 확보 후 재개.
 
 ## Context
 

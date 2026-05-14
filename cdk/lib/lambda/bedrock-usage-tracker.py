@@ -171,6 +171,22 @@ def estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float
     return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
 
 
+def estimate_cost_with_cache(model_id: str, input_tokens: int, output_tokens: int,
+                             cache_read: int = 0, cache_write: int = 0) -> float:
+    """Estimate cost with prompt cache pricing.
+    Cache read tokens are 90% cheaper, cache write tokens are 25% more expensive.
+    """
+    pricing = get_model_pricing(model_id)
+    non_cached_input = max(0, input_tokens - cache_read - cache_write)
+    input_cost = (
+        non_cached_input * pricing["input"]
+        + cache_read * pricing["input"] * 0.1
+        + cache_write * pricing["input"] * 1.25
+    ) / 1_000_000
+    output_cost = output_tokens * pricing["output"] / 1_000_000
+    return input_cost + output_cost
+
+
 def upsert_usage(username: str, department: str, date_str: str, model: str,
                  input_tokens: int, output_tokens: int, cost: float, latency_ms: int = 0):
     """Atomic upsert to DynamoDB."""
@@ -220,6 +236,16 @@ def upsert_usage(username: str, department: str, date_str: str, model: str,
         print(f"DynamoDB error: {e}")
 
 
+def _int(val) -> int:
+    """Safely coerce to int (handles None, missing keys, non-numeric)."""
+    if val is None:
+        return 0
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
+
+
 def process_invocation_log(log_event: dict):
     """Process a Bedrock Invocation Log entry from CloudWatch Logs."""
     message = log_event.get("message", "")
@@ -228,37 +254,51 @@ def process_invocation_log(log_event: dict):
     except json.JSONDecodeError:
         return
 
-    # Extract fields from Bedrock Invocation Log format
     model_id = data.get("modelId", "unknown")
-    identity = data.get("identity", {})
+    identity = data.get("identity") or {}
     identity_arn = identity.get("arn", "")
     source_ip = data.get("sourceIPAddress", "")
 
-    # Token counts from invocation log
-    input_data = data.get("input", {})
-    output_data = data.get("output", {})
-    input_tokens = input_data.get("inputTokenCount", 0) or data.get("inputTokenCount", 0)
-    output_tokens = output_data.get("outputTokenCount", 0) or data.get("outputTokenCount", 0)
+    # Safely extract input/output objects (handle null → None from JSON)
+    input_data = data.get("input") or {}
+    output_data = data.get("output") or {}
 
-    # Latency from output metrics (only available when textDataDeliveryEnabled=true)
-    latency_ms = data.get("latencyMs", 0) or 0
-    if not latency_ms:
-        output_body = output_data.get("outputBodyJson", {})
-        if isinstance(output_body, dict):
-            metrics = output_body.get("metrics", {})
-            latency_ms = metrics.get("latencyMs", 0) or 0
+    # Primary: metadata-level token counts (always present in invocation log)
+    input_tokens = _int(input_data.get("inputTokenCount"))
+    output_tokens = _int(output_data.get("outputTokenCount"))
 
-    # Timestamp
+    # Secondary: parse outputBodyJson.usage for cache tokens + more accurate counts
+    # Available when textDataDeliveryEnabled=true
+    cache_read = 0
+    cache_write = 0
+    output_body = output_data.get("outputBodyJson")
+    if isinstance(output_body, dict):
+        usage = output_body.get("usage") or {}
+        api_input = _int(usage.get("inputTokens"))
+        api_output = _int(usage.get("outputTokens"))
+        cache_read = _int(usage.get("cacheReadInputTokenCount"))
+        cache_write = _int(usage.get("cacheCreationInputTokenCount"))
+        # usage-level counts are more accurate (include non-cached input only)
+        # Total input = non-cached + cache_read + cache_write
+        if api_input > 0 or cache_read > 0 or cache_write > 0:
+            input_tokens = api_input + cache_read + cache_write
+            output_tokens = api_output if api_output > 0 else output_tokens
+
+    # Latency
+    latency_ms = _int(data.get("latencyMs"))
+    if not latency_ms and isinstance(output_body, dict):
+        metrics = (output_body.get("metrics") or {}) if isinstance(output_body, dict) else {}
+        latency_ms = _int(metrics.get("latencyMs"))
+
     timestamp = data.get("timestamp", datetime.utcnow().isoformat())
     date_str = timestamp[:10]
 
-    # Resolve user — skip if not a cc-on-bedrock role
     username, department = resolve_user_from_arn(identity_arn, source_ip)
     if username is None:
         return
 
     model = normalize_model(model_id)
-    cost = estimate_cost(model_id, input_tokens, output_tokens)
+    cost = estimate_cost_with_cache(model, input_tokens, output_tokens, cache_read, cache_write)
 
     upsert_usage(username, department, date_str, model, input_tokens, output_tokens, cost, latency_ms)
 

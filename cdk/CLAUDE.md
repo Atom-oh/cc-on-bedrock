@@ -27,6 +27,15 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 7 stacks.
 - `lib/lambda/devenv-session-validator/index.js` - NextAuth JWE 쿠키 검증 (Lambda@Edge viewer-request, ADR-013)
 - `lib/lambda/devenv-origin-router/index.js` - Host 기반 origin 라우팅 (Lambda@Edge origin-request, ADR-013)
 
+## Key Commands
+```bash
+npx cdk list                              # 스택 목록
+npx cdk synth --all                       # CloudFormation 템플릿 생성
+npx cdk deploy CcOnBedrock-Dashboard --exclusively  # 단일 스택 배포
+npx cdk deploy --all                      # 전체 배포
+npx cdk diff CcOnBedrock-Dashboard        # 변경사항 미리보기
+```
+
 ## Rules
 - IAM Role은 사용하는 스택에서 생성 (cross-stack cyclic ref 방지)
 - grantRead/grantPull 대신 broad ARN 패턴 사용
