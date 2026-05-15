@@ -408,7 +408,17 @@ def handler(event, context):
         print(f"AdminGetUser empty for sub={sub} (possibly deleted) — skipping")
         return {"skipped": True, "reason": "user_not_found", "sub": sub}
 
-    result = _provision_user(info)
+    try:
+        result = _provision_user(info)
+    except ValueError as e:
+        # derive_subdomain refuses unsanitizable email local-parts. Surfacing the
+        # error to EventBridge would trigger retries and eventual DLQ loss; swallow
+        # and log so an operator can act (the user record sits without subdomain
+        # until manually fixed). RuntimeError (subdomain collision) DOES propagate
+        # since that case demands admin attention.
+        print(f"ERROR sub={sub} email={info.get('email')} unsanitizable — provisioning skipped: {e}")
+        return {"skipped": True, "reason": "unsanitizable_email", "sub": sub, "email": info.get("email"), "error": str(e)}
+
     print(
         f"provisioned eventName={event_name} sub={sub} email={info['email']} "
         f"subdomain={result['subdomain']} subdomainUpdated={result['subdomainUpdated']} "

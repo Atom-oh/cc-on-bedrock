@@ -80,7 +80,10 @@ export class LocalGovernanceStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'sts-issuer.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
-      timeout: cdk.Duration.seconds(20),
+      // ADR-022: retry budget bumped to 6 attempts (31s of sleeps) for the
+      // pre-provisioner-miss fallback path. Lambda timeout must accommodate
+      // the worst-case AssumeRole + 31s backoff + ensure_role + DDB lookups.
+      timeout: cdk.Duration.seconds(45),
       memorySize: 256,
       environment: {
         ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
@@ -182,18 +185,29 @@ export class LocalGovernanceStack extends cdk.Stack {
     }));
     // Per-user IAM (EC2 task) + instance profile. PassRole is required because
     // AddRoleToInstanceProfile treats it as passing the role into ec2.amazonaws.com.
+    // Split into two statements so we can scope PassRole with a service condition.
     provisioner.addToRolePolicy(new iam.PolicyStatement({
       sid: 'IamEc2TaskRoleMgmt',
       actions: [
         'iam:CreateRole', 'iam:GetRole', 'iam:UpdateAssumeRolePolicy',
         'iam:PutRolePolicy', 'iam:TagRole', 'iam:UntagRole', 'iam:ListRoleTags',
         'iam:CreateInstanceProfile', 'iam:GetInstanceProfile',
-        'iam:AddRoleToInstanceProfile', 'iam:PassRole',
+        'iam:AddRoleToInstanceProfile',
       ],
       resources: [
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`,
       ],
+    }));
+    // PassRole scoped to ec2.amazonaws.com so the provisioner cannot pass these
+    // task roles to other service principals (least-privilege).
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamPassRoleToEc2',
+      actions: ['iam:PassRole'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+      conditions: {
+        StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' },
+      },
     }));
     // Cognito reads (recover redacted attrs) + writes (set canonical
     // custom:subdomain + custom:dept_manager_sub).
@@ -208,19 +222,33 @@ export class LocalGovernanceStack extends cdk.Stack {
       resources: [userPool.userPoolArn],
     }));
 
-    // EventBridge rule on CloudTrail management events from Cognito-IDP.
-    // AdminAddUserToGroup is included so that promoting a user into the
-    // dept-manager group triggers a refresh of custom:dept_manager_sub for
-    // every member of that department (ADR-022 §dept-manager attribute).
+    // EventBridge rules for Cognito-IDP CloudTrail events. Split into two rules
+    // so the dept-manager group filter applies only to group-membership events,
+    // keeping AdminCreateUser/SignUp unconditional. Cuts noise invocations for
+    // user/admin group adds that the handler would just skip.
     new events.Rule(this, 'CognitoUserCreatedRule', {
       ruleName: 'cc-on-bedrock-cognito-user-created',
-      description: 'Trigger UserRoleProvisioner on AdminCreateUser / SignUp / AdminAddUserToGroup (ADR-022)',
+      description: 'Trigger UserRoleProvisioner on AdminCreateUser / SignUp (ADR-022)',
       eventPattern: {
         source: ['aws.cognito-idp'],
         detailType: ['AWS API Call via CloudTrail'],
         detail: {
           eventSource: ['cognito-idp.amazonaws.com'],
-          eventName: ['AdminCreateUser', 'SignUp', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup'],
+          eventName: ['AdminCreateUser', 'SignUp'],
+        },
+      },
+      targets: [new targets.LambdaFunction(provisioner)],
+    });
+    new events.Rule(this, 'CognitoDeptManagerMembershipRule', {
+      ruleName: 'cc-on-bedrock-cognito-dept-manager-membership',
+      description: 'Trigger UserRoleProvisioner on dept-manager group add/remove only (ADR-022)',
+      eventPattern: {
+        source: ['aws.cognito-idp'],
+        detailType: ['AWS API Call via CloudTrail'],
+        detail: {
+          eventSource: ['cognito-idp.amazonaws.com'],
+          eventName: ['AdminAddUserToGroup', 'AdminRemoveUserFromGroup'],
+          requestParameters: { groupName: ['dept-manager'] },
         },
       },
       targets: [new targets.LambdaFunction(provisioner)],
