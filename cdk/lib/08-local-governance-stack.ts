@@ -158,11 +158,26 @@ export class LocalGovernanceStack extends cdk.Stack {
       retentionPeriod: cdk.Duration.days(14),
       encryptionMasterKey: encryptionKey,
     });
-    // EventBridge needs to encrypt the DLQ payload it writes after a failed
-    // target delivery. CDK auto-grants SendMessage on the queue (queue policy)
-    // but not the corresponding kms:GenerateDataKey on the customer KMS key,
-    // so DLQ writes silently fail with KMSAccessDenied. Add the grant.
-    encryptionKey.grantEncryptDecrypt(new iam.ServicePrincipal('events.amazonaws.com'));
+    // EventBridge needs kms:GenerateDataKey on the customer KMS key to encrypt
+    // DLQ payloads it writes after a failed target delivery. CDK auto-grants
+    // SendMessage on the queue (queue policy) but skips the KMS side, so DLQ
+    // writes silently fail with KMSAccessDenied.
+    //
+    // Scope: only GenerateDataKey + Decrypt (DLQ-writing minimum), and only
+    // when the call is delegated through SQS in this region (`kms:ViaService`).
+    // This prevents EventBridge rules elsewhere in the account from using the
+    // shared CMK for unrelated operations.
+    encryptionKey.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'EventBridgeDlqEncrypt',
+      principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+      actions: ['kms:GenerateDataKey', 'kms:Decrypt'],
+      resources: ['*'],
+      conditions: {
+        StringEquals: {
+          'kms:ViaService': `sqs.${cdk.Aws.REGION}.amazonaws.com`,
+        },
+      },
+    }));
 
     const provisioner = new lambda.Function(this, 'UserRoleProvisioner', {
       functionName: 'cc-on-bedrock-user-role-provisioner',
