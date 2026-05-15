@@ -68,12 +68,16 @@ def derive_subdomain(email_or_username: str) -> str:
     local = (email_or_username or "").split("@")[0].lower()
     cleaned = re.sub(r"[^a-z0-9-]", "-", local)
     cleaned = re.sub(r"-+", "-", cleaned).strip("-")
-    if len(cleaned) < 3:
+    # Truncate first, THEN re-strip — cleaned[:30] could land on a `-` and
+    # violate validation.ts regex /^[a-z0-9][a-z0-9-]*[a-z0-9]$/ if the 30th
+    # char happens to be a dash from the sanitization pass.
+    truncated = cleaned[:30].rstrip("-")
+    if len(truncated) < 3:
         raise ValueError(
             f"cannot derive subdomain from email/username {email_or_username!r}: "
-            f"local-part collapses to {cleaned!r} (must be >= 3 chars after sanitization)"
+            f"sanitized result {truncated!r} (must be >= 3 chars and end alphanumeric)"
         )
-    return cleaned[:30]
+    return truncated
 
 
 def _admin_get_user_by_sub(sub: str) -> dict:
@@ -127,12 +131,18 @@ def _list_dept_members(department: str) -> list:
 
 
 def _extract_sub_from_event(detail: dict) -> str | None:
+    """Returns a sub only if it matches the Cognito UUID format. EventBridge
+    delivers AWS-issued subs which are well-formed, but we validate before
+    interpolating into the Cognito ListUsers Filter — defense in depth, same
+    pattern the direct-invoke path uses."""
     add = detail.get("additionalEventData") or {}
     sub = add.get("sub")
-    if sub:
+    if not sub:
+        resp = detail.get("responseElements") or {}
+        sub = resp.get("userSub")
+    if sub and _SUB_RE.match(sub):
         return sub
-    resp = detail.get("responseElements") or {}
-    return resp.get("userSub")
+    return None
 
 
 def _write_subdomain(internal_username: str, subdomain: str) -> None:

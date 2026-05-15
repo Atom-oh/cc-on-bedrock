@@ -158,6 +158,11 @@ export class LocalGovernanceStack extends cdk.Stack {
       retentionPeriod: cdk.Duration.days(14),
       encryptionMasterKey: encryptionKey,
     });
+    // EventBridge needs to encrypt the DLQ payload it writes after a failed
+    // target delivery. CDK auto-grants SendMessage on the queue (queue policy)
+    // but not the corresponding kms:GenerateDataKey on the customer KMS key,
+    // so DLQ writes silently fail with KMSAccessDenied. Add the grant.
+    encryptionKey.grantEncryptDecrypt(new iam.ServicePrincipal('events.amazonaws.com'));
 
     const provisioner = new lambda.Function(this, 'UserRoleProvisioner', {
       functionName: 'cc-on-bedrock-user-role-provisioner',
