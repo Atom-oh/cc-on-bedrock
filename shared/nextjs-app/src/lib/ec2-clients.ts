@@ -1292,9 +1292,16 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
           Sid: "BedrockClaude",
           Effect: "Allow",
           Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
+          // ADR-021: wildcard Claude-family across all region prefixes
+          // (anthropic./global./us./apac./eu./future). MUST mirror
+          // cdk/lib/lambda/user-role-provisioner.py:_ec2_task_inline_policy and
+          // cdk/lib/02-security-stack.ts task permission boundary — otherwise
+          // EC2-mode users get AccessDenied on `global.anthropic.claude-*`
+          // direct InvokeModel.
           Resource: [
-            `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
+            `arn:aws:bedrock:*::foundation-model/*anthropic.claude-*`,
             `arn:aws:bedrock:*:${accountId}:inference-profile/*anthropic.claude-*`,
+            `arn:aws:bedrock:*:${accountId}:application-inference-profile/*`,
           ],
         },
         {

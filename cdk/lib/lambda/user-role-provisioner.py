@@ -195,9 +195,15 @@ def _ec2_task_inline_policy() -> dict:
                     "bedrock:Converse",
                     "bedrock:ConverseStream",
                 ],
+                # ADR-021: wildcard Claude-family across all region prefixes
+                # (anthropic./global./us./apac./eu./future). MUST mirror
+                # role_factory.allowed_model_arns() and cdk/lib/02-security-stack.ts
+                # task permission boundary — otherwise EC2-mode users get
+                # AccessDenied on `global.anthropic.claude-*` direct InvokeModel.
                 "Resource": [
-                    "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+                    "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
+                    f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",
                 ],
             },
             {

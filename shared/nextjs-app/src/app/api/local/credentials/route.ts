@@ -22,6 +22,11 @@ import { createHash } from "crypto";
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const STS_ISSUER_FUNCTION = process.env.STS_ISSUER_FUNCTION_NAME ?? "cc-on-bedrock-sts-issuer";
 const CLI_TOKENS_TABLE = process.env.CLI_TOKENS_TABLE ?? "cc-on-bedrock-cli-tokens";
+// ADR-014: only access tokens issued by the cc-bedrock-local CLI public client
+// are accepted on the JWT Bearer path. Any other client in the same user pool
+// (admin tools, future federated apps, misconfigured public clients) MUST NOT
+// be able to call /api/local/credentials via Cognito access tokens.
+const COGNITO_CLI_CLIENT_ID = process.env.COGNITO_CLI_CLIENT_ID ?? "";
 
 const lambda = new LambdaClient({ region });
 const ddb = new DynamoDBClient({ region });
@@ -59,7 +64,47 @@ async function resolveBearerToken(token: string): Promise<UserIdentity | null> {
   }
 }
 
+// Decode (NOT verify) a Cognito JWT payload. Signature verification is delegated
+// to cognito-idp:GetUser downstream — it rejects tokens that aren't signed by
+// the user pool's keys. We pre-validate `client_id` and `token_use` so that
+// access tokens from *other* clients in the same user pool don't pass through
+// (GetUser would otherwise accept any valid pool token).
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = Buffer.from(parts[1], "base64url").toString("utf8");
+    const parsed = JSON.parse(payload);
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveCognitoAccessToken(token: string): Promise<UserIdentity | null> {
+  // H2 fix: pre-validate JWT claims before paying for a Cognito API call.
+  // Access tokens carry `client_id` (not `aud`, which lives on ID tokens).
+  const claims = decodeJwtPayload(token);
+  if (!claims) {
+    console.warn("[cognito-token] rejected: token is not a decodable JWT");
+    return null;
+  }
+  if (claims.token_use !== "access") {
+    console.warn(`[cognito-token] rejected: token_use=${String(claims.token_use)} (expected "access")`);
+    return null;
+  }
+  if (!COGNITO_CLI_CLIENT_ID) {
+    // Misconfiguration: refuse to fall back to "any client" semantics. Failing
+    // closed here surfaces the missing env var instead of silently accepting
+    // tokens from the dashboard app client (which uses NextAuth, not Bearer).
+    console.error("[cognito-token] rejected: COGNITO_CLI_CLIENT_ID env var is empty");
+    return null;
+  }
+  if (claims.client_id !== COGNITO_CLI_CLIENT_ID) {
+    console.warn(`[cognito-token] rejected: client_id=${String(claims.client_id)} (expected CLI public client)`);
+    return null;
+  }
+
   try {
     const r = await cognito.send(new GetUserCommand({ AccessToken: token }));
     const attrs = Object.fromEntries(
