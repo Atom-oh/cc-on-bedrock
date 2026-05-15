@@ -28,8 +28,18 @@ import boto3
 
 from role_factory import ensure_role
 
-USER_POOL_ID = os.environ.get("USER_POOL_ID", "")
+# Fail fast at cold-start if USER_POOL_ID is missing — every code path needs it,
+# and an empty string would let calls into cognito.list_users(UserPoolId="")
+# surface as runtime InvalidParameterException instead of a configuration error.
+USER_POOL_ID = os.environ["USER_POOL_ID"]
 ACCOUNT_ID = os.environ["ACCOUNT_ID"]
+
+# Cognito sub is a UUID v4 (8-4-4-4-12 hex); we validate inputs on the
+# direct-invoke path before interpolating into the Cognito ListUsers Filter
+# expression, since that path takes caller-controlled values (backfill script,
+# manual repair tools). EventBridge events deliver AWS-issued subs so this is
+# defense in depth.
+_SUB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 PERMISSION_BOUNDARY_NAME = os.environ.get("PERMISSION_BOUNDARY_NAME", "cc-on-bedrock-task-boundary")
 
 cognito = boto3.client("cognito-idp")
@@ -336,6 +346,10 @@ def handler(event, context):
         sub = event.get("sub")
         if not sub:
             raise ValueError("action=ensure requires sub")
+        if not _SUB_RE.match(sub):
+            # Reject anything that isn't a Cognito UUID before it reaches
+            # cognito.list_users(Filter=...) — narrow injection-surface.
+            raise ValueError(f"sub {sub!r} is not a valid Cognito sub UUID")
         info = _admin_get_user_by_sub(sub)
         if not info:
             raise ValueError(f"sub {sub} not found in Cognito")

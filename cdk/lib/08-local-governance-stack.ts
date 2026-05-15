@@ -7,6 +7,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -149,6 +150,15 @@ export class LocalGovernanceStack extends cdk.Stack {
     // every entry point (seed script, dashboard, console, SDK) converges on
     // the same downstream state — removes the IAM-propagation race at first use.
     // ──────────────────────────────────────────────────────────
+    // DLQ for events the provisioner can't process (subdomain collision, repeated
+    // 5xx, IAM throttling spike). EventBridge default retry is 24h / 185 tries
+    // and then drops silently — unacceptable for an identity provisioner.
+    const provisionerDlq = new sqs.Queue(this, 'UserRoleProvisionerDlq', {
+      queueName: 'cc-on-bedrock-user-role-provisioner-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+      encryptionMasterKey: encryptionKey,
+    });
+
     const provisioner = new lambda.Function(this, 'UserRoleProvisioner', {
       functionName: 'cc-on-bedrock-user-role-provisioner',
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -156,6 +166,8 @@ export class LocalGovernanceStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
+      deadLetterQueue: provisionerDlq,
+      deadLetterQueueEnabled: true,
       environment: {
         ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
         PERMISSION_BOUNDARY_NAME: 'cc-on-bedrock-task-boundary',
@@ -222,36 +234,28 @@ export class LocalGovernanceStack extends cdk.Stack {
       resources: [userPool.userPoolArn],
     }));
 
-    // EventBridge rules for Cognito-IDP CloudTrail events. Split into two rules
-    // so the dept-manager group filter applies only to group-membership events,
-    // keeping AdminCreateUser/SignUp unconditional. Cuts noise invocations for
-    // user/admin group adds that the handler would just skip.
+    // Single EventBridge rule for all relevant Cognito-IDP events.
+    // We previously tried to filter group-membership events on
+    // requestParameters.groupName=dept-manager at the EventBridge layer to
+    // suppress noise invocations, but some account configurations mask the
+    // ENTIRE requestParameters object as HIDDEN_DUE_TO_SECURITY_REASONS —
+    // which would cause the rule to never match and silently drop manager
+    // promotions. Filtering for the dept-manager group happens inside the
+    // Lambda handler instead (handler returns skipped:group_not_dept_manager).
     new events.Rule(this, 'CognitoUserCreatedRule', {
       ruleName: 'cc-on-bedrock-cognito-user-created',
-      description: 'Trigger UserRoleProvisioner on AdminCreateUser / SignUp (ADR-022)',
+      description: 'Trigger UserRoleProvisioner on AdminCreateUser / SignUp / AdminAddUserToGroup / AdminRemoveUserFromGroup (ADR-022)',
       eventPattern: {
         source: ['aws.cognito-idp'],
         detailType: ['AWS API Call via CloudTrail'],
         detail: {
           eventSource: ['cognito-idp.amazonaws.com'],
-          eventName: ['AdminCreateUser', 'SignUp'],
+          eventName: ['AdminCreateUser', 'SignUp', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup'],
         },
       },
-      targets: [new targets.LambdaFunction(provisioner)],
-    });
-    new events.Rule(this, 'CognitoDeptManagerMembershipRule', {
-      ruleName: 'cc-on-bedrock-cognito-dept-manager-membership',
-      description: 'Trigger UserRoleProvisioner on dept-manager group add/remove only (ADR-022)',
-      eventPattern: {
-        source: ['aws.cognito-idp'],
-        detailType: ['AWS API Call via CloudTrail'],
-        detail: {
-          eventSource: ['cognito-idp.amazonaws.com'],
-          eventName: ['AdminAddUserToGroup', 'AdminRemoveUserFromGroup'],
-          requestParameters: { groupName: ['dept-manager'] },
-        },
-      },
-      targets: [new targets.LambdaFunction(provisioner)],
+      targets: [new targets.LambdaFunction(provisioner, {
+        deadLetterQueue: provisionerDlq,
+      })],
     });
 
     new cdk.CfnOutput(this, 'UserRoleProvisionerArn', {
