@@ -1272,11 +1272,13 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
         ...costAllocationTags,
       ],
     }));
-    // No fixed propagation sleep here — `runInstancesWithIamRetry` absorbs IAM
-    // eventual consistency at the RunInstances call site with exponential backoff
-    // (2s → 4s → 8s → ...), so the previous 8s blanket wait was dead weight on
-    // the cold path. The instance-profile attach step below still has a short
-    // settle to give the EC2 control plane its first chance.
+    // Short propagation sleep so the immediately-following PutRolePolicy +
+    // applyGatewayPolicy calls don't race CreateRole with NoSuchEntity (their
+    // failure path is not wrapped in retry — only RunInstances has
+    // runInstancesWithIamRetry below). 3s is enough for IAM internal
+    // consistency; the RunInstances-vs-instance-profile race takes longer and
+    // is absorbed by the retry helper.
+    await new Promise(r => setTimeout(r, 3000));
   }
 
   // Upsert Bedrock + SSM + CloudWatch permissions (runs on every start to fix legacy roles)
