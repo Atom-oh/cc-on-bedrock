@@ -47,6 +47,30 @@ export class LocalGovernanceStack extends cdk.Stack {
     const { config, encryptionKey, usageTable, taskPermissionBoundary, userPool } = props;
 
     // ──────────────────────────────────────────────────────────
+    // Cross-stack DDB table names (ADR-024 deprovision sweep).
+    //
+    // These tables are created in OTHER stacks (cc-user-instances → Stack 07,
+    // cc-routing-table → Stack 04, cc-user-volumes → external/manual). In
+    // `governanceOnly=true` mode those stacks are skipped, so this stack must
+    // not hard-import them — DeleteItem against a non-existent table just
+    // returns ResourceNotFoundException which `_safe_delete_ddb_item` swallows.
+    //
+    // Names are kept here as a single source of truth (env var to Lambda AND
+    // IAM resource ARN) so a rename never silently breaks cleanup. Renaming
+    // requires updating both ec2-clients.ts (Dashboard reader) and the owning
+    // stack — track via project-wide grep, not via CDK cross-stack ref.
+    //
+    // CLAUDE.md "Cross-stack ref 금지" applies to runtime ARN handles that
+    // would create cyclic deps; coordinated naming via prefix-stable constants
+    // is the documented workaround in this codebase.
+    // ──────────────────────────────────────────────────────────
+    const USER_INSTANCES_TABLE_NAME = 'cc-user-instances';
+    const USER_VOLUMES_TABLE_NAME = 'cc-user-volumes';
+    const ROUTING_TABLE_NAME = 'cc-routing-table';
+    const ddbTableArn = (name: string) =>
+      `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${name}`;
+
+    // ──────────────────────────────────────────────────────────
     // SNS alert topic
     // ──────────────────────────────────────────────────────────
     this.alertTopic = new sns.Topic(this, 'LocalGovAlerts', {
@@ -158,26 +182,6 @@ export class LocalGovernanceStack extends cdk.Stack {
       retentionPeriod: cdk.Duration.days(14),
       encryptionMasterKey: encryptionKey,
     });
-    // EventBridge needs kms:GenerateDataKey on the customer KMS key to encrypt
-    // DLQ payloads it writes after a failed target delivery. CDK auto-grants
-    // SendMessage on the queue (queue policy) but skips the KMS side, so DLQ
-    // writes silently fail with KMSAccessDenied.
-    //
-    // Scope: only GenerateDataKey + Decrypt (DLQ-writing minimum), and only
-    // when the call is delegated through SQS in this region (`kms:ViaService`).
-    // This prevents EventBridge rules elsewhere in the account from using the
-    // shared CMK for unrelated operations.
-    encryptionKey.addToResourcePolicy(new iam.PolicyStatement({
-      sid: 'EventBridgeDlqEncrypt',
-      principals: [new iam.ServicePrincipal('events.amazonaws.com')],
-      actions: ['kms:GenerateDataKey', 'kms:Decrypt'],
-      resources: ['*'],
-      conditions: {
-        StringEquals: {
-          'kms:ViaService': `sqs.${cdk.Aws.REGION}.amazonaws.com`,
-        },
-      },
-    }));
 
     const provisioner = new lambda.Function(this, 'UserRoleProvisioner', {
       functionName: 'cc-on-bedrock-user-role-provisioner',
@@ -197,16 +201,23 @@ export class LocalGovernanceStack extends cdk.Stack {
         MAX_SESSION_DURATION_SECONDS: '3600',
         // CloudTrail redacts user attributes — Lambda re-fetches via AdminGetUser.
         USER_POOL_ID: userPool.userPoolId,
+        // ADR-024: tables and prefixes the deletion path sweeps.
+        LIMITS_TABLE: this.limitsTable.tableName,
+        USER_INSTANCES_TABLE: USER_INSTANCES_TABLE_NAME,
+        USER_VOLUMES_TABLE: USER_VOLUMES_TABLE_NAME,
+        ROUTING_TABLE: ROUTING_TABLE_NAME,
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
     });
 
-    // Per-user IAM (Local Gov)
+    // Per-user IAM (Local Gov). DeleteRole + DeleteRolePolicy + ListRolePolicies
+    // added for ADR-024 deletion cleanup.
     provisioner.addToRolePolicy(new iam.PolicyStatement({
       sid: 'IamLocalUserRoleMgmt',
       actions: [
         'iam:CreateRole', 'iam:GetRole', 'iam:UpdateAssumeRolePolicy',
         'iam:PutRolePolicy', 'iam:TagRole', 'iam:UntagRole', 'iam:ListRoleTags',
+        'iam:DeleteRole', 'iam:DeleteRolePolicy', 'iam:ListRolePolicies',
       ],
       resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
     }));
@@ -225,6 +236,9 @@ export class LocalGovernanceStack extends cdk.Stack {
         'iam:PutRolePolicy', 'iam:TagRole', 'iam:UntagRole', 'iam:ListRoleTags',
         'iam:CreateInstanceProfile', 'iam:GetInstanceProfile',
         'iam:AddRoleToInstanceProfile',
+        // ADR-024 deletion cleanup
+        'iam:DeleteRole', 'iam:DeleteRolePolicy', 'iam:ListRolePolicies',
+        'iam:RemoveRoleFromInstanceProfile', 'iam:DeleteInstanceProfile',
       ],
       resources: [
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
@@ -242,7 +256,10 @@ export class LocalGovernanceStack extends cdk.Stack {
       },
     }));
     // Cognito reads (recover redacted attrs) + writes (set canonical
-    // custom:subdomain + custom:dept_manager_sub).
+    // custom:subdomain + custom:dept_manager_sub). AdminListGroupsForUser +
+    // AdminAddUserToGroup needed for the default-group fallback (ADR-024):
+    // users created without group membership land in the `user` group so
+    // dashboard auth middleware accepts them.
     provisioner.addToRolePolicy(new iam.PolicyStatement({
       sid: 'CognitoUserReadWrite',
       actions: [
@@ -250,8 +267,41 @@ export class LocalGovernanceStack extends cdk.Stack {
         'cognito-idp:ListUsers',
         'cognito-idp:ListUsersInGroup',
         'cognito-idp:AdminUpdateUserAttributes',
+        'cognito-idp:AdminListGroupsForUser',
+        'cognito-idp:AdminAddUserToGroup',
       ],
       resources: [userPool.userPoolArn],
+    }));
+    // ADR-024 deletion cleanup: DDB rows, codeserver secrets, EC2 terminate.
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'DdbDeprovision',
+      actions: ['dynamodb:DeleteItem', 'dynamodb:Query'],
+      resources: [
+        ddbTableArn(USER_INSTANCES_TABLE_NAME),
+        ddbTableArn(USER_VOLUMES_TABLE_NAME),
+        ddbTableArn(ROUTING_TABLE_NAME),
+        this.limitsTable.tableArn,
+      ],
+    }));
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'SecretsDeprovision',
+      actions: ['secretsmanager:DeleteSecret'],
+      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/codeserver/*`],
+    }));
+    // ec2:DescribeInstances doesn't support resource-level conditions, so
+    // it stays wildcard. TerminateInstances is scoped to managed_by tag.
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'Ec2Describe',
+      actions: ['ec2:DescribeInstances'],
+      resources: ['*'],
+    }));
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'Ec2Terminate',
+      actions: ['ec2:TerminateInstances'],
+      resources: [`arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/*`],
+      conditions: {
+        StringEquals: { 'ec2:ResourceTag/managed_by': 'cc-on-bedrock' },
+      },
     }));
 
     // Single EventBridge rule for all relevant Cognito-IDP events.
@@ -270,7 +320,12 @@ export class LocalGovernanceStack extends cdk.Stack {
         detailType: ['AWS API Call via CloudTrail'],
         detail: {
           eventSource: ['cognito-idp.amazonaws.com'],
-          eventName: ['AdminCreateUser', 'SignUp', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup'],
+          eventName: [
+            'AdminCreateUser', 'SignUp',
+            'AdminAddUserToGroup', 'AdminRemoveUserFromGroup',
+            // ADR-024: clean up per-user IAM/DDB/Secrets/EC2 when a Cognito user is deleted.
+            'AdminDeleteUser',
+          ],
         },
       },
       targets: [new targets.LambdaFunction(provisioner, {

@@ -94,19 +94,9 @@ export default function UserManagement() {
     }
   };
 
-  const handlePermanentDelete = async (username: string) => {
-    if (!confirm(`⚠️ "${username}" Cognito 계정을 완전히 삭제합니다.\n이 작업은 복구할 수 없습니다. 계속하시겠습니까?`)) {
-      return;
-    }
-    try {
-      await fetch(`/api/users?username=${encodeURIComponent(username)}&action=permanent`, {
-        method: "DELETE",
-      });
-      void fetchUsers();
-    } catch (err) {
-      console.error("Failed to delete user:", err);
-    }
-  };
+  // ADR-024: Permanent delete is disabled from the dashboard. Cognito users may
+  // be federated from an external IdP (SAML/OIDC), so hard-deletion can break
+  // resync. Use `handleToggle(_, false)` (disable) to revoke access instead.
 
   const handleToggle = async (username: string, enable: boolean) => {
     try {
@@ -311,7 +301,7 @@ export default function UserManagement() {
         <UsersTable
           users={users}
           onResetEnvironment={handleResetEnvironment}
-          onPermanentDelete={handlePermanentDelete}
+          // ADR-024: permanent delete intentionally not wired — disable-only.
           onToggle={handleToggle}
           onUpdate={handleUpdate}
         />

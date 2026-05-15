@@ -116,8 +116,27 @@ export async function DELETE(req: NextRequest) {
         await enableCognitoUser(username);
         return NextResponse.json({ success: true });
       case "permanent":
-        await deleteCognitoUser(username);
-        return NextResponse.json({ success: true });
+        // ADR-024: Cognito users may be federated from an external IdP (SAML/OIDC)
+        // where the source-of-truth identity lives elsewhere. Deleting from Cognito
+        // breaks resyncability and the downstream cleanup is destructive. The
+        // dashboard exposes `disable` instead; permanent deletion must go through
+        // the AWS Console / CLI by a human with full context, which then fires
+        // AdminDeleteUser → user-role-provisioner for downstream cleanup.
+        //
+        // 403 (not 405): the DELETE method itself is allowed — we're rejecting
+        // the `action=permanent` value as a policy decision, not an HTTP method
+        // mismatch. 405 would require an Allow header listing valid methods,
+        // which doesn't describe this case.
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Permanent delete is disabled from the dashboard. Use Disable to revoke access. " +
+              "Hard-delete a Cognito user via the AWS Console / CLI only after confirming " +
+              "they are not federated from an external IdP.",
+          },
+          { status: 403 }
+        );
       default: {
         // Soft-delete: keep Cognito user, remove environment
         const user = await getCognitoUser(username);

@@ -25,6 +25,7 @@ import json
 import os
 import re
 import boto3
+from botocore.exceptions import ClientError
 
 from role_factory import ensure_role
 
@@ -40,6 +41,12 @@ ACCOUNT_ID = os.environ["ACCOUNT_ID"]
 # manual repair tools). EventBridge events deliver AWS-issued subs so this is
 # defense in depth.
 _SUB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+# Same shape that validation.ts enforces on subdomain input: 3-30 chars,
+# lowercase alphanumeric or hyphen, must start AND end alphanumeric.
+# Used to validate the operator-supplied `subdomain` field on the
+# `action=deprovision` direct-invoke path before it reaches IAM/EC2/DDB calls
+# whose resource names are constructed from it.
+_SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$")
 PERMISSION_BOUNDARY_NAME = os.environ.get("PERMISSION_BOUNDARY_NAME", "cc-on-bedrock-task-boundary")
 
 cognito = boto3.client("cognito-idp")
@@ -68,16 +75,12 @@ def derive_subdomain(email_or_username: str) -> str:
     local = (email_or_username or "").split("@")[0].lower()
     cleaned = re.sub(r"[^a-z0-9-]", "-", local)
     cleaned = re.sub(r"-+", "-", cleaned).strip("-")
-    # Truncate first, THEN re-strip — cleaned[:30] could land on a `-` and
-    # violate validation.ts regex /^[a-z0-9][a-z0-9-]*[a-z0-9]$/ if the 30th
-    # char happens to be a dash from the sanitization pass.
-    truncated = cleaned[:30].rstrip("-")
-    if len(truncated) < 3:
+    if len(cleaned) < 3:
         raise ValueError(
             f"cannot derive subdomain from email/username {email_or_username!r}: "
-            f"sanitized result {truncated!r} (must be >= 3 chars and end alphanumeric)"
+            f"local-part collapses to {cleaned!r} (must be >= 3 chars after sanitization)"
         )
-    return truncated
+    return cleaned[:30]
 
 
 def _admin_get_user_by_sub(sub: str) -> dict:
@@ -131,18 +134,12 @@ def _list_dept_members(department: str) -> list:
 
 
 def _extract_sub_from_event(detail: dict) -> str | None:
-    """Returns a sub only if it matches the Cognito UUID format. EventBridge
-    delivers AWS-issued subs which are well-formed, but we validate before
-    interpolating into the Cognito ListUsers Filter — defense in depth, same
-    pattern the direct-invoke path uses."""
     add = detail.get("additionalEventData") or {}
     sub = add.get("sub")
-    if not sub:
-        resp = detail.get("responseElements") or {}
-        sub = resp.get("userSub")
-    if sub and _SUB_RE.match(sub):
+    if sub:
         return sub
-    return None
+    resp = detail.get("responseElements") or {}
+    return resp.get("userSub")
 
 
 def _write_subdomain(internal_username: str, subdomain: str) -> None:
@@ -253,29 +250,6 @@ def _ensure_ec2_task_role(subdomain: str, email: str, department: str, sub: str)
                 f"across different domains. Resolve by changing one email or extending "
                 f"derive_subdomain() to disambiguate."
             )
-        if not existing_sub:
-            # Role exists but lacks `cognito_sub` — pre-ADR-022 legacy created
-            # by ec2-clients.ts:ensureUserInstanceProfile (it tagged username +
-            # subdomain but not cognito_sub). Use the legacy `username` tag
-            # (= email) to decide whether this is the same user's role being
-            # backfilled, or a different user colliding on the subdomain:
-            #   - username tag == current email → same user, safe to take over
-            #     (the cognito_sub tag in `tags` will be added on tag_role below,
-            #     after which future invocations hit the matching-sub branch).
-            #   - username tag absent OR differs → unknown provenance / collision,
-            #     refuse so the operator deletes/migrates the role explicitly.
-            existing_username = next(
-                (t["Value"] for t in existing if t["Key"] == "username"), ""
-            )
-            if not existing_username or existing_username != email:
-                raise RuntimeError(
-                    f"legacy role {role_name} has no cognito_sub tag and its "
-                    f"username tag ({existing_username!r}) does not match the "
-                    f"current user email ({email!r}). Refusing takeover for "
-                    f"sub={sub!r} — delete the legacy role manually after "
-                    f"confirming ownership, or invoke the deprovisioner."
-                )
-            # Same-user backfill: fall through and let tag_role add cognito_sub.
         iam.tag_role(RoleName=role_name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
@@ -355,6 +329,257 @@ def _provision_user(info: dict) -> dict:
     }
 
 
+def _ensure_default_group(username_internal: str) -> str | None:
+    """If a freshly-created user has no group membership, add them to `user`.
+
+    Cognito users created via AWS Console / SDK / IdP federation often arrive
+    with no group set, which makes the dashboard's auth middleware reject them
+    (it expects `admin` / `dept-manager` / `user`). The seed script sets group
+    explicitly so this is a no-op for those. Returns the group it assigned, or
+    None if the user already had at least one group.
+    """
+    try:
+        resp = cognito.admin_list_groups_for_user(UserPoolId=USER_POOL_ID, Username=username_internal)
+        if resp.get("Groups"):
+            return None
+        cognito.admin_add_user_to_group(
+            UserPoolId=USER_POOL_ID, Username=username_internal, GroupName="user",
+        )
+        return "user"
+    except ClientError as e:
+        # Cognito-side failure (throttling, AccessDeniedException, user not
+        # found, etc.). Log ERROR so CloudWatch metric filters or alarms can
+        # surface a sustained problem — sustained misses leave users with no
+        # group and the dashboard auth middleware rejects them, so silent
+        # swallow used to mean "users complain they can't log in" without an
+        # operator signal. Returning None keeps the caller flow intact; the
+        # ERROR log line is the actionable bit.
+        code = e.response.get("Error", {}).get("Code", "Unknown")
+        print(f"ERROR default-group assign failed for {username_internal}: {code}: {e}")
+        return None
+    # Note: unknown exceptions intentionally propagate — they indicate a code
+    # bug or a runtime IAM-perms regression and should fail the invocation so
+    # EventBridge retries (and DLQs after exhaustion) rather than masking.
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Deletion path (ADR-024)
+# ────────────────────────────────────────────────────────────────────────
+
+LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
+USER_INSTANCES_TABLE = os.environ.get("USER_INSTANCES_TABLE", "cc-user-instances")
+USER_VOLUMES_TABLE = os.environ.get("USER_VOLUMES_TABLE", "cc-user-volumes")
+ROUTING_TABLE = os.environ.get("ROUTING_TABLE", "cc-routing-table")
+CODESERVER_SECRET_PREFIX = "cc-on-bedrock/codeserver/"
+
+ddb = boto3.client("dynamodb")
+secrets = boto3.client("secretsmanager")
+ec2 = boto3.client("ec2")
+
+
+def _safe_delete_role(role_name: str) -> str:
+    """Delete an IAM role and its inline policies. Returns 'deleted' / 'absent' / 'error: ...'."""
+    try:
+        for p in iam.list_role_policies(RoleName=role_name).get("PolicyNames", []):
+            iam.delete_role_policy(RoleName=role_name, PolicyName=p)
+        iam.delete_role(RoleName=role_name)
+        return "deleted"
+    except iam.exceptions.NoSuchEntityException:
+        return "absent"
+    except Exception as e:
+        print(f"delete_role {role_name} failed: {e}")
+        return f"error: {e.__class__.__name__}"
+
+
+def _safe_delete_instance_profile(profile_name: str) -> str:
+    try:
+        prof = iam.get_instance_profile(InstanceProfileName=profile_name)
+        for r in prof.get("InstanceProfile", {}).get("Roles", []):
+            iam.remove_role_from_instance_profile(
+                InstanceProfileName=profile_name, RoleName=r["RoleName"],
+            )
+        iam.delete_instance_profile(InstanceProfileName=profile_name)
+        return "deleted"
+    except iam.exceptions.NoSuchEntityException:
+        return "absent"
+    except Exception as e:
+        print(f"delete_instance_profile {profile_name} failed: {e}")
+        return f"error: {e.__class__.__name__}"
+
+
+def _safe_delete_ddb_item(table: str, key: dict) -> str:
+    try:
+        ddb.delete_item(TableName=table, Key=key)
+        return "deleted"
+    except Exception as e:
+        print(f"delete_item {table} {key} failed: {e}")
+        return f"error: {e.__class__.__name__}"
+
+
+def _safe_delete_secret(name: str) -> str:
+    try:
+        secrets.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
+        return "deleted"
+    except secrets.exceptions.ResourceNotFoundException:
+        return "absent"
+    except Exception as e:
+        print(f"delete_secret {name} failed: {e}")
+        return f"error: {e.__class__.__name__}"
+
+
+def _terminate_user_instances(subdomain: str) -> dict:
+    """Find EC2 instances tagged subdomain=<subdomain> AND managed_by=cc-on-bedrock
+    and terminate them.
+
+    The managed_by filter is required at the describe layer so a stray instance
+    with a matching subdomain tag (e.g. created outside this project) is never
+    even considered — otherwise the subsequent terminate_instances call would
+    fail with UnauthorizedOperation (the IAM policy requires the managed_by tag)
+    and silently roll back the entire terminate batch.
+
+    Returns {"instanceIds": [...], "error": str|None}. An empty instanceIds with
+    error=None means there were no matching instances; error set means the call
+    itself failed and the caller should not assume cleanup completed.
+    """
+    try:
+        resp = ec2.describe_instances(
+            Filters=[
+                {"Name": "tag:subdomain", "Values": [subdomain]},
+                {"Name": "tag:managed_by", "Values": ["cc-on-bedrock"]},
+                {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
+            ],
+        )
+        ids = [
+            i["InstanceId"]
+            for r in resp.get("Reservations", [])
+            for i in r.get("Instances", [])
+        ]
+        if not ids:
+            return {"instanceIds": [], "error": None}
+        ec2.terminate_instances(InstanceIds=ids)
+        return {"instanceIds": ids, "error": None}
+    except Exception as e:
+        msg = f"{e.__class__.__name__}: {e}"
+        print(f"ERROR terminate_user_instances {subdomain} failed: {msg}")
+        return {"instanceIds": [], "error": msg}
+
+
+def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
+    """ADR-024: clean every per-user resource created by the provisioner pipeline.
+
+    Order matters: terminate EC2 instances first (they reference the instance
+    profile), then remove the instance profile, then roles, then DDB state and
+    secrets. We tolerate NoSuchEntity at every step so a partial-create that
+    crashed mid-pipeline can still be fully reaped.
+
+    The Cognito user is already gone by the time we receive AdminDeleteUser.
+    We use the local-user role's tags to recover the email → subdomain mapping
+    needed for the EC2-side resources (whose names are subdomain-based).
+
+    `override_subdomain` is the operator escape hatch for cases where the
+    local-user role is missing or its email tag can't be sanitized — pass it
+    explicitly via direct-invoke."""
+    local_role = f"cc-on-bedrock-local-user-{sub}"
+    result: dict = {"sub": sub, "subdomain": override_subdomain}
+
+    # Recover subdomain via the local-user role's `username` tag (= email).
+    # If the caller already passed an explicit subdomain (direct-invoke path
+    # for users created before ADR-022, or where the local-role is missing),
+    # honor that and skip the tag lookup.
+    if result.get("subdomain"):
+        pass  # caller-provided
+    else:
+        try:
+            tag_resp = iam.list_role_tags(RoleName=local_role)
+            tag_map = {t["Key"]: t["Value"] for t in tag_resp.get("Tags", [])}
+            email = tag_map.get("username") or ""
+            if email:
+                try:
+                    result["subdomain"] = derive_subdomain(email)
+                except ValueError as e:
+                    # Surface the error so the operator can re-invoke with an
+                    # explicit subdomain. Without this, EC2/DDB/Secret cleanup
+                    # silently no-ops and orphan resources accumulate.
+                    print(f"ERROR deprovision sub={sub} email={email}: subdomain derivation failed ({e}); "
+                          f"re-invoke with {{\"action\":\"deprovision\",\"sub\":\"{sub}\",\"subdomain\":\"<value>\"}}")
+                    result["subdomainError"] = str(e)
+        except iam.exceptions.NoSuchEntityException:
+            print(f"WARN deprovision sub={sub}: local-user role absent; cannot recover subdomain. "
+                  f"Re-invoke with explicit subdomain if EC2-side cleanup is needed.")
+            result["subdomainError"] = "local_role_missing"
+
+    subdomain = result["subdomain"]
+
+    # EC2 instances tagged with the subdomain (if known)
+    if subdomain:
+        terminated = _terminate_user_instances(subdomain)
+        result["terminatedInstances"] = terminated
+
+        # Instance profile + EC2 task role
+        result["ec2InstanceProfile"] = _safe_delete_instance_profile(f"cc-on-bedrock-task-{subdomain}")
+        result["ec2TaskRole"] = _safe_delete_role(f"cc-on-bedrock-task-{subdomain}")
+
+        # DDB state keyed on subdomain (or user_id == subdomain in cc-user-instances)
+        result["userInstancesRow"] = _safe_delete_ddb_item(
+            USER_INSTANCES_TABLE, {"user_id": {"S": subdomain}}
+        )
+        result["userVolumesRow"] = _safe_delete_ddb_item(
+            USER_VOLUMES_TABLE, {"user_id": {"S": subdomain}}
+        )
+        result["routingRow"] = _safe_delete_ddb_item(
+            ROUTING_TABLE, {"subdomain": {"S": subdomain}}
+        )
+
+        # Codeserver password secret
+        result["codeserverSecret"] = _safe_delete_secret(f"{CODESERVER_SECRET_PREFIX}{subdomain}")
+
+    # Local Governance role (delete last; we read its tags above)
+    result["localGovRole"] = _safe_delete_role(local_role)
+
+    # Limits-table rows (Local Governance) — per-user counter / deny / warn
+    # share PK=USER#{sub}; sweep all SKs. Paginated because daily counters can
+    # accumulate past the 1MB / 100-item single-page response window.
+    try:
+        deleted_limits = 0
+        paginator = ddb.get_paginator("query")
+        for page in paginator.paginate(
+            TableName=LIMITS_TABLE,
+            KeyConditionExpression="PK = :pk",
+            ExpressionAttributeValues={":pk": {"S": f"USER#{sub}"}},
+        ):
+            for item in page.get("Items", []):
+                ddb.delete_item(
+                    TableName=LIMITS_TABLE,
+                    Key={"PK": item["PK"], "SK": item["SK"]},
+                )
+                deleted_limits += 1
+        result["limitsRowsDeleted"] = deleted_limits
+    except Exception as e:
+        print(f"limits sweep for sub={sub} failed: {e}")
+        result["limitsRowsDeleted"] = f"error: {e.__class__.__name__}"
+
+    # Aggregate any partial-failure markers. Anything starting with "error:"
+    # (set by _safe_delete_* and the limits sweep above) means a downstream
+    # call failed. Raising here lets EventBridge retry (default 2 attempts,
+    # then DLQ) instead of silently returning 200 to a half-completed cleanup.
+    # DeleteConflict (running EC2 still holding the instance profile) is
+    # explicitly retryable — the instance moves to `terminated` within minutes
+    # and a retry then completes the cleanup.
+    errors = [
+        f"{k}={v}" for k, v in result.items()
+        if isinstance(v, str) and v.startswith("error:")
+    ]
+    if errors:
+        result["errors"] = errors
+        raise RuntimeError(
+            f"deprovision sub={sub} partial-completion: {len(errors)} step(s) failed: "
+            f"{'; '.join(errors)}. EventBridge will retry; if DeleteConflict, "
+            f"the running EC2 instance must terminate first."
+        )
+
+    return result
+
+
 def _refresh_dept_manager_for_dept(department: str, manager_sub: str) -> dict:
     """Triggered when a user joins dept-manager group. Set custom:dept_manager_sub
     on every member of the department (including the manager themselves) to the
@@ -373,6 +598,31 @@ def _refresh_dept_manager_for_dept(department: str, manager_sub: str) -> dict:
 
 
 def handler(event, context):
+    # Direct invoke — deletion (ADR-024). {"action":"deprovision","sub":"...","subdomain":"..."}.
+    # The Cognito user is presumed already deleted; we just reap the per-user
+    # downstream resources. Idempotent: rerunning on a fully-clean sub is a no-op.
+    # `subdomain` is optional — supplied when the local-user role is missing or
+    # derive_subdomain can't recover the value (operator escape hatch).
+    if isinstance(event, dict) and event.get("action") == "deprovision":
+        sub = event.get("sub")
+        if not sub or not _SUB_RE.match(sub):
+            raise ValueError(f"action=deprovision requires a valid sub UUID, got {sub!r}")
+        explicit_subdomain = event.get("subdomain")
+        if explicit_subdomain is not None:
+            # The operator-supplied subdomain is interpolated into IAM role names,
+            # instance profile names, DDB keys, secret names, and EC2 tag filters.
+            # Validate against the same shape `validation.ts` enforces on inbound
+            # form data so a malformed value can't construct unintended ARNs /
+            # match unrelated tags.
+            if not isinstance(explicit_subdomain, str) or not _SUBDOMAIN_RE.match(explicit_subdomain):
+                raise ValueError(
+                    f"action=deprovision subdomain must match {_SUBDOMAIN_RE.pattern}, "
+                    f"got {explicit_subdomain!r}"
+                )
+        result = _deprovision_user(sub, override_subdomain=explicit_subdomain)
+        print(f"deprovisioned sub={sub} subdomain={result.get('subdomain') or '(unknown)'}: {result}")
+        return result
+
     # Direct invoke (backfill / manual repair). Accepts either {action:ensure, sub:...}
     # or {action:ensure-full, sub:...} — both run the full pipeline.
     if isinstance(event, dict) and event.get("action") in ("ensure", "ensure-full"):
@@ -404,6 +654,30 @@ def handler(event, context):
     if detail.get("errorCode"):
         print(f"upstream {event_name} failed: {detail.get('errorCode')} — skipping")
         return {"skipped": True, "upstreamError": detail.get("errorCode")}
+
+    # AdminDeleteUser (ADR-024): fan-out cleanup of per-user resources.
+    # Sub extraction order:
+    #   1. additionalEventData.sub  — the documented CloudTrail field
+    #   2. requestParameters.username — Cognito's internal username IS the
+    #      sub for federated/SDK-created users; fall back when (1) is missing.
+    # ERROR log on miss so a CloudWatch metric filter / alarm catches
+    # accumulating skip events (the silent-skip path used to bury orphan
+    # resources because no operator signal fired).
+    if event_name == "AdminDeleteUser":
+        add = detail.get("additionalEventData") or {}
+        sub = add.get("sub")
+        if not (sub and _SUB_RE.match(sub)):
+            req = detail.get("requestParameters") or {}
+            candidate = req.get("username")
+            if candidate and candidate != "HIDDEN_DUE_TO_SECURITY_REASONS" and _SUB_RE.match(candidate):
+                sub = candidate
+                print(f"AdminDeleteUser: additionalEventData.sub missing, fell back to requestParameters.username={sub}")
+        if not (sub and _SUB_RE.match(sub)):
+            print(f"ERROR AdminDeleteUser: no usable sub in event payload (additionalEventData={add}, requestParameters={detail.get('requestParameters')}) — cleanup will NOT run; orphan resources possible")
+            return {"skipped": True, "reason": "no_sub"}
+        result = _deprovision_user(sub)
+        print(f"deprovisioned eventName=AdminDeleteUser sub={sub} subdomain={result.get('subdomain') or '(unknown)'}")
+        return result
 
     # AdminAddUserToGroup / AdminRemoveUserFromGroup on the dept-manager group:
     # refresh every member of the affected department so their custom:dept_manager_sub
@@ -466,11 +740,20 @@ def handler(event, context):
         print(f"ERROR sub={sub} email={info.get('email')} unsanitizable — provisioning skipped: {e}")
         return {"skipped": True, "reason": "unsanitizable_email", "sub": sub, "email": info.get("email"), "error": str(e)}
 
+    # Default group fallback (ADR-024): users created via AWS Console / SDK / SAML
+    # often have no group attached, which makes dashboard auth middleware reject
+    # the login. Drop them into the `user` group so they at least reach the user
+    # portal. Seed-script-created users already have a group → no-op.
+    assigned = _ensure_default_group(info["username_internal"])
+    if assigned:
+        print(f"default group assigned: sub={sub} email={info['email']} group={assigned}")
+
     print(
         f"provisioned eventName={event_name} sub={sub} email={info['email']} "
         f"subdomain={result['subdomain']} subdomainUpdated={result['subdomainUpdated']} "
         f"deptManagerSub={result['deptManagerSub']} "
         f"local.created={result['localGovRole']['created']} "
-        f"ec2.created={result['ec2Role']['created']}"
+        f"ec2.created={result['ec2Role']['created']} "
+        f"defaultGroup={assigned or '(already set)'}"
     )
     return result
