@@ -83,8 +83,22 @@ while IFS= read -r LINE; do
       --cli-binary-format raw-in-base64-out \
       --payload "$LINE" /tmp/backfill-out.json 2>&1); then
     OUT=$(cat /tmp/backfill-out.json)
-    # ensure-action path returns {"roleArn":"...","created":true|false}; EventBridge path returns {"skipped":true}
-    CREATED_FLAG=$(echo "$OUT" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('created'))" 2>/dev/null || echo "None")
+    # The Lambda's ensure path returns a nested shape:
+    #   {"sub":"...","subdomain":"...","localGovRole":{"created":bool,...},"ec2Role":{"created":bool,...}, ...}
+    # "CREATED" status means at least one role was just created on this call;
+    # if both report created=False the user already had everything in place.
+    CREATED_FLAG=$(echo "$OUT" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+local = (d.get('localGovRole') or {}).get('created')
+ec2 = (d.get('ec2Role') or {}).get('created')
+if local is True or ec2 is True:
+    print('True')
+elif local is False or ec2 is False:
+    print('False')
+else:
+    print('None')
+" 2>/dev/null || echo "None")
     if [ "$CREATED_FLAG" = "True" ]; then
       echo "  CREATED $USERNAME ($DEPT)"
       CREATED=$((CREATED + 1))
