@@ -254,20 +254,28 @@ def _ensure_ec2_task_role(subdomain: str, email: str, department: str, sub: str)
                 f"derive_subdomain() to disambiguate."
             )
         if not existing_sub:
-            # Role exists but lacks a `cognito_sub` tag — pre-ADR-022 legacy
-            # (ec2-clients.ts:ensureUserInstanceProfile only tagged subdomain,
-            # not cognito_sub). Silently re-tagging would invisibly hand this
-            # role to whichever sub the provisioner happens to be processing
-            # right now, breaking audit trail and risking two Cognito users
-            # sharing one IAM identity if the next user collides on subdomain.
-            # Refuse the takeover; operator must run scripts/backfill-local-user-roles.sh
-            # against a known sub OR delete the legacy role first.
-            raise RuntimeError(
-                f"legacy role {role_name} has no cognito_sub tag (created before ADR-022). "
-                f"Refusing silent takeover for sub={sub!r}. Delete the role manually "
-                f"after confirming ownership, or invoke the deprovisioner with the "
-                f"original sub to clean up, then let this Lambda re-create it."
+            # Role exists but lacks `cognito_sub` — pre-ADR-022 legacy created
+            # by ec2-clients.ts:ensureUserInstanceProfile (it tagged username +
+            # subdomain but not cognito_sub). Use the legacy `username` tag
+            # (= email) to decide whether this is the same user's role being
+            # backfilled, or a different user colliding on the subdomain:
+            #   - username tag == current email → same user, safe to take over
+            #     (the cognito_sub tag in `tags` will be added on tag_role below,
+            #     after which future invocations hit the matching-sub branch).
+            #   - username tag absent OR differs → unknown provenance / collision,
+            #     refuse so the operator deletes/migrates the role explicitly.
+            existing_username = next(
+                (t["Value"] for t in existing if t["Key"] == "username"), ""
             )
+            if not existing_username or existing_username != email:
+                raise RuntimeError(
+                    f"legacy role {role_name} has no cognito_sub tag and its "
+                    f"username tag ({existing_username!r}) does not match the "
+                    f"current user email ({email!r}). Refusing takeover for "
+                    f"sub={sub!r} — delete the legacy role manually after "
+                    f"confirming ownership, or invoke the deprovisioner."
+                )
+            # Same-user backfill: fall through and let tag_role add cognito_sub.
         iam.tag_role(RoleName=role_name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
