@@ -48,13 +48,21 @@ def derive_subdomain(email_or_username: str) -> str:
       - lowercase
       - non-[a-z0-9] -> '-'
       - collapse repeating dashes, strip leading/trailing dashes
-      - pad with '0' if shorter than 3 chars, truncate to 30
+      - truncate to 30
+
+    Raises ValueError if the resulting subdomain would be shorter than 3 chars.
+    Previously we padded with '000' which made every empty-local-part user collide
+    onto a shared `cc-on-bedrock-task-000` role — an obvious privilege-bridging
+    hole. Fail loudly so the caller surfaces a real error to the admin instead.
     """
     local = (email_or_username or "").split("@")[0].lower()
     cleaned = re.sub(r"[^a-z0-9-]", "-", local)
     cleaned = re.sub(r"-+", "-", cleaned).strip("-")
     if len(cleaned) < 3:
-        cleaned = (cleaned + "000")[:3]
+        raise ValueError(
+            f"cannot derive subdomain from email/username {email_or_username!r}: "
+            f"local-part collapses to {cleaned!r} (must be >= 3 chars after sanitization)"
+        )
     return cleaned[:30]
 
 
@@ -192,9 +200,16 @@ def _ec2_task_inline_policy() -> dict:
     }
 
 
-def _ensure_ec2_task_role(subdomain: str, email: str, department: str) -> dict:
+def _ensure_ec2_task_role(subdomain: str, email: str, department: str, sub: str) -> dict:
     """Create or refresh the EC2 mode per-user IAM role + instance profile.
-    Mirrors ec2-clients.ts:ensureUserInstanceProfile but runs ahead of first start."""
+    Mirrors ec2-clients.ts:ensureUserInstanceProfile but runs ahead of first start.
+
+    Subdomain collision guard: if a role with the same name already exists tagged
+    to a different Cognito sub, raise instead of silently re-tagging. Subdomains
+    derive from email local-part, so `user01@a.com` and `user01@b.com` would
+    naturally collide; rather than silently hand the second user the first
+    user's EC2 permissions, we fail and require the admin to disambiguate.
+    """
     role_name = f"{EC2_ROLE_PREFIX}{subdomain}"
     tags = [
         {"Key": "cc-on-bedrock", "Value": "user-instance-role"},
@@ -203,10 +218,21 @@ def _ensure_ec2_task_role(subdomain: str, email: str, department: str) -> dict:
         {"Key": "project", "Value": "cc-on-bedrock"},
         {"Key": "subdomain", "Value": subdomain},
         {"Key": "cost-center", "Value": department or "default"},
+        {"Key": "cognito_sub", "Value": sub},
     ]
     created = False
     try:
         iam.get_role(RoleName=role_name)
+        existing = iam.list_role_tags(RoleName=role_name).get("Tags", [])
+        existing_sub = next((t["Value"] for t in existing if t["Key"] == "cognito_sub"), "")
+        if existing_sub and existing_sub != sub:
+            raise RuntimeError(
+                f"subdomain collision on {role_name}: existing role owned by "
+                f"cognito_sub={existing_sub!r} but provisioner invoked for sub={sub!r}. "
+                f"Two users derived the same subdomain — likely same email local-part "
+                f"across different domains. Resolve by changing one email or extending "
+                f"derive_subdomain() to disambiguate."
+            )
         iam.tag_role(RoleName=role_name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
@@ -260,15 +286,18 @@ def _provision_user(info: dict) -> dict:
     # hasn't been added to the dept-manager group yet (chicken-and-egg on the
     # very first user per dept), this stays empty — the AdminAddUserToGroup
     # event handler below backfills it once the manager joins the group.
+    # An empty manager_sub is still written (clearing a stale pointer) so that
+    # demoting the previous manager doesn't leave dept members pointing at a
+    # user who is no longer in the dept-manager group.
     manager_sub = _find_dept_manager_sub(department) or ""
     manager_changed = info.get("existing_dept_manager_sub") != manager_sub
-    if manager_changed and manager_sub:
+    if manager_changed:
         _write_dept_manager_sub(internal_username, manager_sub)
 
     local_result = ensure_role(
         sub=sub, username=email, department=department, project=project,
     )
-    ec2_result = _ensure_ec2_task_role(subdomain, email, department)
+    ec2_result = _ensure_ec2_task_role(subdomain, email, department, sub)
 
     return {
         "sub": sub,
@@ -329,29 +358,43 @@ def handler(event, context):
         print(f"upstream {event_name} failed: {detail.get('errorCode')} — skipping")
         return {"skipped": True, "upstreamError": detail.get("errorCode")}
 
-    # AdminAddUserToGroup: if the target group is `dept-manager`, refresh all
-    # dept members so their custom:dept_manager_sub points to the new manager.
-    if event_name == "AdminAddUserToGroup":
+    # AdminAddUserToGroup / AdminRemoveUserFromGroup on the dept-manager group:
+    # refresh every member of the affected department so their custom:dept_manager_sub
+    # points to the (new) manager, or to '' if the dept now has no manager.
+    if event_name in ("AdminAddUserToGroup", "AdminRemoveUserFromGroup"):
         req = detail.get("requestParameters") or {}
         group_name = req.get("groupName")
         if group_name != "dept-manager":
             return {"skipped": True, "reason": "group_not_dept_manager", "group": group_name}
-        # CloudTrail redacts username; pull from responseElements or requestParameters.
+
+        # Resolve which user was promoted/demoted. CloudTrail redacts
+        # requestParameters.username on some account configurations; fall back to
+        # responseElements (occasionally populated) before giving up.
         username_internal = req.get("username")
         if not username_internal or username_internal == "HIDDEN_DUE_TO_SECURITY_REASONS":
-            print(f"AdminAddUserToGroup: username redacted — cannot resolve manager sub")
+            resp = detail.get("responseElements") or {}
+            username_internal = (resp.get("user") or {}).get("username")
+        if not username_internal or username_internal == "HIDDEN_DUE_TO_SECURITY_REASONS":
+            print(f"{event_name}: username redacted in CloudTrail — cannot resolve dept")
             return {"skipped": True, "reason": "username_redacted"}
+
         try:
             full = cognito.admin_get_user(UserPoolId=USER_POOL_ID, Username=username_internal)
         except cognito.exceptions.UserNotFoundException:
             return {"skipped": True, "reason": "user_not_found", "username": username_internal}
         attrs = {a["Name"]: a["Value"] for a in full.get("UserAttributes", [])}
-        manager_sub = attrs.get("sub")
         department = attrs.get("custom:department") or "default"
-        if not manager_sub:
-            return {"skipped": True, "reason": "no_sub_on_manager"}
-        result = _refresh_dept_manager_for_dept(department, manager_sub)
-        print(f"dept-manager promoted: dept={department} managerSub={manager_sub} updated={result['updated']} unchanged={result['unchanged']}")
+
+        # Recompute the current manager for the dept after the membership change.
+        # For Add: this is usually the user just added (if they were the only/first).
+        # For Remove: this is whoever else is still in dept-manager + has this dept,
+        # or empty if the dept now has no manager.
+        new_manager_sub = _find_dept_manager_sub(department) or ""
+        result = _refresh_dept_manager_for_dept(department, new_manager_sub)
+        print(
+            f"dept-manager {event_name}: dept={department} newManagerSub={new_manager_sub or '(none)'} "
+            f"updated={result['updated']} unchanged={result['unchanged']}"
+        )
         return result
 
     # AdminCreateUser / SignUp path.

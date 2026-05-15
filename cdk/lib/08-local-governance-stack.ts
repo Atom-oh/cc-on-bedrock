@@ -220,7 +220,7 @@ export class LocalGovernanceStack extends cdk.Stack {
         detailType: ['AWS API Call via CloudTrail'],
         detail: {
           eventSource: ['cognito-idp.amazonaws.com'],
-          eventName: ['AdminCreateUser', 'SignUp', 'AdminAddUserToGroup'],
+          eventName: ['AdminCreateUser', 'SignUp', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup'],
         },
       },
       targets: [new targets.LambdaFunction(provisioner)],

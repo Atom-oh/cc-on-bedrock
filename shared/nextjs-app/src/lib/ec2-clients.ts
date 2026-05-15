@@ -1273,9 +1273,11 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
         ...costAllocationTags,
       ],
     }));
-
-    // Wait for IAM propagation (new role only)
-    await new Promise(r => setTimeout(r, 8000));
+    // No fixed propagation sleep here — `runInstancesWithIamRetry` absorbs IAM
+    // eventual consistency at the RunInstances call site with exponential backoff
+    // (2s → 4s → 8s → ...), so the previous 8s blanket wait was dead weight on
+    // the cold path. The instance-profile attach step below still has a short
+    // settle to give the EC2 control plane its first chance.
   }
 
   // Upsert Bedrock + SSM + CloudWatch permissions (runs on every start to fix legacy roles)
