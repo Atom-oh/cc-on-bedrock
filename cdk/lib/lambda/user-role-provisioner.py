@@ -75,12 +75,16 @@ def derive_subdomain(email_or_username: str) -> str:
     local = (email_or_username or "").split("@")[0].lower()
     cleaned = re.sub(r"[^a-z0-9-]", "-", local)
     cleaned = re.sub(r"-+", "-", cleaned).strip("-")
-    if len(cleaned) < 3:
+    # Truncate first, THEN re-strip — `cleaned[:30]` could land on a `-` and
+    # violate validation.ts regex /^[a-z0-9][a-z0-9-]*[a-z0-9]$/ if the 30th
+    # char is a sanitization-inserted dash.
+    truncated = cleaned[:30].rstrip("-")
+    if len(truncated) < 3:
         raise ValueError(
             f"cannot derive subdomain from email/username {email_or_username!r}: "
-            f"local-part collapses to {cleaned!r} (must be >= 3 chars after sanitization)"
+            f"sanitized result {truncated!r} (must be >= 3 chars and end alphanumeric)"
         )
-    return cleaned[:30]
+    return truncated
 
 
 def _admin_get_user_by_sub(sub: str) -> dict:
@@ -250,6 +254,25 @@ def _ensure_ec2_task_role(subdomain: str, email: str, department: str, sub: str)
                 f"across different domains. Resolve by changing one email or extending "
                 f"derive_subdomain() to disambiguate."
             )
+        if not existing_sub:
+            # Pre-ADR-022 role created by ec2-clients.ts:ensureUserInstanceProfile
+            # (it tagged username + subdomain but not cognito_sub). Use the legacy
+            # `username` tag to decide whether this is the same user being
+            # backfilled (safe to take over) or a different user colliding on
+            # the subdomain (must reject; otherwise two Cognito users share one
+            # IAM identity — cross-tenant privilege leak).
+            existing_username = next(
+                (t["Value"] for t in existing if t["Key"] == "username"), ""
+            )
+            if not existing_username or existing_username != email:
+                raise RuntimeError(
+                    f"legacy role {role_name} has no cognito_sub tag and its "
+                    f"username tag ({existing_username!r}) does not match the "
+                    f"current user email ({email!r}). Refusing takeover for "
+                    f"sub={sub!r} — delete the legacy role manually after "
+                    f"confirming ownership, or invoke the deprovisioner."
+                )
+            # Same-user backfill: fall through and tag_role adds cognito_sub.
         iam.tag_role(RoleName=role_name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
@@ -411,9 +434,16 @@ def _safe_delete_ddb_item(table: str, key: dict) -> str:
     try:
         ddb.delete_item(TableName=table, Key=key)
         return "deleted"
-    except Exception as e:
+    except ClientError as e:
+        # `governanceOnly=true` mode skips Stack 04/07 → cc-user-instances,
+        # cc-user-volumes, cc-routing-table don't exist. DeleteItem on missing
+        # table returns ResourceNotFoundException — that's "nothing to clean up
+        # here", not an error worth retrying / DLQ'ing.
+        code = e.response.get("Error", {}).get("Code", "")
+        if code == "ResourceNotFoundException":
+            return "absent"
         print(f"delete_item {table} {key} failed: {e}")
-        return f"error: {e.__class__.__name__}"
+        return f"error: {code or e.__class__.__name__}"
 
 
 def _safe_delete_secret(name: str) -> str:
@@ -558,17 +588,19 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
         print(f"limits sweep for sub={sub} failed: {e}")
         result["limitsRowsDeleted"] = f"error: {e.__class__.__name__}"
 
-    # Aggregate any partial-failure markers. Anything starting with "error:"
-    # (set by _safe_delete_* and the limits sweep above) means a downstream
-    # call failed. Raising here lets EventBridge retry (default 2 attempts,
-    # then DLQ) instead of silently returning 200 to a half-completed cleanup.
-    # DeleteConflict (running EC2 still holding the instance profile) is
-    # explicitly retryable — the instance moves to `terminated` within minutes
-    # and a retry then completes the cleanup.
-    errors = [
-        f"{k}={v}" for k, v in result.items()
-        if isinstance(v, str) and v.startswith("error:")
-    ]
+    # Aggregate any partial-failure markers. Two shapes carry an error:
+    #   - string starting with "error:"  — _safe_delete_* and the limits sweep
+    #   - dict with non-None "error"      — _terminate_user_instances
+    # Raising lets EventBridge retry (default 2 attempts, then DLQ) instead of
+    # silently returning 200 to a half-completed cleanup. DeleteConflict
+    # (running EC2 still holding the instance profile) is explicitly retryable —
+    # the instance moves to `terminated` within minutes and the retry completes.
+    errors: list[str] = []
+    for k, v in result.items():
+        if isinstance(v, str) and v.startswith("error:"):
+            errors.append(f"{k}={v}")
+        elif isinstance(v, dict) and v.get("error"):
+            errors.append(f"{k}={v['error']}")
     if errors:
         result["errors"] = errors
         raise RuntimeError(
