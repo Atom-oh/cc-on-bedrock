@@ -138,12 +138,18 @@ def _list_dept_members(department: str) -> list:
 
 
 def _extract_sub_from_event(detail: dict) -> str | None:
+    """Returns a sub only if it matches the Cognito UUID format. EventBridge
+    delivers AWS-issued subs which are well-formed, but we validate before
+    interpolating into the Cognito ListUsers Filter — defense in depth, same
+    pattern the direct-invoke and AdminDeleteUser paths use."""
     add = detail.get("additionalEventData") or {}
     sub = add.get("sub")
-    if sub:
+    if not sub:
+        resp = detail.get("responseElements") or {}
+        sub = resp.get("userSub")
+    if sub and _SUB_RE.match(sub):
         return sub
-    resp = detail.get("responseElements") or {}
-    return resp.get("userSub")
+    return None
 
 
 def _write_subdomain(internal_username: str, subdomain: str) -> None:
@@ -563,8 +569,14 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
         # Codeserver password secret
         result["codeserverSecret"] = _safe_delete_secret(f"{CODESERVER_SECRET_PREFIX}{subdomain}")
 
-    # Local Governance role (delete last; we read its tags above)
-    result["localGovRole"] = _safe_delete_role(local_role)
+    # NOTE: local Governance role deletion is deferred to AFTER the error
+    # aggregator below. The local-user role tags carry the username (email)
+    # that we use to recover `subdomain` on retry. If we delete it here and
+    # any EC2-side cleanup fails (e.g. DeleteConflict while EC2 still
+    # shutting-down), the aggregator raises → EventBridge retries → but the
+    # retry can't find the local role anymore → can't derive subdomain →
+    # EC2 cleanup loop is silently skipped on every subsequent attempt.
+    # Keep the local role until we know the rest succeeded.
 
     # Limits-table rows (Local Governance) — per-user counter / deny / warn
     # share PK=USER#{sub}; sweep all SKs. Paginated because daily counters can
@@ -603,11 +615,20 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
             errors.append(f"{k}={v['error']}")
     if errors:
         result["errors"] = errors
+        # NOTE: do NOT delete local_role here — its tags are needed to recover
+        # `subdomain` on EventBridge retry. The retry's _deprovision_user call
+        # will read the tags, drive cleanup, and (if successful this time)
+        # fall through to the local role deletion below.
         raise RuntimeError(
             f"deprovision sub={sub} partial-completion: {len(errors)} step(s) failed: "
             f"{'; '.join(errors)}. EventBridge will retry; if DeleteConflict, "
             f"the running EC2 instance must terminate first."
         )
+
+    # All other cleanup succeeded — safe to drop the local-user role last.
+    # (Done after the aggregator so the role's `username` tag remains
+    # available to recover subdomain on retry if any earlier step failed.)
+    result["localGovRole"] = _safe_delete_role(local_role)
 
     return result
 
