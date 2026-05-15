@@ -600,9 +600,14 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
         print(f"limits sweep for sub={sub} failed: {e}")
         result["limitsRowsDeleted"] = f"error: {e.__class__.__name__}"
 
-    # Aggregate any partial-failure markers. Two shapes carry an error:
-    #   - string starting with "error:"  — _safe_delete_* and the limits sweep
-    #   - dict with non-None "error"      — _terminate_user_instances
+    # Aggregate any partial-failure markers. Three shapes carry an error:
+    #   - string starting with "error:"   — _safe_delete_* and the limits sweep
+    #   - dict with non-None "error"       — _terminate_user_instances
+    #   - top-level `subdomainError` key   — derive_subdomain failure or
+    #     local-role-absent (set in the subdomain-recovery block above).
+    #     Without this branch, an unsanitizable email or missing local role
+    #     would skip EC2/DDB/Secret cleanup AND then silently delete the
+    #     local-user role, losing the `username` tag needed to ever recover.
     # Raising lets EventBridge retry (default 2 attempts, then DLQ) instead of
     # silently returning 200 to a half-completed cleanup. DeleteConflict
     # (running EC2 still holding the instance profile) is explicitly retryable —
@@ -613,6 +618,8 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
             errors.append(f"{k}={v}")
         elif isinstance(v, dict) and v.get("error"):
             errors.append(f"{k}={v['error']}")
+    if result.get("subdomainError"):
+        errors.append(f"subdomainError={result['subdomainError']}")
     if errors:
         result["errors"] = errors
         # NOTE: do NOT delete local_role here — its tags are needed to recover
