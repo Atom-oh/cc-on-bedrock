@@ -168,11 +168,16 @@ jobs:
       - name: Parse verdict
         id: gate
         run: |
-          # Read the final VERDICT line. Fail-closed: no VERDICT means FAIL.
-          if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
+          # Read the final VERDICT line. This is INFORMATIONAL — the workflow
+          # never exits non-zero based on the verdict; the badge in the comment
+          # is the only effect. To turn this into a true blocking gate, add an
+          # `Enforce gate` step downstream and register it as a required check.
+          # Patterns tolerate trailing whitespace / CR so model output quirks
+          # don't trip the parser.
+          if grep -Eq "^VERDICT: FAIL[[:space:]]*$" /tmp/review.md; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
             echo "reason=VERDICT: FAIL (CRITICAL or MAJOR issues present)" >> "$GITHUB_OUTPUT"
-          elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
+          elif grep -Eq "^VERDICT: PASS[[:space:]]*$" /tmp/review.md; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
             echo "reason=No CRITICAL or MAJOR issues" >> "$GITHUB_OUTPUT"
           elif [ -s /tmp/review.md ] && ! grep -q "## AI Review Tool Error" /tmp/review.md; then
@@ -194,15 +199,19 @@ jobs:
         run: |
           MARKER="<!-- bedrock-pr-review -->"
 
+          # This badge is informational — the verdict does NOT block PR merge.
+          # Reviewers decide whether to act on the finding. Word the badge so it
+          # reflects severity, not enforcement: "Issues found" instead of "BLOCKED".
           if [ "$GATE_RESULT" = "fail" ]; then
-            STATUS_BADGE="**Status: BLOCKED** — ${GATE_REASON}"
+            STATUS_BADGE="**Verdict: Issues Found (CRITICAL or MAJOR)** — ${GATE_REASON}"
           else
-            STATUS_BADGE="**Status: PASSED** — ${GATE_REASON}"
+            STATUS_BADGE="**Verdict: LGTM** — ${GATE_REASON}"
           fi
 
-          # Strip the trailing VERDICT: line from the comment body (it lives in
-          # the badge instead) so users don't see two verdicts.
-          sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
+          # Strip the VERDICT: line wherever it appears (model output occasionally
+          # has trailing blank lines; the position-anchored `$ {}` form misses it
+          # when VERDICT isn't on the literal last line).
+          sed -E '/^VERDICT: (PASS|FAIL)[[:space:]]*$/d' /tmp/review.md > /tmp/review-clean.md
 
           {
             echo "$MARKER"
