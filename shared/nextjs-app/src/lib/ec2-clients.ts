@@ -1212,12 +1212,10 @@ async function runInstancesWithIamRetry(
   maxAttempts = 6,
 ) {
   let delay = 2000;
-  let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       return await ec2Client.send(new RunInstancesCommand(params));
     } catch (err) {
-      lastErr = err;
       const msg = (err as Error)?.message ?? "";
       const isPropagation =
         msg.includes("Invalid IAM Instance Profile name") ||
@@ -1228,7 +1226,8 @@ async function runInstancesWithIamRetry(
       delay = Math.min(delay * 2, 15000);
     }
   }
-  throw lastErr;
+  // Unreachable — the last iteration either returns or throws.
+  throw new Error("runInstancesWithIamRetry: exhausted retries (should not happen)");
 }
 
 async function ensureUserInstanceProfile(subdomain: string, username: string, department: string): Promise<string> {

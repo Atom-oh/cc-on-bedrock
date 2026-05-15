@@ -253,6 +253,21 @@ def _ensure_ec2_task_role(subdomain: str, email: str, department: str, sub: str)
                 f"across different domains. Resolve by changing one email or extending "
                 f"derive_subdomain() to disambiguate."
             )
+        if not existing_sub:
+            # Role exists but lacks a `cognito_sub` tag — pre-ADR-022 legacy
+            # (ec2-clients.ts:ensureUserInstanceProfile only tagged subdomain,
+            # not cognito_sub). Silently re-tagging would invisibly hand this
+            # role to whichever sub the provisioner happens to be processing
+            # right now, breaking audit trail and risking two Cognito users
+            # sharing one IAM identity if the next user collides on subdomain.
+            # Refuse the takeover; operator must run scripts/backfill-local-user-roles.sh
+            # against a known sub OR delete the legacy role first.
+            raise RuntimeError(
+                f"legacy role {role_name} has no cognito_sub tag (created before ADR-022). "
+                f"Refusing silent takeover for sub={sub!r}. Delete the role manually "
+                f"after confirming ownership, or invoke the deprovisioner with the "
+                f"original sub to clean up, then let this Lambda re-create it."
+            )
         iam.tag_role(RoleName=role_name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
