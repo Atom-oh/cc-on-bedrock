@@ -192,7 +192,14 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         location /healthz {{
             proxy_pass http://codeserver_{subdomain};
         }}
-        location ~ ^/stable-[a-f0-9]+/ {{
+        location /manifest.json {{
+            proxy_pass http://codeserver_{subdomain};
+        }}
+        # Match BOTH `/stable-<hash>/...` (asset paths) AND `/stable-<hash>?...`
+        # (WebSocket reconnection endpoint — no trailing slash, query string only).
+        # The previous regex required `/` after the hash, which missed the WS path
+        # and silently fell back to frontend:3000 → "WebSocket close with status code 1006".
+        location ~ ^/stable-[a-f0-9]+(/|$|\?) {{
             proxy_pass http://codeserver_{subdomain};
         }}
         location ~ ^/vscode-remote-resource/ {{
