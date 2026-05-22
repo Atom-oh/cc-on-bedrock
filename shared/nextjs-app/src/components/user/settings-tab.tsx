@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { UserSession, ContainerInfo } from "@/lib/types";
+import type { UserSession, ContainerInfo, CustomRoute } from "@/lib/types";
 
 interface SettingsTabProps {
   user: UserSession;
@@ -115,6 +115,102 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
   const isRunning = container?.status === "RUNNING";
   const showValidation = passwordTouched && newPassword.length >= 8;
   const validationError = validatePassword(newPassword);
+
+  // ─── Custom Port Routes (ADR-009 ext.) ───
+  const [customRoutes, setCustomRoutes] = useState<CustomRoute[]>([]);
+  const [maxRoutes, setMaxRoutes] = useState<number>(0);
+  const [reservedPaths, setReservedPaths] = useState<readonly string[]>([]);
+  const [reservedPorts, setReservedPorts] = useState<readonly number[]>([]);
+  const [routesLoading, setRoutesLoading] = useState(true);
+  const [routesSaving, setRoutesSaving] = useState(false);
+  const [routesError, setRoutesError] = useState<string | null>(null);
+  const [routesSavedAt, setRoutesSavedAt] = useState<string | null>(null);
+  const [draftPath, setDraftPath] = useState("");
+  const [draftPort, setDraftPort] = useState("");
+  const [draftLabel, setDraftLabel] = useState("");
+
+  const policy = user.securityPolicy ?? "restricted";
+  const routesDisabled = policy === "locked";
+
+  useEffect(() => {
+    if (routesDisabled) { setRoutesLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/user/custom-routes");
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to load");
+        setCustomRoutes(json.data.routes ?? []);
+        setMaxRoutes(json.data.maxAllowed ?? 0);
+        setReservedPaths(json.data.reservedPaths ?? []);
+        setReservedPorts(json.data.reservedPorts ?? []);
+      } catch (err) {
+        if (!cancelled) setRoutesError(err instanceof Error ? err.message : "Failed to load");
+      } finally {
+        if (!cancelled) setRoutesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [routesDisabled]);
+
+  const normalizePath = (raw: string): string => {
+    const trimmed = raw.trim().toLowerCase();
+    if (!trimmed) return "";
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  };
+
+  const handleAddRoute = () => {
+    setRoutesError(null);
+    const path = normalizePath(draftPath);
+    const port = Number(draftPort);
+    const label = draftLabel.trim();
+
+    if (!path || !label || !Number.isInteger(port)) {
+      setRoutesError("All fields are required");
+      return;
+    }
+    if (customRoutes.length >= maxRoutes) {
+      setRoutesError(`Maximum ${maxRoutes} routes`);
+      return;
+    }
+    if (customRoutes.some((r) => r.path === path)) {
+      setRoutesError("Path already exists");
+      return;
+    }
+    if (customRoutes.some((r) => r.port === port)) {
+      setRoutesError("Port already exists");
+      return;
+    }
+    setCustomRoutes([...customRoutes, { path, port, label }]);
+    setDraftPath("");
+    setDraftPort("");
+    setDraftLabel("");
+  };
+
+  const handleRemoveRoute = (path: string) => {
+    setCustomRoutes(customRoutes.filter((r) => r.path !== path));
+  };
+
+  const handleSaveRoutes = async () => {
+    setRoutesSaving(true);
+    setRoutesError(null);
+    try {
+      const res = await fetch("/api/user/custom-routes", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routes: customRoutes }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Save failed");
+      setCustomRoutes(json.data.routes);
+      setRoutesSavedAt(json.data.updatedAt);
+    } catch (err) {
+      setRoutesError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setRoutesSaving(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -302,6 +398,124 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
             onError={(msg) => setError(msg)}
           />
         </div>
+      </div>
+
+      {/* Custom Port Routes (ADR-009 ext.) */}
+      <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
+        <h2 className="text-lg font-semibold text-gray-100 mb-1">Custom Port Routes</h2>
+        <p className="text-sm text-gray-400 mb-4">
+          Map additional paths in your DevEnv URL to ports running inside the instance. Changes apply within ~60 seconds.
+        </p>
+
+        {routesDisabled ? (
+          <p className="text-sm text-yellow-400">
+            Custom routes are disabled for your security policy (locked).
+          </p>
+        ) : routesLoading ? (
+          <p className="text-sm text-gray-500">Loading…</p>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-3">
+              {customRoutes.length} of {maxRoutes} routes used ({policy})
+            </p>
+
+            {customRoutes.length > 0 && (
+              <table className="w-full text-sm mb-4">
+                <thead className="text-xs text-gray-500 uppercase">
+                  <tr>
+                    <th className="text-left py-2">Path</th>
+                    <th className="text-left py-2">Port</th>
+                    <th className="text-left py-2">Label</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customRoutes.map((r) => (
+                    <tr key={r.path} className="border-t border-gray-800">
+                      <td className="py-2 text-blue-400 font-mono">{r.path}</td>
+                      <td className="py-2 text-gray-200 font-mono">{r.port}</td>
+                      <td className="py-2 text-gray-300">{r.label}</td>
+                      <td className="py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRoute(r.path)}
+                          className="text-xs text-red-400 hover:text-red-300"
+                          aria-label={`Remove ${r.path}`}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {customRoutes.length < maxRoutes && (
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                <input
+                  type="text"
+                  placeholder="/preview"
+                  value={draftPath}
+                  onChange={(e) => setDraftPath(e.target.value)}
+                  className="col-span-1 bg-[#0d1117] border border-gray-800 rounded px-2 py-1 text-sm"
+                  aria-label="Path"
+                />
+                <input
+                  type="number"
+                  placeholder="5173"
+                  value={draftPort}
+                  onChange={(e) => setDraftPort(e.target.value)}
+                  className="col-span-1 bg-[#0d1117] border border-gray-800 rounded px-2 py-1 text-sm"
+                  aria-label="Port"
+                />
+                <input
+                  type="text"
+                  placeholder="Vite"
+                  value={draftLabel}
+                  onChange={(e) => setDraftLabel(e.target.value)}
+                  className="col-span-1 bg-[#0d1117] border border-gray-800 rounded px-2 py-1 text-sm"
+                  aria-label="Label"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddRoute}
+                  className="col-span-1 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded px-3 py-1"
+                >
+                  Add
+                </button>
+              </div>
+            )}
+
+            {routesError && (
+              <p className="text-sm text-red-400 mb-3" role="alert">
+                {routesError}
+              </p>
+            )}
+
+            {routesSavedAt && !routesError && (
+              <p className="text-sm text-green-400 mb-3" role="status">
+                Saved at {new Date(routesSavedAt).toLocaleTimeString()}
+              </p>
+            )}
+
+            <p className="text-xs text-gray-500 mb-1">
+              Reserved paths: {reservedPaths.join(", ")}
+            </p>
+            <p className="text-xs text-gray-500 mb-3">
+              Reserved ports: {reservedPorts.join(", ")}
+            </p>
+
+            <button
+              type="button"
+              onClick={handleSaveRoutes}
+              disabled={routesSaving}
+              className="bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white text-sm rounded px-4 py-2"
+            >
+              {routesSaving ? "Saving…" : "Save Changes"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
