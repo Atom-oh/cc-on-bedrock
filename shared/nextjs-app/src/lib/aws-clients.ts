@@ -14,6 +14,7 @@ import type {
   CognitoUser,
   CreateUserInput,
   UpdateUserInput,
+  CustomRoute,
 } from "./types";
 import {
   SecretsManagerClient,
@@ -21,6 +22,7 @@ import {
   PutSecretValueCommand,
   GetSecretValueCommand,
 } from "@aws-sdk/client-secrets-manager";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
@@ -307,5 +309,50 @@ export async function deregisterContainerRoute(
   }));
 
   console.log(`[Routing] Deregistered: ${subdomain}`);
+}
+
+export async function getCustomRoutes(subdomain: string): Promise<CustomRoute[]> {
+  const { DynamoDBClient, GetItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  const res = await ddb.send(new GetItemCommand({
+    TableName: ROUTING_TABLE,
+    Key: { subdomain: { S: subdomain } },
+    ProjectionExpression: "custom_routes",
+  }));
+
+  if (!res.Item) return [];
+  const item = unmarshall(res.Item);
+  const routes = item.custom_routes;
+  if (!Array.isArray(routes)) return [];
+
+  return routes
+    .filter((r): r is { path: unknown; port: unknown; label: unknown } => typeof r === "object" && r !== null)
+    .map((r) => ({
+      path: String(r.path ?? ""),
+      port: Number(r.port ?? 0),
+      label: String(r.label ?? ""),
+    }))
+    .filter((r) => r.path && Number.isFinite(r.port));
+}
+
+export async function setCustomRoutes(
+  subdomain: string,
+  routes: CustomRoute[],
+): Promise<void> {
+  const { DynamoDBClient, UpdateItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  await ddb.send(new UpdateItemCommand({
+    TableName: ROUTING_TABLE,
+    Key: { subdomain: { S: subdomain } },
+    UpdateExpression: "SET custom_routes = :routes, custom_routes_updated_at = :ts",
+    ExpressionAttributeValues: marshall({
+      ":routes": routes,
+      ":ts": new Date().toISOString(),
+    }),
+  }));
+
+  console.log(`[Routing] Updated custom_routes for ${subdomain}: ${routes.length} entries`);
 }
 
