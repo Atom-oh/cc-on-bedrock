@@ -9,10 +9,22 @@ import {
 } from "@/lib/ec2-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
+import * as net from "net";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const dynamodb = new DynamoDBClient({ region });
+
+function probePort(host: string, port: number, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => { socket.destroy(); resolve(true); });
+    socket.once("timeout", () => { socket.destroy(); resolve(false); });
+    socket.once("error", () => { socket.destroy(); resolve(false); });
+    socket.connect(port, host);
+  });
+}
 
 const VALID_TIERS = ["light", "standard", "power"] as const;
 type ResourceTier = (typeof VALID_TIERS)[number];
@@ -88,7 +100,9 @@ export async function GET(req: NextRequest) {
         resourceTier: userInstance.instanceType ?? "standard",
         securityPolicy: userInstance.securityPolicy,
         privateIp: userInstance.privateIp,
-        healthStatus: userInstance.status === "running" ? "HEALTHY" : "UNKNOWN",
+        healthStatus: userInstance.status === "running" && userInstance.privateIp
+          ? (await probePort(userInstance.privateIp, 8080) ? "HEALTHY" : "STARTING")
+          : "UNKNOWN",
       }});
     }
     return NextResponse.json({ success: true, data: null });
