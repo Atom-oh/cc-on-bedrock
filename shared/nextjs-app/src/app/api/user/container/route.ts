@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getCognitoUser } from "@/lib/aws-clients";
+import { getCognitoUser, getCustomRoutes } from "@/lib/aws-clients";
 import {
   startInstance,
   stopInstance,
@@ -89,6 +89,8 @@ export async function GET(req: NextRequest) {
     if (userInstance) {
       // ADR-010: Map hibernated DynamoDB status to HIBERNATED API status
       const apiStatus = userInstance.status === "hibernated" ? "HIBERNATED" : userInstance.status.toUpperCase();
+      // ADR-009 ext: include user's custom port routes for dashboard display
+      const customRoutes = await getCustomRoutes(userInstance.subdomain);
       return NextResponse.json({ success: true, data: {
         taskArn: userInstance.instanceId,
         taskId: userInstance.instanceId,
@@ -103,6 +105,7 @@ export async function GET(req: NextRequest) {
         healthStatus: userInstance.status === "running" && userInstance.privateIp
           ? (await probePort(userInstance.privateIp, 8080) ? "HEALTHY" : "STARTING")
           : "UNKNOWN",
+        customRoutes,
       }});
     }
     return NextResponse.json({ success: true, data: null });
