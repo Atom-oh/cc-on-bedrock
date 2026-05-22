@@ -443,7 +443,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         </div>
 
         {/* DevEnv URL Cards */}
-        {container?.status === "RUNNING" && (container?.healthStatus === "HEALTHY" || container?.healthStatus === "UNKNOWN") && codeServerUrl && (
+        {container?.status === "RUNNING" && container?.healthStatus === "HEALTHY" && codeServerUrl && (
           <div className="space-y-2 mb-4">
             {/* code-server IDE */}
             <div className="bg-[#0d1117] rounded-lg p-4 flex items-center justify-between">
@@ -492,7 +492,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         )}
 
         {/* Warming up indicator */}
-        {container?.status === "RUNNING" && container?.healthStatus !== "HEALTHY" && container?.healthStatus !== "UNKNOWN" && !isProvisioning && (
+        {container?.status === "RUNNING" && container?.healthStatus !== "HEALTHY" && !isProvisioning && (
           <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-4 mb-4 flex items-center gap-3">
             <div className="w-5 h-5 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin flex-shrink-0" aria-hidden="true" />
             <div>

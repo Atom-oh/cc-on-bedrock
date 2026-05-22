@@ -111,6 +111,15 @@ export interface ContainerInfo {
   privateIp?: string;
   storageType?: "ebs" | "efs";
   department?: string;
+  customRoutes?: CustomRoute[];
+}
+
+// ─── Custom Port Routes (ADR-009 extension) ───
+
+export interface CustomRoute {
+  path: string;
+  port: number;
+  label: string;
 }
 
 export interface StartContainerInput {
