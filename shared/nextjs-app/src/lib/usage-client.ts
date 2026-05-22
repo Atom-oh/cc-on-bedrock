@@ -477,13 +477,16 @@ export async function getBedrockUsageTimeSeries(
 
 // ─── Total Spend ───
 
-export async function getTotalUsage(): Promise<{
+export async function getTotalUsage(params?: {
+  startDate?: string;
+  endDate?: string;
+}): Promise<{
   totalCost: number;
   totalTokens: number;
   totalRequests: number;
   userCount: number;
 }> {
-  const records = await getUsageRecords();
+  const records = await getUsageRecords(params);
   const users = new Set(records.map((r) => r.userId));
 
   return {

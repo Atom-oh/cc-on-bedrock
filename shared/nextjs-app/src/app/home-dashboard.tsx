@@ -79,6 +79,8 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const [data, setData] = useState<{
     totalCost: number;
     totalTokens: number;
+    todayCost: number;
+    todayTokens: number;
     activeContainers: number;
     containers: ContainerInfo[];
     cwMetrics: Ec2ClusterMetrics | null;
@@ -86,6 +88,8 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   }>({
     totalCost: 0,
     totalTokens: 0,
+    todayCost: 0,
+    todayTokens: 0,
     activeContainers: 0,
     containers: [],
     cwMetrics: null,
@@ -95,6 +99,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const fetchData = useCallback(async () => {
     try {
       setRefreshing(true);
+      const today = new Date().toISOString().split("T")[0];
       const fetches: Promise<Response>[] = [
         fetch("/api/health"),
       ];
@@ -103,10 +108,9 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           fetch("/api/containers"),
           fetch("/api/container-metrics?action=current"),
           fetch("/api/usage?action=total_spend"),
+          fetch(`/api/usage?action=total_spend&start_date=${today}&end_date=${today}`),
         );
       } else {
-        // Non-admin: fetch own usage
-        const today = new Date().toISOString().split("T")[0];
         fetches.push(fetch(`/api/user/usage?date=${today}`));
       }
 
@@ -115,27 +119,36 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       let activeContainers = 0;
       let totalTokens = 0;
       let totalCost = 0;
+      let todayCost = 0;
+      let todayTokens = 0;
       let cwData = null;
 
       if (isAdmin && responses.length > 1) {
         const containers: ApiResponse<ContainerInfo[]> = await responses[1].json();
         const cw = await responses[2].json();
-        const usage = await responses[3].json();
+        const accumulated = await responses[3].json();
+        const todayUsage = await responses[4].json();
         activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING" || c.status === "running").length || 0;
-        totalTokens = usage.data?.totalTokens ?? 0;
-        totalCost = usage.data?.totalCost ?? 0;
+        totalTokens = accumulated.data?.totalTokens ?? 0;
+        totalCost = accumulated.data?.totalCost ?? 0;
+        todayCost = todayUsage.data?.totalCost ?? 0;
+        todayTokens = todayUsage.data?.totalTokens ?? 0;
         cwData = cw.success ? cw.data : null;
       } else if (!isAdmin && responses.length > 1) {
         const userUsage = await responses[1].json();
         if (userUsage.success) {
-          totalTokens = userUsage.data?.totalTokens ?? 0;
-          totalCost = userUsage.data?.estimatedCost ?? 0;
+          todayTokens = userUsage.data?.totalTokens ?? 0;
+          todayCost = userUsage.data?.estimatedCost ?? 0;
+          totalTokens = todayTokens;
+          totalCost = todayCost;
         }
       }
 
       setData({
         totalCost,
         totalTokens,
+        todayCost,
+        todayTokens,
         activeContainers,
         containers: [],
         cwMetrics: cwData,
@@ -203,13 +216,13 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard
           title={t("home.totalCost")}
-          value={formatCost(data.totalCost)}
-          description={isAdmin ? "Accumulated Platform Spend" : "Your Today's Spend"}
+          value={formatCost(isAdmin ? data.todayCost : data.totalCost)}
+          description={isAdmin ? "Today's Platform Spend" : "Your Today's Spend"}
         />
         <StatCard
           title={t("home.totalTokens")}
-          value={formatNum(data.totalTokens)}
-          description={isAdmin ? "Aggregated Model Interaction" : "Your Today's Tokens"}
+          value={formatNum(isAdmin ? data.todayTokens : data.totalTokens)}
+          description={isAdmin ? "Today's Model Interaction" : "Your Today's Tokens"}
         />
         {isAdmin && (
           <StatCard
@@ -256,13 +269,25 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           <div className="grid grid-cols-2 gap-4 mt-4">
             <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Today Cost</p>
-              <p className="text-2xl font-black text-white">{formatCost(data.totalCost)}</p>
+              <p className="text-2xl font-black text-white">{formatCost(isAdmin ? data.todayCost : data.totalCost)}</p>
             </div>
             <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Today Tokens</p>
-              <p className="text-2xl font-black text-white">{formatNum(data.totalTokens)}</p>
+              <p className="text-2xl font-black text-white">{formatNum(isAdmin ? data.todayTokens : data.totalTokens)}</p>
             </div>
           </div>
+          {isAdmin && (
+            <div className="grid grid-cols-2 gap-4 mt-2">
+              <div className="bg-[#0d1117] rounded-xl p-3 border border-white/5">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Accumulated Cost</p>
+                <p className="text-lg font-bold text-gray-300">{formatCost(data.totalCost)}</p>
+              </div>
+              <div className="bg-[#0d1117] rounded-xl p-3 border border-white/5">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Accumulated Tokens</p>
+                <p className="text-lg font-bold text-gray-300">{formatNum(data.totalTokens)}</p>
+              </div>
+            </div>
+          )}
         </motion.div>
 
         <motion.div

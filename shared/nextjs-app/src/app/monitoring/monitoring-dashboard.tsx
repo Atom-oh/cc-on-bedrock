@@ -72,13 +72,16 @@ interface BedrockTsPoint {
 
 type BedrockTsData = BedrockTsPoint[];
 
-// EC2 on-demand pricing (ap-northeast-2, Seoul)
+// EC2 on-demand pricing (ap-northeast-2, Seoul, ARM64/Graviton)
 const EC2_PRICING: Record<string, number> = {
-  "m7g.4xlarge": 0.8208,  // 16 vCPU, 64 GiB
-  "m7g.2xlarge": 0.4104,  // 8 vCPU, 32 GiB
-  "t4g.xlarge": 0.1792,   // 4 vCPU, 16 GiB
+  "t4g.medium":  0.0448,   // 2 vCPU, 4 GiB  (light tier)
+  "t4g.large":   0.0896,   // 2 vCPU, 8 GiB  (standard tier)
+  "t4g.xlarge":  0.1792,   // 4 vCPU, 16 GiB (dashboard host)
+  "m7g.xlarge":  0.2052,   // 4 vCPU, 16 GiB (power tier)
+  "m7g.2xlarge": 0.4104,   // 8 vCPU, 32 GiB
+  "m7g.4xlarge": 0.8208,   // 16 vCPU, 64 GiB
 };
-const CLUSTER_INSTANCE_TYPE = "m7g.4xlarge";
+const EBS_GP3_PER_GB_MONTH = 0.0912; // ap-northeast-2, $/GB/month
 const DASHBOARD_INSTANCE_TYPE = "t4g.xlarge";
 
 function formatNumber(n: number): string {
@@ -421,18 +424,22 @@ export default function MonitoringDashboard({
 
         {/* Infrastructure Cost Breakdown */}
         {(() => {
-          const devCount = ec2Metrics?.instanceCount ?? 0;
-          const devCostHr = devCount * (EC2_PRICING[CLUSTER_INSTANCE_TYPE] ?? 0);
+          const devCostHr = instanceMetrics.reduce(
+            (sum, inst) => sum + (EC2_PRICING[inst.instanceType] ?? EC2_PRICING["t4g.large"] ?? 0), 0
+          );
+          const devCount = instanceMetrics.length || (ec2Metrics?.instanceCount ?? 0);
           const dashCostHr = EC2_PRICING[DASHBOARD_INSTANCE_TYPE] ?? 0;
           const bedrockCostHr = bedrockMetrics?.costPerHour ?? 0;
-          const totalCostHr = bedrockCostHr + devCostHr + dashCostHr;
+          const ebsTotalGb = devCount * 30;
+          const ebsCostHr = (ebsTotalGb * EBS_GP3_PER_GB_MONTH) / 730;
+          const totalCostHr = bedrockCostHr + devCostHr + dashCostHr + ebsCostHr;
           return (
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium text-gray-300">Infrastructure Cost / hr</h3>
                 <span className="text-lg font-bold text-white">${totalCostHr.toFixed(2)}/hr</span>
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider">Bedrock API</p>
                   <p className="text-sm font-semibold text-rose-400">${bedrockCostHr.toFixed(2)}</p>
@@ -441,7 +448,12 @@ export default function MonitoringDashboard({
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dev Instances</p>
                   <p className="text-sm font-semibold text-cyan-400">${devCostHr.toFixed(2)}</p>
-                  <p className="text-[10px] text-gray-600">{devCount}× {CLUSTER_INSTANCE_TYPE}</p>
+                  <p className="text-[10px] text-gray-600">{devCount} running</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">EBS Storage</p>
+                  <p className="text-sm font-semibold text-emerald-400">${ebsCostHr.toFixed(4)}</p>
+                  <p className="text-[10px] text-gray-600">{ebsTotalGb}GB gp3 (~${(ebsTotalGb * EBS_GP3_PER_GB_MONTH).toFixed(1)}/mo)</p>
                 </div>
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dashboard EC2</p>
@@ -455,6 +467,7 @@ export default function MonitoringDashboard({
                   <>
                     <div className="h-full bg-rose-500" style={{ width: `${(bedrockCostHr / totalCostHr) * 100}%` }} />
                     <div className="h-full bg-cyan-500" style={{ width: `${(devCostHr / totalCostHr) * 100}%` }} />
+                    <div className="h-full bg-emerald-500" style={{ width: `${(ebsCostHr / totalCostHr) * 100}%` }} />
                     <div className="h-full bg-purple-500" style={{ width: `${(dashCostHr / totalCostHr) * 100}%` }} />
                   </>
                 )}
@@ -462,6 +475,7 @@ export default function MonitoringDashboard({
               <div className="flex gap-4 mt-1.5">
                 <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />Bedrock</span>
                 <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />Dev EC2</span>
+                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />EBS</span>
                 <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500 inline-block" />Dashboard</span>
               </div>
             </div>
