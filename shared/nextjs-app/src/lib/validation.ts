@@ -61,7 +61,7 @@ export const customRouteSchema = z.object({
     .max(32)
     .regex(PATH_REGEX, "Path must match /^\\/[a-z0-9][a-z0-9-]*$/")
     .refine(
-      (p) => !RESERVED_PATHS.some((rp) => p === rp || p.startsWith(rp + "/") || p.startsWith(rp)),
+      (p) => !RESERVED_PATHS.some((rp) => p === rp || p.startsWith(rp)),
       { message: "Path is reserved" },
     ),
   port: z
@@ -69,7 +69,7 @@ export const customRouteSchema = z.object({
     .int()
     .min(1024)
     .max(65535)
-    .refine((p) => !RESERVED_PORTS.includes(p as 8080 | 3000 | 8000), {
+    .refine((p) => !(RESERVED_PORTS as readonly number[]).includes(p), {
       message: "Port is reserved",
     }),
   label: z.string().min(1).max(32),

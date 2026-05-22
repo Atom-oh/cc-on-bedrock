@@ -36,6 +36,11 @@ describe('customRouteSchema', () => {
     }
   });
 
+  it('rejects paths that start with a reserved prefix marker', () => {
+    // /stable- is a reserved prefix; any path starting with it must be rejected
+    expect(customRouteSchema.safeParse({ ...valid, path: '/stable-abc123' }).success).toBe(false);
+  });
+
   it('rejects port below 1024', () => {
     expect(customRouteSchema.safeParse({ ...valid, port: 80 }).success).toBe(false);
   });
