@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
         if (!session.user.isAdmin) {
           return NextResponse.json({ error: "Admin access required" }, { status: 403 });
         }
-        const total = await getTotalUsage();
+        const total = await getTotalUsage({ startDate, endDate });
         return NextResponse.json({ success: true, data: total });
       }
 
