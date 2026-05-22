@@ -35,3 +35,59 @@ export const updateUserSchema = z.object({
   resourceTier: z.enum(["light", "standard", "power"]).optional(),
   securityPolicy: z.enum(["open", "restricted", "locked"]).optional(),
 });
+
+// ─── Custom Port Routes (ADR-009 extension) ───
+
+export const RESERVED_PATHS = [
+  "/api",
+  "/_static",
+  "/healthz",
+  "/stable-",
+  "/vscode-remote-resource",
+  "/out",
+  "/webview",
+] as const;
+
+export const RESERVED_PORTS = [8080, 3000, 8000] as const;
+
+export const MAX_CUSTOM_ROUTES = 10; // open tier upper bound; lower tiers enforced in API
+
+const PATH_REGEX = /^\/[a-z0-9][a-z0-9-]*$/;
+
+export const customRouteSchema = z.object({
+  path: z
+    .string()
+    .min(2)
+    .max(32)
+    .regex(PATH_REGEX, "Path must match /^\\/[a-z0-9][a-z0-9-]*$/")
+    .refine(
+      (p) => !RESERVED_PATHS.some((rp) => p === rp || p.startsWith(rp + "/") || p.startsWith(rp)),
+      { message: "Path is reserved" },
+    ),
+  port: z
+    .number()
+    .int()
+    .min(1024)
+    .max(65535)
+    .refine((p) => !RESERVED_PORTS.includes(p as 8080 | 3000 | 8000), {
+      message: "Port is reserved",
+    }),
+  label: z.string().min(1).max(32),
+});
+
+export const customRoutesPayloadSchema = z.object({
+  routes: z
+    .array(customRouteSchema)
+    .max(MAX_CUSTOM_ROUTES)
+    .refine(
+      (routes) => new Set(routes.map((r) => r.path)).size === routes.length,
+      { message: "Duplicate paths are not allowed" },
+    )
+    .refine(
+      (routes) => new Set(routes.map((r) => r.port)).size === routes.length,
+      { message: "Duplicate ports are not allowed" },
+    ),
+});
+
+export type CustomRouteInput = z.infer<typeof customRouteSchema>;
+export type CustomRoutesPayload = z.infer<typeof customRoutesPayloadSchema>;
