@@ -111,7 +111,10 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           fetch(`/api/usage?action=total_spend&start_date=${today}&end_date=${today}`),
         );
       } else {
-        fetches.push(fetch(`/api/user/usage?date=${today}`));
+        fetches.push(
+          fetch(`/api/user/usage?date=${today}`),
+          fetch("/api/user/container"),
+        );
       }
 
       const responses = await Promise.all(fetches);
@@ -141,6 +144,11 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           todayCost = userUsage.data?.estimatedCost ?? 0;
           totalTokens = todayTokens;
           totalCost = todayCost;
+        }
+        if (responses[2]) {
+          const containerRes = await responses[2].json();
+          const status = containerRes.data?.status;
+          activeContainers = (status === "RUNNING" || status === "running") ? 1 : 0;
         }
       }
 
