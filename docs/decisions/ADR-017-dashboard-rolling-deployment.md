@@ -1,8 +1,3 @@
----
-status: Accepted
-verification_required: true
----
-
 # ADR-017: Dashboard ECS Rolling Deployment + Circuit Breaker
 
 ## Status

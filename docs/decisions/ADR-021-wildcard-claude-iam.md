@@ -1,9 +1,3 @@
----
-status: Accepted
-date: 2026-05-13
-verification_required: true
----
-
 # ADR-021: Wildcard Claude-Family IAM (Remove Per-Model-ID Restriction)
 
 ## Status

@@ -1,8 +1,3 @@
----
-status: Proposed
-verification_required: true
----
-
 # ADR-008: Enterprise SSO Federation (SAML / OIDC / Social)
 
 ## Status

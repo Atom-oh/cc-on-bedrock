@@ -1,7 +1,3 @@
----
-verification_required: true
----
-
 # ADR-004: DevEnv 아키텍처 전환 — ECS Task → EC2-per-user
 
 ## Status: Accepted

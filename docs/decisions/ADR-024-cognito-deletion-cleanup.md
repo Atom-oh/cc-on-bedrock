@@ -1,10 +1,3 @@
----
-status: Accepted
-date: 2026-05-15
-verification_required: true
-builds_on: ADR-022
----
-
 # ADR-024: Cognito user deletion → downstream cleanup
 
 **Status:** Accepted

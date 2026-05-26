@@ -1,8 +1,3 @@
----
-status: Accepted
-verification_required: true
----
-
 # ADR-018: Dual-OS AMI Strategy (Ubuntu 24.04 + Amazon Linux 2023)
 
 ## Status

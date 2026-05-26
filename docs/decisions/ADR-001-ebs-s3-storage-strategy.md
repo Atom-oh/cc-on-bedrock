@@ -1,10 +1,3 @@
----
-status: Superseded
-date: 2026-04-03
-verification_required: true
-superseded_by: ADR-004
----
-
 # ADR-001: EFS에서 EBS + S3 동기화 스토리지 전략으로 전환
 
 ## Status
