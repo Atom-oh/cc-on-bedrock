@@ -15,10 +15,15 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
 - `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront
 
 ## Drift vs CDK (parity gaps)
-- ※ Usage Tracking (DynamoDB **Streams**, Lambda, EventBridge) 모듈 — CDK Stack 03 미반영
-- ※ Local Governance (ADR-014) — STS Issuer, token-limit-enforcer, limit-reset, `cc-on-bedrock-limits` table 미반영
-- ※ ADR-016 CloudFront split 미반영 — 현재 `modules/dashboard/`가 단일 CloudFront. CDK는 Dashboard CF (Stack 05) + DevEnv CF (Stack 04)로 분리되어 있음. `*.dev.<domain>` 인증서는 us-east-1 ACM 별도 필요
-- ※ `governanceOnly` 플래그 동등 변수 미구현
+- ※ **Module-exists-but-not-wired** (modules present under `modules/`, root `main.tf` does not call them yet):
+  - `usage-tracking/` — CDK Stack 03 (DynamoDB Streams, Lambda, EventBridge)
+  - `local-governance/` — CDK Stack 08 (ADR-014: STS Issuer, token-limit-enforcer, limit-reset, `cc-on-bedrock-limits` table)
+  - `ec2-devenv/` — CDK Stack 07 (ADR-004 Launch Template + DLP SGs)
+  - `waf/` — CDK Stack 06 (CLOUDFRONT-scope WebACL, us-east-1)
+- ※ **Still missing (no module yet)**:
+  - ADR-022 `UserRoleProvisioner` Lambda + EventBridge `cc-on-bedrock-cognito-user-created` rule + DLQ + Cognito triggers — defer to follow-up PR
+  - ADR-016 CloudFront split — `modules/dashboard/`는 단일 CloudFront. CDK는 Dashboard CF (Stack 05) + DevEnv CF (Stack 04) 분리. `*.dev.<domain>` ACM 인증서는 us-east-1 별도 필요
+  - `governanceOnly` 플래그 동등 변수 (CDK context → TF variable)
 
 ## Commands
 ```bash

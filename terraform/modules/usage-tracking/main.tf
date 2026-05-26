@@ -353,8 +353,18 @@ resource "aws_iam_role_policy_attachment" "tracker_basic" {
 }
 
 data "aws_iam_policy_document" "tracker_policy" {
+  # DynamoDB writes (PutItem / UpdateItem / BatchWriteItem) target only the
+  # base table — GSIs are write-projected automatically and the IAM service
+  # rejects write actions scoped to /index/* as a no-op.
   statement {
-    actions   = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:BatchWriteItem"]
+    sid       = "UsageTableWrite"
+    actions   = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchWriteItem"]
+    resources = [aws_dynamodb_table.usage.arn]
+  }
+  # Reads can target both the base table and any GSI.
+  statement {
+    sid       = "UsageTableRead"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
     resources = [aws_dynamodb_table.usage.arn, "${aws_dynamodb_table.usage.arn}/index/*"]
   }
   statement {
@@ -479,11 +489,23 @@ resource "aws_iam_role_policy_attachment" "budget_check_basic" {
 }
 
 data "aws_iam_policy_document" "budget_check_policy" {
+  # Usage table is read-only — budget-check.py aggregates usage but never
+  # writes back to it. Matches CDK's `usageTable.grantReadData(budgetCheckLambda)`
+  # (cdk/lib/03-usage-tracking-stack.ts:184).
   statement {
-    actions = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+    sid     = "UsageTableReadOnly"
+    actions = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
     resources = [
       aws_dynamodb_table.usage.arn,
       "${aws_dynamodb_table.usage.arn}/index/*",
+    ]
+  }
+  # Budget tables are read-write — budget-check.py records computed totals
+  # and the active limit row.
+  statement {
+    sid     = "BudgetTablesReadWrite"
+    actions = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+    resources = [
       aws_dynamodb_table.user_budgets.arn,
       "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.department_budgets_table_name}",
       "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.project_prefix}-limits",
@@ -603,13 +625,26 @@ data "aws_iam_policy_document" "ec2_idle_stop_policy" {
     actions   = ["cloudwatch:GetMetricStatistics", "cloudwatch:GetMetricData"]
     resources = ["*"]
   }
+  # Usage table is read-only — ec2-idle-stop.py queries usage to determine
+  # idleness but never mutates the table. Matches CDK's
+  # `usageTable.grantReadData(ec2IdleStopLambda)`
+  # (cdk/lib/03-usage-tracking-stack.ts:303).
   statement {
+    sid     = "UsageTableReadOnly"
+    actions = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
+    resources = [
+      aws_dynamodb_table.usage.arn,
+      "${aws_dynamodb_table.usage.arn}/index/*",
+    ]
+  }
+  # Instance + routing tables are read-write — stop/start updates state rows
+  # and the routing table is rewritten when an instance is removed.
+  statement {
+    sid     = "InstanceAndRoutingTablesReadWrite"
     actions = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query"]
     resources = [
       "arn:aws:dynamodb:${local.region}:${local.account_id}:table/cc-user-instances",
       "arn:aws:dynamodb:${local.region}:${local.account_id}:table/cc-routing-table",
-      aws_dynamodb_table.usage.arn,
-      "${aws_dynamodb_table.usage.arn}/index/*",
     ]
   }
   statement {
@@ -801,11 +836,25 @@ resource "aws_lambda_permission" "bedrock_audit" {
 #  terraform apply, see commands below.)
 # ──────────────────────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "bedrock_logging_assume" {
+  # Confused-deputy guard: only Bedrock principals running in THIS account
+  # under THIS region's Bedrock service surface may assume the role. Without
+  # these conditions any Bedrock-enabled account could theoretically be made
+  # to invoke our role through cross-account API manipulation.
   statement {
     actions = ["sts:AssumeRole"]
     principals {
       type        = "Service"
       identifiers = ["bedrock.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:bedrock:${local.region}:${local.account_id}:*"]
     }
   }
 }
@@ -828,25 +877,24 @@ resource "aws_iam_role_policy" "bedrock_logging_policy" {
   policy = data.aws_iam_policy_document.bedrock_logging_policy.json
 }
 
-# Enable Bedrock invocation logging — single-shot, idempotent. The
-# `put-model-invocation-logging-configuration` API is idempotent on the server
-# side, so we re-run on every `terraform apply` to converge any out-of-band
-# drift (e.g. someone disabling logging in the console). The `always_run`
-# trigger forces re-application on every plan; the other triggers ensure the
-# command body changes if the underlying log-group/role identity changes.
-resource "null_resource" "enable_bedrock_logging" {
-  triggers = {
-    always_run    = timestamp()
-    role_arn      = aws_iam_role.bedrock_logging.arn
-    log_group_arn = aws_cloudwatch_log_group.bedrock_invocation.arn
-  }
+# Enable Bedrock invocation logging via the first-class provider resource
+# (AWS provider v5.x). Replaces an earlier `null_resource` + `local-exec`
+# fallback: the proper resource keeps `terraform plan` drift detection alive
+# — if someone toggles logging in the console the next plan re-reconciles.
+#
+# Matches CDK's `AwsCustomResource` semantics: text/image/embedding payload
+# capture stays OFF (textDataDeliveryEnabled = false cuts CloudWatch Logs
+# cost ~99% — only invocation metadata is recorded).
+resource "aws_bedrock_model_invocation_logging_configuration" "this" {
+  logging_config {
+    embedding_data_delivery_enabled = false
+    image_data_delivery_enabled     = false
+    text_data_delivery_enabled      = false
 
-  provisioner "local-exec" {
-    command = <<-EOT
-      aws bedrock put-model-invocation-logging-configuration \
-        --logging-config 'cloudWatchConfig={logGroupName=${aws_cloudwatch_log_group.bedrock_invocation.name},roleArn=${aws_iam_role.bedrock_logging.arn}},textDataDeliveryEnabled=false,imageDataDeliveryEnabled=false,embeddingDataDeliveryEnabled=false' \
-        --region ${local.region}
-    EOT
+    cloudwatch_config {
+      log_group_name = aws_cloudwatch_log_group.bedrock_invocation.name
+      role_arn       = aws_iam_role.bedrock_logging.arn
+    }
   }
 
   depends_on = [aws_iam_role_policy.bedrock_logging_policy]
