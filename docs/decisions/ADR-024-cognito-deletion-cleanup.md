@@ -1,7 +1,7 @@
 ---
 status: Accepted
 date: 2026-05-15
-verification_required: false
+verification_required: true
 builds_on: ADR-022
 ---
 
@@ -167,7 +167,7 @@ list, add to `user`. The seed script already adds explicitly → no-op there.
 - `shared/nextjs-app/src/app/admin/user-management.tsx` — removed
   `handlePermanentDelete` + `onPermanentDelete` prop wiring.
 
-## Verification
+## Manual Verification
 
 Deploy Stack 08, then:
 
@@ -195,4 +195,32 @@ aws secretsmanager describe-secret --secret-id cc-on-bedrock/codeserver/probe-id
 # 3) Dashboard /admin "Delete" button is gone; /api/users?action=permanent returns 403.
 curl -X DELETE 'https://<dashboard>/api/users?username=foo&action=permanent' \
   --cookie ... # expect: 403 with "Permanent delete is disabled" message
+```
+
+## Verification
+
+```yaml
+# Tier 1: Static
+files:
+  - path: cdk/lib/lambda/user-role-provisioner.py
+    must_contain:
+      - "AdminDeleteUser"
+      - "_deprovision_user"
+      - "_safe_delete_role"
+      - "_terminate_user_instances"
+  - path: cdk/lib/08-local-governance-stack.ts
+    must_contain:
+      - "AdminDeleteUser"
+
+# Tier 2: Semantic
+semantic:
+  - claim: "AdminDeleteUser EventBridge 이벤트 수신 시 provisioner가 _deprovision_user로 IAM role + instance profile + DDB rows + Secrets + EC2 instance를 모두 정리한다"
+    context_files:
+      - cdk/lib/lambda/user-role-provisioner.py
+  - claim: "local-user role의 username 태그가 subdomain 복구에 필요하므로 EC2-side cleanup 이전에 삭제되지 않으며, 모든 step 성공 시에만 마지막에 삭제된다"
+    context_files:
+      - cdk/lib/lambda/user-role-provisioner.py
+  - claim: "Partial failure 시 RuntimeError를 raise하여 EventBridge 재시도가 발생하고 local-role은 보존된다 (재시도가 username 태그를 통해 subdomain 복구 가능)"
+    context_files:
+      - cdk/lib/lambda/user-role-provisioner.py
 ```
