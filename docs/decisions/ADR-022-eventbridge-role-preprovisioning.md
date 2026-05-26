@@ -1,7 +1,7 @@
 ---
 status: Accepted
 date: 2026-05-14
-verification_required: false
+verification_required: true
 ---
 
 # ADR-022: EventBridge pre-provisioning of per-user identity (IAM + Cognito attrs)
@@ -138,7 +138,7 @@ provisioner:
 - `scripts/create-enterprise-test-data.sh` — Cognito-only; subdomain/managers no longer hardcoded
 - `scripts/backfill-local-user-roles.sh` — direct-invoke backfill helper
 
-## Verification
+## Deployment Verification Log
 
 Deployed 2026-05-15. End-to-end test:
 
@@ -163,3 +163,32 @@ EC2 mode probe (user04, engineering, dept_manager_sub=user01's sub):
 
 Local Governance probe (`cc login` as user07 = data-science manager):
 - STS Issuer → `_ensure_role` exists-branch → `AssumeRole` succeeds attempt #1, no retry needed.
+
+## Verification
+
+```yaml
+# Tier 1: Static
+files:
+  - path: cdk/lib/lambda/user-role-provisioner.py
+    must_contain:
+      - "AdminCreateUser"
+      - "SignUp"
+      - "derive_subdomain"
+      - "cc-on-bedrock-local-user-"
+      - "cc-on-bedrock-task-"
+  - path: cdk/lib/lambda/role_factory.py
+    must_exist: true
+
+# Tier 2: Semantic
+semantic:
+  - claim: "user-role-provisioner Lambda가 EventBridge로 AdminCreateUser/SignUp 이벤트를 받아 Local Governance role + EC2 task role + instance profile을 미리 생성하여 first-login IAM propagation race를 제거한다"
+    context_files:
+      - cdk/lib/lambda/user-role-provisioner.py
+      - cdk/lib/lambda/role_factory.py
+  - claim: "Provisioner가 email local-part로부터 subdomain을 derive_subdomain()으로 표준화하고 collision detection을 수행한다"
+    context_files:
+      - cdk/lib/lambda/user-role-provisioner.py
+  - claim: "Cognito custom:subdomain 속성이 provisioner에 의해 single source of truth로 동기화된다"
+    context_files:
+      - cdk/lib/lambda/user-role-provisioner.py
+```
