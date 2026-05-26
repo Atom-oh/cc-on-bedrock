@@ -200,7 +200,7 @@ def _main() -> int:
         if result.status == "fail":
             any_fail = True
 
-    text = json.dumps(out, indent=2, ensure_ascii=False)
+    text = json.dumps(out, indent=2, ensure_ascii=False, default=str)
     if str(args.output) == "-":
         print(text)
     else:

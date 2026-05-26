@@ -226,7 +226,7 @@ def _main() -> int:
         out["adrs"].append({"adr_id": parsed.adr_id,
                             "tier2_semantic": result.__dict__})
 
-    text = json.dumps(out, indent=2, ensure_ascii=False)
+    text = json.dumps(out, indent=2, ensure_ascii=False, default=str)
     if str(args.output) == "-":
         print(text)
     else:
