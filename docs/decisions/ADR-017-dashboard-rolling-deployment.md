@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-04-17
+verification_required: false
+---
+
 # ADR-017: Dashboard ECS Rolling Deployment + Circuit Breaker
 
 ## Status

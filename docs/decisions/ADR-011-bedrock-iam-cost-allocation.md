@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-04-10
+verification_required: false
+---
+
 # ADR-011: Bedrock IAM Cost Allocation Hybrid Integration
 
 ## Status
