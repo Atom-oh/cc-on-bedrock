@@ -16,7 +16,9 @@ variable "kms_key_arn" {
 }
 
 variable "task_permission_boundary_arn" {
-  type = string
+  description = "ARN of the permissions boundary to attach to the DevEnv instance IAM role. Optional — CDK treats this as optional (cdk/lib/07-ec2-devenv-stack.ts: taskPermissionBoundary). Pass an empty string to skip."
+  type        = string
+  default     = ""
 }
 
 variable "devenv_instance_type" {

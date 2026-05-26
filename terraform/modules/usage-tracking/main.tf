@@ -4,9 +4,10 @@
 #
 # Lambda packaging:
 #   We zip each *.py file from <lambda_src_dir> individually via archive_file.
-#   The CDK pattern is `Code.fromAsset(__dirname + '/lambda')` which bundles the
-#   whole directory; we keep each handler in its own zip because the Python
-#   modules are self-contained (no shared utility imports).
+#   This works because every handler in this module is self-contained — the
+#   one cross-file dependency in cdk/lib/lambda/ (sts-issuer.py importing
+#   role_factory.py) lives in the local-governance module, which uses a
+#   multi-source archive_file there.
 ###############################################################################
 
 data "aws_caller_identity" "current" {}
@@ -69,8 +70,10 @@ resource "aws_dynamodb_table" "usage" {
     kms_key_arn = var.kms_key_arn
   }
 
+  # CDK applies removalPolicy=RETAIN on the usage table; mirror that here so
+  # `terraform destroy` cannot wipe historical Bedrock invocation records.
   lifecycle {
-    prevent_destroy = false
+    prevent_destroy = true
   }
 
   tags = { Name = "${var.project_prefix}-usage" }
@@ -93,6 +96,11 @@ resource "aws_dynamodb_table" "dlp_domain_lists" {
   }
 
   point_in_time_recovery { enabled = true }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = { Name = "cc-dlp-domain-lists" }
 }
 
@@ -134,6 +142,10 @@ resource "aws_dynamodb_table" "cli_tokens" {
     kms_key_arn = var.kms_key_arn
   }
 
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = { Name = "${var.project_prefix}-cli-tokens" }
 }
 
@@ -153,6 +165,11 @@ resource "aws_dynamodb_table" "user_budgets" {
     kms_key_arn = var.kms_key_arn
   }
   point_in_time_recovery { enabled = true }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = { Name = "cc-user-budgets" }
 }
 
@@ -192,6 +209,10 @@ resource "aws_dynamodb_table" "approval_requests" {
     enabled     = true
     kms_key_arn = var.kms_key_arn
   }
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = { Name = "${var.project_prefix}-approval-requests" }
 }
 
@@ -216,6 +237,10 @@ resource "aws_dynamodb_table" "prompt_audit" {
     enabled     = true
     kms_key_arn = var.kms_key_arn
   }
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = { Name = "cc-prompt-audit" }
 }
 
@@ -240,6 +265,10 @@ resource "aws_dynamodb_table" "mcp_catalog" {
     enabled     = true
     kms_key_arn = var.kms_key_arn
   }
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = { Name = "cc-mcp-catalog" }
 }
 
@@ -266,6 +295,10 @@ resource "aws_dynamodb_table" "dept_mcp_config" {
     enabled     = true
     kms_key_arn = var.kms_key_arn
   }
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = { Name = "cc-dept-mcp-config" }
 }
 
@@ -795,11 +828,15 @@ resource "aws_iam_role_policy" "bedrock_logging_policy" {
   policy = data.aws_iam_policy_document.bedrock_logging_policy.json
 }
 
-# Enable Bedrock invocation logging — single-shot, idempotent. Re-runs on every
-# apply by depending on resource arns but the API is idempotent. Uses AWS CLI
-# via local-exec because no first-class TF resource exists at the moment.
+# Enable Bedrock invocation logging — single-shot, idempotent. The
+# `put-model-invocation-logging-configuration` API is idempotent on the server
+# side, so we re-run on every `terraform apply` to converge any out-of-band
+# drift (e.g. someone disabling logging in the console). The `always_run`
+# trigger forces re-application on every plan; the other triggers ensure the
+# command body changes if the underlying log-group/role identity changes.
 resource "null_resource" "enable_bedrock_logging" {
   triggers = {
+    always_run    = timestamp()
     role_arn      = aws_iam_role.bedrock_logging.arn
     log_group_arn = aws_cloudwatch_log_group.bedrock_invocation.arn
   }

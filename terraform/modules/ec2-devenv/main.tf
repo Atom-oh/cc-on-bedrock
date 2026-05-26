@@ -135,9 +135,11 @@ data "aws_iam_policy_document" "ec2_assume" {
 }
 
 resource "aws_iam_role" "devenv_instance" {
-  name                 = "cc-on-bedrock-devenv-instance"
-  assume_role_policy   = data.aws_iam_policy_document.ec2_assume.json
-  permissions_boundary = var.task_permission_boundary_arn
+  name               = "cc-on-bedrock-devenv-instance"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+  # Empty string -> attribute omitted entirely. Matches CDK's optional
+  # taskPermissionBoundary semantics.
+  permissions_boundary = var.task_permission_boundary_arn != "" ? var.task_permission_boundary_arn : null
 }
 
 resource "aws_iam_role_policy_attachment" "devenv_ssm" {

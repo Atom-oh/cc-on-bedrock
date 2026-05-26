@@ -53,16 +53,24 @@ resource "aws_dynamodb_table" "limits" {
     kms_key_arn = var.kms_key_arn
   }
 
+  # CDK applies removalPolicy=RETAIN on this table; mirror that here so a
+  # mistaken `terraform destroy` doesn't wipe per-user / per-dept normalized-
+  # token state.
   lifecycle {
-    prevent_destroy = false
+    prevent_destroy = true
   }
   tags = { Name = "${var.project_prefix}-limits" }
 }
 
 # ─── Lambda packaging ────────────────────────────────────────────────────────
+#
+# sts-issuer.py imports role_factory.py (same directory in cdk/lib/lambda/) so
+# the two files must be packaged together — otherwise Lambda init fails with
+# ModuleNotFoundError: No module named 'role_factory'. The other handlers
+# (token-limit-enforcer.py, limit-reset.py) are self-contained single-file
+# modules, so we keep the simple per-file packaging for them.
 locals {
   lambda_files = {
-    sts_issuer    = "sts-issuer.py"
     token_limiter = "token-limit-enforcer.py"
     limit_reset   = "limit-reset.py"
   }
@@ -73,6 +81,20 @@ data "archive_file" "lambda" {
   type        = "zip"
   source_file = "${var.lambda_src_dir}/${each.value}"
   output_path = "${path.module}/.build/${each.key}.zip"
+}
+
+data "archive_file" "sts_issuer" {
+  type        = "zip"
+  output_path = "${path.module}/.build/sts_issuer.zip"
+
+  source {
+    content  = file("${var.lambda_src_dir}/sts-issuer.py")
+    filename = "sts-issuer.py"
+  }
+  source {
+    content  = file("${var.lambda_src_dir}/role_factory.py")
+    filename = "role_factory.py"
+  }
 }
 
 data "aws_iam_policy_document" "lambda_assume" {
@@ -145,10 +167,13 @@ resource "aws_lambda_function" "sts_issuer" {
   role             = aws_iam_role.sts_issuer.arn
   runtime          = "python3.12"
   handler          = "sts-issuer.handler"
-  filename         = data.archive_file.lambda["sts_issuer"].output_path
-  source_code_hash = data.archive_file.lambda["sts_issuer"].output_base64sha256
-  timeout          = 20
-  memory_size      = 256
+  filename         = data.archive_file.sts_issuer.output_path
+  source_code_hash = data.archive_file.sts_issuer.output_base64sha256
+  # Worst-case path (pre-provisioner miss): AssumeRole + 31s eventual-consistency
+  # backoff + ensure_role + DDB lookups. CDK uses 45s
+  # (cdk/lib/08-local-governance-stack.ts:111, ADR-022).
+  timeout     = 45
+  memory_size = 256
 
   environment {
     variables = {
