@@ -116,7 +116,6 @@ def _invoke_with_retry(bedrock, model_id, system_prompt, user_prompt) -> str:
         "max_tokens": 4096,
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
-        "temperature": 0.0,
     }
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
