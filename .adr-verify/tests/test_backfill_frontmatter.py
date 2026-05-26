@@ -18,7 +18,7 @@ text
     assert out.startswith("---\n")
     assert "status: Accepted" in out
     assert "date: 2026-05-13" in out
-    assert "verification_required: true" in out
+    assert "verification_required: false" in out
     assert "## Status" in out
 
 

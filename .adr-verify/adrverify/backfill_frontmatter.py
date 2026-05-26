@@ -24,7 +24,19 @@ BOLD_BUILDS_ON_RE = re.compile(
     r"^\*\*Builds on:\*\*\s+\[(ADR-\d+)",
     re.MULTILINE,
 )
-DATE_IN_PAREN_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
+# Inline-heading variants — "## Status: Accepted" / "## Date: 2026-04-03"
+# (ADRs 004/005/006).
+INLINE_STATUS_HEADING_RE = re.compile(
+    r"^##\s*Status\s*:\s*(\S+)",
+    re.MULTILINE,
+)
+INLINE_DATE_HEADING_RE = re.compile(
+    r"^##\s*Date\s*:\s*(\d{4}-\d{2}-\d{2})",
+    re.MULTILINE,
+)
+# Accept date followed by paren-close OR comma OR space
+# (allows "(2026-04-03, retrospective ...)" patterns in ADRs 017-020).
+DATE_IN_PAREN_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})[\),\s]")
 SUPERSEDED_RE = re.compile(
     r"Superseded by\s+\[(ADR-\d+)",
     re.IGNORECASE,
@@ -33,7 +45,9 @@ SUPERSEDED_RE = re.compile(
 
 def _derive_frontmatter(content: str) -> dict:
     """Extract status / date / superseded_by / builds_on from the body."""
-    fm: dict = {"verification_required": True}
+    # Legacy backfill default: false. Tasks 10-15 (and any future PR
+    # that adds a ## Verification section) flip this to true.
+    fm: dict = {"verification_required": False}
 
     bold_status = BOLD_STATUS_RE.search(content)
     bold_date = BOLD_DATE_RE.search(content)
@@ -60,6 +74,25 @@ def _derive_frontmatter(content: str) -> dict:
         d = DATE_IN_PAREN_RE.search(line)
         if d:
             fm["date"] = _dt.date.fromisoformat(d.group(1))
+
+    # Fallback: ## Status: ... heading form (ADRs 004-006)
+    if "status" not in fm:
+        m = INLINE_STATUS_HEADING_RE.search(content)
+        if m:
+            word = m.group(1).strip().lower()
+            if word.startswith("accepted"):
+                fm["status"] = "Accepted"
+            elif word.startswith("proposed"):
+                fm["status"] = "Proposed"
+            elif word.startswith("superseded"):
+                fm["status"] = "Superseded"
+            elif word.startswith("deprecated"):
+                fm["status"] = "Deprecated"
+
+    if "date" not in fm:
+        m = INLINE_DATE_HEADING_RE.search(content)
+        if m:
+            fm["date"] = _dt.date.fromisoformat(m.group(1))
 
     if bold_builds:
         fm["builds_on"] = bold_builds.group(1).upper()
