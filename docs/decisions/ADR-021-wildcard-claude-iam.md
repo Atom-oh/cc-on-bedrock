@@ -152,12 +152,18 @@ files:
       - "*anthropic.claude-*"
       - "application-inference-profile/*"
   # Regression guard: the narrow pattern that caused the original drift
+  # Regex (slash-wrapped) — the literal substring "foundation-model/anthropic.claude-*"
+  # almost never appears in source (the `*` is a glob char, not literal). The
+  # regression we actually want to catch is per-model-ID narrowing like
+  # `foundation-model/anthropic.claude-3-haiku-20240307-v1:0`, which the regex
+  # below matches while leaving the correct wildcard `foundation-model/*anthropic.claude-*`
+  # untouched (no contiguous `foundation-model/anthropic.claude-…` substring).
   - path: cdk/lib/**/*.ts
     must_not_contain:
-      - "foundation-model/anthropic.claude-*"
+      - "/foundation-model/anthropic\\.claude-[a-z0-9-]+/"
   - path: shared/nextjs-app/src/**/*.ts
     must_not_contain:
-      - "foundation-model/anthropic.claude-*"
+      - "/foundation-model/anthropic\\.claude-[a-z0-9-]+/"
 
 # Tier 2: Semantic
 semantic:

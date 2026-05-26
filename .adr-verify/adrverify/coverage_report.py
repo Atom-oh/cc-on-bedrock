@@ -78,7 +78,9 @@ def render_comment(tier1: dict[str, Any], tier2: dict[str, Any], total_adrs: int
                 ev_line = ""
                 if c.get("evidence"):
                     e0 = c["evidence"][0]
-                    ev_line = f"  - `{e0['file']}:{e0['line']}` `{e0.get('snippet','')[:80]}`"
+                    # Defensive .get() — LLM may omit keys in evidence dict; KeyError here
+                    # would crash the entire coverage report and lose the sticky comment.
+                    ev_line = f"  - `{e0.get('file', '?')}:{e0.get('line', '?')}` `{(e0.get('snippet') or '')[:80]}`"
                 block.append(f"- {ic} {c['claim']}")
                 if ev_line:
                     block.append(ev_line)
