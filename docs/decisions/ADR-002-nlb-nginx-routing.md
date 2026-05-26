@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-04-01
+verification_required: true
+---
+
 # ADR-002: ALB에서 NLB + Nginx 동적 라우팅으로 전환
 
 ## Status

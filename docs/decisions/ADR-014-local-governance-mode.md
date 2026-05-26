@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-05-12
+verification_required: true
+---
+
 # ADR-014: Local Governance Mode (EC2-less, IAM + Inference Profile)
 
 ## Status

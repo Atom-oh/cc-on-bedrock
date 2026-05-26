@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-05-14
+verification_required: true
+---
+
 # ADR-023: USD Budget — Department Per-User Default
 
 ## Status

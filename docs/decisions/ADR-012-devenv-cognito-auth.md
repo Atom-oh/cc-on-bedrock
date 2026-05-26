@@ -1,3 +1,10 @@
+---
+status: Superseded
+date: 2026-04-16
+verification_required: true
+superseded_by: ADR-013
+---
+
 # ADR-012: DevEnv Cognito Authentication via Lambda@Edge
 
 ## Status

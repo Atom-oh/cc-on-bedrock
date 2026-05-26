@@ -1,3 +1,8 @@
+---
+status: Accepted
+verification_required: true
+---
+
 # ADR-007: Department MCP via AgentCore Gateway
 
 ## Status

@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-05-14
+verification_required: true
+---
+
 # ADR-022: EventBridge pre-provisioning of per-user identity (IAM + Cognito attrs)
 
 **Status:** Accepted

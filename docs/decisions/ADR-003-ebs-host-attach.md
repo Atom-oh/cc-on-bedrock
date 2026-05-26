@@ -1,3 +1,10 @@
+---
+status: Superseded
+date: 2026-04-03
+verification_required: true
+superseded_by: ADR-004
+---
+
 # ADR-003: ECS Managed EBS에서 Host Attach 방식으로 전환
 
 ## Status
