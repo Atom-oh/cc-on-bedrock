@@ -1,7 +1,7 @@
 ---
 status: Accepted
 date: 2026-05-13
-verification_required: false
+verification_required: true
 ---
 
 # ADR-021: Wildcard Claude-Family IAM (Remove Per-Model-ID Restriction)
@@ -121,3 +121,55 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 - ADR-019: Bedrock Model ID Normalization (호출 후 model ID parsing, 와일드카드 흡수의 사후 정규화 layer)
 - ADR-020: Runtime IAM Policy Upsert (`_ensure_role()` 매 호출 시 inline policy 덮어쓰기 — wildcard 마이그레이션도 이 경로로 자동 적용)
 - 코드: `cdk/lib/02-security-stack.ts:131-216`, `cdk/lib/lambda/sts-issuer.py:76-130`, `cdk/lib/08-local-governance-stack.ts:74-100`
+
+## Verification
+
+```yaml
+# Tier 1: Static
+files:
+  - path: cdk/lib/02-security-stack.ts
+    must_contain:
+      - "*anthropic.claude-*"
+      - "application-inference-profile/*"
+  - path: cdk/lib/04-ecs-devenv-stack.ts
+    must_contain:
+      - "*anthropic.claude-*"
+  - path: cdk/lib/05-dashboard-stack.ts
+    must_contain:
+      - "*anthropic.claude-*"
+  - path: cdk/lib/07-ec2-devenv-stack.ts
+    must_contain:
+      - "*anthropic.claude-*"
+  - path: cdk/lib/lambda/role_factory.py
+    must_contain:
+      - "*anthropic.claude-*"
+  - path: cdk/lib/lambda/user-role-provisioner.py
+    must_contain:
+      - "*anthropic.claude-*"
+      - "application-inference-profile/*"
+  - path: shared/nextjs-app/src/lib/ec2-clients.ts
+    must_contain:
+      - "*anthropic.claude-*"
+      - "application-inference-profile/*"
+  # Regression guard: the narrow pattern that caused the original drift
+  - path: cdk/lib/**/*.ts
+    must_not_contain:
+      - "foundation-model/anthropic.claude-*"
+  - path: shared/nextjs-app/src/**/*.ts
+    must_not_contain:
+      - "foundation-model/anthropic.claude-*"
+
+# Tier 2: Semantic
+semantic:
+  - claim: "Permission Boundary와 Bedrock-using stack(02/04/05/07) 모두 동일한 wildcard *anthropic.claude-* 패턴 사용"
+    context_files:
+      - cdk/lib/02-security-stack.ts
+      - cdk/lib/04-ecs-devenv-stack.ts
+      - cdk/lib/05-dashboard-stack.ts
+      - cdk/lib/07-ec2-devenv-stack.ts
+  - claim: "STS Issuer Lambda가 ALLOWED_MODELS env var를 더 이상 받지 않으며 role_factory가 wildcard ARN을 반환"
+    context_files:
+      - cdk/lib/lambda/sts-issuer.py
+      - cdk/lib/lambda/role_factory.py
+      - cdk/lib/08-local-governance-stack.ts
+```
