@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-05-12
+verification_required: false
+---
+
 # ADR-015: Dollar Budget × Normalized Token Limit Integration
 
 ## Status

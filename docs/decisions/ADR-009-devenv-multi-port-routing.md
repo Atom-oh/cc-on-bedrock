@@ -1,3 +1,8 @@
+---
+status: Accepted
+verification_required: false
+---
+
 # ADR-009: DevEnv Multi-Port Routing (code-server + Frontend + API)
 
 ## Status
