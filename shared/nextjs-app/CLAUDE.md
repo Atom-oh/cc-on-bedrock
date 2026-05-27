@@ -95,6 +95,7 @@
   - `listCognitoUsers()`, `createCognitoUser()`, `deleteCognitoUser()` 등
   - `registerContainerRoute()` / `deregisterContainerRoute()` — Nginx 라우팅 등록
 - `src/lib/ec2-clients.ts` - EC2 인스턴스 관리 (start/stop, RunInstances, password sync, gateway policy)
+  - **UserData boot script** — `startInstance` / `restoreFromSnapshot`에서 systemd unit `cc-cli-update.service`(oneshot, every boot)를 생성·enable해 Claude Code/Kiro CLI를 자동 업데이트. `User=coder`로 실행하되 `ExecStartPost`에 `+` prefix를 붙여 `/usr/local/bin` symlink 갱신만 root로 수행 (CWAgent, MCP config sync 포함)
 - `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 (EC2 CPU/Memory/Network/Disk)
 - `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용)
 - `src/lib/slack-client.ts` - Slack API 클라이언트 (알림, 명령 처리)

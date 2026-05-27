@@ -313,7 +313,10 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `Type=oneshot`,
       `User=coder`,
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
-      `ExecStartPost=/bin/bash -c '[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; [ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro; true'`,
+      // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
+      // Required because /usr/local/bin is root-owned and the symlink update
+      // would otherwise silently fail (with `; true` swallowing the error).
+      `ExecStartPost=+/bin/bash -c '[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; [ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro; true'`,
       `TimeoutStartSec=120`,
       `[Install]`,
       `WantedBy=multi-user.target`,
@@ -708,7 +711,10 @@ export async function restoreFromSnapshot(
       `Type=oneshot`,
       `User=coder`,
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
-      `ExecStartPost=/bin/bash -c '[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; [ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro; true'`,
+      // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
+      // Required because /usr/local/bin is root-owned and the symlink update
+      // would otherwise silently fail (with `; true` swallowing the error).
+      `ExecStartPost=+/bin/bash -c '[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; [ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro; true'`,
       `TimeoutStartSec=120`,
       `[Install]`,
       `WantedBy=multi-user.target`,

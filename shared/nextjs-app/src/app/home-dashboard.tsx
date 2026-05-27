@@ -131,7 +131,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         const cw = await responses[2].json();
         const accumulated = await responses[3].json();
         const todayUsage = await responses[4].json();
-        activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING" || c.status === "running").length || 0;
+        activeContainers = containers.data?.filter((c: ContainerInfo) => c.status === "RUNNING").length || 0;
         totalTokens = accumulated.data?.totalTokens ?? 0;
         totalCost = accumulated.data?.totalCost ?? 0;
         todayCost = todayUsage.data?.totalCost ?? 0;
@@ -148,7 +148,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         if (responses[2]) {
           const containerRes = await responses[2].json();
           const status = containerRes.data?.status;
-          activeContainers = (status === "RUNNING" || status === "running") ? 1 : 0;
+          activeContainers = status === "RUNNING" ? 1 : 0;
         }
       }
 
