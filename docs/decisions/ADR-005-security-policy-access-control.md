@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-04-09
+verification_required: false
+---
+
 # ADR-005: Security Policy & Access Control — DLP 3-tier + IAM Policy Set + 신청/승인
 
 ## Status: Accepted

@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-04-10
+verification_required: true
+---
+
 # ADR-011: Bedrock IAM Cost Allocation Hybrid Integration
 
 ## Status
@@ -56,3 +62,29 @@ Native billing alone cannot support the 5-minute budget enforcement cycle requir
 - Cost allocation tags must be manually activated in AWS Billing console
 - CUR 2.0 data arrives ~24h after API calls — not suitable for real-time dashboards
 - S3 storage for CUR 2.0 reports (~minimal cost, Parquet format, 365-day lifecycle)
+
+## Verification
+
+```yaml
+# Tier 1: Static
+files:
+  - path: cdk/lib/02-security-stack.ts
+    must_contain:
+      - "application-inference-profile"
+  - path: cdk/lib/lambda/role_factory.py
+    must_contain:
+      - "application-inference-profile/*"
+      - "department"
+      - "Tags"
+
+# Tier 2: Semantic
+semantic:
+  - claim: "Application Inference Profile ARN이 per-user role inline policy의 Resource에 포함되어 dept 단위 비용 attribution이 가능하다"
+    context_files:
+      - cdk/lib/lambda/role_factory.py
+      - cdk/lib/02-security-stack.ts
+  - claim: "Per-user role 생성 시 department, project, mode 태그가 부착되어 AWS Cost Allocation Tag 분류가 가능하다"
+    context_files:
+      - cdk/lib/lambda/role_factory.py
+      - cdk/lib/lambda/user-role-provisioner.py
+```

@@ -1,3 +1,10 @@
+---
+status: Superseded
+date: 2026-05-12
+verification_required: false
+superseded_by: ADR-016
+---
+
 # ADR-013: Unified CloudFront + Single Auth Mechanism
 
 ## Status

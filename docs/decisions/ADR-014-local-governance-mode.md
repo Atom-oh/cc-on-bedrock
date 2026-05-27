@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-05-12
+verification_required: true
+---
+
 # ADR-014: Local Governance Mode (EC2-less, IAM + Inference Profile)
 
 ## Status
@@ -175,3 +181,47 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 - ADR-006: Department Budget Management (재사용)
 - ADR-008: Enterprise SSO Federation
 - ADR-015: Dollar Budget × Normalized Token Limit Integration (두 축 통합)
+
+## Verification
+
+```yaml
+# Tier 1: Static
+files:
+  - path: cdk/lib/08-local-governance-stack.ts
+    must_contain:
+      - "cc-on-bedrock-sts-issuer"
+      - "cc-on-bedrock-limits"
+      - "token-limit-enforcer"
+      - "limit-reset"
+  - path: cdk/lib/lambda/sts-issuer.py
+    must_contain:
+      - "ensure_role"
+      - "RoleSessionName"
+      - "SESSION_DURATION_SECONDS"
+  - path: cdk/lib/lambda/token-limit-enforcer.py
+    must_exist: true
+  - path: cdk/lib/lambda/limit-reset.py
+    must_exist: true
+  - path: cdk/lib/lambda/role_factory.py
+    must_contain:
+      - "cc-on-bedrock-local-user-"
+      - "cc-on-bedrock-task-boundary"
+
+# Tier 2: Semantic
+semantic:
+  - claim: "STS Issuer가 발급하는 자격증명의 만료 시간이 SESSION_DURATION_SECONDS env(현재 3600s = 1h, AWS role-chaining 한계로 ADR 본문의 8h가 아닌 1h)와 일치한다"
+    context_files:
+      - cdk/lib/lambda/sts-issuer.py
+      - cdk/lib/08-local-governance-stack.ts
+  - claim: "Per-user role 이름이 `cc-on-bedrock-local-user-{cognito_sub}` 패턴을 따르고 STS Issuer Lambda role만 trust policy의 Principal로 허용된다"
+    context_files:
+      - cdk/lib/lambda/role_factory.py
+  - claim: "token-limit-enforcer Lambda가 cc-on-bedrock-usage 테이블의 DynamoDB Stream을 consume하여 한도 초과시 user role에 Deny policy를 attach한다"
+    context_files:
+      - cdk/lib/lambda/token-limit-enforcer.py
+      - cdk/lib/08-local-governance-stack.ts
+  - claim: "limit-reset Lambda가 EventBridge 일/주/월 cron으로 호출되어 카운터 리셋 + Deny policy detach를 수행한다"
+    context_files:
+      - cdk/lib/lambda/limit-reset.py
+      - cdk/lib/08-local-governance-stack.ts
+```
