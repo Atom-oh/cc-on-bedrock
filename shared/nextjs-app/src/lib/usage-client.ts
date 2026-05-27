@@ -26,6 +26,8 @@ export interface UsageRecord {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   totalTokens: number;
   requests: number;
   estimatedCost: number;
@@ -81,6 +83,8 @@ function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
     model: u.model ?? (u.SK as string).split("#")[1] ?? "unknown",
     inputTokens: u.inputTokens ?? 0,
     outputTokens: u.outputTokens ?? 0,
+    cacheReadTokens: u.cacheReadTokens ?? 0,
+    cacheWriteTokens: u.cacheWriteTokens ?? 0,
     totalTokens: u.totalTokens ?? 0,
     requests: u.requests ?? 0,
     estimatedCost: Number(u.estimatedCost ?? 0),
