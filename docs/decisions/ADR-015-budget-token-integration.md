@@ -132,3 +132,42 @@ the existing budget-check next-day cleanup respectively.
 **Backfill.** Pre-existing rows in `cc-user-budgets` are not automatically
 mirrored; admins must re-PUT each affected row once after deployment (or a
 backfill script can iterate `cc-user-budgets` and replay the writes).
+
+## Addendum 2 (2026-05-27): Username ↔ Role-name reverse lookup
+
+Test verification surfaced that the Gap 1 fix (PR #31, `attach_deny_policy`
+covering both EC2 and Local roles) was necessary but not sufficient. Two
+other enforcement code paths were still computing the Local role name by
+formatting the prefix with whatever string they pulled out of the
+`cc-on-bedrock-limits` / `cc-on-bedrock-usage` PK:
+
+  - `token-limit-enforcer._attach_deny(sub, ...)` — the Stream consumer
+  - `limit-reset._detach(sub)` — the daily/weekly/monthly cron
+  - `budget-check._attach_local_token_deny(role, ...)` callsite for USER trips
+    (the backup path)
+
+The PK suffix is a Cognito **username** (e.g. `atomoh`), not the sub UUID
+embedded in the deployed role name (`cc-on-bedrock-local-user-{cognito_sub}`),
+so each of these silently hit `NoSuchEntityException` and short-circuited.
+Live data confirmed the symptom: `currentSpend=$6.31 > monthlyBudget=$3`,
+`COUNTER#monthly normalized=421106 >> max_normalized=200001`, but the role's
+inline-policy list was just `BedrockInvokeInline` — no deny attached.
+
+A new shared module `cdk/lib/lambda/iam_role_lookup.py` resolves Cognito
+username → real role name by reading the `username` IAM tag (already set by
+`role_factory.ensure_role`). The same reverse index `budget-check` was
+already using for dept-deny attachment is now factored out, and the three
+enforcement sites above are switched to call `local_role_names_for(username)`
+with a fallback to the legacy formatted name in case the cache hasn't seen a
+freshly-provisioned role yet.
+
+Additional IAM grants needed:
+
+  - `cc-on-bedrock-token-limit-enforcer`: `iam:ListRoles` (account-wide, for
+    the index scan) + `iam:ListRoleTags` on `cc-on-bedrock-local-user-*`.
+  - `cc-on-bedrock-limit-reset`: same two actions.
+
+`budget-check` already had both grants. The index is cached per Lambda
+container lifetime — Stream-batch invocations stay warm long enough for the
+cache to amortize over many records, and the cost is one `ListRoles`
+pagination per cold start.

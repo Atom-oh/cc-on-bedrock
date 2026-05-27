@@ -32,22 +32,33 @@ sns = boto3.client("sns") if SNS_TOPIC_ARN else None
 
 KST = timezone(timedelta(hours=9))
 
+from iam_role_lookup import local_role_names_for
 
-def _role_name(sub: str) -> str:
-    return f"{ROLE_PREFIX}{re.sub(r'[^A-Za-z0-9_-]', '-', sub)[:40]}"
+
+def _candidate_role_names(sub: str) -> list:
+    """Resolve real `cc-on-bedrock-local-user-*` role names for a usage-table
+    `USER#<key>` key. The key holds a Cognito username, not a sub UUID, so
+    naive prefix-concat does not yield the deployed role name."""
+    names = local_role_names_for(sub)
+    if names:
+        return names
+    # Fallback to legacy formatted name if tag index hasn't seen the role yet.
+    return [f"{ROLE_PREFIX}{re.sub(r'[^A-Za-z0-9_-]', '-', sub)[:40]}"]
 
 
 def _detach(sub: str) -> bool:
-    role = _role_name(sub)
-    try:
-        iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
-        print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")
-        return True
-    except iam.exceptions.NoSuchEntityException:
-        return False
-    except Exception as e:
-        print(f"[RESET] detach failed for {role}: {e}")
-        return False
+    any_detached = False
+    for role in _candidate_role_names(sub):
+        try:
+            iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
+            print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")
+            any_detached = True
+        except iam.exceptions.NoSuchEntityException:
+            continue
+        except Exception as e:
+            print(f"[RESET] detach failed for {role}: {e}")
+            continue
+    return any_detached
 
 
 def _scan_deny_active(period: str):

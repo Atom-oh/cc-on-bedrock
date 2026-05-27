@@ -382,8 +382,17 @@ export class LocalGovernanceStack extends cdk.Stack {
     this.alertTopic.grantPublish(enforcer);
     enforcer.addToRolePolicy(new iam.PolicyStatement({
       sid: 'IamDenyAttach',
-      actions: ['iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:GetRolePolicy'],
+      actions: ['iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:GetRolePolicy', 'iam:ListRoleTags'],
       resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
+    }));
+    // iam_role_lookup.local_role_names_for() scans the account once per Lambda
+    // container lifetime to map Cognito username → real role name. The
+    // reverse index is needed because usage-table PKs are keyed by username,
+    // not the sub UUID embedded in the role name.
+    enforcer.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamListRolesForUsernameLookup',
+      actions: ['iam:ListRoles'],
+      resources: ['*'],
     }));
 
     // Subscribe to usage table Stream (consumes USER# row updates)
@@ -418,8 +427,14 @@ export class LocalGovernanceStack extends cdk.Stack {
     this.alertTopic.grantPublish(reset);
     reset.addToRolePolicy(new iam.PolicyStatement({
       sid: 'IamDenyDetach',
-      actions: ['iam:DeleteRolePolicy', 'iam:GetRolePolicy'],
+      actions: ['iam:DeleteRolePolicy', 'iam:GetRolePolicy', 'iam:ListRoleTags'],
       resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
+    }));
+    // Same reverse-index need as enforcer — see comment above.
+    reset.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamListRolesForUsernameLookup',
+      actions: ['iam:ListRoles'],
+      resources: ['*'],
     }));
 
     // KST 00:00 = UTC 15:00 (KST = UTC+9)

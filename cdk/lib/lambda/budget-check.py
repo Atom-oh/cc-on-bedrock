@@ -596,19 +596,26 @@ def check_token_limits_backup():
     skipped = 0
     checked = 0
 
-    # USER trips → attach on the user's local role
+    # USER trips → attach on the user's local role.
+    # `key` comes from cc-on-bedrock-limits PK suffix, which the Stream
+    # producer (bedrock-usage-tracker) keys by Cognito *username* — NOT the
+    # sub UUID embedded in the real role name. Use the username-tag reverse
+    # index so we hit the actual deployed role.
+    from iam_role_lookup import local_role_names_for as _local_roles
     for (etype, key), (period, used, mx) in tripped.items():
         if etype != "USER":
             continue
-        # Local role name pattern
-        import re as _re
-        role = f"{LOCAL_ROLE_PREFIX}{_re.sub(r'[^A-Za-z0-9_-]', '-', key)[:40]}"
-        checked += 1
-        if _has_local_token_deny(role):
-            skipped += 1
-            continue
-        if _attach_local_token_deny(role, f"backup: USER {period} {used}/{mx}"):
-            attached += 1
+        candidate_roles = _local_roles(key)
+        if not candidate_roles:
+            import re as _re
+            candidate_roles = [f"{LOCAL_ROLE_PREFIX}{_re.sub(r'[^A-Za-z0-9_-]', '-', key)[:40]}"]
+        for role in candidate_roles:
+            checked += 1
+            if _has_local_token_deny(role):
+                skipped += 1
+                continue
+            if _attach_local_token_deny(role, f"backup: USER {period} {used}/{mx}"):
+                attached += 1
 
     # DEPT trips → attach on every local role in that dept (best-effort by listing)
     if tripped:
