@@ -50,6 +50,14 @@ PRICING = {
     "default": {"input": 3.0, "output": 15.0},
 }
 
+# Anthropic prompt-cache pricing multipliers (relative to base input rate).
+# Claude Code's /usage applies these to align with API billing — without them
+# dashboard cost runs lower than /usage on cache-heavy sessions.
+#   - cache read  : 0.1× input  (cache hit)
+#   - cache write : 1.25× input (5-minute TTL cache create, default for Claude Code)
+CACHE_READ_MULTIPLIER = 0.1
+CACHE_WRITE_MULTIPLIER = 1.25
+
 # Cache: identity_arn → (username, department)
 _task_cache: dict = {}
 # Cache: subdomain → department (from EC2 instance tags)
@@ -223,14 +231,26 @@ def normalize_model(model_id: str) -> str:
     return model_id or "unknown"
 
 
-def estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimate cost in USD."""
+def estimate_cost(
+    model_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float:
+    """Estimate cost in USD, including prompt-cache tokens when present."""
     pricing = get_model_pricing(model_id)
-    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+    return (
+        input_tokens * pricing["input"]
+        + output_tokens * pricing["output"]
+        + cache_read_tokens * pricing["input"] * CACHE_READ_MULTIPLIER
+        + cache_write_tokens * pricing["input"] * CACHE_WRITE_MULTIPLIER
+    ) / 1_000_000
 
 
 def upsert_usage(username: str, department: str, date_str: str, model: str,
-                 input_tokens: int, output_tokens: int, cost: float, latency_ms: int = 0):
+                 input_tokens: int, output_tokens: int, cost: float, latency_ms: int = 0,
+                 cache_read_tokens: int = 0, cache_write_tokens: int = 0):
     """Atomic upsert to DynamoDB."""
     try:
         table.update_item(
@@ -238,6 +258,7 @@ def upsert_usage(username: str, department: str, date_str: str, model: str,
             UpdateExpression=(
                 "SET department = :dept, model = :model, #dt = :date, updatedAt = :now "
                 "ADD inputTokens :inp, outputTokens :out, totalTokens :total, "
+                "cacheReadTokens :cr, cacheWriteTokens :cw, "
                 "requests :one, estimatedCost :cost, latencySumMs :lat"
             ),
             ExpressionAttributeNames={"#dt": "date"},
@@ -248,7 +269,9 @@ def upsert_usage(username: str, department: str, date_str: str, model: str,
                 ":now": datetime.utcnow().isoformat(),
                 ":inp": input_tokens,
                 ":out": output_tokens,
-                ":total": input_tokens + output_tokens,
+                ":total": input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
+                ":cr": cache_read_tokens,
+                ":cw": cache_write_tokens,
                 ":one": 1,
                 ":cost": Decimal(str(round(cost, 6))),
                 ":lat": latency_ms,
@@ -260,20 +283,26 @@ def upsert_usage(username: str, department: str, date_str: str, model: str,
             UpdateExpression=(
                 "SET updatedAt = :now "
                 "ADD inputTokens :inp, outputTokens :out, totalTokens :total, "
+                "cacheReadTokens :cr, cacheWriteTokens :cw, "
                 "requests :one, estimatedCost :cost, latencySumMs :lat"
             ),
             ExpressionAttributeValues={
                 ":now": datetime.utcnow().isoformat(),
                 ":inp": input_tokens,
                 ":out": output_tokens,
-                ":total": input_tokens + output_tokens,
+                ":total": input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
+                ":cr": cache_read_tokens,
+                ":cw": cache_write_tokens,
                 ":one": 1,
                 ":cost": Decimal(str(round(cost, 6))),
                 ":lat": latency_ms,
             },
         )
         lat_str = f" {latency_ms}ms" if latency_ms > 0 else ""
-        print(f"Tracked: {username}({department}) {model} in:{input_tokens} out:{output_tokens} ${cost:.6f}{lat_str}")
+        cache_str = ""
+        if cache_read_tokens or cache_write_tokens:
+            cache_str = f" cacheR:{cache_read_tokens} cacheW:{cache_write_tokens}"
+        print(f"Tracked: {username}({department}) {model} in:{input_tokens} out:{output_tokens}{cache_str} ${cost:.6f}{lat_str}")
     except Exception as e:
         print(f"DynamoDB error: {e}")
 
@@ -297,6 +326,18 @@ def process_invocation_log(log_event: dict):
     output_data = data.get("output", {})
     input_tokens = input_data.get("inputTokenCount", 0) or data.get("inputTokenCount", 0)
     output_tokens = output_data.get("outputTokenCount", 0) or data.get("outputTokenCount", 0)
+    # Bedrock Invocation Log surfaces prompt-cache counts under input.* (AgentCore
+    # stable schema). Fall back to top-level keys if the nested envelope is absent.
+    cache_read_tokens = (
+        input_data.get("cacheReadInputTokenCount", 0)
+        or data.get("cacheReadInputTokenCount", 0)
+        or 0
+    )
+    cache_write_tokens = (
+        input_data.get("cacheWriteInputTokenCount", 0)
+        or data.get("cacheWriteInputTokenCount", 0)
+        or 0
+    )
 
     # Latency from output metrics (only available when textDataDeliveryEnabled=true)
     latency_ms = data.get("latencyMs", 0) or 0
@@ -316,9 +357,14 @@ def process_invocation_log(log_event: dict):
         return
 
     model = normalize_model(model_id)
-    cost = estimate_cost(model_id, input_tokens, output_tokens)
+    cost = estimate_cost(model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
 
-    upsert_usage(username, department, date_str, model, input_tokens, output_tokens, cost, latency_ms)
+    upsert_usage(
+        username, department, date_str, model,
+        input_tokens, output_tokens, cost, latency_ms,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+    )
 
 
 def process_cloudtrail_event(detail: dict):
