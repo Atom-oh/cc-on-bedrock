@@ -10,12 +10,24 @@
 #
 # This workflow ONLY signals (creates an issue). Self-healing happens in
 # `issue-auto-implement.yml` triggered by `issues: types: [opened]`.
+#
+# A manual `workflow_dispatch` trigger with `test_mode=true` injects a
+# synthetic failure so the issue-create path can be exercised end-to-end
+# without polluting main with a real ADR violation. The synthetic issue
+# carries a `[TEST MODE]` title prefix and a body marker so the downstream
+# Claude agent recognizes it as a test and exits with NO_CHANGE.
 
 name: ADR Compliance (main re-verify)
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: "Inject synthetic Tier 1 failure to verify the issue-create path. The real Tier 1 check is skipped."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,10 +51,37 @@ jobs:
           python-version: '3.12'
       - name: Install adrverify
         working-directory: .adr-verify
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_mode) }}
         run: pip install -e .
 
-      - name: Run Tier 1 static (non-blocking — capture exit)
+      - name: Inject synthetic Tier 1 failure (test_mode only)
+        id: synth
+        if: github.event_name == 'workflow_dispatch' && inputs.test_mode
+        run: |
+          cat > tier1.json <<'JSON'
+          {
+            "adrs": [{
+              "adr_id": "TEST-001",
+              "frontmatter": {"status": "Accepted", "verification_required": true},
+              "tier1_static": {
+                "status": "fail",
+                "checks": [{
+                  "path": "tools/synthetic-only.txt",
+                  "rule": "must_contain",
+                  "value": "this-is-a-test-only-rule",
+                  "result": "fail",
+                  "evidence": "tools/synthetic-only.txt: pattern not found (synthetic — workflow test mode)"
+                }]
+              }
+            }]
+          }
+          JSON
+          echo "exit=1" >> "$GITHUB_OUTPUT"
+          echo "::notice::test_mode=true — synthetic tier1.json written; real Tier 1 skipped."
+
+      - name: Run Tier 1 static (real path)
         id: tier1
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_mode) }}
         run: |
           # tier1_static exits non-zero on any failure; capture it so the
           # next step can decide whether to file an issue.
@@ -53,26 +92,49 @@ jobs:
             --output tier1.json
           echo "exit=$?" >> "$GITHUB_OUTPUT"
 
+      - name: Pick exit code (real or synthetic)
+        id: outcome
+        run: |
+          # Exactly one of tier1.exit / synth.exit is set per run. The other is "".
+          REAL="${{ steps.tier1.outputs.exit }}"
+          SYNTH="${{ steps.synth.outputs.exit }}"
+          if [ -n "$SYNTH" ]; then
+            EXIT="$SYNTH"
+            MODE="test"
+          else
+            EXIT="$REAL"
+            MODE="real"
+          fi
+          echo "exit=$EXIT" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
       - name: Build issue body from tier1.json
         id: body
-        if: steps.tier1.outputs.exit != '0'
+        if: steps.outcome.outputs.exit != '0'
         env:
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MODE: ${{ steps.outcome.outputs.mode }}
         run: |
           python3 <<'PY'
           import json, os, textwrap
           with open("tier1.json") as f:
               data = json.load(f)
 
+          mode = os.environ["MODE"]
+          is_test = (mode == "test")
+
           failed = [
               a for a in data["adrs"]
               if a["tier1_static"]["status"] == "fail"
           ]
-          # Group by ADR for readable rendering
           lines = []
-          lines.append(f"main에 push된 commit [`{os.environ['COMMIT_SHA'][:7]}`]({os.environ['COMMIT_URL']})에서 ADR Tier 1 정적 검증이 실패했습니다.\n")
+          if is_test:
+              lines.append("> ⚠️ **TEST MODE** — 합성 실패 주입으로 워크플로 전체 경로(issue 생성 → issue-auto-implement)를 검증하는 테스트 런입니다.")
+              lines.append("> 실제 ADR drift가 아니므로 자동 구현 에이전트가 이 issue를 받으면 `NO_CHANGE` 마커로 종료해야 합니다.")
+              lines.append("> 검증 후 사람이 직접 close 해주세요.\n")
+          lines.append(f"main commit [`{os.environ['COMMIT_SHA'][:7]}`]({os.environ['COMMIT_URL']})에서 ADR Tier 1 정적 검증이 실패했습니다.\n")
           lines.append(f"워크플로 실행: {os.environ['RUN_URL']}\n")
           lines.append(f"## 실패한 ADR ({len(failed)}건)\n")
 
@@ -80,7 +142,7 @@ jobs:
               aid = adr["adr_id"]
               t1 = adr["tier1_static"]
               lines.append(f"### {aid}\n")
-              if "error" in t1:
+              if "error" in t1 and t1["error"]:
                   lines.append(f"- error: `{t1['error']}`\n")
               for chk in t1.get("checks", []):
                   if chk["result"] == "fail":
@@ -90,29 +152,40 @@ jobs:
                       )
               lines.append("")
 
-          lines.append("## 자동 수정 가이드 (Claude Code)\n")
-          lines.append(textwrap.dedent("""
-              실패 원인은 보통 두 가지 중 하나입니다:
+          if is_test:
+              lines.append("---")
+              lines.append("## 🤖 Automated implementer instructions")
+              lines.append("")
+              lines.append("**This is a synthetic test issue.** Do NOT attempt to fix `TEST-001` — that ADR does not exist.")
+              lines.append("Your correct response is to output exactly one final line:")
+              lines.append("")
+              lines.append("`NO_CHANGE: 합성 테스트 issue — adr-verify-main의 workflow_dispatch test_mode로 생성됨`")
+              lines.append("")
+          else:
+              lines.append("## 자동 수정 가이드 (Claude Code)\n")
+              lines.append(textwrap.dedent("""
+                  실패 원인은 보통 두 가지 중 하나입니다:
 
-              1. **코드가 ADR 요구사항을 위반** — 코드 수정으로 ADR 충족
-              2. **ADR Verification 블록이 현재 코드와 불일치** — ADR Verification 룰 갱신 또는 코드 보정
+                  1. **코드가 ADR 요구사항을 위반** — 코드 수정으로 ADR 충족
+                  2. **ADR Verification 블록이 현재 코드와 불일치** — ADR Verification 룰 갱신 또는 코드 보정
 
-              이 issue는 `issue-auto-implement` 워크플로가 자동 트리거하여 Draft PR로 변환합니다.
-              사람이 `needs-triage` 라벨을 해제하고 PR을 Ready로 승급하면 정식 리뷰가 시작됩니다.
-              """).strip())
-          lines.append("\n---\n🤖 Auto-generated by `adr-verify-main.yml`")
+                  이 issue는 `issue-auto-implement` 워크플로가 자동 트리거하여 Draft PR로 변환합니다.
+                  사람이 `needs-triage` 라벨을 해제하고 PR을 Ready로 승급하면 정식 리뷰가 시작됩니다.
+                  """).strip())
+
+          lines.append(f"\n---\n🤖 Auto-generated by `adr-verify-main.yml` (mode=`{mode}`)")
 
           body = "\n".join(lines)
-          # Stash for the next step. write to a file so multiline body survives.
+          title_prefix = "[TEST MODE] " if is_test else ""
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write("title=[ADR Compliance] " + str(len(failed)) + "건 검증 실패 on `" + os.environ["COMMIT_SHA"][:7] + "`\n")
+              f.write(f"title={title_prefix}[ADR Compliance] {len(failed)}건 검증 실패 on `{os.environ['COMMIT_SHA'][:7]}`\n")
           with open("/tmp/issue-body.md", "w") as f:
               f.write(body)
-          print(f"Built issue body: {len(body)} bytes for {len(failed)} failed ADRs")
+          print(f"Built issue body: {len(body)} bytes for {len(failed)} failed ADRs (mode={mode})")
           PY
 
       - name: Create issue (uses PAT so issue-auto-implement triggers)
-        if: steps.tier1.outputs.exit != '0'
+        if: steps.outcome.outputs.exit != '0'
         env:
           GH_TOKEN: ${{ secrets.CLAUDE_BOT_PAT }}
           REPO: ${{ github.repository }}
