@@ -319,7 +319,7 @@ entries + EC2 인스턴스를 정리합니다.
 
 동일한 인프라를 3가지 IaC로 구현합니다:
 - **CDK (TypeScript)**: 주 개발 도구, 8 스택 전체 지원
-- **Terraform (HCL)**: network / security / ecs-devenv / dashboard 모듈이 root 통합돼 있고, usage-tracking / local-governance / ec2-devenv / waf 모듈은 존재하지만 root wiring은 follow-up PR
+- **Terraform (HCL)**: 현재 `terraform/modules/` 안에 `network / security / ecs-devenv / dashboard` 4개만 구현되어 있고 root에서 사용 중입니다. `usage-tracking / local-governance / ec2-devenv / waf` 모듈은 아직 추가되지 않았고 후속 PR에서 모듈 작성 + root wiring을 함께 진행합니다
 - **CloudFormation (YAML)**: 코어 기능 지원
 
 CDK가 가장 최신 상태입니다.

@@ -183,8 +183,9 @@ bash tests/integration/test-e2e.sh
 :::
 
 :::warning Terraform parity 주의
-현재 Terraform 모듈은 root `main.tf`에 network + security + ecs-devenv + dashboard
-4개만 wired되어 있고, usage-tracking / local-governance / ec2-devenv / waf 모듈은
-존재하지만 root 통합은 follow-up PR에서 마무리됩니다. CDK / CloudFormation은
-모두 사용 가능.
+현재 `terraform/modules/` 디렉토리에는 `network / security / ecs-devenv / dashboard`
+4개만 구현되어 있고 root `main.tf`에서 사용 중입니다. 나머지 4개
+(`usage-tracking / local-governance / ec2-devenv / waf`)는 **모듈 자체가
+아직 추가되지 않은 상태**이며 후속 PR에서 모듈 작성 + root wiring을 함께
+진행합니다. 그 때까지 전 기능을 쓰려면 CDK 또는 CloudFormation을 사용하세요.
 :::

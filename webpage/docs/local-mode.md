@@ -136,7 +136,7 @@ cc-bedrock-local logout
 | `change-email` | 새 이메일 + 비밀번호 받아서 config에 영속 |
 | `status` | 남은 TTL + 활성 Deny / 한도 상태 출력 |
 | `claude [args]` | 세션 확보 + 모델 env 주입 후 `claude` 실행 |
-| `set-model K=V` | `sonnet`/`opus`/`haiku`/`subagent`/`pin` 별칭으로 모델 ID 교체 |
+| `set-model K=V` | `sonnet`/`opus`/`haiku`/`subagent`/`pin` 별칭으로 모델 ID 교체. `pin=<id>`은 `/model` "Custom" 슬롯을 강제로 고정, `pin=`(빈 값)으로 unset |
 | `models` | 현재 모델 매핑 + 사용 가능한 추천 ID 출력 |
 | `run -- <cmd>` | 자격증명만 확보하고 임의 명령 실행 (예: `run -- aws bedrock list-foundation-models`) |
 | `config` | 현재 설정 파일 + 경로 출력 |
@@ -186,7 +186,7 @@ ANTHROPIC_MODEL은 일부러 비워두는 것을 권장합니다. 비워두면 C
 
 대시보드 진입은 Cognito 인증입니다. 회사 이메일과 비밀번호를 입력하세요.
 
-![Dashboard login](/img/local-login.png)
+![대시보드 로그인 화면](/img/local-login.png)
 
 ### 3.2 초기 화면 — 자격증명 발급 전
 
@@ -267,7 +267,7 @@ AWS role chaining(=한 role이 다른 role을 AssumeRole)은 어떤 설정에도
 기간 셀렉터(1d/7d/30d) + 4개 StatCard(Tokens/Cost/Requests/Users) +
 Top users 차트 + 부서별 분해.
 
-![Admin Token Dashboard](/img/local-admin-tokens.png)
+![관리자 토큰 대시보드](/img/local-admin-tokens.png)
 
 데이터 출처: `cc-on-bedrock-usage` DynamoDB (CloudWatch `AWS/Bedrock`
 메트릭은 계정 전체이므로 사용 안 함, ADR-019). 프로젝트 IAM role prefix
@@ -278,13 +278,13 @@ Top users 차트 + 부서별 분해.
 일반 사용자는 자신의 일일/누적 토큰 사용량을 `/user` 포털에서도 봅니다
 (EC2 DevEnv 또는 Local Mode 어느 쪽이든 동일하게 표시):
 
-![User Portal](/img/local-user-portal.png)
+![사용자 본인 포털 화면](/img/local-user-portal.png)
 
 ### 4.1c Analytics (`/analytics`)
 
 모델별 / 부서별 / 시계열 사용량 분석 차트 (Admin):
 
-![Analytics](/img/local-analytics.png)
+![Analytics 대시보드 (모델·부서·시계열 사용량)](/img/local-analytics.png)
 
 ### 4.2 토큰 normalization 모델 (ADR-015)
 
@@ -311,7 +311,7 @@ token-limit-enforcer Lambda가 usage table의 Stream을 소비하면서 가중�
 상단에 **Add / Update limit** 폼, 하단에 **Active limits** 테이블 (entity /
 key / period / max / updatedAt + 삭제 버튼).
 
-![Admin Limit Management](/img/local-admin-limits.png)
+![관리자 한도 관리 화면 (/admin/limits)](/img/local-admin-limits.png)
 
 | 필드 | 값 | 비고 |
 |---|---|---|
@@ -327,11 +327,16 @@ API:
 
 ### 5.2 한도 강제 reset + Deny 해제
 
-특정 사용자의 한도를 즉시 reset하고 IAM Deny policy를 떼야 할 때:
+특정 사용자의 한도를 즉시 reset하고 IAM Deny policy를 떼야 할 때
+**Dashboard `/admin/limits` 페이지의 "Reset" 버튼 사용을 권장**합니다.
+브라우저 세션이 그대로 인증을 처리하므로 별도 토큰을 다룰 필요가 없습니다.
+
+아래 `curl` 예시는 자동화/디버그용으로만 사용하세요 — `next-auth.session-token`
+쿠키는 admin 세션과 동일한 권한을 갖는 민감 값이므로 셸 히스토리·로그·CI 변수에
+남기지 말고 1회용으로만 다루는 것이 안전합니다.
 
 ```bash
-# Dashboard UI 사용 — /admin/limits 우측의 "Reset" 버튼
-# 또는 API 직접 호출 (관리자 세션 쿠키 필요)
+# 자동화/디버그 전용 — 관리자 세션 쿠키 필요
 curl -X POST https://cconbedrock-dashboard.<your-domain>/api/admin/limits/reset \
   -H "Cookie: next-auth.session-token=..." \
   -d '{"entity":"USER","key":"d4f0a1b2","period":"daily"}'
