@@ -32,22 +32,31 @@ sns = boto3.client("sns") if SNS_TOPIC_ARN else None
 
 KST = timezone(timedelta(hours=9))
 
-
-def _role_name(sub: str) -> str:
-    return f"{ROLE_PREFIX}{re.sub(r'[^A-Za-z0-9_-]', '-', sub)[:40]}"
+from iam_role_lookup import local_role_names_for
 
 
 def _detach(sub: str) -> bool:
-    role = _role_name(sub)
-    try:
-        iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
-        print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")
-        return True
-    except iam.exceptions.NoSuchEntityException:
+    """Resolve real `cc-on-bedrock-local-user-*` role names for a usage-table
+    `USER#<key>` key (key holds a Cognito username, not a sub UUID) and detach
+    the deny policy from each. `local_role_names_for` covers freshly-provisioned
+    users via its one-shot rescan; no naive-format fallback because that would
+    re-introduce the silent NoSuchEntity this fix is removing."""
+    role_names = local_role_names_for(sub)
+    if not role_names:
+        print(f"[RESET] no Local Governance role found for username='{sub}' — nothing to detach")
         return False
-    except Exception as e:
-        print(f"[RESET] detach failed for {role}: {e}")
-        return False
+    any_detached = False
+    for role in role_names:
+        try:
+            iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
+            print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")
+            any_detached = True
+        except iam.exceptions.NoSuchEntityException:
+            continue
+        except Exception as e:
+            print(f"[RESET] detach failed for {role}: {e}")
+            continue
+    return any_detached
 
 
 def _scan_deny_active(period: str):
