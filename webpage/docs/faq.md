@@ -203,46 +203,55 @@ ALB Listener Rule은 **최대 100개 제한**이 있어 사용자 수에 병목�
 
 ### 사용량 추적은 어떻게 동작하나요?
 
-서버리스 파이프라인으로 월 ~$5에 운영됩니다:
+서버리스 파이프라인으로 월 수 달러에 운영됩니다 (ADR-019):
 
 ```
-ECS Task (Claude Code) → Bedrock API 호출
-  → CloudTrail (자동 기록)
-  → EventBridge Rule (bedrock:InvokeModel 매칭)
-  → Lambda (usage-tracker) → DynamoDB (사용자/모델/일자별)
+EC2 instance (Claude Code, Instance Profile)
+또는 사용자 PC (Local Mode, STS credentials)
+  → Bedrock InvokeModel / Converse
+  → Bedrock invocation logging (CloudWatch Logs, textData=false로 99% 절감)
+  → Subscription Filter (cc-on-bedrock-task-* / cc-on-bedrock-local-user-* 필터)
+  → bedrock-usage-tracker Lambda
+  → cc-on-bedrock-usage DynamoDB (Streams enabled)
+  → token-limit-enforcer Lambda (Stream consumer, ADR-015)
+  → 한도 초과 시 cc-on-bedrock-limits DENY#active + IAM Deny attach
 ```
 
-기존 LiteLLM 프록시($370/월) 대비 **99% 비용 절감**.
+CloudTrail + EventBridge에서 Bedrock invocation logging으로 옮기면서 호출
+횟수만이 아니라 **실제 토큰 수**까지 정확히 잡힙니다. 과거 LiteLLM 프록시
+대비로는 ~99% 절감.
 
-### Nginx Proxy를 Fargate로 전환하면 얼마나 절약되나요?
+### 예상 운영 비용은? (EC2 모드)
 
-Nginx Reverse Proxy는 매우 경량(0.25 vCPU, 128MB)이지만, **현재 EC2 모드**에서는 사용자 태스크가 없어도 EC2 인스턴스를 유지해야 합니다. **Fargate 전환이 계획되어 있습니다.**
-
-| 시나리오 | EC2 (현재) | Fargate (전환 예정) |
-|---------|-----------|------------------|
-| **유휴 시** (사용자 0명) | m7g.4xlarge × 2 = ~$800/월 | 0.25vCPU × 2 = **~$18/월** |
-| **운영 시** (사용자 있음) | EC2 공존 = 추가 비용 없음 | $18 고정 추가 |
-
-:::tip 전환 계획
-Nginx를 Fargate(0.25 vCPU, 512MB, ARM64)로 전환하면 유휴 비용 **97% 절감**. CDK에서 `Ec2TaskDefinition` → `FargateTaskDefinition`, `Ec2Service` → `FargateService`로 변경. HA 2 replica 유지.
-:::
-
-### 예상 운영 비용은?
+`ec2-idle-stop` Lambda가 유휴 인스턴스를 자동으로 stop하므로 사용자가
+"8h 평균 활성"이라고 가정한 추정:
 
 | 항목 | 10 사용자 | 50 사용자 | 100 사용자 |
-|------|----------|----------|-----------|
-| ECS EC2 (m7g.4xlarge) | ~$400 | ~$1,200 | ~$2,400 |
+|---|---|---|---|
+| EC2 t4g.large (8h/d, ARM64) | ~$200 | ~$1,000 | ~$2,000 |
+| EBS gp3 root (40 GB) | ~$32 | ~$160 | ~$320 |
 | Bedrock API | ~$200 | ~$1,000 | ~$2,000 |
-| EFS/EBS | ~$20 | ~$100 | ~$200 |
-| CloudFront + ALB + NLB | ~$50 | ~$80 | ~$120 |
-| DynamoDB + Lambda | ~$5 | ~$10 | ~$20 |
-| **Total** | **~$675** | **~$2,390** | **~$4,740** |
+| Nginx Fargate (HA 2 task) | ~$18 | ~$18 | ~$18 |
+| CloudFront + NLB + Dashboard ECS | ~$50 | ~$80 | ~$120 |
+| DynamoDB + Lambda + CloudWatch | ~$10 | ~$20 | ~$40 |
+| **Total** | **~$510** | **~$2,278** | **~$4,498** |
 
 :::tip 비용 절감
-- Auto Scaling Target 80%로 EC2 절약
-- Warm-Stop으로 유휴 시 EBS 스냅샷 전환 (볼륨 비용 제거)
-- Reserved Instances / Savings Plans 적용 시 30-40% 추가 절감
+- **Hibernation 활성화** (`HIBERNATE_ENABLED=true`, ADR-010): cold-start 시간
+  단축 → 사용자가 더 빈번하게 stop을 사용 → EC2 시간 절약
+- **Local Governance 모드 활용**: 본인 PC가 빠른 사용자는 Local로 전환 → EC2 비용 0
+- **모델 선택 가이드**: 단순 코드 변환 Haiku, 복잡한 reasoning Opus 분리
+- **EBS 적정 크기**: 40 GB 시작 → 사용량 모니터링 후 user portal에서 확장 신청
 :::
+
+### Local Governance 모드의 비용은?
+
+EC2를 띄우지 않으므로 사실상 **Bedrock API 비용만** 발생합니다:
+- Lambda (STS Issuer, enforcer, reset): ~$0.1/월
+- DynamoDB `cc-on-bedrock-limits`: ~$0.01/월
+- 본인 PC는 회사 자산이므로 인프라 비용 0
+
+100명 Local 모드 사용자라면 월 ~$2,000 (Bedrock만) + 거버넌스 인프라 ~$1 수준.
 
 ---
 
@@ -262,13 +271,22 @@ Nginx를 Fargate(0.25 vCPU, 512MB, ARM64)로 전환하면 유휴 비용 **97% �
 
 ### IAM 권한은 어떻게 격리되나요?
 
-사용자별 **전용 IAM Task Role** (`cc-on-bedrock-task-{subdomain}`):
+사용자별 **전용 IAM Role**:
 
-- Bedrock: 특정 모델만 호출 허용 (Claude Opus/Sonnet)
-- S3: `users/{subdomain}/*` 경로만 접근
+- **EC2 모드**: `cc-on-bedrock-task-{subdomain}` (Instance Profile)
+- **Local 모드**: `cc-on-bedrock-local-user-{sub_short}` (STS AssumeRole 대상)
+
+두 role 모두:
+- Bedrock: ADR-021의 wildcard Claude family ARN
+  (`arn:aws:bedrock:*::foundation-model/*anthropic.claude-*` +
+  inference profile). 신규 Claude 모델 출시 시 IAM 변경 없이 즉시 사용
+- S3 / DynamoDB: 본인 데이터 경로만
 - CloudWatch: 로그 쓰기만
-- ECR: 이미지 Pull만
-- Permission Boundary: `cc-on-bedrock-task-boundary`로 권한 확장 방지
+- Permission Boundary: `cc-on-bedrock-task-boundary` 강제 → 권한 확장 방지
+
+per-user IAM role은 **Cognito 사용자 가입 시 EventBridge로 사전 프로비저닝**
+됩니다 (ADR-022). 사용자 삭제 시 ADR-024 EventBridge가 자동으로 role + DDB
+entries + EC2 인스턴스를 정리합니다.
 
 ### DNS Firewall은 무엇을 차단하나요?
 
@@ -285,22 +303,26 @@ Nginx를 Fargate(0.25 vCPU, 512MB, ARM64)로 전환하면 유휴 비용 **97% �
 
 ### CDK 배포 순서가 중요한가요?
 
-**반드시 순서대로 배포해야 합니다:**
+**8개 스택은 의존성 그래프에 따라 자동으로 순서가 정해집니다:**
 
 ```bash
-01-Network → 02-Security → 03-Usage Tracking → 04-ECS DevEnv → 05-Dashboard
+01-Network → 02-Security → 03-Usage Tracking → 04-ECS Dashboard 인프라
+            → 05-Dashboard → 06-WAF
+            → 07-EC2 DevEnv (governanceOnly=true 시 스킵)
+            → 08-Local Governance
 ```
 
-각 스택이 이전 스택의 출력(VPC, Cognito, KMS 등)에 의존합니다. `npx cdk deploy --all` 실행 시 CDK가 자동으로 의존성 순서를 처리합니다.
+각 스택이 이전 스택의 출력(VPC, Cognito, KMS 등)에 의존합니다.
+`npx cdk deploy --all` 실행 시 CDK가 자동으로 의존성 순서를 처리합니다.
 
 ### Terraform과 CloudFormation도 사용 가능한가요?
 
 동일한 인프라를 3가지 IaC로 구현합니다:
-- **CDK (TypeScript)**: 주 개발 도구, 5 스택
-- **Terraform (HCL)**: 4 모듈
-- **CloudFormation (YAML)**: 4 템플릿 + deploy.sh
+- **CDK (TypeScript)**: 주 개발 도구, 8 스택 전체 지원
+- **Terraform (HCL)**: network / security / ecs-devenv / dashboard 모듈이 root 통합돼 있고, usage-tracking / local-governance / ec2-devenv / waf 모듈은 존재하지만 root wiring은 follow-up PR
+- **CloudFormation (YAML)**: 코어 기능 지원
 
-CDK가 가장 최신 상태이며, Terraform/CloudFormation은 코어 기능을 지원합니다.
+CDK가 가장 최신 상태입니다.
 
 ### 다른 리전에 배포할 수 있나요?
 
@@ -309,4 +331,7 @@ CDK context로 오버라이드:
 npx cdk deploy --all -c region=us-west-2 -c vpcCidr=10.200.0.0/16
 ```
 
-Bedrock 모델 가용성은 리전별로 다릅니다. Opus 4.6은 `us-east-1`, `us-west-2`, `ap-northeast-1`, `ap-northeast-2`에서 사용 가능합니다.
+Bedrock 모델 가용성은 리전별로 다릅니다. Claude Opus 4.7 / 4.6은 cross-region
+inference profile(`global.anthropic.*`)을 통해 호출할 수 있고, Haiku 4.5는
+us-region inference profile(`us.anthropic.*`) 사용. 가장 안정적인 리전은
+`us-east-1`, `us-west-2`, `ap-northeast-2`입니다.
