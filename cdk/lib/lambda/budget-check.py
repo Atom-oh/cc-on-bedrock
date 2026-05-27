@@ -352,8 +352,13 @@ def remove_dept_deny_policy(subdomain: str):
 
 
 def attach_deny_policy(subdomain: str):
-    """Attach IAM Deny Policy to user's per-user Task Role."""
-    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
+    """Attach BudgetExceededDeny to ALL of the user's roles (EC2 task + Local Governance).
+
+    Previously this only tried the EC2 `cc-on-bedrock-task-{subdomain}` role, so Local-only
+    users (whose role is `cc-on-bedrock-local-user-{cognito_sub}`) silently bypassed the
+    daily/monthly $ budget enforcement. The Local role is looked up via the same
+    `username`-tag index that `attach_dept_deny_policy` already uses.
+    """
     deny_policy = json.dumps({
         "Version": "2012-10-17",
         "Statement": [{
@@ -368,47 +373,60 @@ def attach_deny_policy(subdomain: str):
             "Resource": "*",
         }],
     })
-    try:
-        iam_client.put_role_policy(
-            RoleName=role_name,
-            PolicyName=DENY_POLICY_NAME,
-            PolicyDocument=deny_policy,
-        )
-        print(f"[DENY] Attached to {role_name}")
-        return True
-    except Exception as e:
-        print(f"[DENY] Failed for {role_name}: {e}")
-        return False
+    _build_local_role_index()
+    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    any_attached = False
+    for role_name in role_names:
+        try:
+            iam_client.put_role_policy(
+                RoleName=role_name,
+                PolicyName=DENY_POLICY_NAME,
+                PolicyDocument=deny_policy,
+            )
+            print(f"[DENY] Attached to {role_name}")
+            any_attached = True
+        except iam_client.exceptions.NoSuchEntityException:
+            # EC2 task role may not exist for a Local-only user — skip silently.
+            continue
+        except Exception as e:
+            print(f"[DENY] Failed for {role_name}: {e}")
+    return any_attached
 
 
 def remove_deny_policy(subdomain: str):
-    """Remove IAM Deny Policy from user's Task Role (next-day reset)."""
-    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
-    try:
-        iam_client.delete_role_policy(
-            RoleName=role_name,
-            PolicyName=DENY_POLICY_NAME,
-        )
-        print(f"[ALLOW] Removed deny from {role_name}")
-        return True
-    except iam_client.exceptions.NoSuchEntityException:
-        return False  # No deny policy exists
-    except Exception as e:
-        print(f"[ALLOW] Failed for {role_name}: {e}")
-        return False
+    """Remove BudgetExceededDeny from ALL of the user's roles (EC2 task + Local)."""
+    _build_local_role_index()
+    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    any_removed = False
+    for role_name in role_names:
+        try:
+            iam_client.delete_role_policy(
+                RoleName=role_name,
+                PolicyName=DENY_POLICY_NAME,
+            )
+            print(f"[ALLOW] Removed deny from {role_name}")
+            any_removed = True
+        except iam_client.exceptions.NoSuchEntityException:
+            continue
+        except Exception as e:
+            print(f"[ALLOW] Failed for {role_name}: {e}")
+    return any_removed
 
 
 def check_deny_exists(subdomain: str) -> bool:
-    """Check if Deny Policy already exists on user's role."""
-    role_name = f"{TASK_ROLE_PREFIX}-{subdomain}"
-    try:
-        iam_client.get_role_policy(
-            RoleName=role_name,
-            PolicyName=DENY_POLICY_NAME,
-        )
-        return True
-    except Exception:
-        return False
+    """Return True if BudgetExceededDeny is present on ANY of the user's roles."""
+    _build_local_role_index()
+    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    for role_name in role_names:
+        try:
+            iam_client.get_role_policy(
+                RoleName=role_name,
+                PolicyName=DENY_POLICY_NAME,
+            )
+            return True
+        except Exception:
+            continue
+    return False
 
 
 # ──────────────────────────────────────────────────────────
