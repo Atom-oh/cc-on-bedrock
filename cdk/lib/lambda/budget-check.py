@@ -16,6 +16,8 @@ import boto3
 from datetime import datetime
 from decimal import Decimal
 
+from iam_role_lookup import local_role_names_for
+
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 DEPT_BUDGETS_TABLE = os.environ.get("DEPT_BUDGETS_TABLE", "cc-department-budgets")
 USER_BUDGETS_TABLE = os.environ.get("USER_BUDGETS_TABLE", "cc-user-budgets")
@@ -596,19 +598,26 @@ def check_token_limits_backup():
     skipped = 0
     checked = 0
 
-    # USER trips → attach on the user's local role
+    # USER trips → attach on the user's local role.
+    # `key` comes from cc-on-bedrock-limits PK suffix, which the Stream
+    # producer (bedrock-usage-tracker) keys by Cognito *username* — NOT the
+    # sub UUID embedded in the real role name. Resolve via the username tag
+    # reverse index; no naive-format fallback because that's the broken
+    # pattern this whole module-level helper exists to replace.
     for (etype, key), (period, used, mx) in tripped.items():
         if etype != "USER":
             continue
-        # Local role name pattern
-        import re as _re
-        role = f"{LOCAL_ROLE_PREFIX}{_re.sub(r'[^A-Za-z0-9_-]', '-', key)[:40]}"
-        checked += 1
-        if _has_local_token_deny(role):
-            skipped += 1
+        candidate_roles = local_role_names_for(key)
+        if not candidate_roles:
+            print(f"[LIMITS] backup: no Local role for username='{key}' — skipping USER {period}")
             continue
-        if _attach_local_token_deny(role, f"backup: USER {period} {used}/{mx}"):
-            attached += 1
+        for role in candidate_roles:
+            checked += 1
+            if _has_local_token_deny(role):
+                skipped += 1
+                continue
+            if _attach_local_token_deny(role, f"backup: USER {period} {used}/{mx}"):
+                attached += 1
 
     # DEPT trips → attach on every local role in that dept (best-effort by listing)
     if tripped:

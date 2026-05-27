@@ -22,6 +22,8 @@ import boto3
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from iam_role_lookup import local_role_names_for
+
 REGION = os.environ["AWS_REGION"]
 LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
@@ -215,19 +217,37 @@ def _deny_policy_doc() -> str:
 
 
 def _attach_deny(sub: str, reason: str, period: str, reset_at: str):
-    role_name = f"{ROLE_PREFIX}{re.sub(r'[^A-Za-z0-9_-]', '-', sub)[:40]}"
-    try:
-        iam.put_role_policy(
-            RoleName=role_name,
-            PolicyName=DENY_POLICY_NAME,
-            PolicyDocument=_deny_policy_doc(),
-        )
-        print(f"[DENY] attached {DENY_POLICY_NAME} → {role_name} ({reason})")
-    except iam.exceptions.NoSuchEntityException:
-        print(f"[DENY] role {role_name} not found — skipping attach")
+    # The usage-table PK is keyed by Cognito *username* (e.g. "atomoh"), not the
+    # sub UUID. The real ADR-014 role is cc-on-bedrock-local-user-{cognito_sub},
+    # so naive `ROLE_PREFIX + sub` produced a mismatch and put_role_policy
+    # silently NoSuchEntity'd. Resolve via the `username` tag instead.
+    # `local_role_names_for` already does a one-shot rescan on cache miss to
+    # cover freshly-provisioned users; we don't add another fallback here
+    # because the legacy `ROLE_PREFIX+username` form is the broken pattern we
+    # are explicitly removing — keeping it as a "fallback" would re-create
+    # exactly the silent NoSuchEntity that this fix targets.
+    role_names = local_role_names_for(sub)
+    if not role_names:
+        print(f"[DENY] no Local Governance role found for username='{sub}' — nothing to attach")
         return False
-    except Exception as e:
-        print(f"[DENY] put_role_policy failed for {role_name}: {e}")
+
+    any_attached = False
+    for role_name in role_names:
+        try:
+            iam.put_role_policy(
+                RoleName=role_name,
+                PolicyName=DENY_POLICY_NAME,
+                PolicyDocument=_deny_policy_doc(),
+            )
+            print(f"[DENY] attached {DENY_POLICY_NAME} → {role_name} ({reason})")
+            any_attached = True
+        except iam.exceptions.NoSuchEntityException:
+            print(f"[DENY] role {role_name} not found — skipping attach")
+            continue
+        except Exception as e:
+            print(f"[DENY] put_role_policy failed for {role_name}: {e}")
+            continue
+    if not any_attached:
         return False
 
     # Conditional write: only fire SNS once per active period
