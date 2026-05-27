@@ -4,9 +4,13 @@ const sidebars: SidebarsConfig = {
   tutorialSidebar: [
     'intro',
     'architecture',
+    'deployment',
     'usage',
+    'user-portal',
+    'local-mode',
     'cost',
     'security',
+    'faq',
   ],
 };
 
