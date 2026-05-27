@@ -41,6 +41,7 @@ jobs:
             --decisions-dir docs/decisions \
             --output tier1.json
       - uses: actions/upload-artifact@v4
+        if: always()  # tier1_static.py writes JSON before non-zero exit; preserve it for the report job
         with:
           name: adr-tier1
           path: tier1.json
@@ -97,6 +98,7 @@ jobs:
         with:
           name: adr-tier1
           path: .
+        continue-on-error: true  # if static job crashed before upload, fallback below produces empty tier1.json
       - uses: actions/download-artifact@v4
         with:
           name: adr-tier2
