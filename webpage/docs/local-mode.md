@@ -284,7 +284,7 @@ Top users 차트 + 부서별 분해.
 
 모델별 / 부서별 / 시계열 사용량 분석 차트 (Admin):
 
-![Analytics 대시보드 (모델·부서·시계열 사용량)](/img/local-analytics.png)
+![Analytics 대시보드 — 모델·부서·시계열 사용량](/img/local-analytics.png)
 
 ### 4.2 토큰 normalization 모델 (ADR-015)
 
@@ -311,7 +311,7 @@ token-limit-enforcer Lambda가 usage table의 Stream을 소비하면서 가중�
 상단에 **Add / Update limit** 폼, 하단에 **Active limits** 테이블 (entity /
 key / period / max / updatedAt + 삭제 버튼).
 
-![관리자 한도 관리 화면 (/admin/limits)](/img/local-admin-limits.png)
+![관리자 한도 관리 화면 — /admin/limits](/img/local-admin-limits.png)
 
 | 필드 | 값 | 비고 |
 |---|---|---|
