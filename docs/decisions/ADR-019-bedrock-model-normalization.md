@@ -1,3 +1,8 @@
+---
+status: Accepted
+verification_required: false
+---
+
 # ADR-019: Bedrock Model ID Normalization for Usage Tracking
 
 ## Status

@@ -1,0 +1,118 @@
+# .github/workflows/adr-verify-pr.yml
+name: ADR Compliance (PR)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: adr-verify-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-northeast-2
+  CLAUDE_CODE_USE_BEDROCK: "1"
+  ANTHROPIC_MODEL: global.anthropic.claude-opus-4-7
+
+jobs:
+  static:
+    name: ADR Static Check
+    runs-on: cc-bedrock-arm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install adrverify
+        working-directory: .adr-verify
+        run: pip install -e .
+      - name: Run Tier 1 static
+        run: |
+          python -m adrverify.tier1_static \
+            --repo-root . \
+            --decisions-dir docs/decisions \
+            --output tier1.json
+      - uses: actions/upload-artifact@v4
+        if: always()  # tier1_static.py writes JSON before non-zero exit; preserve it for the report job
+        with:
+          name: adr-tier1
+          path: tier1.json
+          retention-days: 7
+
+  semantic:
+    name: ADR Semantic Check
+    runs-on: cc-bedrock-arm
+    timeout-minutes: 15
+    continue-on-error: true     # advisory — does NOT block merge
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install adrverify
+        working-directory: .adr-verify
+        run: pip install -e .
+      - name: Run Tier 2 semantic
+        run: |
+          python -m adrverify.tier2_semantic \
+            --repo-root . \
+            --decisions-dir docs/decisions \
+            --region ${{ env.AWS_REGION }} \
+            --model-id ${{ env.ANTHROPIC_MODEL }} \
+            --output tier2.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adr-tier2
+          path: tier2.json
+          retention-days: 7
+
+  report:
+    name: ADR Coverage Report
+    runs-on: cc-bedrock-arm
+    needs: [static, semantic]
+    if: always()
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install adrverify
+        working-directory: .adr-verify
+        run: pip install -e .
+      - uses: actions/download-artifact@v4
+        with:
+          name: adr-tier1
+          path: .
+        continue-on-error: true  # if static job crashed before upload, fallback below produces empty tier1.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: adr-tier2
+          path: .
+        continue-on-error: true
+      - name: Render + post sticky comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          test -f tier1.json || echo '{"adrs":[]}' > tier1.json
+          test -f tier2.json || echo '{"adrs":[]}' > tier2.json
+          python -m adrverify.coverage_report \
+            --tier1 tier1.json \
+            --tier2 tier2.json \
+            --total-adrs 24 \
+            --post-pr ${{ github.event.pull_request.number }}
