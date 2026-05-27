@@ -35,20 +35,18 @@ KST = timezone(timedelta(hours=9))
 from iam_role_lookup import local_role_names_for
 
 
-def _candidate_role_names(sub: str) -> list:
-    """Resolve real `cc-on-bedrock-local-user-*` role names for a usage-table
-    `USER#<key>` key. The key holds a Cognito username, not a sub UUID, so
-    naive prefix-concat does not yield the deployed role name."""
-    names = local_role_names_for(sub)
-    if names:
-        return names
-    # Fallback to legacy formatted name if tag index hasn't seen the role yet.
-    return [f"{ROLE_PREFIX}{re.sub(r'[^A-Za-z0-9_-]', '-', sub)[:40]}"]
-
-
 def _detach(sub: str) -> bool:
+    """Resolve real `cc-on-bedrock-local-user-*` role names for a usage-table
+    `USER#<key>` key (key holds a Cognito username, not a sub UUID) and detach
+    the deny policy from each. `local_role_names_for` covers freshly-provisioned
+    users via its one-shot rescan; no naive-format fallback because that would
+    re-introduce the silent NoSuchEntity this fix is removing."""
+    role_names = local_role_names_for(sub)
+    if not role_names:
+        print(f"[RESET] no Local Governance role found for username='{sub}' — nothing to detach")
+        return False
     any_detached = False
-    for role in _candidate_role_names(sub):
+    for role in role_names:
         try:
             iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
             print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")

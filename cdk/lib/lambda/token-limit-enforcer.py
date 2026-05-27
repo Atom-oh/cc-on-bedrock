@@ -221,13 +221,15 @@ def _attach_deny(sub: str, reason: str, period: str, reset_at: str):
     # sub UUID. The real ADR-014 role is cc-on-bedrock-local-user-{cognito_sub},
     # so naive `ROLE_PREFIX + sub` produced a mismatch and put_role_policy
     # silently NoSuchEntity'd. Resolve via the `username` tag instead.
+    # `local_role_names_for` already does a one-shot rescan on cache miss to
+    # cover freshly-provisioned users; we don't add another fallback here
+    # because the legacy `ROLE_PREFIX+username` form is the broken pattern we
+    # are explicitly removing — keeping it as a "fallback" would re-create
+    # exactly the silent NoSuchEntity that this fix targets.
     role_names = local_role_names_for(sub)
     if not role_names:
-        # Backward-compat fallback: try the legacy formatted name in case a
-        # newly-provisioned role hasn't been picked up by the index yet.
-        legacy = f"{ROLE_PREFIX}{re.sub(r'[^A-Za-z0-9_-]', '-', sub)[:40]}"
-        print(f"[DENY] no role found via username tag for sub='{sub}' — trying legacy name {legacy}")
-        role_names = [legacy]
+        print(f"[DENY] no Local Governance role found for username='{sub}' — nothing to attach")
+        return False
 
     any_attached = False
     for role_name in role_names:

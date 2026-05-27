@@ -14,8 +14,8 @@ Lambda container lifetime. Both callers should resolve role names through
 
 Lambda container reuse persists the cache, so subsequent invocations within the
 same warm container avoid the `iam:ListRoles` round-trip. `reset_cache()`
-exists for explicit invalidation (e.g. handler-entry reset like budget-check
-already does for its dept-deny index).
+exists for explicit invalidation (tests or aggressive consistency); the
+production code does NOT call it on the hot path.
 """
 from __future__ import annotations
 
@@ -26,19 +26,25 @@ LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
 _iam = boto3.client("iam")
 _index: dict[str, list[str]] = {}
 _built = False
+# Per-username retry guard: if `username` is not in the freshly-built index,
+# we rebuild once (in case a brand-new user landed after the cache was warmed)
+# and remember we've tried — so we don't hammer iam:ListRoles for unknown keys.
+_retried_for: set[str] = set()
 
 
 def _build_index() -> None:
     """Scan `cc-on-bedrock-local-user-*` roles once and index by `username` tag.
 
-    Idempotent within a single Lambda container. The `built` flag is set in
-    `finally` so a partial index from a mid-scan failure still prevents
-    redundant re-scans on every lookup in the same invocation.
+    Sets the `_built` flag ONLY on a clean run. If `list_roles` raises
+    (throttle / 5xx / permission revoked), `_built` stays False so the next
+    `local_role_names_for()` call retries the scan — otherwise a single
+    cold-start transient could leave the container permanently silent on
+    every Deny attach.
     """
     global _index, _built
     if _built:
         return
-    _index = {}
+    new_index: dict[str, list[str]] = {}
     try:
         paginator = _iam.get_paginator("list_roles")
         for page in paginator.paginate(PathPrefix="/"):
@@ -56,25 +62,48 @@ def _build_index() -> None:
                     print(f"[iam-lookup] list_role_tags failed for {rname}: {e}")
                     uname = None
                 if uname:
-                    _index.setdefault(uname, []).append(rname)
+                    new_index.setdefault(uname, []).append(rname)
     except Exception as e:
-        print(f"[iam-lookup] list_roles failed: {e}")
-    finally:
-        _built = True
+        # Do NOT mark `_built`; the next call will retry. This is the difference
+        # between a transient cold-start failure and permanent silent enforcement.
+        print(f"[iam-lookup] list_roles failed (will retry next call): {e}")
+        return
+    _index = new_index
+    _built = True
 
 
 def local_role_names_for(username: str) -> list[str]:
     """Return real `cc-on-bedrock-local-user-*` role names whose `username` tag
-    equals `username`. Returns an empty list when no role matches (caller
-    should treat that as "Local Governance not provisioned for this user").
+    equals `username`. Returns an empty list when no role matches (caller must
+    treat that as "Local Governance not provisioned for this user").
+
+    On cache miss, retries once with a fresh index — covers the case where a
+    user was provisioned after this container's cold-start scan. The retry is
+    bounded per-username so unknown/malicious keys don't hammer `iam:ListRoles`.
     """
+    _build_index()
+    names = _index.get(username)
+    if names:
+        return list(names)
+    # Cache miss — give it one second chance with a fresh scan in case the
+    # user was provisioned after this container warmed up.
+    if username in _retried_for:
+        return []
+    _retried_for.add(username)
+    reset_cache(_keep_retry_guard=True)
     _build_index()
     return list(_index.get(username, []))
 
 
-def reset_cache() -> None:
+def reset_cache(_keep_retry_guard: bool = False) -> None:
     """Drop the in-process cache. Call from `handler` entry if you need a
-    fresh index per invocation (e.g. tests or aggressive consistency)."""
-    global _index, _built
+    fresh index per invocation (e.g. tests or aggressive consistency).
+
+    Internal: `local_role_names_for` calls this with `_keep_retry_guard=True`
+    to force a single rescan without losing the per-username retry guard.
+    """
+    global _index, _built, _retried_for
     _index = {}
     _built = False
+    if not _keep_retry_guard:
+        _retried_for = set()

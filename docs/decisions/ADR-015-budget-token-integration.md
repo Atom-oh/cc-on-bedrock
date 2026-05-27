@@ -155,11 +155,23 @@ inline-policy list was just `BedrockInvokeInline` — no deny attached.
 
 A new shared module `cdk/lib/lambda/iam_role_lookup.py` resolves Cognito
 username → real role name by reading the `username` IAM tag (already set by
-`role_factory.ensure_role`). The same reverse index `budget-check` was
-already using for dept-deny attachment is now factored out, and the three
-enforcement sites above are switched to call `local_role_names_for(username)`
-with a fallback to the legacy formatted name in case the cache hasn't seen a
-freshly-provisioned role yet.
+`role_factory.ensure_role`). The three enforcement sites above are switched
+to call `local_role_names_for(username)`. When the lookup returns an empty
+list the callers log + skip — they do NOT reconstruct the legacy
+`prefix + username` form, because that *is* the broken pattern this fix
+exists to replace; carrying it as a "fallback" would silently re-introduce
+the `NoSuchEntity` class of bugs for any user whose role isn't in the index.
+
+Cache miss handling lives inside `iam_role_lookup` itself: a cache miss
+triggers exactly one rescan of `iam:ListRoles` to cover freshly-provisioned
+users that landed after the container's cold start. The retry is bounded
+per-username, so unknown / malicious keys cannot hammer the IAM API.
+
+`_built` is only set after a successful pagination — a transient
+`list_roles` failure (throttle, 5xx) leaves the flag False so the next call
+retries. The earlier draft set the flag in `finally`, which would have
+locked a warm container into a permanent empty-index state and silently
+disabled enforcement until the next cold start.
 
 Additional IAM grants needed:
 
@@ -170,4 +182,5 @@ Additional IAM grants needed:
 `budget-check` already had both grants. The index is cached per Lambda
 container lifetime — Stream-batch invocations stay warm long enough for the
 cache to amortize over many records, and the cost is one `ListRoles`
-pagination per cold start.
+pagination per cold start (plus at most one rescan on first miss per
+username).
