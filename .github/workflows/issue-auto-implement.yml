@@ -1,0 +1,305 @@
+# .github/workflows/issue-auto-implement.yml
+# When ANY new issue is opened, hand the issue body to Claude Code (Bedrock,
+# Opus 4.7) in agent mode and have it either:
+#   (a) make minimal code edits and open a Draft PR labelled `needs-triage`
+#       so a human can promote it to Ready when satisfied, OR
+#   (b) decide the issue is not actionable (question / wishlist / ambiguous)
+#       and post a clarifying comment on the issue — no PR created.
+#
+# Branch protection on `main` requires PRs to be green on 5 required checks,
+# so a Draft PR cannot self-merge. The Draft state itself is the second
+# safety net: GitHub disallows merging a Draft regardless of approvals.
+#
+# Uses `secrets.CLAUDE_BOT_PAT` (Fine-grained PAT) to push branches and open
+# PRs so that downstream workflows (`adr-verify-pr.yml`, `pr-review.yml`) DO
+# trigger on the bot's PR — the default GITHUB_TOKEN would suppress them.
+
+name: Issue Auto-Implement (Claude Code)
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+concurrency:
+  group: issue-auto-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-2
+  CLAUDE_CODE_USE_BEDROCK: "1"
+  ANTHROPIC_MODEL: global.anthropic.claude-opus-4-7
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  implement:
+    if: github.event.issue.user.type != 'Bot'
+    name: Claude implements issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CLAUDE_BOT_PAT }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "claude-code-bot[bot]"
+          git config user.email "claude-code-bot@users.noreply.github.com"
+
+      - name: Create work branch
+        id: branch
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          BRANCH="claude/issue-${ISSUE_NUMBER}"
+          git fetch origin "$BRANCH" 2>/dev/null || true
+          git checkout -B "$BRANCH" origin/main
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Build prompt
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY:  ${{ github.event.issue.body }}
+          ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
+          PROMPT_TEMPLATE: |
+            You are working on a GitHub issue for the `cc-on-bedrock` repository.
+
+            ## Project context (read FIRST)
+            - `CLAUDE.md` at repo root — tech stack, conventions, portability rules
+            - Module-level `CLAUDE.md` under any directory you touch (cdk/, shared/nextjs-app/, terraform/, .adr-verify/, docs/, docker/, etc.)
+            - Relevant ADRs in `docs/decisions/` if the issue touches an architectural area
+
+            ## Your task
+            1. Read the issue carefully. Decide if it is an actionable code-change request.
+               - **Actionable** = clear deliverable: bug fix, ADR drift correction, requested feature with concrete spec, refactor with specified goal.
+               - **NOT actionable** = open-ended question, vague wishlist, duplicate, "investigate / explore X", "what do you think about Y".
+
+            2. **If NOT actionable**: do NOT modify any files. Output EXACTLY one final line, nothing else after it:
+
+               `NO_CHANGE: <한 줄 이유, 한국어로>`
+
+               Example: `NO_CHANGE: 비용 차이의 원인을 식별하려면 실제 측정 데이터가 필요함 — 코드 변경 전 분석 필요`
+
+            3. **If actionable**: make minimal, surgical edits.
+               - Follow project conventions (CLAUDE.md, conventional commits, Korean docs / English code).
+               - DO NOT touch: `package-lock.json`, `yarn.lock`, `*.tsbuildinfo`, `.next/`, `cdk.out/`, `.venv/`, any `*.tar.gz`.
+               - For issues labelled `adr-fail`: the issue body has the EXACT failed check details (file, rule, value, evidence). Two valid fixes:
+                 (a) update the code so the failed `must_contain` / `must_not_contain` / `must_exist` rule passes, OR
+                 (b) update the ADR's `## Verification` block if the rule itself is outdated (rare).
+                 Prefer (a) unless the ADR text shows the rule predated a since-decided change.
+               - When done, output a brief summary of what changed (this becomes the PR body).
+
+            ## Validation (run before finishing if your changes touch these areas)
+            - Next.js: `cd shared/nextjs-app && npx tsc --noEmit`
+            - CDK: `cd cdk && npx tsc --noEmit`
+            - ADR pipeline: `cd .adr-verify && pip install -e . && pytest`
+
+            ## DO NOT
+            - Commit, push, or open PRs — the workflow handles git after you finish.
+            - Modify `.github/workflows/*` unless the issue explicitly asks for it.
+            - Add features beyond what the issue asks (no scope creep).
+        run: |
+          {
+            printf '%s\n' "$PROMPT_TEMPLATE"
+            echo ""
+            echo "## Issue"
+            echo ""
+            echo "Number: #${ISSUE_NUMBER}"
+            echo "Title: ${ISSUE_TITLE}"
+            echo "Labels: ${ISSUE_LABELS}"
+            echo ""
+            echo "Body:"
+            echo "---"
+            printf '%s\n' "${ISSUE_BODY}"
+            echo "---"
+          } > /tmp/prompt.txt
+          echo "Prompt size: $(wc -c < /tmp/prompt.txt) bytes"
+
+      - name: Run Claude in agent mode
+        id: claude
+        run: |
+          set +e
+          claude -p "$(cat /tmp/prompt.txt)" \
+            --permission-mode acceptEdits \
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash,TodoWrite" \
+            --max-turns 25 \
+            > /tmp/claude-stdout.log 2> /tmp/claude-stderr.log
+          EXIT=$?
+          set -e
+          echo "exit=$EXIT" >> "$GITHUB_OUTPUT"
+          echo "--- last 80 lines of stdout ---"
+          tail -80 /tmp/claude-stdout.log || true
+          echo "--- stderr ---"
+          tail -40 /tmp/claude-stderr.log || true
+
+      - name: Decide outcome
+        id: outcome
+        run: |
+          if grep -Eq "^NO_CHANGE: " /tmp/claude-stdout.log; then
+            REASON=$(grep -E "^NO_CHANGE: " /tmp/claude-stdout.log | tail -1 | sed 's/^NO_CHANGE: //')
+            {
+              echo "kind=no_change"
+              echo "reason=${REASON}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --quiet HEAD && [ -z "$(git status --porcelain)" ]; then
+            echo "kind=empty" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "kind=changed" >> "$GITHUB_OUTPUT"
+
+      - name: Commit + push (CHANGED path)
+        if: steps.outcome.outputs.kind == 'changed'
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          COMMIT_MSG_TEMPLATE: |
+            chore(issue-#__ISSUE__): Claude Code auto-implement
+
+            Closes #__ISSUE__
+
+            Auto-generated by issue-auto-implement workflow. Draft PR is in
+            the `needs-triage` queue — human triage required before promotion
+            to Ready.
+
+            🤖 Generated with Claude Code (__MODEL__)
+        run: |
+          git add -A
+          for path in package-lock.json yarn.lock pnpm-lock.yaml \
+                      shared/nextjs-app/tsconfig.tsbuildinfo \
+                      cdk/cdk.out shared/nextjs-app/.next \
+                      .adr-verify/.venv .adr-verify/adrverify.egg-info; do
+            git reset -- "$path" 2>/dev/null || true
+          done
+          if git diff --cached --quiet; then
+            echo "::warning::All edits were on the forbidden-path list; nothing to commit."
+            exit 0
+          fi
+          # Substitute placeholders → real values
+          printf '%s\n' "$COMMIT_MSG_TEMPLATE" \
+            | sed "s|__ISSUE__|${ISSUE_NUMBER}|g; s|__MODEL__|${ANTHROPIC_MODEL}|g" \
+            > /tmp/commit-msg.txt
+          git commit -F /tmp/commit-msg.txt
+          git push -u origin "$BRANCH"
+
+      - name: Open Draft PR (CHANGED path)
+        if: steps.outcome.outputs.kind == 'changed'
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_BOT_PAT }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Auto-implements #${ISSUE_NUMBER}"
+            echo ""
+            echo "${ISSUE_TITLE}"
+            echo ""
+            echo "### Claude의 작업 요약"
+            echo ""
+            echo '<details><summary>Claude stdout (마지막 200줄)</summary>'
+            echo ''
+            echo '```'
+            tail -200 /tmp/claude-stdout.log
+            echo '```'
+            echo '</details>'
+            echo ""
+            echo "### Triage 체크리스트"
+            echo ""
+            echo "- [ ] 변경 의도가 issue와 일치하는가"
+            echo "- [ ] CLAUDE.md / ADR 컨벤션 준수"
+            echo "- [ ] 테스트 추가/수정 필요 여부"
+            echo "- [ ] 보안 영향 (IAM / secret / PII)"
+            echo "- [ ] 모든 required check 그린"
+            echo ""
+            echo "통과 시: \`needs-triage\` 라벨 제거 + Ready for review로 전환."
+            echo ""
+            echo "---"
+            echo "Workflow run: ${RUN_URL}"
+            echo "🤖 Generated by issue-auto-implement.yml (Claude Code + ${ANTHROPIC_MODEL})"
+          } > /tmp/pr-body.md
+
+          gh pr create \
+            --repo "$REPO" \
+            --base main \
+            --head "$BRANCH" \
+            --draft \
+            --title "chore(issue-#${ISSUE_NUMBER}): auto-implement — ${ISSUE_TITLE}" \
+            --body-file /tmp/pr-body.md \
+            --label needs-triage
+
+      - name: Comment on issue (NO_CHANGE path)
+        if: steps.outcome.outputs.kind == 'no_change'
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_BOT_PAT }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REASON: ${{ steps.outcome.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Auto-implement: skipped"
+            echo ""
+            echo "자동 구현이 적절치 않다고 판단했습니다."
+            echo ""
+            echo "**이유:** ${REASON}"
+            echo ""
+            echo "이슈를 더 구체적인 spec으로 다듬어주시거나, 사람이 직접 진행해주세요."
+            echo "(라벨로 \`auto-fix\`를 명시적으로 붙이는 옵션은 추후 추가 가능)"
+            echo ""
+            echo "---"
+            echo "Workflow run: ${RUN_URL}"
+            echo "🤖 issue-auto-implement.yml"
+          } > /tmp/comment.md
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+
+      - name: Comment on issue (EMPTY path)
+        if: steps.outcome.outputs.kind == 'empty'
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_BOT_PAT }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CLAUDE_EXIT: ${{ steps.claude.outputs.exit }}
+        run: |
+          {
+            echo "## Auto-implement: 변경 없음"
+            echo ""
+            echo "Claude가 실행되었으나 파일 변경이 없고 \`NO_CHANGE:\` 마커도 출력되지 않았습니다 (claude exit=\`${CLAUDE_EXIT}\`)."
+            echo ""
+            echo "가능한 원인:"
+            echo "- 토큰/턴 제한 초과 (\`--max-turns 25\`)"
+            echo "- Bedrock 호출 오류"
+            echo "- 프롬프트가 모호하여 모델이 침묵"
+            echo ""
+            echo "워크플로 로그를 확인하시고, 필요하다면 issue를 닫고 다시 여시거나 직접 진행해주세요."
+            echo ""
+            echo "---"
+            echo "Workflow run: ${RUN_URL}"
+            echo "🤖 issue-auto-implement.yml"
+          } > /tmp/comment.md
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
