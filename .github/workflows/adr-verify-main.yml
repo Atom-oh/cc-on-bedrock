@@ -186,18 +186,30 @@ jobs:
 
       - name: Create issue (uses PAT so issue-auto-implement triggers)
         if: steps.outcome.outputs.exit != '0'
+        # Use actions/github-script — the self-hosted cc-bedrock-arm runner
+        # does not ship `gh` CLI. The action uses Node + Octokit which is
+        # already pulled in by the other actions in this job.
+        # Prefer CLAUDE_BOT_PAT so the new issue triggers
+        # issue-auto-implement.yml; fall back to GITHUB_TOKEN if missing
+        # (issue still gets filed for visibility, but the chain breaks —
+        # we surface that as a workflow notice from inside the script).
+        uses: actions/github-script@v7
         env:
-          GH_TOKEN: ${{ secrets.CLAUDE_BOT_PAT }}
-          REPO: ${{ github.repository }}
           ISSUE_TITLE: ${{ steps.body.outputs.title }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::CLAUDE_BOT_PAT secret missing — issue cannot trigger downstream workflow"
-            echo "Falling back to default GITHUB_TOKEN; issue will be created but chain will break."
-            export GH_TOKEN="${{ github.token }}"
-          fi
-          gh issue create \
-            --repo "$REPO" \
-            --title "$ISSUE_TITLE" \
-            --label adr-fail \
-            --body-file /tmp/issue-body.md
+          USING_PAT: ${{ secrets.CLAUDE_BOT_PAT != '' }}
+        with:
+          github-token: ${{ secrets.CLAUDE_BOT_PAT || github.token }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/issue-body.md', 'utf8');
+            const result = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: process.env.ISSUE_TITLE,
+              body: body,
+              labels: ['adr-fail'],
+            });
+            core.notice(`Created issue #${result.data.number}: ${result.data.html_url}`);
+            if (process.env.USING_PAT !== 'true') {
+              core.warning('CLAUDE_BOT_PAT secret missing — issue filed via GITHUB_TOKEN, issue-auto-implement workflow will NOT trigger');
+            }
