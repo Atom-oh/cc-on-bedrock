@@ -16,9 +16,12 @@ const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 
 // USD → normalized-token conversion for syncing $ budgets into the ADR-014/015
-// cc-on-bedrock-limits table. Default 66667 ≈ Sonnet output ($15 / 1M tokens, weight 1.0):
-// $1 ≈ 1_000_000 / 15 ≈ 66_667 normalized. Override with NORMALIZED_PER_USD when the
-// expected workload mix shifts (Opus-heavy or Haiku-heavy).
+// cc-on-bedrock-limits table. Default 66667 ≈ 1_000_000 / $15 per 1M output tokens
+// (Sonnet output reference). This ratio holds approximately across Claude model
+// families because token-limit-enforcer's normalize-weights are calibrated to be
+// roughly $-proportional (Opus weight 5.0 ↔ $75/1M, Haiku 0.267 ↔ $4/1M, Sonnet
+// 1.0 ↔ $15/1M output). Override NORMALIZED_PER_USD when adding non-Anthropic
+// models or when AWS Bedrock pricing shifts materially.
 const NORMALIZED_PER_USD = Number(process.env.NORMALIZED_PER_USD ?? "66667");
 
 const dynamodb = new DynamoDBClient({ region });
@@ -202,21 +205,20 @@ export async function PUT(req: NextRequest) {
             },
           }));
         } else {
-          try {
-            await dynamodb.send(new DeleteItemCommand({
-              TableName: LIMITS_TABLE,
-              Key: {
-                PK: { S: `USER#${id}` },
-                SK: { S: "LIMIT#monthly" },
-              },
-            }));
-          } catch (err) {
-            // Treat "row didn't exist" as success; surface anything else.
-            const code = (err as { name?: string }).name;
-            if (code !== "ResourceNotFoundException") {
-              console.warn("[admin/budgets] LIMIT#monthly delete:", err instanceof Error ? err.message : err);
-            }
-          }
+          // DynamoDB DeleteItem is a no-op when the item doesn't exist (it does
+          // NOT throw ResourceNotFoundException for missing rows — that exception
+          // is reserved for missing tables). Any other error (throttling,
+          // AccessDenied, network) must propagate to the outer catch so the PUT
+          // returns 500: swallowing here would let cc-user-budgets.monthlyBudget=0
+          // commit while LIMIT#monthly keeps the stale cap, leaving
+          // token-limit-enforcer blocking the user on an old threshold.
+          await dynamodb.send(new DeleteItemCommand({
+            TableName: LIMITS_TABLE,
+            Key: {
+              PK: { S: `USER#${id}` },
+              SK: { S: "LIMIT#monthly" },
+            },
+          }));
         }
       }
     } else {

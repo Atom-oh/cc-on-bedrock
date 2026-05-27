@@ -292,6 +292,17 @@ def _build_local_role_index():
         _local_role_index_built = True
 
 
+def _candidate_role_names(subdomain: str) -> list:
+    """Return all IAM role candidates for a user (EC2 task + Local Governance).
+
+    Builds the per-handler-invocation `_local_role_index` cache lazily.
+    `_build_local_role_index()` is itself idempotent until the index is reset
+    at handler entry, so this helper is safe to call from every deny/allow site.
+    """
+    _build_local_role_index()
+    return [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+
+
 def attach_dept_deny_policy(subdomain: str):
     """Attach department budget exceeded IAM Deny Policy.
     ADR-015 §3: applies to BOTH the per-user EC2 Task Role and any Local Governance role
@@ -311,8 +322,7 @@ def attach_dept_deny_policy(subdomain: str):
             "Resource": "*",
         }],
     })
-    _build_local_role_index()
-    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    role_names = _candidate_role_names(subdomain)
     any_attached = False
     for role_name in role_names:
         try:
@@ -333,8 +343,7 @@ def attach_dept_deny_policy(subdomain: str):
 
 def remove_dept_deny_policy(subdomain: str):
     """Remove department budget IAM Deny Policy from both EC2 Task Role and matching Local roles."""
-    _build_local_role_index()
-    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    role_names = _candidate_role_names(subdomain)
     any_removed = False
     for role_name in role_names:
         try:
@@ -373,8 +382,7 @@ def attach_deny_policy(subdomain: str):
             "Resource": "*",
         }],
     })
-    _build_local_role_index()
-    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    role_names = _candidate_role_names(subdomain)
     any_attached = False
     for role_name in role_names:
         try:
@@ -395,8 +403,7 @@ def attach_deny_policy(subdomain: str):
 
 def remove_deny_policy(subdomain: str):
     """Remove BudgetExceededDeny from ALL of the user's roles (EC2 task + Local)."""
-    _build_local_role_index()
-    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    role_names = _candidate_role_names(subdomain)
     any_removed = False
     for role_name in role_names:
         try:
@@ -415,8 +422,7 @@ def remove_deny_policy(subdomain: str):
 
 def check_deny_exists(subdomain: str) -> bool:
     """Return True if BudgetExceededDeny is present on ANY of the user's roles."""
-    _build_local_role_index()
-    role_names = [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    role_names = _candidate_role_names(subdomain)
     for role_name in role_names:
         try:
             iam_client.get_role_policy(

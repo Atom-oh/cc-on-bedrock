@@ -75,3 +75,54 @@ ADR-006은 부서 단위 **달러 월간 예산**을 정의하고, 초과 시 5�
 - ADR-006: Department Budget Management
 - ADR-011: Bedrock IAM Cost Allocation
 - ADR-014: Local Governance Mode
+
+## Addendum (2026-05-27): USD → Normalized Token Mirror for Local Governance Roles
+
+Live incident: a Local Governance user with `cc-user-budgets.monthlyBudget=$1`
+reached `currentSpend=$2.13` without any Deny policy attached. Two enforcement
+gaps were identified and fixed:
+
+**Gap 1 — `budget-check.attach_deny_policy()` was EC2-only.** It attached
+`BudgetExceededDeny` to `cc-on-bedrock-task-{subdomain}` only. For ADR-014 Local
+users (role: `cc-on-bedrock-local-user-{cognito_sub}`) IAM returned
+`NoSuchEntityException` and the per-user $ budget enforcement silently no-op'd.
+The dept-deny path already handled both prefixes via the `_local_role_index`
+username-tag cache; per-user attach/remove/check now go through a shared
+`_candidate_role_names(subdomain)` helper that all five sites call.
+
+**Gap 2 — Dashboard `/admin/budgets` PUT didn't mirror $ into `cc-on-bedrock-limits`.**
+`token-limit-enforcer` (Stream-driven, near-real-time) reads `LIMIT#{period}.max_normalized`;
+if that row is absent, `user_max=0` short-circuits the limit check and Deny is
+never attached. The PUT now upserts `USER#{id} / LIMIT#monthly.max_normalized =
+floor(monthlyBudget × NORMALIZED_PER_USD)` whenever a user's $ budget changes,
+and deletes the row when `monthlyBudget=0` so ADR-023's
+`dept.perUserMonthlyBudget` default takes over.
+
+**Conversion factor.** `NORMALIZED_PER_USD` env var, default `66667 ≈
+1_000_000 / 15` derived from Sonnet output ($15 / 1M tokens, weight 1.0). The
+ratio holds approximately across Claude families because token-limit-enforcer's
+normalize-weights are calibrated to be roughly $-proportional (Opus weight 5.0 ↔
+$75/1M, Haiku 0.267 ↔ $4/1M). Override the env var when adding non-Anthropic
+models or when AWS Bedrock pricing shifts materially.
+
+**Why mirror at admin write time, not derive at enforcement read time.** Stream
+records arrive once per usage row; computing the USD↔normalized conversion in
+that hot path would require a second DynamoDB read against `cc-user-budgets`
+per record. The mirror keeps the hot path local to `cc-on-bedrock-limits` and
+shifts the conversion to a low-frequency admin write.
+
+**Failure-mode handling.** The delete branch (`monthlyBudget=0`) propagates any
+DynamoDB error (throttling, AccessDenied, network) to the PUT response so the
+admin sees a 500 instead of a silent half-commit where `cc-user-budgets` zeros
+out but the stale LIMIT row keeps the user blocked.
+
+**Race window.** Two enforcement paths now cover Local users: the Stream
+consumer attaches `cc-bedrock-local-token-deny` within ~1-2s of the usage
+record arriving (subject to the upstream Bedrock invocation-logging delay),
+and the 5-min `budget-check` cron attaches `BudgetExceededDeny` independently.
+Both policies are idempotent; reset is handled by `limit-reset` (ADR-014) and
+the existing budget-check next-day cleanup respectively.
+
+**Backfill.** Pre-existing rows in `cc-user-budgets` are not automatically
+mirrored; admins must re-PUT each affected row once after deployment (or a
+backfill script can iterate `cc-user-budgets` and replay the writes).
