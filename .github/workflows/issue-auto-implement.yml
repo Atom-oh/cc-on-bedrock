@@ -156,7 +156,18 @@ jobs:
       - name: Decide outcome
         id: outcome
         run: |
-          if grep -Eq "^NO_CHANGE: " /tmp/claude-stdout.log; then
+          # Real git state is the source of truth — if Claude modified anything,
+          # commit it regardless of what the stdout log says. A `NO_CHANGE: ...`
+          # line appearing in a code block or quoted reasoning must NEVER discard
+          # real edits. (PR #34 AI review MAJOR 2.)
+          if ! git diff --quiet HEAD || [ -n "$(git status --porcelain)" ]; then
+            echo "kind=changed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # No file changes — now it's safe to honor NO_CHANGE. Restrict the
+          # search to the tail of stdout so reasoning-trace coincidences don't
+          # match: the marker is emitted as the agent's final-answer line.
+          if tail -n 40 /tmp/claude-stdout.log | grep -Eq "^NO_CHANGE: "; then
             REASON=$(grep -E "^NO_CHANGE: " /tmp/claude-stdout.log | tail -1 | sed 's/^NO_CHANGE: //')
             {
               echo "kind=no_change"
@@ -164,11 +175,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if git diff --quiet HEAD && [ -z "$(git status --porcelain)" ]; then
-            echo "kind=empty" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "kind=changed" >> "$GITHUB_OUTPUT"
+          echo "kind=empty" >> "$GITHUB_OUTPUT"
 
       - name: Commit + push (CHANGED path)
         if: steps.outcome.outputs.kind == 'changed'
