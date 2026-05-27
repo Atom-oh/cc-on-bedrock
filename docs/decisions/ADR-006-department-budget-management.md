@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-04-09
+verification_required: false
+---
+
 # ADR-006: 부서 예산 관리 — EventBridge + Lambda 동적 IAM 집행
 
 ## Status: Accepted

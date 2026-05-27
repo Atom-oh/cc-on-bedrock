@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-05-12
+verification_required: false
+---
+
 # ADR-016: Separate CloudFront Distributions per Concern
 
 ## Status

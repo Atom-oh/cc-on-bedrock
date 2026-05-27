@@ -1,3 +1,8 @@
+---
+status: Accepted
+verification_required: false
+---
+
 # ADR-010: EC2 Hibernation for DevEnv Instances
 
 ## Status

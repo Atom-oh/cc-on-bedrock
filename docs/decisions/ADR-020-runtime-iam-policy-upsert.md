@@ -1,3 +1,9 @@
+---
+status: Accepted
+date: 2026-04-17
+verification_required: false
+---
+
 # ADR-020: Runtime IAM Policy & Tag Upsert (Replace One-Shot Migration Scripts)
 
 ## Status
