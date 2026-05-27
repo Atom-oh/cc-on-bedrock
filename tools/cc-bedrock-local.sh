@@ -9,9 +9,10 @@
 #   status        remaining TTL + Deny / limit state
 #   claude [args] ensure session + apply model env from config, then exec 'claude'
 #   set-model K=V (or K V) — update model env in config. Keys (aliases ok):
-#                 opus | default-opus | fast | small | subagent
-#                 (or full: ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
-#                  ANTHROPIC_SMALL_FAST_MODEL, CLAUDE_CODE_SUBAGENT_MODEL)
+#                 sonnet | opus | haiku | subagent | pin
+#                 (full: ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
+#                  ANTHROPIC_DEFAULT_HAIKU_MODEL, CLAUDE_CODE_SUBAGENT_MODEL,
+#                  ANTHROPIC_MODEL [forces /model "Custom" slot — usually leave unset])
 #   models        print current model env + suggested ids
 #   run -- <cmd>  generic wrapper: ensure session, exec <cmd> (no claude env)
 #   config        print current config / file paths
@@ -43,11 +44,15 @@ EMAIL="${CC_BEDROCK_EMAIL:-${EMAIL:-}}"
 AWS_PROFILE_NAME="${AWS_PROFILE_NAME:-cc-bedrock}"
 AWS_REGION="${AWS_REGION:-ap-northeast-2}"
 
-# Model env (defaults shipped here; user can override via 'set-model')
-# Default: Sonnet (cheaper / faster than Opus). Use 'cc --set-model opus=...' to switch.
-ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-global.anthropic.claude-sonnet-4-6}"
-ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-sonnet-4-6}"
-ANTHROPIC_SMALL_FAST_MODEL="${ANTHROPIC_SMALL_FAST_MODEL:-us.anthropic.claude-haiku-4-5-20251001-v1:0}"
+# Model env — Bedrock inference profile IDs mapped to Claude Code's model slots.
+# Defaults: Sonnet 4.6 backs "Default"/"Sonnet" in the /model picker, real Opus 4.6
+# backs "Opus", Haiku 4.5 backs "Haiku"/background. ANTHROPIC_MODEL is intentionally
+# unset so the picker shows "Default" — setting it forces the "Custom" slot.
+ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
+ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-4-6}"
+ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-6-v1[1m]}"
+# ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
+ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${ANTHROPIC_SMALL_FAST_MODEL:-us.anthropic.claude-haiku-4-5-20251001-v1:0}}"
 CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-4-6}"
 
 die() { echo "cc-bedrock-local: $*" >&2; exit 1; }
@@ -334,15 +339,29 @@ do_claude() {
     fi
   fi
 
-  echo "[Bedrock] model=${ANTHROPIC_MODEL} (fast=${ANTHROPIC_SMALL_FAST_MODEL})"
-  CLAUDE_CODE_USE_BEDROCK=1 \
-    AWS_PROFILE="${AWS_PROFILE_NAME}" \
-    AWS_REGION="${AWS_REGION}" \
-    ANTHROPIC_MODEL="${ANTHROPIC_MODEL}" \
-    ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL}" \
-    ANTHROPIC_SMALL_FAST_MODEL="${ANTHROPIC_SMALL_FAST_MODEL}" \
-    CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL}" \
-    exec claude --dangerously-skip-permissions "$@"
+  if [[ -n "${ANTHROPIC_MODEL}" ]]; then
+    echo "[Bedrock] pinned=${ANTHROPIC_MODEL} (forces /model Custom slot)"
+  else
+    echo "[Bedrock] sonnet=${ANTHROPIC_DEFAULT_SONNET_MODEL} opus=${ANTHROPIC_DEFAULT_OPUS_MODEL} haiku=${ANTHROPIC_DEFAULT_HAIKU_MODEL}"
+  fi
+
+  export CLAUDE_CODE_USE_BEDROCK=1
+  export AWS_PROFILE="${AWS_PROFILE_NAME}"
+  export AWS_REGION="${AWS_REGION}"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL
+  export ANTHROPIC_DEFAULT_OPUS_MODEL
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL
+  export CLAUDE_CODE_SUBAGENT_MODEL
+  # Only export ANTHROPIC_MODEL when explicitly pinned — otherwise the picker
+  # would show "Custom" instead of "Default".
+  if [[ -n "${ANTHROPIC_MODEL}" ]]; then
+    export ANTHROPIC_MODEL
+  else
+    unset ANTHROPIC_MODEL
+  fi
+  # Don't leak the deprecated var to claude (DEFAULT_HAIKU is the canonical knob).
+  unset ANTHROPIC_SMALL_FAST_MODEL
+  exec claude --dangerously-skip-permissions "$@"
 }
 
 # ─── set-model (update config) ──────────────────────────────
@@ -356,11 +375,13 @@ do_set_model() {
     [[ -n "${val}" ]] || die "value missing"
   fi
   case "${key}" in
-    opus|model|ANTHROPIC_MODEL)                          key="ANTHROPIC_MODEL" ;;
-    default-opus|opus1m|ANTHROPIC_DEFAULT_OPUS_MODEL)    key="ANTHROPIC_DEFAULT_OPUS_MODEL" ;;
-    fast|small|haiku|ANTHROPIC_SMALL_FAST_MODEL)         key="ANTHROPIC_SMALL_FAST_MODEL" ;;
+    sonnet|default|ANTHROPIC_DEFAULT_SONNET_MODEL)       key="ANTHROPIC_DEFAULT_SONNET_MODEL" ;;
+    opus|ANTHROPIC_DEFAULT_OPUS_MODEL)                   key="ANTHROPIC_DEFAULT_OPUS_MODEL" ;;
+    haiku|fast|small|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_SMALL_FAST_MODEL)
+                                                         key="ANTHROPIC_DEFAULT_HAIKU_MODEL" ;;
     subagent|CLAUDE_CODE_SUBAGENT_MODEL)                 key="CLAUDE_CODE_SUBAGENT_MODEL" ;;
-    *) die "unknown model key: ${key} (use opus|default-opus|fast|subagent)" ;;
+    pin|model|ANTHROPIC_MODEL)                           key="ANTHROPIC_MODEL" ;;
+    *) die "unknown model key: ${key} (use sonnet|opus|haiku|subagent|pin)" ;;
   esac
   config_set "${key}" "${val}"
   echo "✓ ${key}=${val} (saved to ${CFG_FILE})"
@@ -370,17 +391,19 @@ do_set_model() {
 do_models() {
   cat <<EOF
 Current model env (from ${CFG_FILE} or defaults):
-  ANTHROPIC_MODEL              = ${ANTHROPIC_MODEL}
-  ANTHROPIC_DEFAULT_OPUS_MODEL = ${ANTHROPIC_DEFAULT_OPUS_MODEL}
-  ANTHROPIC_SMALL_FAST_MODEL   = ${ANTHROPIC_SMALL_FAST_MODEL}
-  CLAUDE_CODE_SUBAGENT_MODEL   = ${CLAUDE_CODE_SUBAGENT_MODEL}
+  ANTHROPIC_DEFAULT_SONNET_MODEL = ${ANTHROPIC_DEFAULT_SONNET_MODEL}   # /model Default + Sonnet
+  ANTHROPIC_DEFAULT_OPUS_MODEL   = ${ANTHROPIC_DEFAULT_OPUS_MODEL}   # /model Opus
+  ANTHROPIC_DEFAULT_HAIKU_MODEL  = ${ANTHROPIC_DEFAULT_HAIKU_MODEL}   # /model Haiku + background
+  CLAUDE_CODE_SUBAGENT_MODEL     = ${CLAUDE_CODE_SUBAGENT_MODEL}   # subagent dispatch
+  ANTHROPIC_MODEL                = ${ANTHROPIC_MODEL:-(unset — picker shows Default)}
 
 Examples:
-  cc-bedrock-local set-model opus=global.anthropic.claude-sonnet-4-6
-  cc-bedrock-local set-model fast us.anthropic.claude-haiku-4-5-20251001-v1:0
-  cc-bedrock-local set-model default-opus 'global.anthropic.claude-opus-4-7[1m]'
+  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-4-6[1m]'
+  cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-6-v1[1m]'
+  cc-bedrock-local set-model haiku  us.anthropic.claude-haiku-4-5-20251001-v1:0
+  cc-bedrock-local set-model pin    global.anthropic.claude-opus-4-7   # force Custom slot
 
-Aliases: opus|model | default-opus|opus1m | fast|small|haiku | subagent
+Aliases: sonnet|default | opus | haiku|fast|small | subagent | pin|model
 EOF
 }
 
@@ -443,7 +466,7 @@ Subcommands:
   change-email                prompt new email + password, update config, re-login
   status                      session state + limit/deny state
   claude [args]               ensure session + apply model env from config, exec claude
-  set-model KEY=VAL           change model env in config (alias keys: opus|fast|subagent|default-opus)
+  set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin)
   models                      show current model env + valid keys
   run -- <cmd> [args]         generic: ensure session, exec <cmd> (no claude env)
   config                      print config / file paths
