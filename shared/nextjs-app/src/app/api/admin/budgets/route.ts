@@ -5,6 +5,7 @@ import {
   DynamoDBClient,
   ScanCommand,
   UpdateItemCommand,
+  DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
@@ -12,6 +13,16 @@ import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
+const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
+
+// USD → normalized-token conversion for syncing $ budgets into the ADR-014/015
+// cc-on-bedrock-limits table. Default 66667 ≈ 1_000_000 / $15 per 1M output tokens
+// (Sonnet output reference). This ratio holds approximately across Claude model
+// families because token-limit-enforcer's normalize-weights are calibrated to be
+// roughly $-proportional (Opus weight 5.0 ↔ $75/1M, Haiku 0.267 ↔ $4/1M, Sonnet
+// 1.0 ↔ $15/1M output). Override NORMALIZED_PER_USD when adding non-Anthropic
+// models or when AWS Bedrock pricing shifts materially.
+const NORMALIZED_PER_USD = Number(process.env.NORMALIZED_PER_USD ?? "66667");
 
 const dynamodb = new DynamoDBClient({ region });
 
@@ -169,6 +180,47 @@ export async function PUT(req: NextRequest) {
         UpdateExpression: `SET ${updateParts.join(", ")}`,
         ExpressionAttributeValues: exprValues,
       }));
+
+      // ADR-014/015: mirror $ monthlyBudget into cc-on-bedrock-limits LIMIT#monthly so
+      // the Stream-driven token-limit-enforcer (near-real-time) can enforce it on the
+      // Local Governance role. Without this, the only enforcement path is budget-check
+      // (5-min cron) which used to silently skip Local-only users.
+      // monthlyBudget > 0 → upsert LIMIT row; monthlyBudget === 0 → delete row so
+      // dept.perUserMonthlyBudget (ADR-023) takes over.
+      if (monthlyBudget !== undefined) {
+        if (monthlyBudget > 0) {
+          const maxNormalized = Math.floor(monthlyBudget * NORMALIZED_PER_USD);
+          await dynamodb.send(new UpdateItemCommand({
+            TableName: LIMITS_TABLE,
+            Key: {
+              PK: { S: `USER#${id}` },
+              SK: { S: "LIMIT#monthly" },
+            },
+            UpdateExpression: "SET max_normalized = :mx, source_usd = :usd, normalized_per_usd = :rate, updatedAt = :now",
+            ExpressionAttributeValues: {
+              ":mx": { N: String(maxNormalized) },
+              ":usd": { N: String(monthlyBudget) },
+              ":rate": { N: String(NORMALIZED_PER_USD) },
+              ":now": { S: now },
+            },
+          }));
+        } else {
+          // DynamoDB DeleteItem is a no-op when the item doesn't exist (it does
+          // NOT throw ResourceNotFoundException for missing rows — that exception
+          // is reserved for missing tables). Any other error (throttling,
+          // AccessDenied, network) must propagate to the outer catch so the PUT
+          // returns 500: swallowing here would let cc-user-budgets.monthlyBudget=0
+          // commit while LIMIT#monthly keeps the stale cap, leaving
+          // token-limit-enforcer blocking the user on an old threshold.
+          await dynamodb.send(new DeleteItemCommand({
+            TableName: LIMITS_TABLE,
+            Key: {
+              PK: { S: `USER#${id}` },
+              SK: { S: "LIMIT#monthly" },
+            },
+          }));
+        }
+      }
     } else {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
     }
