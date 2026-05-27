@@ -24,10 +24,10 @@ flowchart LR
     User[사용자 PC<br/>cc-bedrock-local CLI] -->|1. Cognito login<br/>USER_PASSWORD_AUTH| Cognito[Cognito User Pool]
     User -->|2. POST /api/local/credentials<br/>Bearer JWT| Dashboard[Dashboard<br/>Next.js + Cognito 세션]
     Dashboard -->|3. invoke<br/>IAM auth| STS[STS Issuer Lambda<br/>ADR-014]
-    STS -->|4. ensure_role<br/>+ AssumeRole 8h| IAM[per-user IAM Role<br/>cc-on-bedrock-local-user-*]
+    STS -->|4. ensure_role<br/>+ AssumeRole 1h| IAM[per-user IAM Role<br/>cc-on-bedrock-local-user-*]
     STS -->|5. read<br/>DENY#active| Limits[(cc-on-bedrock-limits<br/>DynamoDB)]
     STS -->|6. STS credentials<br/>+ limit_status| Dashboard
-    Dashboard -->|7. 8h credentials<br/>+ profileSnippet| User
+    Dashboard -->|7. 1h credentials<br/>+ profileSnippet| User
     User -->|8. claude<br/>CLAUDE_CODE_USE_BEDROCK=1| Bedrock[(Bedrock Runtime<br/>Inference Profile)]
     Bedrock -->|9. invocation logs| CW[CloudWatch Logs]
     CW -->|10. subscription filter<br/>cc-on-bedrock-*| Tracker[bedrock-usage-tracker<br/>Lambda]
@@ -39,7 +39,7 @@ flowchart LR
 | 단계 | 주체 | 무엇을 하나 |
 |---|---|---|
 | 1-2 | User → Cognito → Dashboard | 비밀번호 인증 → JWT 세션 |
-| 3-7 | Dashboard → STS Issuer → User | 8시간 짜리 Bedrock 자격증명 발급 |
+| 3-7 | Dashboard → STS Issuer → User | 1시간 짜리 Bedrock 자격증명 발급 (만료 전 `cc refresh`로 자동 재발급) |
 | 8-9 | User → Bedrock | `claude` CLI가 Bedrock 직접 호출 |
 | 10-13 | Bedrock → Tracker → Enforcer | 사용량 집계 → 한도 초과 시 IAM Deny 부착 |
 
@@ -53,7 +53,8 @@ flowchart LR
 
 ```bash
 # 한 줄 설치 (Dashboard URL은 본인 환경에 맞게 교체)
-curl -fsSL https://cconbedrock-dashboard.<your-domain>/tools/cc-bedrock-local.sh \
+# 정식 채널: /api/install/cli (Next.js API가 동적으로 서빙)
+curl -fsSL https://cconbedrock-dashboard.<your-domain>/api/install/cli \
   -o ~/.local/bin/cc-bedrock-local
 chmod +x ~/.local/bin/cc-bedrock-local
 
@@ -61,6 +62,12 @@ chmod +x ~/.local/bin/cc-bedrock-local
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
+
+:::tip 정적 백업 경로
+같은 스크립트가 정적 자산 `/tools/cc-bedrock-local.sh` 로도 노출되지만 정식 안내
+채널은 `/api/install/cli` 입니다. `/api/install` 엔드포인트의 부트스트랩 셸 스크립트도
+같은 URL로 다운로드합니다.
+:::
 
 ### 2.2 설정 파일
 
@@ -123,7 +130,7 @@ cc-bedrock-local logout
 
 | 명령 | 동작 |
 |---|---|
-| `login` | 비밀번호 프롬프트 → Cognito `USER_PASSWORD_AUTH` → 8h STS 발급. refresh token도 저장 |
+| `login` | 비밀번호 프롬프트 → Cognito `USER_PASSWORD_AUTH` → 1h STS 발급. refresh token도 저장 |
 | `refresh` | 캐시된 refresh token으로 silent 재발급 (만료되면 실패; 그땐 `login`) |
 | `logout` | refresh token + state 캐시 삭제 |
 | `change-email` | 새 이메일 + 비밀번호 받아서 config에 영속 |
@@ -193,7 +200,7 @@ ANTHROPIC_MODEL은 일부러 비워두는 것을 권장합니다. 비워두면 C
 | 섹션 | 내용 |
 |---|---|
 | **Local Governance Mode** | 페이지 헤더 + 모드 설명 |
-| **Get Bedrock credentials** | 8h STS 자격증명 발급 버튼 |
+| **Get Bedrock credentials** | 1h STS 자격증명 발급 버튼 (role chaining 제약; CLI는 자동 refresh) |
 | **Normalized token usage** | DAILY/WEEKLY/MONTHLY 게이지 (본인 + 본인 부서) |
 | **CLI helper** | `cc-bedrock-local.sh` 다운로드 + 1회용 설정 스니펫 |
 | **Deny 활성 시 (위 화면엔 없음)** | 페이지 최상단 빨간색 배너 — daily/weekly/monthly 한도 초과 시 |
@@ -223,7 +230,7 @@ AWS role chaining(=한 role이 다른 role을 AssumeRole)은 어떤 설정에도
 ### 3.4 동작
 
 - **Get credentials** 버튼 → `/api/local/credentials`(POST) → STS Issuer
-  Lambda → 8h 자격증명 + `profileSnippet` 반환. 페이지에서 **Copy** 누르면
+  Lambda → 1h 자격증명 + `profileSnippet` 반환. 페이지에서 **Copy** 누르면
   클립보드로 복사됨.
 - **Normalized token usage** 게이지 → `/api/local/limits` 조회. 사용자
   본인 + 본인 소속 부서의 daily/weekly/monthly 사용량을 0~100% 게이지로 표시.
@@ -438,7 +445,7 @@ cc-bedrock-local run -- aws bedrock list-inference-profiles \
 | **사용자 PC 환경** | 본인 IDE/터미널 그대로 | code-server (브라우저 IDE) |
 | **컴퓨팅 자원** | 본인 PC | EC2 t4g.large ARM64 (per user) |
 | **저장소** | 본인 PC 디스크 | EBS root volume (40~100 GB) |
-| **세션 지속성** | 8h STS 발급 → 만료 후 재발급 | Hibernation 사용 시 ~5s resume |
+| **세션 지속성** | 1h STS 발급 → CLI 자동 refresh (refresh token 캐시) | Hibernation 사용 시 ~5s resume |
 | **인프라 비용** | 0 (Bedrock 호출만 과금) | EC2 + EBS 시간당 |
 | **거버넌스** | IAM role per user, normalized token 한도, Deny policy 모두 동일 | 동일 |
 | **모델 호출 경로** | Local PC → Bedrock | EC2 → Bedrock |

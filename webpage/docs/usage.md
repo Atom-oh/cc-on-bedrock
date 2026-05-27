@@ -68,8 +68,8 @@ Bedrock 모델은 ap-northeast-2의 inference profile을 사용합니다:
 들지 않습니다.
 
 ```bash
-# CLI 설치
-curl -fsSL https://cconbedrock-dashboard.<domain>/tools/cc-bedrock-local.sh \
+# CLI 설치 (정식 채널: /api/install/cli)
+curl -fsSL https://cconbedrock-dashboard.<domain>/api/install/cli \
   -o ~/.local/bin/cc-bedrock-local
 chmod +x ~/.local/bin/cc-bedrock-local
 

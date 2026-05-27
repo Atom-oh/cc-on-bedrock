@@ -14,8 +14,8 @@ CDK 기준 8개 스택 (Terraform/CloudFormation도 동일 구조). 각 스택�
 | **01-Network** | VPC (10.100.0.0/16, 2 AZ), NAT, VPC Endpoints, DNS Firewall, Route 53 | — |
 | **02-Security** | Cognito User Pool + custom 속성, ACM, KMS, Secrets Manager, IAM 기반 role + Permission Boundary | — |
 | **03-Usage Tracking** | DynamoDB usage / cli_tokens / user_budgets / approval_requests / prompt_audit / mcp_catalog / dept_mcp_config 테이블, Lambda (tracker / budget-check / ec2-idle-stop / audit-logger / gateway-manager), Bedrock invocation logging | ADR-011, ADR-019 |
-| **04-ECS Dashboard 인프라** | NLB internet-facing, Nginx Fargate (HA), DynamoDB routing table + Lambda nginx-config-gen | ADR-002 |
-| **05-Dashboard** | Next.js Standalone ECS task, 통합 CloudFront, Lambda@Edge (session-validator + origin-router) | ADR-013, ADR-016, ADR-017 |
+| **04-ECS DevEnv 라우팅** | NLB internet-facing, Nginx Fargate (HA), DynamoDB routing table + Lambda nginx-config-gen, **DevEnv CloudFront** (`*.dev.<domain>`) + Lambda@Edge session-validator | ADR-002, ADR-013, ADR-016 |
+| **05-Dashboard** | Next.js Standalone ECS task, ALB, **Dashboard CloudFront** (`<dashboardSubdomain>.<domain>`) | ADR-016, ADR-017 |
 | **06-WAF** | CLOUDFRONT-scope WebACL (`us-east-1`) | — |
 | **07-EC2 DevEnv** | Launch Template (ARM64, t4g.large), 3-tier DLP Security Groups (open/restricted/locked), Hibernation | ADR-004, ADR-005, ADR-009, ADR-010, ADR-018 |
 | **08-Local Governance** | STS Issuer Lambda + Function URL, `cc-on-bedrock-limits` table, token-limit-enforcer, limit-reset cron, UserRoleProvisioner Lambda + EventBridge `cognito-user-created` rule + DLQ | ADR-014, ADR-015, ADR-021, ADR-022, ADR-024 |
@@ -82,13 +82,16 @@ flowchart LR
 
 ## 인증 / SSO
 
-ADR-013에 따라 Dashboard와 DevEnv가 **하나의 CloudFront 배포 + 단일 NextAuth
-JWE 쿠키**로 SSO됩니다:
+ADR-013이 도입한 **단일 NextAuth JWE 쿠키 SSO**를 ADR-016이 두 개의 CloudFront
+distribution(Dashboard CF, DevEnv CF)으로 분리한 형태입니다:
 
-- 사용자가 Dashboard 로그인 → NextAuth가 JWE 쿠키를 `.{domain}` 도메인에 설정
-- DevEnv 서브도메인(`{subdomain}.dev.{domain}`) 접근 시 같은 쿠키로 Lambda@Edge
-  session-validator가 검증
+- 사용자가 Dashboard CloudFront(`<dashboardSubdomain>.<domain>`) 로그인 →
+  NextAuth가 JWE 쿠키를 `.{domain}` 도메인에 설정
+- DevEnv CloudFront(`*.dev.{domain}`) 접근 시 viewer-request Lambda@Edge
+  session-validator가 같은 쿠키를 검증한 뒤 NLB origin으로 전달
 - 별도의 Cognito Hosted UI redirect 없이 단일 로그인으로 양쪽 사용 가능
+- ADR-016 split 이후 host 기반 origin 분기용 `devenv-origin-router` Lambda@Edge는
+  더 이상 사용되지 않습니다 (각 distribution이 단일 origin만 가짐)
 
 ## 더 깊이
 
@@ -98,7 +101,8 @@ JWE 쿠키**로 SSO됩니다:
 - ADR-007 — Department MCP Gateway
 - ADR-010 — EC2 Hibernation
 - ADR-011 — Bedrock IAM Cost Allocation
-- ADR-013 — Unified CloudFront + Single Auth
+- ADR-013 — Unified CloudFront + Single Auth (superseded by ADR-016 for distribution layout)
+- ADR-016 — CloudFront Split (Dashboard CF + DevEnv CF)
 - ADR-014 — Local Governance Mode
 - ADR-015 — Dollar Budget × Normalized Token Limit
 - ADR-019 — Bedrock Model ID Normalization

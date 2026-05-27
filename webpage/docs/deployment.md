@@ -41,7 +41,7 @@ VPC와 보안의 기초가 되는 네트워크 환경.
 
 - **VPC**: `10.100.0.0/16` 대역, 2개 AZ (Public + Private + Isolated subnet)
 - **NAT Gateway**: Private subnet의 outbound 트래픽
-- **VPC Endpoints**: S3, DynamoDB, Bedrock Runtime, KMS, Secrets Manager (인터넷 경유 X)
+- **VPC Endpoints**: S3, DynamoDB, Bedrock Runtime, KMS, Secrets Manager (인터넷 경유 X) — EC2 DevEnv 트래픽 한정. Local Governance Mode는 사용자 PC에서 public AWS API endpoint로 직접 호출하므로 VPC Endpoint 경로를 타지 않습니다.
 - **DNS Firewall**: AWS Managed + 사용자 정의 차단 목록
 - **Route 53**: hosted zone (있으면 import, 없으면 hosted zone 별도 생성 후 NS 위임)
 
@@ -73,29 +73,39 @@ VPC와 보안의 기초가 되는 네트워크 환경.
 - **audit-logger Lambda** — Bedrock 호출 prompt audit
 - **gateway-manager Lambda** — `dept_mcp_config` Streams → MCP Gateway 동기화
 
-### Step 4: ECS Dashboard 인프라 (04-ECS)
+### Step 4: ECS DevEnv 라우팅 (04-ECS, ADR-016)
 
-대시보드 트래픽 분기 + 사용자별 라우팅.
+DevEnv 트래픽 경로 + DevEnv CloudFront.
 
-- **NLB** (internet-facing) — CloudFront prefix list만 허용 (port 80)
+- **NLB** (internal) — DevEnv CloudFront origin (CloudFront prefix list만 허용, port 80)
 - **Nginx Fargate** — 2 task HA, DynamoDB routing table → S3 → 5초 hot-reload pipeline
 - **Lambda nginx-config-gen** — routing table 변경 감지 → nginx config 재생성
+- **DevEnv CloudFront** (`*.dev.<domain>`) — viewer-request Lambda@Edge
+  `session-validator`가 NextAuth JWE 쿠키 검증 후 NLB origin으로 전달
 
-### Step 5: Dashboard (05-Dashboard)
+### Step 5: Dashboard (05-Dashboard, ADR-016)
 
 중앙 집중식 관리 + AI 비서.
 
 - **Next.js Standalone** — ECS task (rolling deployment + circuit breaker, ADR-017)
-- **통합 CloudFront** (ADR-013) — Dashboard + DevEnv 둘 다 라우팅
-- **Lambda@Edge 2종**
-  - `session-validator` — NextAuth JWE 쿠키 검증
-  - `origin-router` — Host 기반 NLB / ALB 라우팅
+- **ALB** — Dashboard CloudFront origin (CloudFront prefix list만 허용)
+- **Dashboard CloudFront** (`<dashboardSubdomain>.<domain>`) — ALB origin 직결
+- ADR-016 split 이후 host 기반 origin 분기용 `devenv-origin-router` Lambda@Edge는
+  더 이상 사용되지 않습니다 (각 distribution이 단일 origin만 가짐)
 
 ### Step 6: WAF (06-WAF)
 
 CloudFront-scope WebACL (`us-east-1`):
 - AWS Managed Common Rule Set
 - 사용자 정의 rate limit / IP allowlist 추가 가능
+
+:::note 배포 순서 vs 스택 번호
+스택 번호와 실제 의존성 순서는 다릅니다. WAF(06)는 DevEnv CF(Stack 04)와
+Dashboard CF(Stack 05)가 참조하므로 **WAF가 먼저 배포돼야** 합니다 — 즉
+실제 순서는 `01 → 02 → 03 → 06 → 04 → 05 → 07 → 08`. `cdk deploy --all`은
+`Stack.addDependency()` 그래프로 자동 정렬하므로 사용자가 신경 쓸 필요는
+없습니다.
+:::
 
 ### Step 7: EC2 DevEnv (07-EC2 DevEnv)
 
@@ -141,9 +151,10 @@ bash tests/integration/test-e2e.sh
 ### 1. EC2 모드 사용자 접속 흐름
 
 1. 사용자가 `{subdomain}.dev.{domain}` 접속
-2. **CloudFront** → Lambda@Edge `session-validator`가 NextAuth JWE 쿠키 검증.
-   없으면 Dashboard 로그인으로 redirect
-3. **CloudFront** → Lambda@Edge `origin-router`가 Host 기반 NLB로 라우팅
+2. **DevEnv CloudFront** → viewer-request Lambda@Edge `session-validator`가
+   NextAuth JWE 쿠키 검증. 없으면 Dashboard 로그인으로 redirect
+3. **DevEnv CloudFront** → 단일 NLB origin으로 직접 전달 (ADR-016 split 이후
+   host-based origin 분기 Lambda@Edge 없음)
 4. **NLB** → **Nginx Fargate** → 사용자 EC2 (`{subdomain}` → IP 매핑은 DynamoDB
    routing table에서 5초 단위 hot-reload)
 5. 사용자는 브라우저에서 **code-server**로 개발 진행

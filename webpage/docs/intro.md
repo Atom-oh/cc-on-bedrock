@@ -7,7 +7,7 @@
 | 모드 | 사용 방식 | 인프라 비용 | 거버넌스 |
 |---|---|---|---|
 | **EC2-per-user DevEnv** (ADR-004) | 사용자별 전용 EC2 (ARM64) + 브라우저 code-server | EC2 + EBS 시간당 | 동일 |
-| **Local Governance** (ADR-014) | 사용자 PC에서 `claude` 직접 실행, Dashboard에서 8h STS 자격증명 발급 | 0 (Bedrock 호출만 과금) | 동일 |
+| **Local Governance** (ADR-014) | 사용자 PC에서 `claude` 직접 실행, Dashboard에서 1h STS 자격증명 발급 (CLI 자동 refresh) | 0 (Bedrock 호출만 과금) | 동일 |
 
 두 모드는 같은 클러스터에 **공존 가능**합니다. 인프라는 CDK(TypeScript) /
 Terraform(HCL) / CloudFormation(YAML) 세 가지 IaC 도구로 동일하게 구현되어
@@ -51,8 +51,8 @@ IAM은 ADR-021의 wildcard Claude family ARN으로 부여돼 신규 Claude 모�
 1. **Network (01)** — VPC, Subnets, NAT, VPC Endpoints, DNS Firewall, Route 53
 2. **Security (02)** — Cognito User Pool, ACM, KMS, Secrets Manager, IAM 기반 role
 3. **Usage Tracking (03)** — Bedrock invocation logging + DynamoDB usage table + tracker/budget-check Lambdas + EventBridge crons (ADR-019)
-4. **ECS Dashboard 인프라 (04)** — NLB + Nginx Fargate + DynamoDB routing table (사용자별 라우팅)
-5. **Dashboard (05)** — Next.js Standalone + ECS task + 통합 CloudFront + Lambda@Edge (ADR-013)
+4. **ECS DevEnv 라우팅 (04)** — NLB + Nginx Fargate + DynamoDB routing table + **DevEnv CloudFront** (`*.dev.<domain>`) + Lambda@Edge session-validator (ADR-013/016)
+5. **Dashboard (05)** — Next.js Standalone + ECS task + ALB + **Dashboard CloudFront** (`<dashboardSubdomain>.<domain>`, ADR-016)
 6. **WAF (06)** — CLOUDFRONT-scope WebACL (us-east-1)
 7. **EC2 DevEnv (07)** — Launch Template + DLP Security Groups (3-tier: open/restricted/locked) + Hibernation 지원 (ADR-004/010)
 8. **Local Governance (08)** — STS Issuer Lambda + Function URL, `cc-on-bedrock-limits` table, token-limit-enforcer, limit-reset cron, UserRoleProvisioner Lambda (ADR-014/022/024)
