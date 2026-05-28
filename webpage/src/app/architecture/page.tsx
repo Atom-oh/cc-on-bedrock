@@ -1,6 +1,7 @@
 "use client";
 
 import { useLanguage } from "@/lib/i18n";
+import Mermaid from "@/components/doc/Mermaid";
 import { PageShell, H2, P, Code, Table, CodeBlock, Callout } from "@/components/doc/primitives";
 
 export default function ArchitecturePage() {
@@ -76,20 +77,28 @@ export default function ArchitecturePage() {
           "Run claude on your own PC without provisioning EC2. Dashboard issues 1h chained-AssumeRole credentials via the STS Issuer Lambda."
         )}
       </P>
-      <CodeBlock title="Local Mode flow">
-{`User PC (cc-bedrock-local CLI or /local page)
-  ↓ 1. NextAuth login
-Dashboard
-  ↓ 2. invoke STS Issuer Lambda (IAM auth)
-STS Issuer
-  ↓ 3. AssumeRole 1h
-per-user IAM role (cc-on-bedrock-local-user-*)
-  ↓ 4. read DENY#active
-cc-on-bedrock-limits DynamoDB
-  ↑ 5. STS credentials + limit_status
-Dashboard → User PC
-  ↓ 6. claude → Bedrock`}
-      </CodeBlock>
+      <Mermaid
+        caption="Local Mode flow"
+        chart={`flowchart LR
+  User["User PC<br/>cc-bedrock-local"]
+  Dashboard["Dashboard"]
+  STS["STS Issuer Lambda<br/>(IAM Function URL)"]
+  Role["per-user IAM Role<br/>cc-on-bedrock-local-user-*"]
+  Limits[("cc-on-bedrock-limits")]
+  Bedrock[("Bedrock Runtime")]
+
+  User -->|"1. NextAuth login"| Dashboard
+  Dashboard -->|"2. invoke (IAM)"| STS
+  STS -->|"3. AssumeRole 1h"| Role
+  STS -->|"4. read DENY#active"| Limits
+  Dashboard -->|"5. STS creds + limit_status"| User
+  User -->|"6. claude → Bedrock"| Bedrock
+
+  classDef store fill:#151d30,stroke:#00d4ff,color:#e5e7eb
+  classDef lambda fill:#1a2540,stroke:#a855f7,color:#e5e7eb
+  class Limits store
+  class STS lambda`}
+      />
 
       <H2 id="ai">{t("4. Hybrid AI 아키텍처", "4. Hybrid AI architecture")}</H2>
       <Table

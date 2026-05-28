@@ -1,7 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import { useLanguage } from "@/lib/i18n";
+import { asset } from "@/lib/assets";
+import Mermaid from "@/components/doc/Mermaid";
 import { PageShell, H2, H3, P, Code, CodeBlock, Tag, Callout, Table } from "@/components/doc/primitives";
 
 export default function LocalModePage() {
@@ -21,7 +22,55 @@ export default function LocalModePage() {
       ]}
     >
       <H2 id="flow">{t("1. 전체 흐름", "1. End-to-end flow")}</H2>
-      <CodeBlock title={t("거래 흐름", "Transaction flow")}>
+      <P>
+        {t(
+          "사용자 PC → Cognito → Dashboard → STS Issuer Lambda → per-user IAM role → Bedrock 호출 후 사용량이 로깅·집계·한도 평가되는 13 단계.",
+          "User PC → Cognito → Dashboard → STS Issuer Lambda → per-user IAM role → Bedrock, with 13 steps for logging, aggregation, and limit enforcement."
+        )}
+      </P>
+      <Mermaid
+        caption={t("거래 흐름 (Local Governance Mode)", "Transaction flow (Local Governance Mode)")}
+        chart={`flowchart LR
+  User["User PC<br/>cc-bedrock-local CLI<br/>또는 /local 페이지"]
+  Cognito["Cognito User Pool"]
+  Dashboard["Dashboard (Next.js)"]
+  STS["STS Issuer Lambda<br/>(IAM Function URL)"]
+  Role["per-user IAM Role<br/>cc-on-bedrock-local-user-*"]
+  Limits[("cc-on-bedrock-limits<br/>DynamoDB")]
+  Bedrock[("Bedrock Runtime<br/>Inference Profile")]
+  CW["CloudWatch Logs<br/>(invocation logging)"]
+  Tracker["bedrock-usage-tracker<br/>Lambda"]
+  Usage[("cc-on-bedrock-usage<br/>DynamoDB Streams")]
+  Enforcer["token-limit-enforcer<br/>Lambda (stream consumer)"]
+
+  User -->|"1. USER_PASSWORD_AUTH"| Cognito
+  Cognito -->|"2. JWT"| User
+  User -->|"3. POST /api/local/credentials<br/>(Bearer)"| Dashboard
+  Dashboard -->|"4. invoke (IAM)"| STS
+  STS -->|"5. AssumeRole 1h"| Role
+  STS -->|"6. read DENY#active"| Limits
+  STS -->|"7. STS creds + limit_status"| Dashboard
+  Dashboard -->|"8. ~/.aws snippet + Shell env"| User
+
+  User -->|"9. claude (CLAUDE_CODE_USE_BEDROCK=1)<br/>InvokeModel / Converse"| Bedrock
+  Bedrock -->|"10. invocation log"| CW
+  CW -->|"11. subscription filter<br/>(cc-on-bedrock-* prefix)"| Tracker
+  Tracker -->|"12. write usage"| Usage
+  Usage -->|"13. stream"| Enforcer
+  Enforcer -->|"한도 초과 시<br/>DENY#active + IAM Deny"| Limits
+
+  classDef store fill:#151d30,stroke:#00d4ff,color:#e5e7eb
+  classDef lambda fill:#1a2540,stroke:#a855f7,color:#e5e7eb
+  classDef user fill:#0f1629,stroke:#00ff88,color:#e5e7eb
+  class Limits,Usage store
+  class STS,Tracker,Enforcer lambda
+  class User,Dashboard user`}
+      />
+      <details className="mb-5 rounded-lg border border-navy-600">
+        <summary className="px-4 py-2 text-[11px] font-bold text-gray-500 uppercase tracking-widest cursor-pointer hover:text-gray-300">
+          {t("ASCII 버전 (mermaid 미지원 환경)", "ASCII version (for non-mermaid renderers)")}
+        </summary>
+        <pre className="p-4 bg-navy-800 text-xs text-gray-300 overflow-x-auto leading-relaxed border-t border-navy-600">
 {`User PC (cc-bedrock-local CLI or /local page)
    ↓ 1. Cognito USER_PASSWORD_AUTH → JWT
    ↓ 2. POST /api/local/credentials (Bearer)
@@ -34,21 +83,13 @@ per-user IAM role (cc-on-bedrock-local-user-*)
 cc-on-bedrock-limits DynamoDB
    ↑ 6. STS credentials + limit_status
 Dashboard → User PC
-
-User PC: claude (CLAUDE_CODE_USE_BEDROCK=1)
-   ↓ 7. InvokeModel / Converse
-Bedrock Runtime (inference profile)
-   ↓ 8. invocation logging
-CloudWatch Logs
-   ↓ 9. subscription filter (cc-on-bedrock-* prefix)
-bedrock-usage-tracker Lambda
-   ↓ 10. write usage + stream
-cc-on-bedrock-usage DynamoDB (Streams)
-   ↓ 11. stream consumer
-token-limit-enforcer Lambda
-   ↓ 12. limit exceeded? → DENY#active + IAM Deny attach
-cc-on-bedrock-limits DynamoDB`}
-      </CodeBlock>
+   ↓ 7. claude → Bedrock → invocation logging
+   → CloudWatch Logs → subscription filter → tracker Lambda
+   → cc-on-bedrock-usage DynamoDB (Streams)
+   → token-limit-enforcer Lambda
+   → 한도 초과 시 DENY#active + IAM Deny attach`}
+        </pre>
+      </details>
 
       <H2 id="cli">{t("2. CLI 사용법 — cc-bedrock-local", "2. CLI usage — cc-bedrock-local")}</H2>
 
@@ -115,12 +156,14 @@ cc-bedrock-local logout       # 토큰 캐시 삭제`}
 
       <H3>{t("3.1 첫 진입 화면", "3.1 Initial view")}</H3>
       <div className="rounded-lg overflow-hidden border border-navy-600 mb-5">
-        <Image src="/img/local-page.png" alt={t("/local 초기 화면", "/local initial view")} width={1440} height={900} className="w-full" />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={asset("/img/local-page.png")} alt={t("/local 초기 화면", "/local initial view")} width={1440} height={900} className="w-full h-auto" />
       </div>
 
       <H3>{t("3.2 자격증명 발급 후", "3.2 After Get credentials")}</H3>
       <div className="rounded-lg overflow-hidden border border-navy-600 mb-5">
-        <Image src="/img/local-page-with-creds.png" alt={t("/local 자격증명 발급 후", "/local with credentials")} width={1440} height={900} className="w-full" />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={asset("/img/local-page-with-creds.png")} alt={t("/local 자격증명 발급 후", "/local with credentials")} width={1440} height={900} className="w-full h-auto" />
       </div>
 
       <Callout type="warn" title={t("만료 시간이 1시간인 이유", "Why credentials expire in 1 hour")}>
@@ -149,7 +192,8 @@ cc-bedrock-local logout       # 토큰 캐시 삭제`}
 
       <H3>{t("Admin Token Dashboard", "Admin Token Dashboard")} <Code>/admin/tokens</Code></H3>
       <div className="rounded-lg overflow-hidden border border-navy-600 mb-5">
-        <Image src="/img/local-admin-tokens.png" alt="/admin/tokens" width={1440} height={900} className="w-full" />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={asset("/img/local-admin-tokens.png")} alt="/admin/tokens" width={1440} height={900} className="w-full h-auto" />
       </div>
 
       <H3>{t("Normalized 토큰 가중치 (ADR-015)", "Normalized token weights (ADR-015)")}</H3>
@@ -169,7 +213,8 @@ cc-bedrock-local logout       # 토큰 캐시 삭제`}
       <H2 id="admin">{t("5. Admin 컨트롤", "5. Admin controls")}</H2>
       <H3><Code>/admin/limits</Code> — {t("한도 CRUD", "limit CRUD")}</H3>
       <div className="rounded-lg overflow-hidden border border-navy-600 mb-5">
-        <Image src="/img/local-admin-limits.png" alt="/admin/limits" width={1440} height={900} className="w-full" />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={asset("/img/local-admin-limits.png")} alt="/admin/limits" width={1440} height={900} className="w-full h-auto" />
       </div>
       <CodeBlock title="API">
 {`GET    /api/admin/limits           — list active limits
