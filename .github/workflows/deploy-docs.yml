@@ -1,4 +1,4 @@
-name: Deploy Docusaurus to GitHub Pages
+name: Deploy webpage (Next.js static export) to GitHub Pages
 
 on:
   push:
@@ -30,15 +30,24 @@ jobs:
           cache-dependency-path: webpage/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        # `npm ci` falls back to `npm install` if lockfile is missing.
+        # The initial Next.js rewrite (v2.0) ships without a committed
+        # package-lock.json; CI installs fresh and the resulting lockfile
+        # is regenerated each run.
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
 
-      - name: Build
+      - name: Build (Next.js static export → ./out/)
         run: npm run build
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: webpage/build
+          publish_dir: webpage/out
           user_name: github-actions[bot]
           user_email: github-actions[bot]@users.noreply.github.com
