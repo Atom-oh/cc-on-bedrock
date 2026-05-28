@@ -33,3 +33,9 @@ variable "isolated_subnet_cidr_c" {
 variable "domain_name" {
   type = string
 }
+
+variable "hosted_zone_id" {
+  description = "Optional existing Route 53 public hosted zone ID. If empty, a new public zone is created (mirrors CDK config.hostedZoneId)."
+  type        = string
+  default     = ""
+}

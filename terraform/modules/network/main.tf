@@ -219,7 +219,59 @@ resource "aws_vpc_endpoint" "s3" {
   tags = { Name = "${var.vpc_name}-s3" }
 }
 
-# ---- Route 53 Private Hosted Zone -------------------------------------------
+# ---- Route 53 Hosted Zone ---------------------------------------------------
+# Mirrors CDK behavior: if hosted_zone_id is provided, look it up; otherwise
+# create a brand-new public zone. (cdk/lib/01-network-stack.ts:77-87)
+locals {
+  create_hosted_zone = var.hosted_zone_id == ""
+}
+
 resource "aws_route53_zone" "this" {
-  name = var.domain_name
+  count = local.create_hosted_zone ? 1 : 0
+  name  = var.domain_name
+}
+
+data "aws_route53_zone" "existing" {
+  count   = local.create_hosted_zone ? 0 : 1
+  zone_id = var.hosted_zone_id
+}
+
+locals {
+  effective_hosted_zone_id   = local.create_hosted_zone ? aws_route53_zone.this[0].zone_id : data.aws_route53_zone.existing[0].zone_id
+  effective_hosted_zone_name = local.create_hosted_zone ? aws_route53_zone.this[0].name : data.aws_route53_zone.existing[0].name
+}
+
+# ─── Route 53 DNS Firewall ───
+# AWS managed domain list IDs for ap-northeast-2 (region-stable).
+# CDK uses ID directly because the CFN schema rejects the ARN form (maxLength:64).
+# Equivalent to cdk/lib/01-network-stack.ts:92-116.
+locals {
+  dns_firewall_domain_lists = {
+    Malware         = "rslvr-fdl-6301b5257e0c4210"
+    Botnet          = "rslvr-fdl-e8d1e969ad484741"
+    AmazonGuardDuty = "rslvr-fdl-19615996f5c5490f"
+    AggregateThreat = "rslvr-fdl-1997a3cdd61a4f2a"
+  }
+}
+
+resource "aws_route53_resolver_firewall_rule_group" "this" {
+  name = "cc-on-bedrock-dns-firewall"
+}
+
+resource "aws_route53_resolver_firewall_rule" "managed" {
+  for_each = local.dns_firewall_domain_lists
+
+  name                    = each.key
+  action                  = "BLOCK"
+  block_response          = "NXDOMAIN"
+  firewall_domain_list_id = each.value
+  firewall_rule_group_id  = aws_route53_resolver_firewall_rule_group.this.id
+  priority                = (index(keys(local.dns_firewall_domain_lists), each.key) + 1) * 100
+}
+
+resource "aws_route53_resolver_firewall_rule_group_association" "this" {
+  name                   = "cc-on-bedrock-dns-firewall"
+  firewall_rule_group_id = aws_route53_resolver_firewall_rule_group.this.id
+  vpc_id                 = aws_vpc.this.id
+  priority               = 101
 }

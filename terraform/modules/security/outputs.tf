@@ -7,7 +7,15 @@ output "user_pool_arn" {
 }
 
 output "user_pool_client_id" {
-  value = aws_cognito_user_pool_client.this.id
+  value = aws_cognito_user_pool_client.app.id
+}
+
+output "cli_public_client_id" {
+  value = aws_cognito_user_pool_client.cli_public.id
+}
+
+output "cognito_domain" {
+  value = aws_cognito_user_pool_domain.this.domain
 }
 
 output "devenv_certificate_arn" {
@@ -15,7 +23,8 @@ output "devenv_certificate_arn" {
 }
 
 output "dashboard_certificate_arn" {
-  value = aws_acm_certificate.dashboard.arn
+  description = "Either the module-created cert or the pre-validated dashboard_cert_arn passed in"
+  value       = local.create_dashboard_cert ? aws_acm_certificate.dashboard[0].arn : var.dashboard_cert_arn
 }
 
 output "kms_key_arn" {
@@ -39,6 +48,26 @@ output "dashboard_ec2_role_arn" {
   value = aws_iam_role.dashboard_ec2.arn
 }
 
+output "dashboard_ec2_role_name" {
+  value = aws_iam_role.dashboard_ec2.name
+}
+
 output "dashboard_ec2_instance_profile_name" {
   value = aws_iam_instance_profile.dashboard_ec2.name
+}
+
+output "task_permission_boundary_arn" {
+  value = aws_iam_policy.task_permission_boundary.arn
+}
+
+output "task_permission_boundary_name" {
+  value = aws_iam_policy.task_permission_boundary.name
+}
+
+output "ecs_infrastructure_role_arn" {
+  value = aws_iam_role.ecs_infrastructure.arn
+}
+
+output "department_budgets_table_name" {
+  value = aws_dynamodb_table.department_budgets.name
 }

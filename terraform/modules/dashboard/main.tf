@@ -11,13 +11,13 @@ resource "aws_security_group" "alb" {
   description = "Dashboard ALB SG"
   vpc_id      = var.vpc_id
 
-  # CloudFront managed prefix list for ap-northeast-2
+  # CloudFront managed prefix list (region-specific)
   ingress {
     description     = "Allow CloudFront"
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
-    prefix_list_ids = ["pl-22a6434b"]
+    prefix_list_ids = [var.cloudfront_prefix_list_id]
   }
 
   egress {
@@ -181,8 +181,11 @@ resource "aws_autoscaling_group" "this" {
 
 # ---- CloudFront Distribution -------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
-  comment = "CC-on-Bedrock Dashboard"
+  comment = "CC-on-Bedrock Dashboard (ADR-016 split)"
   enabled = true
+  aliases = var.cloudfront_cert_arn != "" ? ["${var.dashboard_subdomain}.${var.domain_name}"] : []
+
+  web_acl_id = var.web_acl_arn != "" ? var.web_acl_arn : null
 
   origin {
     domain_name = aws_lb.this.dns_name
@@ -220,7 +223,10 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = var.cloudfront_cert_arn == ""
+    acm_certificate_arn            = var.cloudfront_cert_arn != "" ? var.cloudfront_cert_arn : null
+    ssl_support_method             = var.cloudfront_cert_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.cloudfront_cert_arn != "" ? "TLSv1.2_2021" : null
   }
 
   tags = { Name = "cc-dashboard-cloudfront" }
@@ -229,7 +235,7 @@ resource "aws_cloudfront_distribution" "this" {
 # ---- Route 53 Record ---------------------------------------------------------
 resource "aws_route53_record" "dashboard" {
   zone_id = var.hosted_zone_id
-  name    = "dashboard.${var.domain_name}"
+  name    = "${var.dashboard_subdomain}.${var.domain_name}"
   type    = "A"
 
   alias {

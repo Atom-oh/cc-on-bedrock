@@ -132,6 +132,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "user_data" {
   rule {
     id     = "noncurrent-cleanup"
     status = "Enabled"
+    # Provider v5 requires either filter or prefix; empty filter = apply to all
+    # objects (equivalent to the legacy implicit-all behavior).
+    filter {}
     noncurrent_version_expiration { noncurrent_days = 30 }
   }
 }
@@ -409,13 +412,13 @@ resource "aws_security_group" "alb" {
   description = "DevEnv ALB SG"
   vpc_id      = var.vpc_id
 
-  # CloudFront managed prefix list for ap-northeast-2
+  # CloudFront managed prefix list (region-specific)
   ingress {
     description     = "Allow CloudFront"
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
-    prefix_list_ids = ["pl-22a6434b"]
+    prefix_list_ids = [var.cloudfront_prefix_list_id]
   }
 
   egress {
@@ -457,8 +460,11 @@ resource "aws_lb_listener" "https" {
 
 # ---- CloudFront Distribution -------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
-  comment = "CC-on-Bedrock Dev Environment"
+  comment = "CC-on-Bedrock DevEnv (*.dev.<domain>) — ADR-016 split"
   enabled = true
+  aliases = var.devenv_cf_cert_arn != "" ? ["*.${var.dev_subdomain}.${var.domain_name}"] : []
+
+  web_acl_id = var.web_acl_arn != "" ? var.web_acl_arn : null
 
   origin {
     domain_name = aws_lb.this.dns_name
@@ -496,7 +502,10 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = var.devenv_cf_cert_arn == ""
+    acm_certificate_arn            = var.devenv_cf_cert_arn != "" ? var.devenv_cf_cert_arn : null
+    ssl_support_method             = var.devenv_cf_cert_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.devenv_cf_cert_arn != "" ? "TLSv1.2_2021" : null
   }
 
   tags = { Name = "cc-devenv-cloudfront" }

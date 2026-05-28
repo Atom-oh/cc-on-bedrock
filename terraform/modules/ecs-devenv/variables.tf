@@ -51,3 +51,21 @@ variable "ecs_host_instance_type" {
   type    = string
   default = "m7g.4xlarge"
 }
+
+variable "cloudfront_prefix_list_id" {
+  description = "CloudFront managed prefix list id (region-specific). ap-northeast-2 → pl-22a6434b"
+  type        = string
+  default     = "pl-22a6434b"
+}
+
+variable "devenv_cf_cert_arn" {
+  description = "Optional us-east-1 ACM cert ARN for the DevEnv CloudFront distribution (*.dev.<domain>). If empty, CloudFront default cert is used."
+  type        = string
+  default     = ""
+}
+
+variable "web_acl_arn" {
+  description = "Optional CLOUDFRONT-scope WAF Web ACL ARN to attach to the DevEnv distribution"
+  type        = string
+  default     = ""
+}

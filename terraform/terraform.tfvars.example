@@ -1,28 +1,67 @@
+###############################################################################
 # Copy this file to terraform.tfvars and customise.
-# Values below match the CDK defaults in cdk/config/default.ts.
+# Defaults below match cdk/config/default.ts so a fresh account yields the same
+# resource shape as `cdk deploy --all`.
+###############################################################################
 
 aws_region = "ap-northeast-2"
 
-# Network
-vpc_name              = "cc-on-bedrock-vpc"
-vpc_cidr              = "10.0.0.0/16"
-public_subnet_cidr_a  = "10.0.1.0/24"
-public_subnet_cidr_c  = "10.0.2.0/24"
-private_subnet_cidr_a = "10.0.16.0/20"
-private_subnet_cidr_c = "10.0.32.0/20"
-isolated_subnet_cidr_a = "10.0.100.0/23"
-isolated_subnet_cidr_c = "10.0.102.0/23"
+# ---- Project ---------------------------------------------------------------
+project_prefix = "cc-on-bedrock"
 
-# Domain
-domain_name   = "example.com"
-dev_subdomain = "dev"
+# ---- Network ---------------------------------------------------------------
+# Match CDK defaults (10.100.0.0/16). Change all six subnet CIDRs together.
+vpc_name               = "cc-on-bedrock-vpc"
+vpc_cidr               = "10.100.0.0/16"
+public_subnet_cidr_a   = "10.100.1.0/24"
+public_subnet_cidr_c   = "10.100.2.0/24"
+private_subnet_cidr_a  = "10.100.16.0/20"
+private_subnet_cidr_c  = "10.100.32.0/20"
+isolated_subnet_cidr_a = "10.100.100.0/23"
+isolated_subnet_cidr_c = "10.100.102.0/23"
 
-# Models
+# ---- Domain ----------------------------------------------------------------
+# Leave hosted_zone_id empty to have Terraform create a new public zone.
+# Pass a value to reuse a pre-existing zone (mirrors CDK config.hostedZoneId).
+domain_name           = "atomai.click"
+hosted_zone_id        = ""
+dev_subdomain         = "dev"
+dashboard_subdomain   = "cconbedrock-dashboard"
+cognito_domain_prefix = "cc-on-bedrock-ent"
+
+# ---- Models ----------------------------------------------------------------
 opus_model_id   = "global.anthropic.claude-opus-4-6-v1[1m]"
 sonnet_model_id = "global.anthropic.claude-sonnet-4-6[1m]"
 
-# Compute
-litellm_instance_type   = "t4g.xlarge"
-ecs_host_instance_type  = "m7g.4xlarge"
-dashboard_instance_type = "t4g.xlarge"
-rds_instance_type       = "db.t4g.medium"
+# ---- Compute ---------------------------------------------------------------
+ecs_host_instance_type  = "m7g.4xlarge" # ECS DevEnv (Stack 04)
+dashboard_instance_type = "t4g.xlarge"  # Dashboard EC2 ASG (Stack 05)
+devenv_instance_type    = "t4g.large"   # Per-user EC2 DevEnv (Stack 07)
+
+# ---- Budget ----------------------------------------------------------------
+daily_budget_usd = 50
+
+# ---- CloudFront prefix list (region-specific) -----------------------------
+# ap-northeast-2: pl-22a6434b
+# us-east-1     : pl-3b927c52
+cloudfront_prefix_list_id = "pl-22a6434b"
+
+# ---- ACM Certificate ARNs (pre-validate in the right region) --------------
+# Leave empty to fall back to CloudFront default cert / module-managed regional
+# cert. To match the production CDK deployment, pre-validate:
+#   - dashboard_cert_arn  : ap-northeast-2 ACM for *.atomai.click (ALB)
+#   - cloudfront_cert_arn : us-east-1     ACM for <dashboard>.<domain> (CF)
+#   - devenv_cert_arn     : us-east-1     ACM for *.<dev>.<domain>  (CF)
+dashboard_cert_arn  = ""
+cloudfront_cert_arn = ""
+devenv_cert_arn     = ""
+
+# ---- Local Governance toggle (ADR-014) ------------------------------------
+# Set to true to skip Stack 04 (ECS DevEnv) and Stack 07 (EC2 DevEnv) and deploy
+# only the Local Governance layer (~46 fewer resources).
+governance_only = false
+
+# ---- Lambda source dir ----------------------------------------------------
+# Default points at the sibling cdk/lib/lambda folder so Terraform can package
+# the Python handlers without duplicating them.
+lambda_src_dir = "../cdk/lib/lambda"

@@ -19,9 +19,13 @@ output "isolated_subnet_ids" {
 }
 
 output "hosted_zone_id" {
-  value = aws_route53_zone.this.zone_id
+  value = local.effective_hosted_zone_id
 }
 
 output "hosted_zone_name" {
-  value = aws_route53_zone.this.name
+  value = local.effective_hosted_zone_name
+}
+
+output "dns_firewall_rule_group_id" {
+  value = aws_route53_resolver_firewall_rule_group.this.id
 }
