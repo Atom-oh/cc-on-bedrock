@@ -25,8 +25,8 @@ const cards = [
   {
     href: "/architecture",
     icon: Layers,
-    ko: { title: "아키텍처", desc: "8 CDK 스택 매핑(ADR 별), EC2-per-user 아키텍처, Local Mode 흐름, Hybrid AI." },
-    en: { title: "Architecture", desc: "8-stack ADR mapping, EC2-per-user architecture, Local Mode flow, Hybrid AI." },
+    ko: { title: "아키텍처", desc: "8 CDK 스택 매핑, EC2-per-user 아키텍처, Local Mode 흐름, Hybrid AI." },
+    en: { title: "Architecture", desc: "8-stack layout, EC2-per-user architecture, Local Mode flow, Hybrid AI." },
     color: "from-accent-purple/30 to-accent-purple/5",
   },
   {
@@ -46,8 +46,8 @@ const cards = [
   {
     href: "/local-mode",
     icon: Terminal,
-    ko: { title: "Local 모드", desc: "본인 PC + STS + normalized token 한도. 인프라 비용 0. ADR-014." },
-    en: { title: "Local Mode", desc: "Your PC + STS + normalized token limits. Zero infra cost. ADR-014." },
+    ko: { title: "Local 모드", desc: "본인 PC + STS + normalized 토큰 한도. 인프라 비용 0." },
+    en: { title: "Local Mode", desc: "Your PC + STS + normalized token limits. Zero infra cost." },
     color: "from-accent-cyan/30 to-accent-cyan/5",
   },
   {
@@ -60,15 +60,15 @@ const cards = [
   {
     href: "/cost",
     icon: DollarSign,
-    ko: { title: "비용 관리", desc: "EC2/Local 단가표, 모델별 단가, ADR-019 추적 파이프라인, 비용 절감 팁." },
-    en: { title: "Cost", desc: "EC2/Local pricing, model unit cost, ADR-019 tracking pipeline, savings tips." },
+    ko: { title: "비용 관리", desc: "EC2/Local 단가표, 모델별 단가, 사용량 추적 파이프라인, 비용 절감 팁." },
+    en: { title: "Cost", desc: "EC2/Local pricing, model unit cost, usage-tracking pipeline, savings tips." },
     color: "from-accent-green/30 to-accent-green/5",
   },
   {
     href: "/security",
     icon: ShieldCheck,
-    ko: { title: "보안", desc: "7계층 보안 모델, DLP 3-tier, Permission Boundary, ADR-022/024 IAM lifecycle." },
-    en: { title: "Security", desc: "7-layer security, DLP 3-tier, Permission Boundary, ADR-022/024 IAM lifecycle." },
+    ko: { title: "보안", desc: "7계층 보안 모델, DLP 3-tier, Permission Boundary, per-user IAM 라이프사이클." },
+    en: { title: "Security", desc: "7-layer security, DLP 3-tier, Permission Boundary, per-user IAM lifecycle." },
     color: "from-accent-red/30 to-accent-red/5",
   },
   {
@@ -82,7 +82,7 @@ const cards = [
 
 const stats: { value: string; ko: string; en: string }[] = [
   { value: "8", ko: "CDK 스택", en: "CDK Stacks" },
-  { value: "24", ko: "ADR", en: "ADRs" },
+  { value: "4", ko: "Bedrock 모델", en: "Bedrock models" },
   { value: "3", ko: "IaC 도구", en: "IaC Tools" },
   { value: "2", ko: "배포 모드", en: "Deploy modes" },
 ];
@@ -107,8 +107,8 @@ export default function HomePage() {
         </h1>
         <p className="text-base lg:text-lg text-gray-400 leading-relaxed max-w-3xl mb-6">
           {t(
-            "EC2-per-user DevEnv 와 Local Governance 모드를 모두 지원하는 엔터프라이즈 플랫폼. CDK / Terraform / CloudFormation 세 IaC 도구로 동일 인프라를 배포할 수 있고, ADR-022 사전 프로비저닝과 ADR-014 normalized token 한도까지 풀 라이프사이클 거버넌스를 제공합니다.",
-            "Enterprise platform supporting both EC2-per-user DevEnv and Local Governance modes. Deploy the same infrastructure via CDK, Terraform, or CloudFormation, with full-lifecycle governance from ADR-022 pre-provisioning to ADR-014 normalized token limits."
+            "EC2-per-user DevEnv 와 Local Governance 모드를 모두 지원하는 엔터프라이즈 플랫폼. CDK / Terraform / CloudFormation 세 IaC 도구로 동일 인프라를 배포할 수 있고, 사용자별 IAM 사전 프로비저닝부터 normalized 토큰 한도까지 풀 라이프사이클 거버넌스를 제공합니다.",
+            "Enterprise platform supporting both EC2-per-user DevEnv and Local Governance modes. Deploy the same infrastructure via CDK, Terraform, or CloudFormation, with full-lifecycle governance from per-user IAM pre-provisioning to normalized token limits."
           )}
         </p>
         <div className="flex flex-wrap gap-3">
