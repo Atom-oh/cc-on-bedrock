@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { LanguageProvider } from "@/lib/i18n";
+import { AudienceProvider } from "@/lib/audience";
 import Sidebar from "@/components/layout/Sidebar";
 
 export const metadata: Metadata = {
@@ -15,10 +16,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ko" className="dark">
       <body className="bg-navy-900 text-gray-100 antialiased min-h-screen">
         <LanguageProvider>
-          <div className="flex">
-            <Sidebar />
-            <main className="flex-1 min-w-0">{children}</main>
-          </div>
+          <AudienceProvider>
+            <div className="flex">
+              <Sidebar />
+              <main className="flex-1 min-w-0">{children}</main>
+            </div>
+          </AudienceProvider>
         </LanguageProvider>
       </body>
     </html>
