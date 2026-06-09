@@ -16,7 +16,6 @@ import boto3
 from datetime import datetime
 from decimal import Decimal
 
-from iam_role_lookup import local_role_names_for
 
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 DEPT_BUDGETS_TABLE = os.environ.get("DEPT_BUDGETS_TABLE", "cc-department-budgets")
@@ -64,9 +63,12 @@ def get_today_usage():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "")
+            user = item["PK"].replace("USER#", "")  # ADR-025: this is the Cognito sub
             cost = float(item.get("estimatedCost", 0))
             dept = item.get("department", "default")
+            sd = item.get("subdomain")
+            if sd:
+                _subdomain_by_sub[user] = sd  # for EC2 task-role construction
             if user in user_spend:
                 user_spend[user]["cost"] += cost
             else:
@@ -94,9 +96,12 @@ def get_monthly_usage_by_department():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "")
+            user = item["PK"].replace("USER#", "")  # ADR-025: Cognito sub
             cost = float(item.get("estimatedCost", 0))
             dept = item.get("department", "default")
+            sd = item.get("subdomain")
+            if sd:
+                _subdomain_by_sub[user] = sd
             if dept in dept_spend:
                 dept_spend[dept]["cost"] += cost
                 dept_spend[dept]["users"].add(user)
@@ -256,53 +261,28 @@ def get_user_department(subdomain: str) -> str:
         return "default"
 
 
-# Per-handler-invocation cache of Local Governance roles indexed by `username` tag.
-# Reset at handler entry. Built lazily on first dept-over-budget event in that invocation.
-_local_role_index: dict = {}
-_local_role_index_built = False
+# ADR-025: per-handler map of Cognito sub → subdomain, populated from the
+# `subdomain` attribute on usage rows during get_today_usage / monthly scans.
+# Lets _candidate_role_names build the EC2 task-role name (which uses subdomain)
+# for a sub-keyed user. Reset at handler entry.
+_subdomain_by_sub: dict = {}
 
 
-def _build_local_role_index():
-    """Scan all cc-on-bedrock-local-user-* roles once and index by `username` tag.
-    Idempotent within a single handler invocation. The `built` flag is set in `finally`
-    so a partial index from a mid-scan exception still prevents redundant re-scans
-    within the same invocation (best-effort attribution > re-scan on every dept-over-budget hit)."""
-    global _local_role_index, _local_role_index_built
-    if _local_role_index_built:
-        return
-    _local_role_index = {}
-    try:
-        paginator = iam_client.get_paginator("list_roles")
-        for page in paginator.paginate(PathPrefix="/"):
-            for role in page.get("Roles", []):
-                rname = role.get("RoleName", "")
-                if not rname.startswith(LOCAL_ROLE_PREFIX):
-                    continue
-                try:
-                    tags_resp = iam_client.list_role_tags(RoleName=rname)
-                    uname = next(
-                        (t["Value"] for t in tags_resp.get("Tags", []) if t["Key"] == "username"),
-                        None,
-                    )
-                except Exception:
-                    uname = None
-                if uname:
-                    _local_role_index.setdefault(uname, []).append(rname)
-    except Exception as e:
-        print(f"[DEPT-DENY] local role index build failed: {e}")
-    finally:
-        _local_role_index_built = True
+def _candidate_role_names(sub: str) -> list:
+    """Return all IAM role candidates for a user (Local Governance + EC2 task).
 
-
-def _candidate_role_names(subdomain: str) -> list:
-    """Return all IAM role candidates for a user (EC2 task + Local Governance).
-
-    Builds the per-handler-invocation `_local_role_index` cache lazily.
-    `_build_local_role_index()` is itself idempotent until the index is reset
-    at handler entry, so this helper is safe to call from every deny/allow site.
+    ADR-025: usage/limits rows are keyed by the Cognito sub, so the Local role
+    is constructed directly (cc-on-bedrock-local-user-{sub}) and the EC2 task
+    role (cc-on-bedrock-task-{subdomain}) is added when we know the subdomain —
+    captured from the row's `subdomain` attribute during the usage scans. This
+    replaces the old `username`-tag reverse index (only needed when rows were
+    keyed by subdomain).
     """
-    _build_local_role_index()
-    return [f"{TASK_ROLE_PREFIX}-{subdomain}"] + _local_role_index.get(subdomain, [])
+    names = [f"{LOCAL_ROLE_PREFIX}{sub}"]
+    subdomain = _subdomain_by_sub.get(sub)
+    if subdomain:
+        names.append(f"{TASK_ROLE_PREFIX}-{subdomain}")
+    return names
 
 
 def attach_dept_deny_policy(subdomain: str):
@@ -441,17 +421,6 @@ def check_deny_exists(subdomain: str) -> bool:
 # ADR-014 / ADR-015 — Local Governance Mode helpers
 # ──────────────────────────────────────────────────────────
 
-def _resolve_role_candidates(user_key: str):
-    """Return list of plausible role names for a user_key.
-    EC2 mode uses subdomain → cc-on-bedrock-task-{subdomain};
-    Local mode uses Cognito sub → cc-on-bedrock-local-user-{sub_short}.
-    """
-    import re as _re
-    safe = _re.sub(r"[^A-Za-z0-9_-]", "-", user_key)[:40]
-    return [
-        f"{TASK_ROLE_PREFIX}-{user_key}",
-        f"{LOCAL_ROLE_PREFIX}{safe}",
-    ]
 
 
 def _has_local_token_deny(role_name: str) -> bool:
@@ -607,10 +576,9 @@ def check_token_limits_backup():
     for (etype, key), (period, used, mx) in tripped.items():
         if etype != "USER":
             continue
-        candidate_roles = local_role_names_for(key)
-        if not candidate_roles:
-            print(f"[LIMITS] backup: no Local role for username='{key}' — skipping USER {period}")
-            continue
+        # ADR-025: `key` is the Cognito sub → Local role name is direct; the EC2
+        # task role is added when the subdomain is known from today's usage scan.
+        candidate_roles = _candidate_role_names(key)
         for role in candidate_roles:
             checked += 1
             if _has_local_token_deny(role):
@@ -657,14 +625,18 @@ def check_token_limits_backup():
     return {"attached": attached, "skipped": skipped, "checked": checked}
 
 
-def set_cognito_budget_flag(username: str, exceeded: bool):
-    """Set budget_exceeded flag in Cognito user attributes."""
+def set_cognito_budget_flag(sub: str, exceeded: bool):
+    """Set budget_exceeded flag in Cognito user attributes.
+
+    ADR-025: callers pass the Cognito sub (UUID). `sub` is a supported ListUsers
+    filter attribute (custom attributes are not), so we filter by it directly.
+    """
     if not USER_POOL_ID:
         return
     try:
         result = cognito_client.list_users(
             UserPoolId=USER_POOL_ID,
-            Filter=f'custom:subdomain = "{username}"',
+            Filter=f'sub = "{sub}"',
             Limit=1,
         )
         users = result.get("Users", [])
@@ -713,10 +685,9 @@ def check_department_budgets(user_spend):
 
 def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
-    # Reset per-invocation Local-role index so each 5-min run picks up newly issued/revoked roles.
-    global _local_role_index, _local_role_index_built
-    _local_role_index = {}
-    _local_role_index_built = False
+    # ADR-025: reset the per-invocation sub→subdomain map (repopulated by the scans).
+    global _subdomain_by_sub
+    _subdomain_by_sub = {}
 
     user_spend = get_today_usage()
     all_known_users = set(user_spend.keys())

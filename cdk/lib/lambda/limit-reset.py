@@ -32,19 +32,16 @@ sns = boto3.client("sns") if SNS_TOPIC_ARN else None
 
 KST = timezone(timedelta(hours=9))
 
-from iam_role_lookup import local_role_names_for
-
 
 def _detach(sub: str) -> bool:
-    """Resolve real `cc-on-bedrock-local-user-*` role names for a usage-table
-    `USER#<key>` key (key holds a Cognito username, not a sub UUID) and detach
-    the deny policy from each. `local_role_names_for` covers freshly-provisioned
-    users via its one-shot rescan; no naive-format fallback because that would
-    re-introduce the silent NoSuchEntity this fix is removing."""
-    role_names = local_role_names_for(sub)
-    if not role_names:
-        print(f"[RESET] no Local Governance role found for username='{sub}' — nothing to detach")
-        return False
+    """Detach the deny policy from the user's Local Governance role.
+
+    ADR-025: the limits-table `USER#{sub}` key now holds the Cognito sub, and the
+    role name is exactly cc-on-bedrock-local-user-{sub} — so it is constructed
+    directly (the old `username`-tag reverse index is no longer needed).
+    NoSuchEntity (no Local role for this user) is treated as a normal skip.
+    """
+    role_names = [f"{ROLE_PREFIX}{sub}"]
     any_detached = False
     for role in role_names:
         try:

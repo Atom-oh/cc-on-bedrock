@@ -22,7 +22,11 @@ import boto3
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from iam_role_lookup import local_role_names_for
+# ADR-025: usage rows are keyed by Cognito sub, and the Local Governance role is
+# exactly cc-on-bedrock-local-user-{sub} — so the role name is constructed directly
+# (the old iam_role_lookup reverse-index existed only because rows were keyed by
+# subdomain while roles are keyed by sub; that mismatch is gone).
+LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
 
 REGION = os.environ["AWS_REGION"]
 LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
@@ -217,19 +221,10 @@ def _deny_policy_doc() -> str:
 
 
 def _attach_deny(sub: str, reason: str, period: str, reset_at: str):
-    # The usage-table PK is keyed by Cognito *username* (e.g. "atomoh"), not the
-    # sub UUID. The real ADR-014 role is cc-on-bedrock-local-user-{cognito_sub},
-    # so naive `ROLE_PREFIX + sub` produced a mismatch and put_role_policy
-    # silently NoSuchEntity'd. Resolve via the `username` tag instead.
-    # `local_role_names_for` already does a one-shot rescan on cache miss to
-    # cover freshly-provisioned users; we don't add another fallback here
-    # because the legacy `ROLE_PREFIX+username` form is the broken pattern we
-    # are explicitly removing — keeping it as a "fallback" would re-create
-    # exactly the silent NoSuchEntity that this fix targets.
-    role_names = local_role_names_for(sub)
-    if not role_names:
-        print(f"[DENY] no Local Governance role found for username='{sub}' — nothing to attach")
-        return False
+    # ADR-025: usage PK is the Cognito sub, so the Local Governance role name is
+    # deterministic — cc-on-bedrock-local-user-{sub}. NoSuchEntity (e.g. an EC2-only
+    # user with no Local role) is handled below as a normal skip.
+    role_names = [f"{LOCAL_ROLE_PREFIX}{sub}"]
 
     any_attached = False
     for role_name in role_names:
