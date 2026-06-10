@@ -185,6 +185,7 @@ export default function UsersTable({
               <th className={thClass} onClick={() => handleSort("securityPolicy")}>Security<SortIcon active={sortKey === "securityPolicy"} dir={sortDir} /></th>
               <th className={thClass} onClick={() => handleSort("storageType")}>Storage<SortIcon active={sortKey === "storageType"} dir={sortDir} /></th>
               <th className={thClass} onClick={() => handleSort("status")}>Status<SortIcon active={sortKey === "status"} dir={sortDir} /></th>
+              <th className="px-5 py-3 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Ports</th>
               <th className="px-5 py-3 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
@@ -256,6 +257,18 @@ export default function UsersTable({
                     {user.status === "FORCE_CHANGE_PASSWORD" ? "Pending" : user.enabled ? user.status : "Disabled"}
                   </span>
                 </td>
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  <div className="flex flex-wrap gap-1 max-w-[220px]">
+                    {(user.customRoutes ?? []).slice(0, 3).map((r, i) => (
+                      <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
+                        {r.label} {r.path === "/" ? "/" : r.path}:{r.port}
+                      </span>
+                    ))}
+                    {(user.customRoutes?.length ?? 0) > 3 && (
+                      <span className="text-[10px] text-gray-500">+{(user.customRoutes!.length - 3)}</span>
+                    )}
+                  </div>
+                </td>
                 <td className="px-5 py-3.5 whitespace-nowrap text-right">
                   <div className="flex items-center justify-end gap-2">
                     {onToggle && (
@@ -292,7 +305,7 @@ export default function UsersTable({
             ))}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-6 py-12 text-center text-sm text-gray-600">
+                <td colSpan={9} className="px-6 py-12 text-center text-sm text-gray-600">
                   No users found.
                 </td>
               </tr>

@@ -28,6 +28,7 @@ export interface CognitoUser {
   storageType?: "ebs" | "efs";
   containerId?: string;
   groups: string[];
+  customRoutes?: CustomRoute[];
 }
 
 export interface CreateUserInput {
