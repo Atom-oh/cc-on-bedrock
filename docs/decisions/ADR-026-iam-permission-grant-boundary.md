@@ -47,17 +47,29 @@ builds_on: ADR-020
 실권한 = 0 (IAM 은 boundary ∩ inline 의 명시적 Allow 교집합). 따라서 boundary 를 카탈로그 서비스로
 넓혀도 **미승인 사용자에게 실제 접근이 생기지 않으며**, "승인했는데 무효" 버그만 사라진다.
 
+**리소스 스코프 정정 (2026-06-10, v2):** 초기엔 boundary 리소스를 `cc-on-bedrock-*` 로 좁히려 했으나,
+이는 개발자가 **자기 프로젝트의 임의 SQS/SNS/S3/DynamoDB**(이름이 cc-on-bedrock-* 가 아닌)를 못 쓰게 만들어
+플랫폼이 "그냥 IDE" 로 전락한다. 따라서 **최소권한을 boundary ARN 스코프가 아니라 "admin 위임형
+resource-specific 승인"으로 달성**한다 — boundary 는 서비스 천장, 실제 통제는 승인 + no-wildcard 에서.
+
 구체:
-1. `cc-on-bedrock-task-boundary` 에 카탈로그 서비스를 추가하되 **리소스를 최대한 좁게**
-   스코프(임의 `*` 지양, 계정/프로젝트 스코프 우선).
-2. **`boundary ⊇ catalog` CI 게이트** — `IAM_POLICY_SETS` 에 서비스를 추가하면서 boundary 에 반영하지
-   않으면 빌드 실패(드리프트·"승인했는데 무효" 재발 방지).
-3. **부여를 EC2 task + Local 역할 양쪽에 적용** — `addIamPolicySet`/`removeIamPolicySet` 가
-   `cc-on-bedrock-task-{subdomain}` + `cc-on-bedrock-local-user-{sub}` 양쪽을 대상으로,
-   **역할 미존재 시 graceful skip**(모드 미사용 사용자).
-4. boundary 거부 시 **사용자에게 명확한 에러** ("이 권한은 플랫폼 상한 밖") 노출.
-5. (별개·동반) 승인 authz 를 **admin OR 해당 부서 dept-manager** 로 확장.
-6. (선택) `ec2:Describe` read-only policy set 추가 + boundary 허용.
+1. **boundary = 서비스 천장** — `cc-on-bedrock-task-boundary` 는 신청 가능 서비스(sqs/sns/s3/dynamodb/
+   lambda/… )를 **서비스 단위로 허용**(천장). 안전은 좁은 boundary 가 아니라 아래 2~3 에서 나온다.
+2. **결정의 admin 위임 + `Resource:*` 금지** — 개발자가 **구체 action + 구체 resource ARN** 을 신청.
+   요청 검증이 `Resource:*`·`Action:*`·`*:*`·`NotResource/NotAction` 우회를 **거부**한다.
+   단 **리소스 레벨 권한 미지원 액션**(`ec2:Describe*`, `s3:ListAllMyBuckets`, `cloudwatch:GetMetricData` 등)은
+   `Resource:*` 예외 allowlist 로만 허용.
+3. **LLM 보조 admin 리뷰** — 신청된 각 resource/action 의 의미·위험을 LLM 이 요약해 approval 메시지로
+   저장 → admin 이 근거 있게 승인. (v1 은 라이브 조회 없는 **정적 설명**; 라이브 메타데이터 조회는 플랫폼이
+   임의 리소스 read 권한을 갖게 되므로 보류.)
+4. **`boundary ⊇ 신청가능 서비스` CI 게이트** — 신청 가능 서비스 allowlist 가 boundary 에 반영되지 않으면
+   빌드 실패. (소스 regex 금지 — `cdk synth` JSON + export 된 allowlist JSON 비교.)
+5. **부여를 EC2 task + Local 역할 양쪽에 적용** — `addIamPolicySet`/`removeIamPolicySet(subdomain, sub, …)` 가
+   `cc-on-bedrock-task-{subdomain}` + `cc-on-bedrock-local-user-{sub}` 양쪽 대상. 역할 부재(NoSuchEntity)는
+   skip, **기대 역할 부착 실패는 throw**(부분실패 은폐 금지). sub 는 신청 시 approval 행에 저장(Cognito lookup 회피).
+6. boundary/검증 거부 시 **사용자에게 명확한 에러** 노출.
+7. **승인 authz = admin OR dept-manager** — dept-manager 는 **DB 저장 request.department == 본인 부서**일 때만.
+8. 기존 EC2-only 부여분은 **reconcile 스크립트**로 Local 역할에 소급 반영.
 
 ## Considered Alternatives
 
