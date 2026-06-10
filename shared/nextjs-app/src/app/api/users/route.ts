@@ -12,6 +12,7 @@ import {
   resetUserEnvironment,
 } from "@/lib/aws-clients";
 import { createUserSchema, updateUserSchema } from "@/lib/validation";
+import { getCustomRoutes } from "@/lib/ec2-clients";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -28,7 +29,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, data: user });
     }
     const users = await listCognitoUsers();
-    return NextResponse.json({ success: true, data: users });
+    const withRoutes = await Promise.all(
+      users.map(async (u) => {
+        if (!u.subdomain) return { ...u, customRoutes: [] };
+        try {
+          const { customRoutes } = await getCustomRoutes(u.subdomain);
+          return { ...u, customRoutes };
+        } catch {
+          return { ...u, customRoutes: [] };
+        }
+      }),
+    );
+    return NextResponse.json({ success: true, data: withRoutes });
   } catch (err) {
     console.error("[users] GET", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
