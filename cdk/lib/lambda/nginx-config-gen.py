@@ -158,6 +158,8 @@ _CUSTOM_COMMON = (
     '        proxy_set_header X-Auth-User "";\n'
     "        proxy_read_timeout 3600s;\n"
     "        proxy_send_timeout 3600s;\n"
+    "        proxy_intercept_errors on;\n"
+    "        error_page 502 503 504 = @noservice_frontend;\n"  # M10: friendly page when app down
 )
 
 

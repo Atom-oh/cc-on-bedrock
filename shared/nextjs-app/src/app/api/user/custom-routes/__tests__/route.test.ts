@@ -50,7 +50,7 @@ describe('PUT /api/user/custom-routes', () => {
   });
   it('persists and mirrors on valid payload', async () => {
     (getServerSession as any).mockResolvedValue({ user: { subdomain: 'alice' } });
-    getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 0 });
+    getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 0, exists: true });
     putCustomRoutes.mockResolvedValue(1);
     mirrorCustomRoutes.mockResolvedValue({ mirrored: true });
     const res = await PUT(asReq({ routes: [{ path: '/p', port: 5000, label: 'x' }] }));
@@ -58,9 +58,16 @@ describe('PUT /api/user/custom-routes', () => {
     expect(putCustomRoutes).toHaveBeenCalledWith('alice', expect.any(Array), 0);
     expect(mirrorCustomRoutes).toHaveBeenCalled();
   });
+  it('409 when no instance record exists (no phantom row)', async () => {
+    (getServerSession as any).mockResolvedValue({ user: { subdomain: 'alice' } });
+    getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 0, exists: false });
+    const res = await PUT(asReq({ routes: [{ path: '/p', port: 5000, label: 'x' }] }));
+    expect(res.status).toBe(409);
+    expect(putCustomRoutes).not.toHaveBeenCalled();
+  });
   it('409 on version conflict', async () => {
     (getServerSession as any).mockResolvedValue({ user: { subdomain: 'alice' } });
-    getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 0 });
+    getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 0, exists: true });
     putCustomRoutes.mockRejectedValue(new Error('version-conflict'));
     const res = await PUT(asReq({ routes: [{ path: '/p', port: 5000, label: 'x' }] }));
     expect(res.status).toBe(409);

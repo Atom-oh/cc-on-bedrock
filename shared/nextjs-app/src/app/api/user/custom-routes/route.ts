@@ -46,7 +46,14 @@ export async function PUT(req: Request) {
   }
 
   try {
-    const { routesVersion } = await getCustomRoutes(subdomain);
+    const { routesVersion, exists } = await getCustomRoutes(subdomain);
+    if (!exists) {
+      // M9: no instance record — don't create a phantom row; require an environment first.
+      return NextResponse.json(
+        { success: false, error: "먼저 개발 환경을 시작한 뒤 포트를 설정하세요." },
+        { status: 409 },
+      );
+    }
     const newVersion = await putCustomRoutes(subdomain, parsed.data.routes, routesVersion);
     const { mirrored } = await mirrorCustomRoutes(subdomain, parsed.data.routes, newVersion);
     return NextResponse.json({

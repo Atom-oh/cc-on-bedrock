@@ -42,6 +42,12 @@ export class Ec2DevenvStack extends cdk.Stack {
     const { config, vpc, encryptionKey } = props;
 
     // ─── DLP Security Groups (no SSH, SSM only) ───
+    // ⚠️ LEGACY/DEAD-PATH (ADR-027 review M8): these SGs are NOT what running instances use.
+    //    The Dashboard launches per-user EC2 with SG_DEVENV_* env = Stack 04's
+    //    (EcsDevenvStack) sgOpen/restricted/locked, which are NginxSg-sourced 1024-65535
+    //    (B-H3 fix lives there). These Stack-07 SGs only serve as the Launch Template default
+    //    (overridden at RunInstances). The vpcCidr ingress below is therefore inert — but
+    //    DO NOT treat it as the live control. TODO: remove these or import Stack 04's NginxSg.
     // Allowed DevEnv ports: 8080 (code-server), 3000 (frontend), 8000 (API)
     const devenvPorts = [
       { port: 8080, desc: 'code-server' },

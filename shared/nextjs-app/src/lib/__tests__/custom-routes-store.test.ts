@@ -15,11 +15,18 @@ import { marshall } from '@aws-sdk/util-dynamodb';
 beforeEach(() => sendMock.mockReset());
 
 describe('getCustomRoutes', () => {
-  it('returns [] and version 0 when record has no customRoutes', async () => {
+  it('returns [] and version 0 when record has no customRoutes (but exists)', async () => {
     sendMock.mockResolvedValueOnce({ Item: marshall({ user_id: 'alice' }) });
     const res = await getCustomRoutes('alice');
     expect(res.customRoutes).toEqual([]);
     expect(res.routesVersion).toBe(0);
+    expect(res.exists).toBe(true);
+  });
+
+  it('exists=false when no instance record', async () => {
+    sendMock.mockResolvedValueOnce({}); // no Item
+    const res = await getCustomRoutes('ghost');
+    expect(res.exists).toBe(false);
   });
 
   it('returns stored routes + version', async () => {

@@ -1470,12 +1470,13 @@ export async function getCustomRoutes(subdomain: string): Promise<CustomRoutesRe
     TableName: INSTANCE_TABLE,
     Key: marshall({ user_id: subdomain }),
   }));
-  if (!result.Item) return { customRoutes: [], routesVersion: 0 };
+  if (!result.Item) return { customRoutes: [], routesVersion: 0, exists: false };
   const item = unmarshall(result.Item);
   return {
     customRoutes: (item.customRoutes as CustomRoute[]) ?? [],
     routesVersion: (item.routesVersion as number) ?? 0,
     routeStatus: item.routeStatus,
+    exists: true,
   };
 }
 

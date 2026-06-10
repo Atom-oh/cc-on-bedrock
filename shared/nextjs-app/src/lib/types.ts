@@ -134,6 +134,7 @@ export interface CustomRoutesRecord {
   customRoutes: CustomRoute[];
   routesVersion: number;        // 조건부 쓰기(CAS)용 단조증가 정수
   routeStatus?: RouteStatus[];  // config-gen 기록
+  exists: boolean;              // cc-user-instances 행 존재 여부 (M9: phantom 행 방지)
 }
 
 export interface StartContainerInput {

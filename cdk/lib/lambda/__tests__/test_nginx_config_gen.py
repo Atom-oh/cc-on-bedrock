@@ -128,3 +128,9 @@ def test_custom_location_includes_auth_scrub_headers():
     blocks = ncg.render_custom_locations("alice", [{"path": "/p", "port": 5173, "label": "v"}])
     assert 'proxy_set_header X-Auth-User ""' in blocks
     assert "X-Forwarded-For" in blocks
+
+
+def test_custom_location_has_error_page():
+    # M10: downed upstream → friendly page, not raw 502
+    blocks = ncg.render_custom_locations("alice", [{"path": "/p", "port": 5173, "label": "v"}])
+    assert "error_page 502 503 504 = @noservice_frontend" in blocks
