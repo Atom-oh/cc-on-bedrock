@@ -25,6 +25,10 @@
 - `generate-usage-data.py` - DynamoDB 사용량 시뮬레이션 데이터 생성
 - `seed-mcp-catalog.py` - MCP 서버 카탈로그 시드 데이터
 
+## ADR-026 (IAM 권한 신청/승인)
+- `check-policyset-boundary.py` - CI 불변식: `cc-on-bedrock-task-boundary` ⊇ 신청가능 서비스(DEFAULT_SERVICE_ALLOWLIST) **및** wildcard-ok 액션 커버(action-level). cdk synth JSON vs TS 비교. `--self-test` 픽스처. `tests/run-all.sh` 가 호출.
+- `reconcile-iam-grants-to-local.py` - 기존 EC2-only 부여분(Grant-*/PolicySet-*)을 대응 Local 역할에 소급 복사 (dry-run 기본, `--apply`). subdomain→sub 는 Cognito 매핑.
+
 ## Utility
 - (없음 — IAM role 태그는 ec2-clients.ts에서 매 시작 시 자동 upsert)
 

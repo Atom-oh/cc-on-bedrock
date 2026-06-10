@@ -270,11 +270,17 @@ export class SecurityStack extends cdk.Stack {
         }),
         new iam.PolicyStatement({
           // List/Describe APIs that do NOT support resource-level scoping → Resource:* (gate round-1 Codex MAJOR).
+          // MUST be a superset of validator DEFAULT_WILDCARD_OK_ACTIONS (those are the
+          // resource-level-unsupported actions a user may request with Resource:*).
+          // Boundary may use action wildcards (it's a ceiling); the T6 CI check now
+          // verifies this action-level coverage so the two never drift (review MAJOR).
           sid: 'GrantCeilingReadOnly',
           actions: [
             'eks:ListClusters',
             'sqs:ListQueues', 'sns:ListTopics', 'sns:ListSubscriptions',
-            'ec2:DescribeInstances', 'ec2:DescribeVolumes', 'ec2:DescribeRegions', 'ec2:DescribeSecurityGroups', 'ec2:DescribeSubnets',
+            'ec2:Describe*',
+            's3:ListAllMyBuckets',
+            'states:ListStateMachines',
             'cloudwatch:GetMetricData', 'cloudwatch:GetMetricStatistics', 'cloudwatch:ListMetrics',
           ],
           resources: ['*'],

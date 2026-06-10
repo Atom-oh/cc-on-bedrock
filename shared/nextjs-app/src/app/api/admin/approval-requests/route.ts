@@ -138,6 +138,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Not authorized for this request's department" }, { status: 403 });
     }
 
+    // Idempotency (review suggestion): a request already approved/rejected is not
+    // re-processed — avoids re-attaching grants or flipping a decided request.
+    const currentStatus = (request.status as string) ?? "pending";
+    if (currentStatus !== "pending") {
+      return NextResponse.json(
+        { success: true, data: { requestId, status: currentStatus, alreadyProcessed: true } },
+      );
+    }
+
     if (action === "reject") {
       await dynamodb.send(
         new UpdateItemCommand({
