@@ -50,6 +50,7 @@ function toCognitoUser(user: {
   const attrs = user.Attributes;
   return {
     username: user.Username ?? "",
+    sub: getAttr(attrs, "sub") ?? "",
     email: getAttr(attrs, "email") ?? "",
     enabled: user.Enabled ?? false,
     status: user.UserStatus ?? "UNKNOWN",
