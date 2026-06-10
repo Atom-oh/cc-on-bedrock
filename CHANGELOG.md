@@ -2,6 +2,54 @@
 
 All notable changes to CC-on-Bedrock are documented in this file.
 
+## [1.3.0] - 2026-05-28 (Local Governance Mode + CloudFront Split + Self-Healing CI)
+
+### Architecture
+- **Local Governance Mode (ADR-014)** — New deployment profile that drops EC2/ECS DevEnv and lets developers run `claude` from their own machines while keeping centralized governance. STS Issuer Lambda + Function URL issues 1h chained-AssumeRole credentials; per-user `cc-on-bedrock-local-user-{cognito_sub}` IAM role with Permission Boundary; usage tracking + token-limit-enforcer DynamoDB Stream consumer; limit-reset EventBridge crons (daily/weekly/monthly KST). Enabled via `cdk deploy --context governanceOnly=true`. Coexists with EC2 mode.
+- **Dollar Budget × Normalized Token Limit Integration (ADR-015)** — Two independent enforcement axes share IAM Deny policies on the same per-user role: (a) `BudgetExceededDeny` from 5-min budget-check cron, (b) `cc-bedrock-local-token-deny` from DynamoDB Stream-driven token-limit-enforcer. Distinct policy names so each axis cleans up independently. Dashboard `/admin/budgets` PUT now mirrors `monthlyBudget` (USD) into `cc-on-bedrock-limits LIMIT#monthly.max_normalized` via `NORMALIZED_PER_USD` factor (default 66667 ≈ Sonnet output reference). Race window from ~5 min cron-only to ~1-2 s Stream path.
+- **CloudFront Split (ADR-016)** — Single unified CloudFront from ADR-013 split into two distributions: Dashboard CF (Stack 05, ALB origin, `<dashboardSubdomain>.<domain>`) and DevEnv CF (Stack 04, NLB origin, `*.dev.<domain>` with viewer-request Lambda@Edge session-validator). Host-based origin router Lambda@Edge deprecated and archived. Lower edge complexity, clearer per-distribution caching policy.
+- **Dashboard rolling deployment + circuit breaker (ADR-017)** — ECS service rolling update with `minHealthyPercent=50` and CloudWatch alarm rollback. Removed zero-downtime gap from the v1.2.0 `minHealthyPercent: 0` workaround.
+- **DevEnv OS choice (ADR-018)** — Per-user EC2 can boot Ubuntu 24.04 ARM64 or Amazon Linux 2023 ARM64. SSM Parameter `/cc-on-bedrock/devenv/ami-id/{os}` with legacy single-key fallback.
+- **Bedrock Model ID normalization (ADR-019)** — Canonical `global.anthropic.claude-{model}-{ver}` IDs across all components; weights calibration ($-proportional) so `NORMALIZED_PER_USD` holds approximately across Claude families.
+- **Runtime IAM policy upsert (ADR-020)** — Pre-provisioned per-user roles patched at runtime by enforcers instead of re-deploying CloudFormation, removing the multi-minute drift between dashboard budget edit and IAM effect.
+- **Wildcard Claude IAM (ADR-021)** — Per-user roles authorize `claude-*` foundation models via a single wildcard ARN pattern, eliminating per-version IAM policy churn.
+- **EventBridge user pre-provisioning (ADR-022)** — `cognito-user-created` rule triggers `UserRoleProvisioner` Lambda + DLQ. New users get their Local Governance role and Permission Boundary before first STS request, removing the IAM-propagation race at first login.
+- **Dept per-user budget default (ADR-023)** — Department-level `perUserMonthlyBudget` is the default budget for new members; explicit `cc-user-budgets.monthlyBudget` overrides per-user. Budget resolution priority: user explicit > dept default > global `DAILY_BUDGET` env.
+- **Cognito deletion cleanup (ADR-024)** — Provisioner Lambda also deletes per-user IAM role + Permission Boundary on `cognito-user-deleted` event. Idempotent (handles already-deleted), DLQ on partial failures.
+
+### Closed-loop CI
+- **ADR-verify pipeline Phase 1+2 (PR #29)** — `.adr-verify/` toolkit with frontmatter `verification_required` + per-ADR `## Verification` blocks. 24 ADRs backfilled with frontmatter; 6 high-priority ADRs (011, 014, 021, 022, 023, 024) gained full Verification sections (Static, Runtime, Permissions checks). PR workflow `adr-verify-pr.yml` and main workflow `adr-verify-main.yml`.
+- **Self-healing pipeline (PR #34)** — `main` push → ADR re-verify → if any ADR fails, open a labeled issue → `issue-auto-implement.yml` triggers Claude Code with `--permission-mode acceptEdits`, scoped allow-list, forbidden-path reset → Draft PR with `needs-triage` label. Human is the merge gate.
+- **Workflow hardening (PRs #38, #39, #40)** — `adr-verify-main` uses `actions/github-script` instead of `gh` CLI for reliability inside GitHub Actions; `workflow_dispatch` `test_mode` for end-to-end smoke testing without waiting for a failing ADR. `issue-auto-implement` prefers `git diff` over the `NO_CHANGE:` stdout marker so reasoning-trace code blocks can't discard real edits.
+
+### Budget enforcement — gap closures
+- **`attach_deny_policy` covers Local roles too (PR #31)** — Previously only tried `cc-on-bedrock-task-{subdomain}`; Local-only users hit `NoSuchEntity` and silently bypassed the daily/monthly $ budget enforcement. Now resolves both EC2 + Local via the same `_local_role_index` (username-tag reverse index) that dept-deny was already using.
+- **`/api/admin/budgets` PUT mirrors $ into LIMITS table (PR #31)** — Dashboard budget edits now write both `cc-user-budgets.monthlyBudget` (USD) and `cc-on-bedrock-limits[USER#{id}] LIMIT#monthly.max_normalized` (token-equivalent) in one transaction. Stream-driven enforcer reacts within ~1-2 s instead of waiting for the 5-min cron. `monthlyBudget=0` deletes the LIMIT row so dept default takes over.
+- **Username ↔ sub-UUID asymmetry resolved (PR #38)** — `cc-on-bedrock-usage` PKs use Cognito *username* (`USER#atomoh`) while real IAM role names embed the Cognito *sub UUID*. New shared `cdk/lib/lambda/iam_role_lookup.py` reverse-indexes the IAM `username` tag (set by `role_factory.ensure_role`) so `token-limit-enforcer._attach_deny`, `limit-reset._detach`, and `budget-check`'s backup token-deny path all hit the deployed role instead of a phantom `cc-on-bedrock-local-user-atomoh`. Per-username one-shot rescan covers users provisioned after the warm container's cold-start scan. `iam:ListRoles` + `iam:ListRoleTags` grants added to enforcer + limit-reset Lambda roles. ADR-015 Addendum 1 + 2.
+
+### Terraform parity (PR #28)
+- **Four new modules**: `ec2-devenv`, `local-governance`, `usage-tracking`, `waf`. Root `main.tf` wiring still pending — see deployment guide warning.
+
+### Dashboard / Docs
+- **`/local` page (ADR-014)** — Self-service STS credentials button, normalized token usage gauges (daily/weekly/monthly, self + dept), `cc-bedrock-local` CLI download + paste-ready config snippet, Deny-active banner.
+- **`/admin/limits` page (ADR-014)** — Normalized token limit CRUD per user/dept, force-reset button (`/api/admin/limits/reset`) that detaches `cc-bedrock-local-token-deny` + clears `DENY#active`.
+- **`/admin/budgets` revamp (ADR-023, PR #31)** — Adds `perUserMonthlyBudget` field on dept rows; user `monthlyBudget=0` means inherit from dept.
+- **Comprehensive docs refresh (PRs #32, #43)** — `webpage/docs/` rewritten as Next.js 14 + Tailwind static export. Added Local Governance Mode guide (`local-mode.md`), STS 1h truth (was previously documented as 8h), ADR-016 split model in architecture + deployment docs, VPC Endpoints scope clarification (EC2 only), `/api/install/cli` as canonical download channel.
+- **`/model` "Default" routes to Sonnet 4.6 (PR #30)** — Drop `ANTHROPIC_MODEL` pin and set `ANTHROPIC_DEFAULT_SONNET_MODEL` so the Claude Code picker shows "Default" instead of forcing the "Custom" slot. Real Opus 4.6 restored to the "Opus" slot. `cc-bedrock-local` wrapper, install snippet, EC2 UserData, devenv `entrypoint.sh` all aligned.
+
+### Fixed
+- **Non-admin home-dashboard instance status (PR #27)** — Self-service users now see their own instance card without admin-only API calls; CLI auto-update on boot via `cc-cli-update.service`.
+- **MDX image-alt escape (PR #35)** — Parens in alt text were truncating the rendered image in MDX; escaped consistently.
+
+### Documentation
+- **ADR-014 through ADR-024** — 11 new Architecture Decision Records covering Local Governance Mode and the ecosystem around it. ADR-013 marked superseded by ADR-016 (auth model still applies; distribution layout changed).
+- **`docs/runbooks/`** — New per-mode runbooks for credential issuance, limit reset, Local user offboarding.
+- **CLAUDE.md sync** — Root + `cdk/`, `tools/`, `shared/nextjs-app/`, `docker/`, `terraform/` modules all updated for new pages, Lambdas, modules.
+
+### Operations notes
+- **PR #38 + #31 require `cdk deploy CcOnBedrock-LocalGovernance CcOnBedrock-UsageTracking` after merge** — the dashboard's auto-deploy workflow covers `shared/nextjs-app/**` only; CDK Lambda code + IAM policy changes do not auto-deploy yet. Follow-up issue tracks adding a `deploy-cdk.yml`.
+- **Existing rows in `cc-user-budgets`** are not auto-mirrored into `cc-on-bedrock-limits`; admins must re-PUT each affected row once after upgrading to v1.3.0 (or a small backfill script can replay the writes).
+
 ## [1.2.0] - 2026-04-17 (EC2-per-user + Unified Auth)
 
 ### Architecture
