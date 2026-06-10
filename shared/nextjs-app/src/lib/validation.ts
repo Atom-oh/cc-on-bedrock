@@ -36,41 +36,51 @@ export const updateUserSchema = z.object({
   securityPolicy: z.enum(["open", "restricted", "locked"]).optional(),
 });
 
-// ─── Custom Port Routes (ADR-009 extension) ───
+// ─── Custom Port Routes (ADR-009 extension, ADR-026) ───
 
+// code-server 내부경로 + nginx 인프라 경로 (등록 불가). /api 는 제거(seedable).
 export const RESERVED_PATHS = [
-  "/api",
   "/_static",
   "/healthz",
   "/stable-",
   "/vscode-remote-resource",
   "/out",
   "/webview",
+  "/manifest.json",
+  "/health",
+  "/nginx-status",
 ] as const;
 
-export const RESERVED_PORTS = [8080, 3000, 8000] as const;
+export const RESERVED_PORTS = [8080] as const; // code-server only
 
-export const MAX_CUSTOM_ROUTES = 10; // open tier upper bound; lower tiers enforced in API
+export const MAX_CUSTOM_ROUTES = 5;
 
-const PATH_REGEX = /^\/[a-z0-9][a-z0-9-]*$/;
+// "/" (루트) 또는 multi-segment. 각 세그먼트 [a-z0-9][a-z0-9-]*, 끝슬래시·연속슬래시 없음.
+const SUBPATH_REGEX = /^\/[a-z0-9][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)*$/;
+
+/** 세그먼트 경계 기준 예약 판정. `/apiary` 가 `/api` 로 오판되지 않음. */
+export function isReservedPath(path: string): boolean {
+  return RESERVED_PATHS.some(
+    (rp) => path === rp || path.startsWith(rp + "/") || (rp.endsWith("-") && path.startsWith(rp)),
+  );
+}
 
 export const customRouteSchema = z.object({
   path: z
     .string()
-    .min(2)
-    .max(32)
-    .regex(PATH_REGEX, "Path must match /^\\/[a-z0-9][a-z0-9-]*$/")
-    .refine(
-      (p) => !RESERVED_PATHS.some((rp) => p === rp || p.startsWith(rp)),
-      { message: "Path is reserved" },
-    ),
+    .min(1)
+    .max(64)
+    .refine((p) => p === "/" || SUBPATH_REGEX.test(p), {
+      message: "Path must be '/' or like /preview or /api/v1 (lowercase, no trailing slash)",
+    })
+    .refine((p) => !isReservedPath(p), { message: "Path is reserved" }),
   port: z
     .number()
     .int()
     .min(1024)
     .max(65535)
-    .refine((p) => !(RESERVED_PORTS as readonly number[]).includes(p), {
-      message: "Port is reserved",
+    .refine((p) => p !== 8080, {
+      message: "8080은 code-server가 사용 중인 포트입니다 (노출 불가)",
     }),
   label: z.string().min(1).max(32),
 });
@@ -86,7 +96,10 @@ export const customRoutesPayloadSchema = z.object({
     .refine(
       (routes) => new Set(routes.map((r) => r.port)).size === routes.length,
       { message: "Duplicate ports are not allowed" },
-    ),
+    )
+    .refine((routes) => routes.filter((r) => r.path === "/").length <= 1, {
+      message: "Only one route may use the root path '/'",
+    }),
 });
 
 export type CustomRouteInput = z.infer<typeof customRouteSchema>;
