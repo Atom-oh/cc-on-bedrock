@@ -70,3 +70,61 @@ def test_invalid_subdomain_rejects_all_routes():
     valid, status = ncg.validate_routes("Bad; subdomain", [{"path": "/ok", "port": 5000, "label": "a"}])
     assert valid == []
     assert all(s["state"] == "rejected" for s in status)
+
+
+# ─── consensus review fixes (C1/C2/C3/H6) ───
+
+def test_container_ip_failsafe_when_cidr_unset():
+    # C1: VPC_CIDR unset/empty → private-only (no platform-wide outage)
+    assert ncg.is_valid_container_ip("10.100.1.50", cidr="")      # platform VPC private
+    assert ncg.is_valid_container_ip("10.0.1.50", cidr="")
+    assert not ncg.is_valid_container_ip("8.8.8.8", cidr="")      # public still rejected
+
+
+def test_container_ip_strict_when_cidr_set():
+    # C1: explicit CIDR → strict membership
+    assert ncg.is_valid_container_ip("10.100.1.50", cidr="10.100.0.0/16")
+    assert not ncg.is_valid_container_ip("10.0.1.50", cidr="10.100.0.0/16")
+
+
+def test_container_ip_bad_cidr_failsafe():
+    assert ncg.is_valid_container_ip("10.100.1.50", cidr="not-a-cidr")  # bad cidr → private-only
+
+
+def test_validate_routes_dedup_path_and_port():
+    # C2: duplicate path / port must not both render (would break shared nginx)
+    routes = [
+        {"path": "/a", "port": 5000, "label": "x"},
+        {"path": "/a", "port": 5001, "label": "y"},   # dup path
+        {"path": "/b", "port": 5000, "label": "z"},    # dup port
+    ]
+    valid, status = ncg.validate_routes("alice", routes)
+    paths = [r["path"] for r in valid]
+    ports = [r["port"] for r in valid]
+    assert len(paths) == len(set(paths))
+    assert len(ports) == len(set(ports))
+    assert valid == [{"path": "/a", "port": 5000, "label": "x"}]  # first wins
+
+
+def test_validate_routes_cap_and_single_root():
+    # C2: cap at MAX_CUSTOM_ROUTES and at most one root
+    routes = [{"path": "/", "port": 3000, "label": "r1"},
+              {"path": "/x2", "port": 5002, "label": "r"}] + \
+             [{"path": f"/p{i}", "port": 5100 + i, "label": "p"} for i in range(6)]
+    valid, status = ncg.validate_routes("alice", routes)
+    assert len(valid) <= ncg.MAX_CUSTOM_ROUTES
+    assert sum(1 for r in valid if r["path"] == "/") <= 1
+
+
+def test_validate_routes_skips_non_dict_items():
+    # C3: malformed (non-dict) entries must not crash
+    routes = [{"path": "/ok", "port": 5000, "label": "a"}, "garbage", 123, None]
+    valid, status = ncg.validate_routes("alice", routes)
+    assert [r["path"] for r in valid] == ["/ok"]
+
+
+def test_custom_location_includes_auth_scrub_headers():
+    # H6: custom locations must re-set server-level headers (X-Auth-User scrub, X-Forwarded-*)
+    blocks = ncg.render_custom_locations("alice", [{"path": "/p", "port": 5173, "label": "v"}])
+    assert 'proxy_set_header X-Auth-User ""' in blocks
+    assert "X-Forwarded-For" in blocks

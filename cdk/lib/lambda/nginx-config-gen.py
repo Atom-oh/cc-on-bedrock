@@ -42,7 +42,11 @@ s3 = boto3.client("s3", region_name=REGION)
 import re
 import ipaddress
 
-VPC_CIDR = os.environ.get("VPC_CIDR", "10.0.0.0/16")
+# Empty default → RFC1918-private-only fail-safe (C1: avoid platform-wide outage if env unwired).
+# CDK wires the real VPC CIDR; when set, membership is enforced strictly.
+VPC_CIDR = os.environ.get("VPC_CIDR", "")
+INSTANCE_TABLE = os.environ.get("INSTANCE_TABLE", "cc-user-instances")
+MAX_CUSTOM_ROUTES = 5
 
 _SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _SUBPATH_RE = re.compile(r"^/[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*$")
@@ -76,25 +80,46 @@ def is_valid_route_port(port):
     return isinstance(port, int) and 1024 <= port <= 65535 and port not in RESERVED_PORTS
 
 
-def is_valid_container_ip(ip):
+def is_valid_container_ip(ip, cidr=None):
+    cidr = VPC_CIDR if cidr is None else cidr
     try:
         addr = ipaddress.ip_address(ip)
     except (ValueError, TypeError):
         return False
-    return addr.is_private and addr in ipaddress.ip_network(VPC_CIDR)
+    if not addr.is_private:
+        return False
+    if not cidr:
+        return True  # C1 fail-safe: RFC1918-private only when CIDR unset
+    try:
+        return addr in ipaddress.ip_network(cidr)
+    except ValueError:
+        return True  # malformed CIDR → private-only (don't hard-reject)
 
 
 def validate_routes(subdomain, routes):
-    """보간 전 전수 검증. 반환: (valid_routes, status_list). subdomain 무효면 전체 거부."""
+    """보간 전 전수 검증. 반환: (valid_routes, status_list). subdomain 무효면 전체 거부.
+
+    C2/C3 defense-in-depth (config-gen은 API 검증을 신뢰하지 않음):
+      - 비-dict 항목 skip, path/port 개별 검증
+      - 중복 path/port 제거(first wins), root('/') 최대 1개, MAX_CUSTOM_ROUTES cap
+    중복/초과 행을 렌더하면 nginx -t 실패 → 공유 프록시 전체 reload 거부.
+    """
     if not is_valid_subdomain(subdomain):
         logger.warning("Rejecting all routes: invalid subdomain %r", subdomain)
         return [], [
-            {"path": r.get("path", "?"), "state": "rejected", "reason": "invalid subdomain"}
+            {"path": (r.get("path", "?") if isinstance(r, dict) else "?"),
+             "state": "rejected", "reason": "invalid subdomain"}
             for r in routes
         ]
     status = []
     valid = []
+    seen_paths = set()
+    seen_ports = set()
+    has_root = False
     for r in routes:
+        if not isinstance(r, dict):
+            logger.warning("skip non-dict route entry: %r", r)
+            continue
         path, port = r.get("path"), r.get("port")
         if not is_valid_route_path(path):
             logger.warning("skip route path=%r (invalid/reserved)", path)
@@ -102,19 +127,35 @@ def validate_routes(subdomain, routes):
         elif not is_valid_route_port(port):
             logger.warning("skip route path=%r port=%r (invalid/reserved port)", path, port)
             status.append({"path": path, "state": "rejected", "reason": "invalid or reserved port"})
+        elif path in seen_paths or port in seen_ports:
+            logger.warning("skip duplicate route path=%r port=%r", path, port)
+            status.append({"path": path, "state": "rejected", "reason": "duplicate path or port"})
+        elif path == "/" and has_root:
+            status.append({"path": path, "state": "rejected", "reason": "multiple root routes"})
+        elif len(valid) >= MAX_CUSTOM_ROUTES:
+            status.append({"path": path, "state": "rejected", "reason": "exceeds max routes"})
         else:
             valid.append({"path": path, "port": int(port), "label": str(r.get("label", ""))})
             status.append({"path": path, "state": "ok"})
+            seen_paths.add(path)
+            seen_ports.add(port)
+            if path == "/":
+                has_root = True
     return valid, status
 
 
-# 공통 proxy 지시문 (WebSocket + timeout — consensus)
+# 공통 proxy 지시문. H6: location에 proxy_set_header가 있으면 server-level이 상속되지 않으므로
+# X-Auth-User 스크럽 + X-Forwarded-* 를 여기서 반드시 재선언 (백엔드로 인증헤더 누출/누락 방지).
 _CUSTOM_COMMON = (
     "        proxy_pass http://custom_{sub}_{port};\n"
     "        proxy_http_version 1.1;\n"
     "        proxy_set_header Host $host;\n"
+    "        proxy_set_header X-Real-IP $remote_addr;\n"
+    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+    "        proxy_set_header X-Forwarded-Proto $scheme;\n"
     "        proxy_set_header Upgrade $http_upgrade;\n"
     "        proxy_set_header Connection $connection_upgrade;\n"
+    '        proxy_set_header X-Auth-User "";\n'
     "        proxy_read_timeout 3600s;\n"
     "        proxy_send_timeout 3600s;\n"
 )
@@ -165,16 +206,23 @@ FALLBACK_ROOT = (
 
 
 def write_route_status(subdomain, status):
-    """routing-table 에 route별 반영 결과 기록 (best-effort, silent skip 방지)."""
-    table = dynamodb.Table(ROUTING_TABLE)
+    """route별 반영 결과를 cc-user-instances 에 기록 (best-effort).
+
+    H4: API GET이 user-instances 에서 routeStatus 를 읽으므로 거기에 써야 UI에 노출됨.
+    H5: cc-routing-table 에 쓰면 그 테이블의 Stream이 이 Lambda를 재트리거 → 피드백 루프.
+        user-instances 는 config-gen 을 트리거하지 않으므로 안전.
+    M9: attribute_exists(user_id) 로 인스턴스 행이 있을 때만 기록(phantom 행 방지).
+    """
+    table = dynamodb.Table(INSTANCE_TABLE)
     try:
         table.update_item(
-            Key={"subdomain": subdomain},
+            Key={"user_id": subdomain},
+            ConditionExpression="attribute_exists(user_id)",
             UpdateExpression="SET routeStatus = :s",
             ExpressionAttributeValues={":s": status},
         )
     except ClientError as e:
-        logger.warning("routeStatus write failed for %s: %s", subdomain, e)
+        logger.warning("routeStatus write skipped for %s: %s", subdomain, e)
 
 # Nginx config template
 NGINX_TEMPLATE = """# Auto-generated nginx config for CC-on-Bedrock Enterprise
@@ -415,6 +463,10 @@ def generate_nginx_config() -> str:
                         json.loads(raw_routes) if isinstance(raw_routes, str) else (raw_routes or [])
                     )
                 except (ValueError, TypeError):
+                    parsed_routes = []
+                if not isinstance(parsed_routes, list):  # C3: non-list poison pill guard
+                    logger.warning("customRoutes for %s is not a list (%r) — ignoring",
+                                   item.get("subdomain"), type(parsed_routes).__name__)
                     parsed_routes = []
                 routes.append({
                     "subdomain": item["subdomain"],
