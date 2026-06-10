@@ -97,6 +97,35 @@ builds_on: ADR-020
 - 승인 후 EC2 task + Local 역할 양쪽에서 권한이 실제 동작함을 확인.
 - CI 게이트가 `IAM_POLICY_SETS ⊄ boundary` 일 때 빌드 실패시키는지 확인.
 
+## Verification
+
+```yaml
+# Tier 1: Static — 현행 사실(결정의 전제) 검증. 구현 완료 시 Follow-ups 항목 기준으로 확장할 것.
+files:
+  - path: cdk/lib/02-security-stack.ts
+    must_contain:
+      - "cc-on-bedrock-task-boundary"
+  - path: cdk/lib/lambda/role_factory.py
+    must_contain:
+      - "cc-on-bedrock-task-boundary"
+  - path: shared/nextjs-app/src/lib/ec2-clients.ts
+    must_contain:
+      - "addIamPolicySet"
+      - "IAM_POLICY_SETS"
+  - path: shared/nextjs-app/src/app/api/admin/approval-requests/route.ts
+    must_exist: true
+
+# Tier 2: Semantic — 현행 상태 기준 claim (구현 pending인 Decision 항목은 구현 후 추가)
+semantic:
+  - claim: "EC2 task 역할과 Local Governance 역할이 동일한 permission boundary(cc-on-bedrock-task-boundary)를 공유한다"
+    context_files:
+      - cdk/lib/02-security-stack.ts
+      - cdk/lib/lambda/role_factory.py
+  - claim: "IAM policy set 승인(addIamPolicySet)은 inline policy를 역할에 부착하며, 카탈로그는 IAM_POLICY_SETS에 정적으로 정의된다"
+    context_files:
+      - shared/nextjs-app/src/lib/ec2-clients.ts
+```
+
 ## Follow-ups
 - `cc-on-bedrock-task-boundary` 확장(스코프된 리소스) — `02-security-stack.ts`.
 - `addIamPolicySet`/`removeIamPolicySet` 양쪽 역할 대상 + graceful skip — `ec2-clients.ts`.

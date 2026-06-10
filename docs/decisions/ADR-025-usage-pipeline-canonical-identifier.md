@@ -91,6 +91,38 @@ sub 기반인 읽기 측에 맞춘다. 사람 가독성은 **표시 계층에서
 **검증 필요(verification_required):** 마이그레이션 후 동일 유저의 EC2·Local 사용량이 단일
 `USER#{sub}` 로 합산되는지, `/local` 게이지·한도 상태가 enforcer 기록과 일치하는지 E2E 확인.
 
+## Verification
+
+```yaml
+# Tier 1: Static
+files:
+  - path: cdk/lib/lambda/bedrock-usage-tracker.py
+    must_contain:
+      - "USER#{sub}"
+  - path: cdk/lib/lambda/budget-check.py
+    must_contain:
+      - "ADR-025"
+      - "_candidate_role_names"
+  - path: cdk/lib/lambda/token-limit-enforcer.py
+    must_contain:
+      - "USER#"
+  - path: scripts/cleanup-stale-budget-users.py
+    must_exist: true
+
+# Tier 2: Semantic
+semantic:
+  - claim: "usage 파이프라인의 쓰기 키가 USER#{sub}(Cognito sub)로 통일되어 있고, EC2 task/Local 역할명에서 sub를 역해석한다"
+    context_files:
+      - cdk/lib/lambda/bedrock-usage-tracker.py
+  - claim: "budget-check가 sub 키 기준으로 사용량을 집계하고 Local(cc-on-bedrock-local-user-{sub})·EC2(cc-on-bedrock-task-{subdomain}) 역할 모두에 deny를 처리한다"
+    context_files:
+      - cdk/lib/lambda/budget-check.py
+  - claim: "비-Cognito 식별자(raw IAM principal 등)는 usage/budget 집계·표시에서 제외된다"
+    context_files:
+      - cdk/lib/lambda/budget-check.py
+      - shared/nextjs-app/src/app/api/admin/budgets/route.ts
+```
+
 ## Follow-ups
 - dual-write tracker 구현(1단계) → backfill 스크립트 → cutover.
 - EC2 task 역할 sub 태그 부여 방안 결정(provisioner/UserData).
