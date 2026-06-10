@@ -62,3 +62,6 @@ docusaurus-*.png
 # Claude Code local (personal, per-repo)
 .claude/co-agent.local.json
 .claude/worktrees/
+
+# co-agent consensus session state (local only)
+.claude/co-agent-consensus/
