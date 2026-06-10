@@ -28,11 +28,15 @@ SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task"
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # ADR-014 Local Governance Mode
 MAX_SCAN_PAGES = 100
-# Legacy policy names (kept for backward-compat cleanup)
-DENY_POLICY_NAME = "BudgetExceededDeny"
-DEPT_DENY_POLICY_NAME = "DeptBudgetExceededDeny"
-# ADR-015 canonical policy names
+# ADR-015 canonical policy names (attach path). Legacy names below are still
+# detached on every attach/remove so roles denied under the old names get
+# migrated/released in place (ADR-020 runtime-upsert pattern — no one-shot script).
+DENY_POLICY_NAME = "cc-bedrock-user-daily-deny"
+DEPT_DENY_POLICY_NAME = "cc-bedrock-dept-budget-deny"
 LOCAL_TOKEN_DENY_POLICY_NAME = "cc-bedrock-local-token-deny"
+# Legacy (pre-ADR-015) policy names — delete-only, never attached anymore
+LEGACY_DENY_POLICY_NAME = "BudgetExceededDeny"
+LEGACY_DEPT_DENY_POLICY_NAME = "DeptBudgetExceededDeny"
 
 dynamodb = boto3.resource("dynamodb")
 dynamodb_client = boto3.client("dynamodb")
@@ -64,6 +68,8 @@ def get_today_usage():
         result = table.scan(**params)
         for item in result.get("Items", []):
             user = item["PK"].replace("USER#", "")  # ADR-025: this is the Cognito sub
+            if not _is_valid_user(user):
+                continue  # stale non-Cognito identity (e.g. raw IAM principal) — skip
             cost = float(item.get("estimatedCost", 0))
             dept = item.get("department", "default")
             sd = item.get("subdomain")
@@ -97,6 +103,8 @@ def get_monthly_usage_by_department():
         result = table.scan(**params)
         for item in result.get("Items", []):
             user = item["PK"].replace("USER#", "")  # ADR-025: Cognito sub
+            if not _is_valid_user(user):
+                continue  # stale non-Cognito identity — skip
             cost = float(item.get("estimatedCost", 0))
             dept = item.get("department", "default")
             sd = item.get("subdomain")
@@ -267,6 +275,53 @@ def get_user_department(subdomain: str) -> str:
 # for a sub-keyed user. Reset at handler entry.
 _subdomain_by_sub: dict = {}
 
+# Set of identifiers that belong to a real Cognito user (sub + custom:subdomain +
+# email + username). Usage rows keyed by anything else — e.g. a raw IAM principal
+# like "awsops-ec2-role" written before the bedrock-usage-tracker role filter
+# existed — are stale and must be ignored so they never reach cc-user-budgets or
+# the deny logic. Populated at handler entry; empty means "could not load" →
+# fail-open (do not filter) so a transient Cognito error can't zero all spend or
+# release every deny policy.
+_valid_user_keys: set = set()
+
+
+def _load_valid_user_keys() -> set:
+    """Build the set of authoritative Cognito identifiers (sub / subdomain / email /
+    username). Returns an empty set on any failure so callers fail open."""
+    keys: set = set()
+    if not USER_POOL_ID:
+        return keys
+    try:
+        pagination_token = None
+        pages = 0
+        while True:
+            params = {"UserPoolId": USER_POOL_ID, "Limit": 60}
+            if pagination_token:
+                params["PaginationToken"] = pagination_token
+            result = cognito_client.list_users(**params)
+            for u in result.get("Users", []):
+                if u.get("Username"):
+                    keys.add(u["Username"])
+                for attr in u.get("Attributes", []):
+                    if attr["Name"] in ("sub", "custom:subdomain", "email") and attr.get("Value"):
+                        keys.add(attr["Value"])
+            pagination_token = result.get("PaginationToken")
+            pages += 1
+            if not pagination_token or pages >= MAX_SCAN_PAGES:
+                break
+    except Exception as e:
+        print(f"[VALID-USERS] Failed to load Cognito users (failing open): {e}")
+        return set()
+    return keys
+
+
+def _is_valid_user(key: str) -> bool:
+    """True if `key` belongs to a Cognito user. Fail-open when the valid-key set
+    could not be loaded (empty), so a Cognito hiccup never drops real spend."""
+    if not _valid_user_keys:
+        return True
+    return key in _valid_user_keys
+
 
 def _candidate_role_names(sub: str) -> list:
     """Return all IAM role candidates for a user (Local Governance + EC2 task).
@@ -293,7 +348,7 @@ def attach_dept_deny_policy(subdomain: str):
     deny_policy = json.dumps({
         "Version": "2012-10-17",
         "Statement": [{
-            "Sid": "DeptBudgetExceededDenyBedrock",
+            "Sid": "CcBedrockDeptBudgetDeny",
             "Effect": "Deny",
             "Action": [
                 "bedrock:InvokeModel",
@@ -315,6 +370,7 @@ def attach_dept_deny_policy(subdomain: str):
             )
             print(f"[DEPT-DENY] Attached to {role_name}")
             any_attached = True
+            _delete_policy_quiet(role_name, LEGACY_DEPT_DENY_POLICY_NAME)  # ADR-015: migrate legacy name in place
         except iam_client.exceptions.NoSuchEntityException:
             # EC2 task role may not exist for a Local-only user — silently skip.
             continue
@@ -324,26 +380,39 @@ def attach_dept_deny_policy(subdomain: str):
 
 
 def remove_dept_deny_policy(subdomain: str):
-    """Remove department budget IAM Deny Policy from both EC2 Task Role and matching Local roles."""
+    """Remove department budget IAM Deny Policy (canonical + legacy names) from both
+    EC2 Task Role and matching Local roles."""
     role_names = _candidate_role_names(subdomain)
     any_removed = False
     for role_name in role_names:
-        try:
-            iam_client.delete_role_policy(
-                RoleName=role_name,
-                PolicyName=DEPT_DENY_POLICY_NAME,
-            )
-            print(f"[DEPT-ALLOW] Removed dept deny from {role_name}")
-            any_removed = True
-        except iam_client.exceptions.NoSuchEntityException:
-            continue
-        except Exception as e:
-            print(f"[DEPT-ALLOW] Failed for {role_name}: {e}")
+        for policy_name in (DEPT_DENY_POLICY_NAME, LEGACY_DEPT_DENY_POLICY_NAME):
+            try:
+                iam_client.delete_role_policy(
+                    RoleName=role_name,
+                    PolicyName=policy_name,
+                )
+                print(f"[DEPT-ALLOW] Removed {policy_name} from {role_name}")
+                any_removed = True
+            except iam_client.exceptions.NoSuchEntityException:
+                continue
+            except Exception as e:
+                print(f"[DEPT-ALLOW] Failed for {role_name}/{policy_name}: {e}")
     return any_removed
 
 
+def _delete_policy_quiet(role_name: str, policy_name: str):
+    """Best-effort delete of an inline policy — used to clean up legacy (pre-ADR-015)
+    policy names whenever the canonical name is attached or released."""
+    try:
+        iam_client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+        print(f"[MIGRATE] Removed legacy {policy_name} from {role_name}")
+    except Exception:
+        pass  # not present / role gone — nothing to migrate
+
+
 def attach_deny_policy(subdomain: str):
-    """Attach BudgetExceededDeny to ALL of the user's roles (EC2 task + Local Governance).
+    """Attach the user daily-budget deny (cc-bedrock-user-daily-deny, ADR-015) to ALL
+    of the user's roles (EC2 task + Local Governance).
 
     Previously this only tried the EC2 `cc-on-bedrock-task-{subdomain}` role, so Local-only
     users (whose role is `cc-on-bedrock-local-user-{cognito_sub}`) silently bypassed the
@@ -353,7 +422,7 @@ def attach_deny_policy(subdomain: str):
     deny_policy = json.dumps({
         "Version": "2012-10-17",
         "Statement": [{
-            "Sid": "BudgetExceededDenyBedrock",
+            "Sid": "CcBedrockUserDailyDeny",
             "Effect": "Deny",
             "Action": [
                 "bedrock:InvokeModel",
@@ -375,6 +444,7 @@ def attach_deny_policy(subdomain: str):
             )
             print(f"[DENY] Attached to {role_name}")
             any_attached = True
+            _delete_policy_quiet(role_name, LEGACY_DENY_POLICY_NAME)  # ADR-015: migrate legacy name in place
         except iam_client.exceptions.NoSuchEntityException:
             # EC2 task role may not exist for a Local-only user — skip silently.
             continue
@@ -384,36 +454,40 @@ def attach_deny_policy(subdomain: str):
 
 
 def remove_deny_policy(subdomain: str):
-    """Remove BudgetExceededDeny from ALL of the user's roles (EC2 task + Local)."""
+    """Remove the user daily-budget deny (canonical + legacy names) from ALL of the
+    user's roles (EC2 task + Local)."""
     role_names = _candidate_role_names(subdomain)
     any_removed = False
     for role_name in role_names:
-        try:
-            iam_client.delete_role_policy(
-                RoleName=role_name,
-                PolicyName=DENY_POLICY_NAME,
-            )
-            print(f"[ALLOW] Removed deny from {role_name}")
-            any_removed = True
-        except iam_client.exceptions.NoSuchEntityException:
-            continue
-        except Exception as e:
-            print(f"[ALLOW] Failed for {role_name}: {e}")
+        for policy_name in (DENY_POLICY_NAME, LEGACY_DENY_POLICY_NAME):
+            try:
+                iam_client.delete_role_policy(
+                    RoleName=role_name,
+                    PolicyName=policy_name,
+                )
+                print(f"[ALLOW] Removed {policy_name} from {role_name}")
+                any_removed = True
+            except iam_client.exceptions.NoSuchEntityException:
+                continue
+            except Exception as e:
+                print(f"[ALLOW] Failed for {role_name}/{policy_name}: {e}")
     return any_removed
 
 
 def check_deny_exists(subdomain: str) -> bool:
-    """Return True if BudgetExceededDeny is present on ANY of the user's roles."""
+    """Return True if the user daily-budget deny (canonical or legacy name) is present
+    on ANY of the user's roles."""
     role_names = _candidate_role_names(subdomain)
     for role_name in role_names:
-        try:
-            iam_client.get_role_policy(
-                RoleName=role_name,
-                PolicyName=DENY_POLICY_NAME,
-            )
-            return True
-        except Exception:
-            continue
+        for policy_name in (DENY_POLICY_NAME, LEGACY_DENY_POLICY_NAME):
+            try:
+                iam_client.get_role_policy(
+                    RoleName=role_name,
+                    PolicyName=policy_name,
+                )
+                return True
+            except Exception:
+                continue
     return False
 
 
@@ -686,8 +760,12 @@ def check_department_budgets(user_spend):
 def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
     # ADR-025: reset the per-invocation sub→subdomain map (repopulated by the scans).
-    global _subdomain_by_sub
+    global _subdomain_by_sub, _valid_user_keys
     _subdomain_by_sub = {}
+    # Load the authoritative Cognito identity set so the scans below skip stale
+    # non-user rows (e.g. raw IAM principals). Empty set = fail-open (no filtering).
+    _valid_user_keys = _load_valid_user_keys()
+    print(f"[VALID-USERS] loaded {len(_valid_user_keys)} Cognito identity keys")
 
     user_spend = get_today_usage()
     all_known_users = set(user_spend.keys())
@@ -751,9 +829,17 @@ def handler(event, context):
         except Exception as e:
             print(f"SNS alert failed: {e}")
 
-    # Release users who are NOT over budget but still have Deny Policy
+    # Release users who are NOT over budget but still have a Deny policy.
+    # Bugfix (deny deadlock): a denied user can't invoke Bedrock → has no usage
+    # today → never appears in all_known_users → their Deny was never removed even
+    # after the budget was raised. Iterate users that have a budget row too
+    # (idle/denied users persist there). remove_deny_policy is a no-op
+    # (NoSuchEntity) when no Deny is attached, so this is safe.
+    # NOTE (scale): this attempts a removal for every budget-tracked user each run.
+    # Fine for dozens of users; for very large fleets, gate on a `denied` marker.
     over_budget_users = {o["user"] for o in over_budget}
-    for user in all_known_users:
+    release_candidates = all_known_users | set(user_budgets.keys())
+    for user in release_candidates:
         if user not in over_budget_users:
             if remove_deny_policy(user):
                 released += 1
