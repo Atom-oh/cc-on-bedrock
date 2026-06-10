@@ -50,6 +50,7 @@ import {
   CreateSecretCommand,
 } from "@aws-sdk/client-secrets-manager";
 import { randomBytes } from "crypto";
+import type { CustomRoute, CustomRoutesRecord } from "@/lib/types";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const ec2Client = new EC2Client({ region });
@@ -1454,4 +1455,81 @@ async function updateInstanceRecord(subdomain: string, updates: Record<string, s
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: values,
   }));
+}
+
+// ─── Custom Port Routes store (ADR-026) ───
+
+export const DEFAULT_SEED_ROUTES: CustomRoute[] = [
+  { path: "/", port: 3000, label: "Frontend" },
+  { path: "/api", port: 8000, label: "API" },
+];
+
+/** cc-user-instances 에서 customRoutes + version 조회. 없으면 [] / 0. */
+export async function getCustomRoutes(subdomain: string): Promise<CustomRoutesRecord> {
+  const result = await ddbClient.send(new GetItemCommand({
+    TableName: INSTANCE_TABLE,
+    Key: marshall({ user_id: subdomain }),
+  }));
+  if (!result.Item) return { customRoutes: [], routesVersion: 0 };
+  const item = unmarshall(result.Item);
+  return {
+    customRoutes: (item.customRoutes as CustomRoute[]) ?? [],
+    routesVersion: (item.routesVersion as number) ?? 0,
+    routeStatus: item.routeStatus,
+  };
+}
+
+/**
+ * customRoutes 를 expectedVersion 기반 조건부 쓰기로 갱신(lost-update 방지).
+ * 성공 시 새 version(=expectedVersion+1) 반환. 충돌 시 throw('version-conflict').
+ */
+export async function putCustomRoutes(
+  subdomain: string,
+  routes: CustomRoute[],
+  expectedVersion: number,
+): Promise<number> {
+  const nextVersion = expectedVersion + 1;
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :nv",
+      ConditionExpression: "attribute_not_exists(routesVersion) OR routesVersion = :ev",
+      ExpressionAttributeValues: marshall({
+        ":r": routes,
+        ":nv": nextVersion,
+        ":ev": expectedVersion,
+      }),
+    }));
+    return nextVersion;
+  } catch (err) {
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      throw new Error("version-conflict");
+    }
+    throw err;
+  }
+}
+
+/** customRoutes 미설정(속성 없음)이면 seed 1회 주입. 빈 배열은 "전부 삭제"로 보고 주입 안 함. */
+export async function seedCustomRoutesIfUnset(subdomain: string): Promise<CustomRoute[]> {
+  const result = await ddbClient.send(new GetItemCommand({
+    TableName: INSTANCE_TABLE,
+    Key: marshall({ user_id: subdomain }),
+  }));
+  const item = result.Item ? unmarshall(result.Item) : null;
+  if (item && Array.isArray(item.customRoutes)) {
+    return item.customRoutes as CustomRoute[]; // 이미 설정됨(빈 배열 포함)
+  }
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = if_not_exists(routesVersion, :z)",
+      ConditionExpression: "attribute_not_exists(customRoutes)",
+      ExpressionAttributeValues: marshall({ ":r": DEFAULT_SEED_ROUTES, ":z": 0 }),
+    }));
+  } catch {
+    /* race: 동시 seed — 무시 */
+  }
+  return DEFAULT_SEED_ROUTES;
 }
