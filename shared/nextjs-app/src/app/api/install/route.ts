@@ -75,8 +75,8 @@ cat > "\${CFG_DIR}/config" <<EOF
 # cc-bedrock-local config (mode 600). Edit as needed.
 # To change models without editing this file directly:
 #   cc --set-model sonnet 'global.anthropic.claude-sonnet-4-6[1m]'
-#   cc --set-model opus   'global.anthropic.claude-opus-4-6-v1[1m]'
-#   cc --set-model haiku  us.anthropic.claude-haiku-4-5-20251001-v1:0
+#   cc --set-model opus   'global.anthropic.claude-opus-4-8[1m]'
+#   cc --set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
 #   cc --models                         # show current values
 
 DASHBOARD_URL=\${DASHBOARD_URL}
@@ -91,8 +91,8 @@ AWS_REGION=\${COGNITO_REGION}
 # real Opus 4.6 backs "Opus"; Haiku 4.5 backs "Haiku" + background. ANTHROPIC_MODEL
 # is intentionally absent so the picker shows "Default" instead of "Custom".
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-6-v1[1m]
-ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]
+ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
 CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6
 EOF
 chmod 600 "\${CFG_DIR}/config"

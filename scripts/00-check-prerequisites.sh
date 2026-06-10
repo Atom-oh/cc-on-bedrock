@@ -56,7 +56,7 @@ fi
 
 header "4. Bedrock Model Access"
 
-for MODEL_ID in anthropic.claude-sonnet-4-6-v1 anthropic.claude-opus-4-6-v1; do
+for MODEL_ID in anthropic.claude-sonnet-4-6-v1 anthropic.claude-opus-4-8; do
   if aws bedrock get-foundation-model --model-identifier "$MODEL_ID" --region "$REGION" &>/dev/null 2>&1; then
     ok "Bedrock model: $MODEL_ID"
   else
