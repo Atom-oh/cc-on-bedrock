@@ -7,7 +7,7 @@ builds_on: ADR-014
 
 # ADR-025: 사용량/한도 파이프라인의 canonical 유저 식별자 = Cognito sub
 
-**Status:** Accepted (구현·마이그레이션 pending)
+**Status:** Accepted — 코드 cutover 구현 완료(usage-tracker/budget-check/enforcer sub-키), stale 비-Cognito 레코드 정리 완료(2026-06-10, `scripts/cleanup-stale-budget-users.py`)
 **Date:** 2026-06-09
 **Builds on:** [ADR-014 Local Governance Mode](ADR-014-local-governance-mode.md)
 **Collaboration:** co-agent 패널(Kiro CLI · Codex · Gemini) 의사결정, Claude chair 합성

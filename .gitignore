@@ -58,3 +58,7 @@ docs/superpowers/plans/
 docs-*.png
 *.mov
 docusaurus-*.png
+
+# Claude Code local (personal, per-repo)
+.claude/co-agent.local.json
+.claude/worktrees/
