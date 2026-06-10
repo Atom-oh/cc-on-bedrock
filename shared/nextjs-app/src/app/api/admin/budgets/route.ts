@@ -9,6 +9,7 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
+import { listCognitoUsers } from "@/lib/aws-clients";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -75,20 +76,38 @@ export async function GET(req: NextRequest) {
     }
 
     if (!type || type === "user") {
-      const userResult = await dynamodb.send(new ScanCommand({
-        TableName: USER_BUDGETS_TABLE,
-      }));
-      results.users = (userResult.Items ?? []).map((item) => {
-        const u = unmarshall(item);
-        return {
-          userId: u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
-          department: u.department ?? "default",
-          dailyTokenLimit: Number(u.dailyTokenLimit ?? 100000),
-          monthlyBudget: Number(u.monthlyBudget ?? 0),
-          currentSpend: Number(u.currentSpend ?? 0),
-          updatedAt: u.updatedAt ?? "",
-        };
-      });
+      const [userResult, cognitoUsers] = await Promise.all([
+        dynamodb.send(new ScanCommand({ TableName: USER_BUDGETS_TABLE })),
+        listCognitoUsers(),
+      ]);
+
+      // Only surface budget rows that map to a real Cognito user. cc-user-budgets
+      // rows are written by budget-check.py from cc-on-bedrock-usage PKs, which
+      // historically could be a raw IAM principal (e.g. "awsops-ec2-role") rather
+      // than a Cognito identity. Accept a row whose user_id matches any authoritative
+      // Cognito identifier — sub (ADR-025), legacy subdomain, email, or username —
+      // and drop everything else (stale non-user rows).
+      const validUserKeys = new Set<string>();
+      for (const cu of cognitoUsers) {
+        if (cu.sub) validUserKeys.add(cu.sub);
+        if (cu.subdomain) validUserKeys.add(cu.subdomain);
+        if (cu.email) validUserKeys.add(cu.email);
+        if (cu.username) validUserKeys.add(cu.username);
+      }
+
+      results.users = (userResult.Items ?? [])
+        .map((item) => {
+          const u = unmarshall(item);
+          return {
+            userId: u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
+            department: u.department ?? "default",
+            dailyTokenLimit: Number(u.dailyTokenLimit ?? 100000),
+            monthlyBudget: Number(u.monthlyBudget ?? 0),
+            currentSpend: Number(u.currentSpend ?? 0),
+            updatedAt: u.updatedAt ?? "",
+          };
+        })
+        .filter((u) => validUserKeys.has(u.userId));
     }
 
     return NextResponse.json({

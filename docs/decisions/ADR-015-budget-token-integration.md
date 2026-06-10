@@ -7,7 +7,8 @@ verification_required: false
 # ADR-015: Dollar Budget × Normalized Token Limit Integration
 
 ## Status
-Accepted (2026-05-12) — implemented in `cdk/lib/lambda/budget-check.py` (canonical policy names + Local Governance role coverage)
+Accepted (2026-05-12) — implemented in `cdk/lib/lambda/budget-check.py` (canonical policy names + Local Governance role coverage).
+Canonical 정책명 cutover 완료 (2026-06-10): `cc-bedrock-user-daily-deny` / `cc-bedrock-dept-budget-deny`로 attach하며, legacy 이름(`BudgetExceededDeny` / `DeptBudgetExceededDeny`)은 attach/release 시 발견되는 대로 자동 제거 (ADR-020 runtime-upsert 패턴, 일회성 마이그레이션 스크립트 없음).
 
 ## Context
 ADR-006은 부서 단위 **달러 월간 예산**을 정의하고, 초과 시 5분 cycle의 `budget-check.py`가 부서 전체 사용자에게 IAM Deny를 부착한다. ADR-014는 Local Governance Mode에 **normalized token 한도**(사용자/부서, daily/weekly/monthly)를 도입하고, DynamoDB Stream 기반으로 1-3분 내 Deny를 부착한다.

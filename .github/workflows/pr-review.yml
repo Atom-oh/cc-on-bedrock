@@ -14,8 +14,8 @@ env:
   AWS_REGION: ap-northeast-2
   # Pin the model explicitly so the workflow does not silently break when the
   # claude CLI default changes or the model is unavailable in the AWS account.
-  # Opus 4.7 is verified active in ap-northeast-2 (inference-profile/global.anthropic.claude-opus-4-7).
-  ANTHROPIC_MODEL: global.anthropic.claude-opus-4-7
+  # Opus 4.8 — inference-profile/global.anthropic.claude-opus-4-8 in ap-northeast-2.
+  ANTHROPIC_MODEL: global.anthropic.claude-opus-4-8
   CLAUDE_CODE_USE_BEDROCK: "1"
 
 jobs:
