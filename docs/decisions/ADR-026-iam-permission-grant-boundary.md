@@ -5,7 +5,7 @@ verification_required: true
 builds_on: ADR-020
 ---
 
-# ADR-026: 사용자 IAM 권한 신청/승인 — boundary⊇catalog 정적 확장 + EC2/Local 양쪽 부여
+# ADR-026: 사용자 IAM 권한 신청/승인 — 서비스 천장 boundary + admin 위임형 resource-specific 부여 (EC2/Local 양쪽)
 
 **Status:** Accepted (구현 pending)
 **Date:** 2026-06-10
@@ -40,8 +40,11 @@ builds_on: ADR-020
 
 ## Decision
 
-**A + D 혼합**을 채택한다: permission boundary 를 **카탈로그의 상위집합(boundary ⊇ catalog)으로
-정적 확장**하되, 그 불변식을 **CI 게이트로 강제**한다.
+**A + D 혼합(v3)**을 채택한다: permission boundary 는 **신청 가능 서비스의 천장(service ceiling)으로
+정적 확장**하고(`boundary ⊇ 신청가능 서비스` 불변식을 **CI 게이트로 강제**), 부여는 고정 policy-set
+카탈로그(`IAM_POLICY_SETS`)가 아닌 **자유형 resource-specific 신청**(구체 action + 구체 resource ARN,
+`Resource:*` 금지)을 admin/dept-manager 가 승인하는 위임형으로 한다. 구현 계획:
+`docs/superpowers/plans/2026-06-10-adr-026-iam-permission-grant.md` (T1~T8).
 
 핵심 근거(패널 합의): **permission boundary 는 "상한"일 뿐 "부여"가 아니다.** inline Allow 가 없으면
 실권한 = 0 (IAM 은 boundary ∩ inline 의 명시적 Allow 교집합). 따라서 boundary 를 카탈로그 서비스로
@@ -73,7 +76,7 @@ resource-specific 승인"으로 달성**한다 — boundary 는 서비스 천장
 
 ## Considered Alternatives
 
-### A. 정적 boundary 확장 (+ D 규율) — **채택**
+### A. 정적 boundary 확장 (+ D 규율) — **채택** (v1 형태; v2~v3 에서 catalog→자유형 신청·서비스 천장으로 진화)
 - **장점(검증):** boundary=상한이라 확장해도 실권한 증분 없음(Kiro). 운영 단순 — boundary managed policy
   1개만 관리, per-user 분기·race 없음(Kiro). 승인 즉시 효력, 셀프서비스 UX 최상(Gemini). 카탈로그+boundary
   를 한 PR 로 리뷰 → 감사성↑(Codex).
@@ -102,12 +105,13 @@ resource-specific 승인"으로 달성**한다 — boundary 는 서비스 천장
 **부정/비용:**
 - 전 사용자의 이론적 권한 상한이 카탈로그 합집합으로 상승 — 단 실효 권한은 승인된 inline 에만 의존하므로
   실질 위험 증분 미미(boundary breach 조건 = inline 탈취와 동일). 보안 리뷰 대상.
-- boundary 는 계정/프로젝트 스코프로 좁게 유지해야 의미 — 리소스 스코핑 설계 필요.
+- boundary 는 서비스 천장으로 넓어짐(v2 정정) — 최소권한은 boundary ARN 스코프가 아니라 **신청 검증
+  (`Resource:*` 금지) + admin 승인**에서 달성. boundary 에 새 서비스 추가는 보안 리뷰 대상.
 
 **리스크 & 검증(verification_required):**
 - boundary 확장 후 **미승인 사용자가 해당 서비스에 실제 접근 불가**함을 E2E 확인(inline 없으면 deny).
 - 승인 후 EC2 task + Local 역할 양쪽에서 권한이 실제 동작함을 확인.
-- CI 게이트가 `IAM_POLICY_SETS ⊄ boundary` 일 때 빌드 실패시키는지 확인.
+- CI 게이트가 `신청가능 서비스 allowlist ⊄ boundary` 일 때 빌드 실패시키는지 확인.
 
 ## Verification
 
@@ -120,10 +124,10 @@ files:
   - path: cdk/lib/lambda/role_factory.py
     must_contain:
       - "cc-on-bedrock-task-boundary"
+  # NOTE: v3 구현(plan T1~T8)이 addIamPolicySet/IAM_POLICY_SETS 를 자유형 grant 로 대체할 예정이므로
+  # 심볼 이름은 고정하지 않는다 — 구현 완료 시 applyIamGrant/validateIamRequest 기준으로 갱신할 것.
   - path: shared/nextjs-app/src/lib/ec2-clients.ts
-    must_contain:
-      - "addIamPolicySet"
-      - "IAM_POLICY_SETS"
+    must_exist: true
   - path: shared/nextjs-app/src/app/api/admin/approval-requests/route.ts
     must_exist: true
 
@@ -133,14 +137,16 @@ semantic:
     context_files:
       - cdk/lib/02-security-stack.ts
       - cdk/lib/lambda/role_factory.py
-  - claim: "IAM policy set 승인(addIamPolicySet)은 inline policy를 역할에 부착하며, 카탈로그는 IAM_POLICY_SETS에 정적으로 정의된다"
+  - claim: "사용자 IAM 권한 확장은 admin 승인 플로우(approval-requests)를 거쳐야만 역할에 inline policy로 부착된다"
     context_files:
       - shared/nextjs-app/src/lib/ec2-clients.ts
+      - shared/nextjs-app/src/app/api/admin/approval-requests/route.ts
 ```
 
 ## Follow-ups
-- `cc-on-bedrock-task-boundary` 확장(스코프된 리소스) — `02-security-stack.ts`.
-- `addIamPolicySet`/`removeIamPolicySet` 양쪽 역할 대상 + graceful skip — `ec2-clients.ts`.
-- `IAM_POLICY_SETS ⊆ boundary` CI 검증 스크립트.
-- `approval-requests` authz: admin OR dept-manager(해당 부서).
-- (선택) `ec2:Describe` read-only policy set.
+구현 계획 `docs/superpowers/plans/2026-06-10-adr-026-iam-permission-grant.md` (v3, T1~T8):
+- T1 요청 검증 모듈(`Resource:*` 금지 + 예외 allowlist) · T2 자유형 신청 라우트(sub/department 저장)
+- T3 LLM advisory 주석(프롬프트 인젝션 격리) · T4 boundary 서비스 천장 — `02-security-stack.ts`
+- T5 승인 시 양쪽 역할 부착(fail-loud, 보상 rollback) — `applyIamGrant`/`removeIamGrant`
+- T6 `신청가능 서비스 allowlist ⊆ boundary` synth-JSON CI 게이트
+- T7 승인 authz: admin OR dept-manager(저장된 부서) · T8 기존 부여분 reconcile + admin UI
