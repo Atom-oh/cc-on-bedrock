@@ -38,6 +38,7 @@ import {
   GetRoleCommand,
   CreateRoleCommand,
   PutRolePolicyCommand,
+  DeleteRolePolicyCommand,
   TagRoleCommand,
   CreateInstanceProfileCommand,
   AddRoleToInstanceProfileCommand,
@@ -995,6 +996,95 @@ export async function changeSecurityPolicy(
 
   await updateInstanceRecord(subdomain, { securityPolicy: newPolicy });
   return { applied: true };
+}
+
+// ─── ADR-026 T5: resource-specific grant onto BOTH the EC2 task role and the
+// Local Governance role. Server-side re-validates statements (never trust stored
+// data), skips legitimately-absent roles, and fail-loud with compensating rollback
+// on partial failure so approval state never diverges from actual IAM state. ───
+
+const GRANT_LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-";
+
+function isNoSuchEntity(e: unknown): boolean {
+  return (e as { name?: string })?.name === "NoSuchEntityException";
+}
+
+interface GrantArgs {
+  subdomain: string;
+  sub: string;
+  requestId: string;
+  statements: IamStatementInput[];
+  iam?: IAMClient;
+  accountId?: string;
+  region?: string;
+}
+type IamStatementInput = import("./iam-request-validation").IamStatement;
+
+function grantRoleNames(subdomain: string, sub: string): string[] {
+  const roles: string[] = [];
+  if (subdomain) roles.push(`cc-on-bedrock-task-${subdomain}`);
+  if (sub) roles.push(`${GRANT_LOCAL_ROLE_PREFIX}${sub}`);
+  return roles;
+}
+
+export async function applyIamGrant(args: GrantArgs): Promise<{ attached: string[] }> {
+  const { validateIamRequest, DEFAULT_SERVICE_ALLOWLIST, DEFAULT_WILDCARD_OK_ACTIONS } = await import("./iam-request-validation");
+  const v = validateIamRequest(args.statements, {
+    serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
+    wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
+    accountId: args.accountId ?? process.env.AWS_ACCOUNT_ID,
+    region: args.region ?? process.env.AWS_REGION,
+  });
+  if (!v.ok) throw new Error(`grant re-validation failed (not valid): ${v.errors.join("; ")}`);
+
+  const iam = args.iam ?? iamClient;
+  // PolicyName is per-requestId; requestId is a randomUUID per request (container-request),
+  // so there is no cross-request name collision — re-approving the same request just
+  // re-puts identical content (idempotent).
+  const policyName = `Grant-${args.requestId}`;
+  const roles = grantRoleNames(args.subdomain, args.sub);
+  if (roles.length === 0) {
+    // gate round-1 (Codex MAJOR): never silently "succeed" with zero target roles.
+    throw new Error("grant has no target role — both subdomain and sub are empty");
+  }
+  const doc = JSON.stringify({
+    Version: "2012-10-17",
+    Statement: args.statements.map((s) => ({ Effect: "Allow", Action: s.Action, Resource: s.Resource })),
+  });
+  const attached: string[] = [];
+  for (const roleName of roles) {
+    try {
+      await iam.send(new PutRolePolicyCommand({ RoleName: roleName, PolicyName: policyName, PolicyDocument: doc }));
+      attached.push(roleName);
+    } catch (e) {
+      if (isNoSuchEntity(e)) continue; // role legitimately absent (that mode unused)
+      // compensating rollback of already-attached roles, then fail loud.
+      const rollbackFailed: string[] = [];
+      for (const done of attached) {
+        try {
+          await iam.send(new DeleteRolePolicyCommand({ RoleName: done, PolicyName: policyName }));
+        } catch {
+          rollbackFailed.push(done); // orphan grant — surfaced below; reconcile (T8) is the backstop
+        }
+      }
+      const orphan = rollbackFailed.length ? ` ORPHAN GRANT on ${rollbackFailed.join(", ")} (run reconcile)` : "";
+      throw new Error(`grant attach failed on ${roleName}: ${e instanceof Error ? e.message : e}; rolled back ${attached.filter((r) => !rollbackFailed.includes(r)).join(", ") || "none"}.${orphan}`);
+    }
+  }
+  return { attached };
+}
+
+export async function removeIamGrant(args: { subdomain: string; sub: string; requestId: string; iam?: IAMClient }): Promise<void> {
+  const iam = args.iam ?? iamClient;
+  const policyName = `Grant-${args.requestId}`;
+  for (const roleName of grantRoleNames(args.subdomain, args.sub)) {
+    try {
+      await iam.send(new DeleteRolePolicyCommand({ RoleName: roleName, PolicyName: policyName }));
+    } catch (e) {
+      if (isNoSuchEntity(e)) continue; // role or policy already gone — fine
+      throw new Error(`grant remove failed on ${roleName}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
 }
 
 /**
