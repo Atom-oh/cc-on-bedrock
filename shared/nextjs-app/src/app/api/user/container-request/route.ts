@@ -15,6 +15,7 @@ import {
   DEFAULT_WILDCARD_OK_ACTIONS,
   type IamStatement,
 } from "@/lib/iam-request-validation";
+import { annotateIamRequest } from "@/lib/iam-resource-annotator";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
@@ -141,6 +142,9 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "Invalid IAM request", details: built.errors }, { status: 400 });
         }
         baseItem.statements = { S: built.statementsJson! };
+        // ADR-026 T3/T8: advisory LLM risk note for the admin reviewer (graceful: null on failure).
+        const llmNote = await annotateIamRequest(statements);
+        if (llmNote) baseItem.llmNote = { S: llmNote };
       } else if (policySets && Array.isArray(policySets) && policySets.length > 0) {
         const invalid = policySets.filter((p) => !IAM_POLICY_SETS[p]);
         if (invalid.length > 0) {

@@ -67,6 +67,8 @@ export async function GET(req: NextRequest) {
         newPolicy: u.newPolicy,
         currentPolicy: u.currentPolicy,
         policySets: u.policySets,
+        statements: u.statements, // ADR-026: JSON string of requested action+resource
+        llmNote: u.llmNote, // ADR-026 T3: advisory LLM risk summary
         reason: u.reason,
         // Legacy fields
         resourceTier: u.resourceTier,
