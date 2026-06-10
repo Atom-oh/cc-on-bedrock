@@ -21,11 +21,60 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
   const [copied, setCopied] = useState(false);
   const autoHideRef = useRef<NodeJS.Timeout | null>(null);
 
+  // ─── Exposed ports (custom routes, ADR-026) ───
+  type RouteRow = { path: string; port: number; label: string };
+  const [routes, setRoutes] = useState<RouteRow[]>([]);
+  const [routeStatus, setRouteStatus] = useState<{ path: string; state: string; reason?: string }[]>([]);
+  const [routesSaving, setRoutesSaving] = useState(false);
+  const [routesError, setRoutesError] = useState<string | null>(null);
+  const [routesPending, setRoutesPending] = useState(false);
+
   const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
   const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
   const codeServerUrl = user.subdomain
     ? `https://${user.subdomain}.${devSubdomain}.${domainName}`
     : null;
+
+  // Load custom routes
+  useEffect(() => {
+    fetch("/api/user/custom-routes")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) {
+          setRoutes(d.data.routes ?? []);
+          setRouteStatus(d.data.status ?? []);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveRoutes = async () => {
+    setRoutesSaving(true);
+    setRoutesError(null);
+    try {
+      const res = await fetch("/api/user/custom-routes", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routes }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.success) {
+        setRoutesError(d.error ?? "저장 실패");
+        return;
+      }
+      setRoutesPending(d.data.pending === true);
+    } finally {
+      setRoutesSaving(false);
+    }
+  };
+
+  const addRoute = () => {
+    if (routes.length >= 5) return;
+    setRoutes([...routes, { path: "/preview", port: 5173, label: "App" }]);
+  };
+  const removeRoute = (i: number) => setRoutes(routes.filter((_, idx) => idx !== i));
+  const updateRoute = (i: number, patch: Partial<RouteRow>) =>
+    setRoutes(routes.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
   // Fetch current code-server password
   useEffect(() => {
@@ -301,6 +350,77 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
             onSuccess={() => setSuccess("IAM extension request submitted")}
             onError={(msg) => setError(msg)}
           />
+
+          {/* ─── Exposed Ports (custom routes, ADR-026) ─── */}
+          <section className="mt-8">
+            <h3 className="text-sm font-semibold text-gray-200">포트 노출 / Exposed Ports</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              앱이 해당 path 밑에서 서빙되도록 설정 필요 (Vite <code>base</code>, Next <code>basePath</code>,
+              Streamlit <code>--server.baseUrlPath</code>). 최대 5개. 8080은 code-server 예약.
+            </p>
+            <div className="mt-3 space-y-2">
+              {routes.map((r, i) => {
+                const st = routeStatus.find((s) => s.path === r.path);
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      value={r.label}
+                      onChange={(e) => updateRoute(i, { label: e.target.value })}
+                      placeholder="Label"
+                      className="w-28 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
+                    />
+                    <input
+                      value={r.path}
+                      onChange={(e) => updateRoute(i, { path: e.target.value })}
+                      placeholder="/preview"
+                      className="w-32 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
+                    />
+                    <input
+                      type="number"
+                      value={r.port}
+                      onChange={(e) => updateRoute(i, { port: Number(e.target.value) })}
+                      placeholder="5173"
+                      className="w-24 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
+                    />
+                    <span className="text-xs text-gray-500 truncate">
+                      {codeServerUrl ? `${codeServerUrl}${r.path === "/" ? "" : r.path}` : ""}
+                    </span>
+                    {st &&
+                      (st.state === "ok" ? (
+                        <span className="text-xs text-green-400">✅</span>
+                      ) : (
+                        <span className="text-xs text-amber-400" title={st.reason}>
+                          ⚠️
+                        </span>
+                      ))}
+                    <button onClick={() => removeRoute(i)} className="text-xs text-red-400">
+                      삭제
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={addRoute}
+                disabled={routes.length >= 5}
+                className="text-sm px-3 py-1 rounded bg-gray-800 text-gray-200 disabled:opacity-50"
+              >
+                + 추가
+              </button>
+              <button
+                onClick={saveRoutes}
+                disabled={routesSaving}
+                className="text-sm px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
+              >
+                저장
+              </button>
+              {routesPending && (
+                <span className="text-xs text-amber-400">인스턴스 시작 시 반영됩니다</span>
+              )}
+              {routesError && <span className="text-xs text-red-400">{routesError}</span>}
+            </div>
+          </section>
         </div>
       </div>
     </div>
