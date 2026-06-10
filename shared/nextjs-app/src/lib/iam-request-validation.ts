@@ -1,0 +1,153 @@
+/**
+ * ADR-026 — IAM permission request validation.
+ *
+ * Developers request specific (action, resource) pairs; an admin approves. The
+ * security model is NOT a narrow boundary but "no wildcards + admin review", so
+ * this validator is the first gate: it REJECTS wildcard actions/resources and
+ * dangerous resource-policy/delegation actions, and confines requests to an
+ * admin-controlled service allowlist within the platform account/region.
+ *
+ * Resolution rules (see ADR-026 Decision / plan T1):
+ *   - reject `*`, `*:*`, service-wildcard actions (`s3:*`)
+ *   - reject `NotAction`/`NotResource`
+ *   - reject `Resource:"*"` EXCEPT when every action in the statement is a
+ *     resource-level-unsupported action (e.g. `ec2:Describe*`)
+ *   - reject namespace-wide ARN wildcards (`arn:...:*`, `table/*`) but allow
+ *     legit object-path wildcards (`arn:aws:s3:::bucket/prefix/*`)
+ *   - reject dangerous actions (resource-policy / public-making / delegation)
+ *   - reject services outside the allowlist and cross-account ARNs
+ */
+
+export interface IamStatement {
+  Action: string[];
+  Resource: string[];
+}
+
+export interface ValidateOpts {
+  /** lowercased service names devs may request, e.g. ["s3","sqs",...] */
+  serviceAllowlist: string[];
+  /** actions that don't support resource-level perms → Resource:"*" allowed.
+   *  lowercased; a trailing `*` is a prefix glob (e.g. "ec2:describe*"). */
+  wildcardOkActions: string[];
+  /** dangerous actions to deny outright; defaults applied when omitted */
+  dangerousActionDenylist?: RegExp[];
+  /** platform account id; cross-account ARNs are rejected when set */
+  accountId?: string;
+  /** platform region; cross-region ARNs are rejected when set (empty = global) */
+  region?: string;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  errors: string[];
+}
+
+// Resource-policy mutation, public-making, and privilege-delegation actions.
+// These can escalate beyond the granted resource even when scoped to "own" ARNs.
+const DEFAULT_DANGEROUS: RegExp[] = [
+  /:put[a-z]*policy$/i, // s3:PutBucketPolicy, sns:PutResourcePolicy, ...
+  /:set[a-z]*attributes$/i, // sns:SetTopicAttributes, sqs:SetQueueAttributes
+  /^lambda:(add|remove)permission$/i,
+  /^iam:/i, // any iam:* (PassRole, CreateRole, ...)
+  /^sts:assumerole/i,
+  /:[a-z]*resourcepolicy$/i, // *PutResourcePolicy / *DeleteResourcePolicy
+];
+
+function actionMatchesAny(action: string, patterns: string[]): boolean {
+  const a = action.toLowerCase();
+  return patterns.some((p) => {
+    const pl = p.toLowerCase();
+    return pl.endsWith("*") ? a.startsWith(pl.slice(0, -1)) : a === pl;
+  });
+}
+
+export function validateIamRequest(statements: IamStatement[], opts: ValidateOpts): ValidationResult {
+  const errors: string[] = [];
+  const dangerous = opts.dangerousActionDenylist ?? DEFAULT_DANGEROUS;
+  const allowlist = opts.serviceAllowlist.map((s) => s.toLowerCase());
+
+  for (const raw of statements) {
+    const obj = raw as unknown as Record<string, unknown>;
+    if (obj.NotAction || obj.NotResource) {
+      errors.push("NotAction/NotResource is not allowed");
+      continue;
+    }
+    const actions = Array.isArray(raw.Action) ? raw.Action : [];
+    const resources = Array.isArray(raw.Resource) ? raw.Resource : [];
+    if (actions.length === 0) errors.push("Action[] is required");
+    if (resources.length === 0) errors.push("Resource[] is required");
+
+    const actionServices = new Set<string>();
+    for (const action of actions) {
+      if (action === "*" || action === "*:*") {
+        errors.push(`wildcard action not allowed: ${action}`);
+        continue;
+      }
+      const [svc, op] = action.split(":");
+      if (!svc || !op) {
+        errors.push(`invalid action format: ${action}`);
+        continue;
+      }
+      // Reject ANY wildcard inside the action — requests must name specific
+      // actions, else partial wildcards (s3:Put*Policy, lambda:*Permission)
+      // evade both the "specific action" rule and the dangerous-action denylist.
+      if (op.includes("*") || op.includes("?")) {
+        errors.push(`wildcard not allowed in action: ${action}`);
+        continue;
+      }
+      actionServices.add(svc.toLowerCase());
+      if (!allowlist.includes(svc.toLowerCase())) {
+        errors.push(`service not in allowlist: ${svc}`);
+      }
+      if (dangerous.some((re) => re.test(action))) {
+        errors.push(`dangerous action not allowed: ${action}`);
+      }
+    }
+
+    const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions));
+    for (const res of resources) {
+      if (res === "*") {
+        if (!allActionsWildcardOk) {
+          errors.push("Resource:'*' only allowed for resource-level-unsupported actions");
+        }
+        continue;
+      }
+      if (!res.toLowerCase().startsWith("arn:")) {
+        errors.push(`resource must be an ARN or '*': ${res}`);
+        continue;
+      }
+      const parts = res.split(":"); // arn:partition:service:region:account:resource...
+      const arnService = (parts[2] ?? "").toLowerCase();
+      const region = parts[3] ?? "";
+      const account = parts[4] ?? "";
+      const resourcePart = parts.slice(5).join(":");
+      if (resourcePart === "" || resourcePart === "*") {
+        errors.push(`resource too broad: ${res}`);
+        continue;
+      }
+      // Wildcards: only S3 object keys may use them, and only AFTER a concrete
+      // bucket + "/" (e.g. bucket/prefix/*). Reject bucket-name wildcards (my*)
+      // and any wildcard in non-S3 resource ids (table/*, my-queue*).
+      if (/[*?]/.test(resourcePart)) {
+        const slash = resourcePart.indexOf("/");
+        const bucket = slash >= 0 ? resourcePart.slice(0, slash) : resourcePart;
+        if (arnService !== "s3" || slash < 0 || bucket.length === 0 || /[*?]/.test(bucket)) {
+          errors.push(`wildcard not allowed in resource id (use s3 bucket/prefix/*): ${res}`);
+          continue;
+        }
+      }
+      // resource ARN service must match one of the statement's action services
+      if (actionServices.size > 0 && !actionServices.has(arnService)) {
+        errors.push(`resource service '${arnService}' does not match action service(s): ${res}`);
+      }
+      if (account && opts.accountId && account !== opts.accountId) {
+        errors.push(`cross-account ARN not allowed: ${res}`);
+      }
+      if (region && opts.region && region !== opts.region) {
+        errors.push(`cross-region ARN not allowed: ${res}`);
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
+}
