@@ -7,8 +7,10 @@ import {
   changeTier,
   changeSecurityPolicy,
   addIamPolicySet,
+  applyIamGrant,
   IAM_POLICY_SETS,
 } from "@/lib/ec2-clients";
+import type { IamStatement } from "@/lib/iam-request-validation";
 import {
   DynamoDBClient,
   ScanCommand,
@@ -150,13 +152,26 @@ export async function POST(req: NextRequest) {
       await updateCognitoUserAttribute(email, "custom:security_policy", newPolicy);
       applyResult = { dlpChange: result };
     } else if (requestType === "iam_extension") {
-      const policySets = request.policySets as string[];
-      const results = [];
-      for (const ps of policySets) {
-        const result = await addIamPolicySet(subdomain, ps);
-        results.push(result);
+      // ADR-026 T5: free-form statements grant onto BOTH task + local roles
+      // (re-validated server-side). Legacy policySets kept for back-compat.
+      if (request.statements) {
+        const statements = JSON.parse(request.statements as string) as IamStatement[];
+        const grant = await applyIamGrant({
+          subdomain,
+          sub: (request.sub as string) ?? "",
+          requestId: request.requestId as string,
+          statements,
+        });
+        applyResult = { iamGrant: grant };
+      } else {
+        const policySets = (request.policySets as string[]) ?? [];
+        const results = [];
+        for (const ps of policySets) {
+          const result = await addIamPolicySet(subdomain, ps);
+          results.push(result);
+        }
+        applyResult = { iamPolicies: results };
       }
-      applyResult = { iamPolicies: results };
     } else {
       // Legacy container_request: just approve and assign subdomain
       const assignedSubdomain = subdomain || emailToSubdomain(email);
