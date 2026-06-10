@@ -613,6 +613,10 @@ def _scan_limits_limits():
                 out[("USER", pk[5:], period)] = mx
             elif pk.startswith("DEPT#"):
                 out[("DEPT", pk[5:], period)] = mx
+        last_key = r.get("LastEvaluatedKey")
+        pages += 1
+        if not last_key or pages >= MAX_SCAN_PAGES:
+            break
     return out
 
 
