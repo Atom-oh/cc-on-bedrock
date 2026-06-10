@@ -38,7 +38,7 @@ CLOUDFRONT_SECRET = os.environ.get("CLOUDFRONT_SECRET", "")
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 s3 = boto3.client("s3", region_name=REGION)
 
-# ─── Custom Port Routes validation (ADR-026, B-H1/B-M3 defense-in-depth) ───
+# ─── Custom Port Routes validation (ADR-027, B-H1/B-M3 defense-in-depth) ───
 import re
 import ipaddress
 
@@ -259,7 +259,7 @@ http {{
 """
 
 # Upstream block template — code-server (8080) built-in only.
-# frontend(3000)/API(8000) and any other ports now come from customRoutes (ADR-026).
+# frontend(3000)/API(8000) and any other ports now come from customRoutes (ADR-027).
 UPSTREAM_TEMPLATE = """    # Upstream for {subdomain} (code-server, built-in)
     upstream codeserver_{subdomain} {{
         server {container_ip}:8080 max_fails=3 fail_timeout=5s;
@@ -343,7 +343,7 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
             proxy_pass http://codeserver_{subdomain};
         }}
 
-        # ─── User custom port routes (ADR-026) — root + subpaths from customRoutes ───
+        # ─── User custom port routes (ADR-027) — root + subpaths from customRoutes ───
         # Generated per-user: root "/" (if defined) + "= /path" & "^~ /path/" for each.
         # When no root route exists, a fallback "location /" is appended.
 {custom_locations}

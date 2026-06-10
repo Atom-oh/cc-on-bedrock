@@ -1457,7 +1457,7 @@ async function updateInstanceRecord(subdomain: string, updates: Record<string, s
   }));
 }
 
-// ─── Custom Port Routes store (ADR-026) ───
+// ─── Custom Port Routes store (ADR-027) ───
 
 export const DEFAULT_SEED_ROUTES: CustomRoute[] = [
   { path: "/", port: 3000, label: "Frontend" },

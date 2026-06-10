@@ -115,7 +115,7 @@ export interface ContainerInfo {
   customRoutes?: CustomRoute[];
 }
 
-// ─── Custom Port Routes (ADR-009 extension, ADR-026) ───
+// ─── Custom Port Routes (ADR-009 extension, ADR-027) ───
 
 export interface CustomRoute {
   path: string;   // "/" 또는 "/preview", "/api/v1"

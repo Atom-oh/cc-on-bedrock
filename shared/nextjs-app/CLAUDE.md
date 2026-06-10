@@ -54,7 +54,7 @@
 - `src/app/api/user/keep-alive/route.ts` - 유휴 타임아웃 연장 (EBS)
 - `src/app/api/user/resource-review/route.ts` - AI 리소스 리뷰 (EBS 확장 전 사용량 분석)
 - `src/app/api/user/container-request/route.ts` - 인스턴스 생성 요청
-- `src/app/api/user/custom-routes/route.ts` - **포트 노출 CRUD** (GET/PUT, 본인 customRoutes, max 5, version CAS, routing-table 미러, ADR-026)
+- `src/app/api/user/custom-routes/route.ts` - **포트 노출 CRUD** (GET/PUT, 본인 customRoutes, max 5, version CAS, routing-table 미러, ADR-027)
 - `src/app/api/local/credentials/route.ts` - STS Issuer Lambda 호출, 8h Bedrock 자격증명 반환 (Local Governance, ADR-014)
 - `src/app/api/local/limits/route.ts` - 본인 사용자의 normalized token 한도/사용량/Deny 상태 조회 (Local Governance, ADR-014)
 
@@ -74,7 +74,7 @@
 - `environment-tab.tsx` - 환경 정보 탭 (프로비저닝, 상태, 멀티URL [IDE/WEB/API], 메트릭, 사용량)
 - `provisioning-progress.tsx` - SSE 6단계 프로비저닝 프로그레스 (Cancel, ARIA)
 - `storage-tab.tsx` - 스토리지 탭 (디스크 게이지, EBS 확장 신청, Keep-Alive)
-- `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보, **포트 노출 CRUD** ADR-026)
+- `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보, **포트 노출 CRUD** ADR-027)
 - `first-launch-guide.tsx` - 첫 실행 가이드 (환경 설정 안내)
 - `welcome-onboarding.tsx` - 온보딩 워크플로우
 

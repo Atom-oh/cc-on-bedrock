@@ -36,7 +36,7 @@ export const updateUserSchema = z.object({
   securityPolicy: z.enum(["open", "restricted", "locked"]).optional(),
 });
 
-// ─── Custom Port Routes (ADR-009 extension, ADR-026) ───
+// ─── Custom Port Routes (ADR-009 extension, ADR-027) ───
 
 // code-server 내부경로 + nginx 인프라 경로 (등록 불가). /api 는 제거(seedable).
 export const RESERVED_PATHS = [

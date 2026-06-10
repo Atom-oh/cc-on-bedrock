@@ -21,7 +21,7 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
   const [copied, setCopied] = useState(false);
   const autoHideRef = useRef<NodeJS.Timeout | null>(null);
 
-  // ─── Exposed ports (custom routes, ADR-026) ───
+  // ─── Exposed ports (custom routes, ADR-027) ───
   type RouteRow = { path: string; port: number; label: string };
   const [routes, setRoutes] = useState<RouteRow[]>([]);
   const [routeStatus, setRouteStatus] = useState<{ path: string; state: string; reason?: string }[]>([]);
@@ -351,7 +351,7 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
             onError={(msg) => setError(msg)}
           />
 
-          {/* ─── Exposed Ports (custom routes, ADR-026) ─── */}
+          {/* ─── Exposed Ports (custom routes, ADR-027) ─── */}
           <section className="mt-8">
             <h3 className="text-sm font-semibold text-gray-200">포트 노출 / Exposed Ports</h3>
             <p className="text-xs text-gray-500 mt-1">

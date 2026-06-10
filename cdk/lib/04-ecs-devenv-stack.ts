@@ -224,7 +224,7 @@ export class EcsDevenvStack extends cdk.Stack {
     });
     nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
 
-    // Allow Nginx → DevEnv: code-server (8080) + user custom ports (ADR-026).
+    // Allow Nginx → DevEnv: code-server (8080) + user custom ports (ADR-027).
     // Source is NginxSg only (SG chaining, B-H3) — the only host that can reach these
     // high ports is the shared Nginx proxy, which proxies only validated routes.
     // Range 1024-65535 avoids per-route SG redeploys when users add/remove custom ports.

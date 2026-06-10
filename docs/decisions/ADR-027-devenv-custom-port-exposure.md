@@ -3,7 +3,7 @@ status: Accepted
 verification_required: false
 ---
 
-# ADR-026: DevEnv 사용자 커스텀 포트 노출 (ADR-009 확장)
+# ADR-027: DevEnv 사용자 커스텀 포트 노출 (ADR-009 확장)
 
 ## Status
 Accepted
