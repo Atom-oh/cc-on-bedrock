@@ -7,8 +7,11 @@ import {
   changeTier,
   changeSecurityPolicy,
   addIamPolicySet,
+  applyIamGrant,
   IAM_POLICY_SETS,
 } from "@/lib/ec2-clients";
+import type { IamStatement } from "@/lib/iam-request-validation";
+import { canApproveRequest, isApprover, type ApproverUser } from "@/lib/approval-authz";
 import {
   DynamoDBClient,
   ScanCommand,
@@ -22,11 +25,14 @@ const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-req
 
 const dynamodb = new DynamoDBClient({ region });
 
+// ADR-026 T7 — approval authz lives in @/lib/approval-authz (pure, unit-tested).
+
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
+  if (!session?.user || !isApprover(session.user as unknown as ApproverUser)) {
+    return NextResponse.json({ error: "Approver access required (admin or dept-manager)" }, { status: 403 });
   }
+  const approver = session.user as unknown as ApproverUser;
 
   const { searchParams } = new URL(req.url);
   const statusFilter = searchParams.get("status"); // optional: pending, approved, rejected
@@ -61,6 +67,8 @@ export async function GET(req: NextRequest) {
         newPolicy: u.newPolicy,
         currentPolicy: u.currentPolicy,
         policySets: u.policySets,
+        statements: u.statements, // ADR-026: JSON string of requested action+resource
+        llmNote: u.llmNote, // ADR-026 T3: advisory LLM risk summary
         reason: u.reason,
         // Legacy fields
         resourceTier: u.resourceTier,
@@ -70,9 +78,17 @@ export async function GET(req: NextRequest) {
 
     requests.sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
 
+    // dept-manager (non-admin) sees only their own department's requests.
+    // fail-closed: a dept-manager with no department sees nothing (gate round-1 Codex MAJOR).
+    const visible = approver.isAdmin
+      ? requests
+      : approver.department
+        ? requests.filter((r) => r.department === approver.department)
+        : [];
+
     return NextResponse.json({
       success: true,
-      data: requests,
+      data: visible,
       meta: { policySetCatalog: Object.entries(IAM_POLICY_SETS).map(([id, ps]) => ({ id, ...ps })) },
     });
   } catch (err) {
@@ -83,9 +99,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
+  if (!session?.user || !isApprover(session.user as unknown as ApproverUser)) {
+    return NextResponse.json({ error: "Approver access required (admin or dept-manager)" }, { status: 403 });
   }
+  const approver = session.user as unknown as ApproverUser;
 
   try {
     const body = await req.json();
@@ -104,6 +121,32 @@ export async function POST(req: NextRequest) {
     const pk = `REQUEST#${requestId}`;
     const now = new Date().toISOString();
 
+    // Fetch the request FIRST and authorize on its STORED department (never a
+    // client-supplied value) — a dept-manager may only act on their own dept.
+    const getResult = await dynamodb.send(new GetItemCommand({
+      TableName: APPROVAL_TABLE,
+      Key: { PK: { S: pk }, SK: { S: "META" } },
+    }));
+    if (!getResult.Item) {
+      return NextResponse.json({ error: "Request not found" }, { status: 404 });
+    }
+    const request = unmarshall(getResult.Item);
+    // Pass the STORED department verbatim (empty string when missing) — do NOT
+    // coerce to "default", else a default-dept manager could approve dept-less
+    // requests. Missing department → dept-manager denied; admin still allowed.
+    if (!canApproveRequest(approver, (request.department as string) ?? "")) {
+      return NextResponse.json({ error: "Not authorized for this request's department" }, { status: 403 });
+    }
+
+    // Idempotency (review suggestion): a request already approved/rejected is not
+    // re-processed — avoids re-attaching grants or flipping a decided request.
+    const currentStatus = (request.status as string) ?? "pending";
+    if (currentStatus !== "pending") {
+      return NextResponse.json(
+        { success: true, data: { requestId, status: currentStatus, alreadyProcessed: true } },
+      );
+    }
+
     if (action === "reject") {
       await dynamodb.send(
         new UpdateItemCommand({
@@ -121,17 +164,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, data: { requestId, status: "rejected" } });
     }
 
-    // Approve: fetch the request, apply changes, then mark approved
-    const getResult = await dynamodb.send(new GetItemCommand({
-      TableName: APPROVAL_TABLE,
-      Key: { PK: { S: pk }, SK: { S: "META" } },
-    }));
-
-    if (!getResult.Item) {
-      return NextResponse.json({ error: "Request not found" }, { status: 404 });
-    }
-
-    const request = unmarshall(getResult.Item);
+    // Approve: apply changes (request already fetched + authorized above)
     const requestType = request.type as string;
     const subdomain = request.subdomain as string;
     const email = request.email as string;
@@ -150,13 +183,26 @@ export async function POST(req: NextRequest) {
       await updateCognitoUserAttribute(email, "custom:security_policy", newPolicy);
       applyResult = { dlpChange: result };
     } else if (requestType === "iam_extension") {
-      const policySets = request.policySets as string[];
-      const results = [];
-      for (const ps of policySets) {
-        const result = await addIamPolicySet(subdomain, ps);
-        results.push(result);
+      // ADR-026 T5: free-form statements grant onto BOTH task + local roles
+      // (re-validated server-side). Legacy policySets kept for back-compat.
+      if (request.statements) {
+        const statements = JSON.parse(request.statements as string) as IamStatement[];
+        const grant = await applyIamGrant({
+          subdomain,
+          sub: (request.sub as string) ?? "",
+          requestId: request.requestId as string,
+          statements,
+        });
+        applyResult = { iamGrant: grant };
+      } else {
+        const policySets = (request.policySets as string[]) ?? [];
+        const results = [];
+        for (const ps of policySets) {
+          const result = await addIamPolicySet(subdomain, ps);
+          results.push(result);
+        }
+        applyResult = { iamPolicies: results };
       }
-      applyResult = { iamPolicies: results };
     } else {
       // Legacy container_request: just approve and assign subdomain
       const assignedSubdomain = subdomain || emailToSubdomain(email);

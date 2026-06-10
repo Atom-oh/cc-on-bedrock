@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { DynamoDBClient, ScanCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, ScanCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 // ADR-014: returns the current normalized-token usage and limits for the logged-in user
@@ -9,6 +9,7 @@ import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
+const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 
 const dynamo = new DynamoDBClient({ region });
 
@@ -59,6 +60,15 @@ function nextResetIso(period: PeriodSummary["period"]): string {
   return nxt.toISOString().replace(/\.\d+Z$/, "Z");
 }
 
+// USD budget deny (cc-bedrock-user-daily-deny) releases when the daily spend window rolls
+// over — i.e. the next UTC midnight — OR within ~5 min of an admin raising the budget
+// (budget-check re-evaluates every 5 min). We surface the guaranteed-by time.
+function nextUtcMidnightIso(): string {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
+  return next.toISOString().replace(/\.\d+Z$/, "Z");
+}
+
 export async function GET(_req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -104,7 +114,33 @@ export async function GET(_req: NextRequest) {
       };
     }
 
-    return NextResponse.json({ sub, department: dept, summary, denyActive });
+    // USD budget deny (cc-bedrock-user-daily-deny, ADR-015) — not in the limits
+    // table, so read the budget row and surface a release estimate to the user.
+    // ADR-025: budget-check keys cc-user-budgets by the Cognito sub; legacy rows
+    // may still be keyed by subdomain, so fall back to it.
+    let budgetDeny: { active: boolean; currentSpend: number; budget: number; releaseAt: string } | null = null;
+    const subdomain = (session.user as { subdomain?: string }).subdomain;
+    const budgetKeys = [sub, ...(subdomain && subdomain !== sub ? [subdomain] : [])];
+    try {
+      for (const budgetKey of budgetKeys) {
+        const r = await dynamo.send(new GetItemCommand({
+          TableName: USER_BUDGETS_TABLE,
+          Key: { user_id: { S: budgetKey } },
+        }));
+        if (!r.Item) continue;
+        const b = unmarshall(r.Item);
+        const budget = Number(b.monthlyBudget ?? 0);
+        const spend = Number(b.currentSpend ?? 0);
+        if (budget > 0 && spend >= budget) {
+          budgetDeny = { active: true, currentSpend: spend, budget, releaseAt: nextUtcMidnightIso() };
+        }
+        break; // first existing row wins (canonical sub key preferred)
+      }
+    } catch {
+      /* budget table optional — ignore */
+    }
+
+    return NextResponse.json({ sub, department: dept, summary, denyActive, budgetDeny });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "lookup failed";
     return NextResponse.json({ error: msg }, { status: 500 });

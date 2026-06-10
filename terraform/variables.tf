@@ -67,7 +67,7 @@ variable "dev_subdomain" {
 # ---- Models ------------------------------------------------------------------
 variable "opus_model_id" {
   type    = string
-  default = "global.anthropic.claude-opus-4-6-v1[1m]"
+  default = "global.anthropic.claude-opus-4-8[1m]"
 }
 
 variable "sonnet_model_id" {

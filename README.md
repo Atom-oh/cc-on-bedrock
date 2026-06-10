@@ -100,20 +100,60 @@ Each user gets:
 | L6 | DNS Firewall | 5 AWS threat lists + custom block |
 | L7 | IAM + DLP | Per-model access control, budget Deny Policy, file restrictions |
 
-## Budget Control Flow
+## Budget & Limit Control Flow
+
+Two enforcement axes share the same per-user IAM role and are independently
+attached/detached. Distinct policy names so an admin can see which axis
+tripped at a glance.
+
+### A. Stream path — normalized token limits (ADR-014/015, near-real-time)
 
 ```
-ECS Task (Claude Code) → Bedrock API call
-  → CloudTrail (auto-logged)
-  → EventBridge Rule (match bedrock:InvokeModel)
-  → Lambda: usage-tracker → DynamoDB (per-user cost)
-
-Every 5 min: Lambda: budget-check
-  → DynamoDB Scan (today's cost per user)
-  → 80%: SNS warning alert
-  → 100%: IAM Deny Policy on user's Task Role + Cognito flag
-  → Next day: auto-release Deny Policy
+Bedrock invocation (EC2 DevEnv role OR Local Governance role)
+  → Bedrock invocation logging → CloudWatch Logs
+  → Subscription filter → bedrock-usage-tracker Lambda
+  → DynamoDB `cc-on-bedrock-usage` PutItem (PK=USER#{username})
+  → DynamoDB Streams → token-limit-enforcer Lambda
+       ├─ _normalize(model, in_tokens, out_tokens) using per-family weights
+       ├─ ADD COUNTER#{period}#{bucket} in cc-on-bedrock-limits
+       └─ if COUNTER ≥ LIMIT#{period}.max_normalized:
+            put_role_policy(role, "cc-bedrock-local-token-deny")
+            put DENY#active item (conditional, fires SNS once per period)
+  ≤ ~2 s after the request, the role is denied
 ```
+
+`token-limit-enforcer` resolves the real IAM role name via the IAM
+`username` tag (`iam_role_lookup.local_role_names_for`) because usage
+rows are keyed by Cognito username, not the sub UUID embedded in the role
+name. Same lookup is used by `limit-reset` (KST daily/weekly/monthly cron)
+and `budget-check`'s backup token-deny path.
+
+### B. Cron path — USD daily/monthly budget (ADR-006/015, 5-min cadence)
+
+```
+EventBridge rate(5 min) → budget-check Lambda
+  → scan today's usage from cc-on-bedrock-usage
+  → resolve effective budget: user explicit > dept perUserMonthlyBudget > env DAILY_BUDGET
+  → 80%: SNS warning
+  → 100%: put_role_policy("BudgetExceededDeny") on EC2 task role AND Local role
+                       (via _candidate_role_names — both prefixes tried)
+  → users no longer over budget have their deny removed in the same run
+```
+
+### Dashboard PUT mirror (PR #31)
+
+`/api/admin/budgets` (Dashboard) writes `cc-user-budgets.monthlyBudget`
+(USD) AND `cc-on-bedrock-limits[USER#{id}] LIMIT#monthly.max_normalized =
+floor(monthlyBudget × NORMALIZED_PER_USD)` in a single PUT, so both
+enforcement axes pick up the new cap on their next cycle (Stream within
+~2 s, cron within 5 min). `monthlyBudget=0` deletes the LIMIT row so
+`dept.perUserMonthlyBudget` (ADR-023) becomes the active default.
+
+`NORMALIZED_PER_USD` defaults to `66667` (≈ Sonnet output, $15/1M tokens
+× weight 1.0). The ratio is approximately $-proportional across Claude
+families because `token-limit-enforcer` weights are calibrated that way
+(Opus 5.0 ↔ $75/1M, Haiku 0.267 ↔ $4/1M). Override the env var if your
+workload mix needs different conservatism.
 
 ## Dashboard (9 Pages)
 
@@ -238,6 +278,10 @@ cd shared/nextjs-app && npm install && npm run dev
 
 # AgentCore Lambda + Gateway
 ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
+
+# After merging changes that touch cdk/lib/lambda/*.py or cdk/lib/*.ts:
+# (Dashboard auto-deploy covers shared/nextjs-app/** only — CDK changes are manual today)
+cd cdk && npx cdk deploy CcOnBedrock-LocalGovernance CcOnBedrock-UsageTracking
 ```
 
 ## Tech Stack
@@ -353,20 +397,63 @@ Slack/외부 (멀티 클라이언트 공유):
 | L6 | DNS Firewall | 5개 AWS 위협 리스트 + 커스텀 차단 |
 | L7 | IAM + DLP | 모델별 접근 제어, 예산 Deny Policy, 파일 제한 |
 
-## 예산 제어 흐름
+## 예산 · 한도 제어 흐름
+
+두 개의 enforcement 축이 같은 per-user IAM role을 공유합니다. 정책 이름이
+다르기 때문에 어느 축이 트립됐는지 관리자가 한눈에 구분할 수 있습니다.
+
+### A. Stream 경로 — normalized token 한도 (ADR-014/015, 근실시간)
 
 ```
-ECS Task (Claude Code) → Bedrock API 호출
-  → CloudTrail (자동 기록)
-  → EventBridge Rule (bedrock:InvokeModel 매칭)
-  → Lambda: usage-tracker → DynamoDB (사용자별 비용)
-
-5분마다: Lambda: budget-check
-  → DynamoDB Scan (오늘 사용자별 비용)
-  → 80%: SNS 경고 알림
-  → 100%: 사용자 Task Role에 IAM Deny Policy 부착 + Cognito 플래그
-  → 다음 날: Deny Policy 자동 해제
+Bedrock 호출 (EC2 DevEnv role 또는 Local Governance role)
+  → Bedrock invocation logging → CloudWatch Logs
+  → Subscription filter → bedrock-usage-tracker Lambda
+  → DynamoDB `cc-on-bedrock-usage` PutItem (PK=USER#{username})
+  → DynamoDB Streams → token-limit-enforcer Lambda
+       ├─ _normalize(model, in_tokens, out_tokens) — family별 weights 사용
+       ├─ COUNTER#{period}#{bucket}에 ADD (cc-on-bedrock-limits)
+       └─ COUNTER ≥ LIMIT#{period}.max_normalized 면:
+            put_role_policy(role, "cc-bedrock-local-token-deny")
+            DENY#active 항목 conditional write (period당 SNS 1회)
+  호출 후 ~2초 안에 role 차단
 ```
+
+`token-limit-enforcer`는 IAM `username` 태그
+(`iam_role_lookup.local_role_names_for`)로 실제 role 이름을 역검색합니다.
+usage 테이블 PK가 Cognito username으로 키잉되지만 IAM role 이름은 sub UUID
+기반이라 prefix 조합만으로는 매치되지 않기 때문입니다. 동일 lookup을
+`limit-reset` (일/주/월 KST cron) 과 `budget-check` backup token-deny 경로도
+사용합니다.
+
+### B. Cron 경로 — USD 일일/월간 예산 (ADR-006/015, 5분 주기)
+
+```
+EventBridge rate(5분) → budget-check Lambda
+  → cc-on-bedrock-usage 에서 오늘 사용량 scan
+  → effective_budget 우선순위: 사용자 명시 > 부서 perUserMonthlyBudget > env DAILY_BUDGET
+  → 80%: SNS 경고
+  → 100%: EC2 task role + Local role 둘 다 "BudgetExceededDeny" 부착
+                       (_candidate_role_names — 두 prefix 모두 시도)
+  → 한도 아래로 내려간 사용자는 같은 사이클에 deny 자동 detach
+```
+
+### Dashboard PUT mirror (PR #31)
+
+`/api/admin/budgets` (Dashboard) 가 한 번의 PUT으로 다음 두 가지를 같이
+씁니다:
+- `cc-user-budgets.monthlyBudget` (USD)
+- `cc-on-bedrock-limits[USER#{id}] LIMIT#monthly.max_normalized =
+  floor(monthlyBudget × NORMALIZED_PER_USD)`
+
+그래서 두 enforcement 축이 다음 사이클에 새 한도를 즉시 인식합니다 (Stream
+~2초, cron 최대 5분). `monthlyBudget=0` 이면 LIMIT 행이 삭제되어
+`dept.perUserMonthlyBudget` (ADR-023) 이 활성 기본값으로 사용됩니다.
+
+`NORMALIZED_PER_USD` 기본값 `66667` (Sonnet output 기준, $15/1M tokens
+× weight 1.0). `token-limit-enforcer` weights가 $-비례로 calibration되어
+있어 Claude family 전체에서 근사적으로 성립합니다 (Opus 5.0 ↔ $75/1M,
+Haiku 0.267 ↔ $4/1M). 사용 모델 mix에 따라 보수성을 조정하고 싶다면 env
+var 로 override.
 
 ## Dashboard (9 페이지)
 
@@ -491,6 +578,10 @@ cd shared/nextjs-app && npm install && npm run dev
 
 # AgentCore Lambda + Gateway 배포
 ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
+
+# cdk/lib/lambda/*.py 또는 cdk/lib/*.ts 변경을 머지한 직후:
+# (Dashboard auto-deploy는 shared/nextjs-app/** 만 커버 — CDK 변경은 현재 수동)
+cd cdk && npx cdk deploy CcOnBedrock-LocalGovernance CcOnBedrock-UsageTracking
 ```
 
 ## 기술 스택

@@ -219,6 +219,72 @@ export class SecurityStack extends cdk.Stack {
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dept-mcp-config`,
           ],
         }),
+        // ADR-026 T4 — grantable-service CEILING. The boundary permits the SAFE
+        // actions of services a developer may request, scoped to this account/region.
+        // It is a ceiling only: actual access requires an admin-approved inline grant
+        // (request validation T1 bans Resource:* and dangerous actions; those are also
+        // omitted here as defense-in-depth). The T6 CI check asserts boundary ⊇ the
+        // request service allowlist.
+        new iam.PolicyStatement({
+          sid: 'GrantCeilingSqs',
+          actions: [
+            'sqs:SendMessage', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes',
+            'sqs:GetQueueUrl', 'sqs:ChangeMessageVisibility',
+          ],
+          resources: [`arn:aws:sqs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'GrantCeilingSns',
+          actions: ['sns:Publish', 'sns:Subscribe', 'sns:Unsubscribe', 'sns:GetTopicAttributes'],
+          resources: [`arn:aws:sns:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'GrantCeilingDynamoDb',
+          actions: [
+            'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
+            'dynamodb:Query', 'dynamodb:Scan', 'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem', 'dynamodb:DescribeTable',
+          ],
+          resources: [
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/*`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/*/index/*`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          sid: 'GrantCeilingLambda',
+          actions: ['lambda:InvokeFunction', 'lambda:GetFunction'],
+          resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'GrantCeilingStepFunctions',
+          actions: ['states:StartExecution', 'states:StopExecution', 'states:DescribeExecution', 'states:ListExecutions'],
+          resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
+        }),
+        new iam.PolicyStatement({
+          // eks Describe/List-nodegroups support resource-level scoping → scope to account/region.
+          sid: 'GrantCeilingEks',
+          actions: ['eks:DescribeCluster', 'eks:ListNodegroups', 'eks:DescribeNodegroup'],
+          resources: [
+            `arn:aws:eks:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/*`,
+            `arn:aws:eks:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:nodegroup/*`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          // List/Describe APIs that do NOT support resource-level scoping → Resource:* (gate round-1 Codex MAJOR).
+          // MUST be a superset of validator DEFAULT_WILDCARD_OK_ACTIONS (those are the
+          // resource-level-unsupported actions a user may request with Resource:*).
+          // Boundary may use action wildcards (it's a ceiling); the T6 CI check now
+          // verifies this action-level coverage so the two never drift (review MAJOR).
+          sid: 'GrantCeilingReadOnly',
+          actions: [
+            'eks:ListClusters',
+            'sqs:ListQueues', 'sns:ListTopics', 'sns:ListSubscriptions',
+            'ec2:Describe*',
+            's3:ListAllMyBuckets',
+            'states:ListStateMachines',
+            'cloudwatch:GetMetricData', 'cloudwatch:GetMetricStatistics', 'cloudwatch:ListMetrics',
+          ],
+          resources: ['*'],
+        }),
       ],
     });
 

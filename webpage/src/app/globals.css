@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #0a0e1a;
+  --bg-card: #0f1629;
+  --bg-hover: #151d30;
+  --border: #1a2540;
+  --accent-cyan: #00d4ff;
+  --accent-green: #00ff88;
+  --accent-purple: #a855f7;
+  --accent-orange: #f59e0b;
+  --accent-red: #ef4444;
+  --accent-pink: #ec4899;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg-primary);
+  color: #e5e7eb;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Slim scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2a3a5c;
+}
+
+/* Code block tweak */
+pre code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Menlo', monospace;
+}
+
+/* Anchor offsets for sticky-header sections */
+.anchor-offset {
+  scroll-margin-top: 5rem;
+}
+
+/* Glow utilities */
+.glow-cyan {
+  box-shadow: 0 0 32px -4px rgba(0, 212, 255, 0.25);
+}
+.glow-green {
+  box-shadow: 0 0 32px -4px rgba(0, 255, 136, 0.2);
+}
