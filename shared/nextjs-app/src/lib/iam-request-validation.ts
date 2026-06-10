@@ -151,3 +151,44 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
 
   return { ok: errors.length === 0, errors };
 }
+
+// ADR-026 T2 — defaults for the self-service request path. The service allowlist
+// is the set of services a developer may request at all (admin-controlled ceiling);
+// it MUST stay ⊆ the boundary (enforced by the T6 CI check).
+export const DEFAULT_SERVICE_ALLOWLIST = ["s3", "sqs", "sns", "dynamodb", "lambda", "states", "eks", "ec2", "cloudwatch"];
+
+// Actions that don't support resource-level permissions → Resource:"*" is allowed.
+export const DEFAULT_WILDCARD_OK_ACTIONS = [
+  "ec2:describe*",
+  "s3:listallmybuckets",
+  "cloudwatch:getmetricdata",
+  "cloudwatch:listmetrics",
+  "states:liststatemachines",
+];
+
+export interface IamExtensionInput {
+  statements: IamStatement[];
+  reason?: string;
+}
+
+export interface BuiltIamExtension {
+  ok: boolean;
+  errors: string[];
+  /** validated statements serialized for DynamoDB storage (set only when ok) */
+  statementsJson?: string;
+}
+
+/**
+ * ADR-026 T2 — validate a free-form iam_extension request and produce the
+ * DynamoDB-ready payload. The route persists `statementsJson` + sub + department
+ * on the approval row; an admin later approves and the statements are attached
+ * (after server-side re-validation in T5).
+ */
+export function buildIamExtensionRequest(input: IamExtensionInput, opts: ValidateOpts): BuiltIamExtension {
+  if (!input || !Array.isArray(input.statements) || input.statements.length === 0) {
+    return { ok: false, errors: ["statements[] is required"] };
+  }
+  const v = validateIamRequest(input.statements, opts);
+  if (!v.ok) return { ok: false, errors: v.errors };
+  return { ok: true, errors: [], statementsJson: JSON.stringify(input.statements) };
+}

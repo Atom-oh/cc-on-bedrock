@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { validateIamRequest, type IamStatement } from "../iam-request-validation";
+import {
+  validateIamRequest,
+  buildIamExtensionRequest,
+  DEFAULT_SERVICE_ALLOWLIST,
+  DEFAULT_WILDCARD_OK_ACTIONS,
+  type IamStatement,
+} from "../iam-request-validation";
 
 const OPTS = {
   serviceAllowlist: ["s3", "sqs", "sns", "dynamodb", "lambda", "states", "eks", "ec2", "cloudwatch"],
@@ -95,5 +101,39 @@ describe("validateIamRequest — allows safe", () => {
     // ec2:DescribeInstances is wildcard-ok but sqs:SendMessage is not → Resource:* must be rejected
     const r = validateIamRequest([st(["ec2:DescribeInstances", "sqs:SendMessage"], ["*"])], OPTS);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("buildIamExtensionRequest", () => {
+  const OPTS2 = {
+    serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
+    wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
+    accountId: "180294183052",
+    region: "ap-northeast-2",
+  };
+
+  it("returns error when statements missing/empty", () => {
+    expect(buildIamExtensionRequest({ statements: [] }, OPTS2).ok).toBe(false);
+    // @ts-expect-error invalid shape
+    expect(buildIamExtensionRequest({}, OPTS2).ok).toBe(false);
+  });
+
+  it("rejects when validation fails (Resource:*)", () => {
+    const r = buildIamExtensionRequest({ statements: [{ Action: ["sqs:SendMessage"], Resource: ["*"] }] }, OPTS2);
+    expect(r.ok).toBe(false);
+    expect(r.errors.length).toBeGreaterThan(0);
+  });
+
+  it("returns ok + JSON for a valid request", () => {
+    const stmts: IamStatement[] = [{ Action: ["sqs:SendMessage"], Resource: ["arn:aws:sqs:ap-northeast-2:180294183052:my-queue"] }];
+    const r = buildIamExtensionRequest({ statements: stmts, reason: "need queue" }, OPTS2);
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(r.statementsJson!)).toEqual(stmts);
+  });
+
+  it("default allowlist includes core dev services", () => {
+    for (const s of ["s3", "sqs", "sns", "dynamodb", "lambda"]) {
+      expect(DEFAULT_SERVICE_ALLOWLIST).toContain(s);
+    }
   });
 });
