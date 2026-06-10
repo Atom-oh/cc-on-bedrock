@@ -280,6 +280,11 @@ export async function registerContainerRoute(
   const { DynamoDBClient, PutItemCommand } = await import("@aws-sdk/client-dynamodb");
   const ddb = new DynamoDBClient({ region });
 
+  // 부팅 시 seed (미설정이면 1회). 이미 설정돼 있으면 기존값 사용.
+  const { seedCustomRoutesIfUnset, getCustomRoutes } = await import("@/lib/ec2-clients");
+  await seedCustomRoutesIfUnset(subdomain);
+  const { customRoutes, routesVersion } = await getCustomRoutes(subdomain);
+
   await ddb.send(new PutItemCommand({
     TableName: ROUTING_TABLE,
     Item: {
@@ -289,10 +294,12 @@ export async function registerContainerRoute(
       status: { S: "active" },
       updatedAt: { S: new Date().toISOString() },
       domain: { S: `${subdomain}.${devSubdomain}.${domainName}` },
+      customRoutes: { S: JSON.stringify(customRoutes) },
+      routesVersion: { N: String(routesVersion) },
     },
   }));
 
-  console.log(`[Routing] Registered: ${subdomain} → ${privateIp}:8080`);
+  console.log(`[Routing] Registered: ${subdomain} → ${privateIp}:8080 (+${customRoutes.length} custom)`);
 }
 
 export async function deregisterContainerRoute(
@@ -307,5 +314,38 @@ export async function deregisterContainerRoute(
   }));
 
   console.log(`[Routing] Deregistered: ${subdomain}`);
+}
+
+/**
+ * 인스턴스 active 일 때 routing-table 행의 customRoutes 만 patch.
+ * routing-table 행의 routesVersion 이 더 최신(부팅 register가 더 최신)이면 덮어쓰지 않음 — hot-update 유실 방지.
+ */
+export async function mirrorCustomRoutes(
+  subdomain: string,
+  routes: { path: string; port: number; label: string }[],
+  version: number
+): Promise<{ mirrored: boolean }> {
+  const { DynamoDBClient, UpdateItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: ROUTING_TABLE,
+      Key: { subdomain: { S: subdomain } },
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :v",
+      ConditionExpression:
+        "attribute_exists(subdomain) AND (attribute_not_exists(routesVersion) OR routesVersion <= :v)",
+      ExpressionAttributeValues: {
+        ":r": { S: JSON.stringify(routes) },
+        ":v": { N: String(version) },
+      },
+    }));
+    return { mirrored: true };
+  } catch (err) {
+    // 행 없음(인스턴스 미가동) 또는 더 최신 version → mirror skip (영속본은 user-instances)
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      return { mirrored: false };
+    }
+    throw err;
+  }
 }
 
