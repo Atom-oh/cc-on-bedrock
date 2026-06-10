@@ -38,6 +38,144 @@ CLOUDFRONT_SECRET = os.environ.get("CLOUDFRONT_SECRET", "")
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 s3 = boto3.client("s3", region_name=REGION)
 
+# ─── Custom Port Routes validation (ADR-026, B-H1/B-M3 defense-in-depth) ───
+import re
+import ipaddress
+
+VPC_CIDR = os.environ.get("VPC_CIDR", "10.0.0.0/16")
+
+_SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+_SUBPATH_RE = re.compile(r"^/[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*$")
+RESERVED_PATHS = (
+    "/_static", "/healthz", "/stable-", "/vscode-remote-resource",
+    "/out", "/webview", "/manifest.json", "/health", "/nginx-status",
+)
+RESERVED_PORTS = (8080,)
+
+
+def is_valid_subdomain(s):
+    return bool(isinstance(s, str) and _SUBDOMAIN_RE.match(s))
+
+
+def _is_reserved_path(p):
+    return any(
+        p == rp or p.startswith(rp + "/") or (rp.endswith("-") and p.startswith(rp))
+        for rp in RESERVED_PATHS
+    )
+
+
+def is_valid_route_path(p):
+    if not isinstance(p, str):
+        return False
+    if p != "/" and not _SUBPATH_RE.match(p):
+        return False
+    return not _is_reserved_path(p)
+
+
+def is_valid_route_port(port):
+    return isinstance(port, int) and 1024 <= port <= 65535 and port not in RESERVED_PORTS
+
+
+def is_valid_container_ip(ip):
+    try:
+        addr = ipaddress.ip_address(ip)
+    except (ValueError, TypeError):
+        return False
+    return addr.is_private and addr in ipaddress.ip_network(VPC_CIDR)
+
+
+def validate_routes(subdomain, routes):
+    """보간 전 전수 검증. 반환: (valid_routes, status_list). subdomain 무효면 전체 거부."""
+    if not is_valid_subdomain(subdomain):
+        logger.warning("Rejecting all routes: invalid subdomain %r", subdomain)
+        return [], [
+            {"path": r.get("path", "?"), "state": "rejected", "reason": "invalid subdomain"}
+            for r in routes
+        ]
+    status = []
+    valid = []
+    for r in routes:
+        path, port = r.get("path"), r.get("port")
+        if not is_valid_route_path(path):
+            logger.warning("skip route path=%r (invalid/reserved)", path)
+            status.append({"path": path, "state": "rejected", "reason": "invalid or reserved path"})
+        elif not is_valid_route_port(port):
+            logger.warning("skip route path=%r port=%r (invalid/reserved port)", path, port)
+            status.append({"path": path, "state": "rejected", "reason": "invalid or reserved port"})
+        else:
+            valid.append({"path": path, "port": int(port), "label": str(r.get("label", ""))})
+            status.append({"path": path, "state": "ok"})
+    return valid, status
+
+
+# 공통 proxy 지시문 (WebSocket + timeout — consensus)
+_CUSTOM_COMMON = (
+    "        proxy_pass http://custom_{sub}_{port};\n"
+    "        proxy_http_version 1.1;\n"
+    "        proxy_set_header Host $host;\n"
+    "        proxy_set_header Upgrade $http_upgrade;\n"
+    "        proxy_set_header Connection $connection_upgrade;\n"
+    "        proxy_read_timeout 3600s;\n"
+    "        proxy_send_timeout 3600s;\n"
+)
+
+
+def render_custom_upstreams(subdomain, valid_routes, container_ip):
+    out = []
+    for r in valid_routes:
+        out.append(
+            f"    upstream custom_{subdomain}_{r['port']} {{\n"
+            f"        server {container_ip}:{r['port']} max_fails=3 fail_timeout=5s;\n"
+            f"        keepalive 16;\n"
+            f"    }}\n"
+        )
+    return "\n".join(out)
+
+
+def render_custom_locations(subdomain, valid_routes):
+    out = []
+    for r in valid_routes:
+        path, port = r["path"], r["port"]
+        common = _CUSTOM_COMMON.format(sub=subdomain, port=port)
+        if path == "/":
+            out.append(
+                "        location / {\n"
+                "            if ($arg_folder) { error_page 418 = @codeserver; return 418; }\n"
+                f"{common}"
+                "        }\n"
+            )
+        else:
+            out.append(
+                f"        location = {path} {{\n{common}        }}\n"
+                f"        location ^~ {path}/ {{\n{common}        }}\n"
+            )
+    return "\n".join(out)
+
+
+# 루트 custom route가 없을 때의 fallback `location /`.
+# ?folder= → code-server, 그 외 → @noservice_frontend 안내 페이지.
+FALLBACK_ROOT = (
+    "        # Fallback root (no custom root route)\n"
+    "        location / {\n"
+    "            if ($arg_folder) { error_page 418 = @codeserver; return 418; }\n"
+    "            error_page 404 = @noservice_frontend;\n"
+    "            return 404;\n"
+    "        }\n"
+)
+
+
+def write_route_status(subdomain, status):
+    """routing-table 에 route별 반영 결과 기록 (best-effort, silent skip 방지)."""
+    table = dynamodb.Table(ROUTING_TABLE)
+    try:
+        table.update_item(
+            Key={"subdomain": subdomain},
+            UpdateExpression="SET routeStatus = :s",
+            ExpressionAttributeValues={":s": status},
+        )
+    except ClientError as e:
+        logger.warning("routeStatus write failed for %s: %s", subdomain, e)
+
 # Nginx config template
 NGINX_TEMPLATE = """# Auto-generated nginx config for CC-on-Bedrock Enterprise
 # Generated at: {generated_at}
@@ -120,19 +258,12 @@ http {{
 }}
 """
 
-# Upstream block template — 3 upstreams per user (code-server, frontend, API)
-UPSTREAM_TEMPLATE = """    # Upstreams for {subdomain}
+# Upstream block template — code-server (8080) built-in only.
+# frontend(3000)/API(8000) and any other ports now come from customRoutes (ADR-026).
+UPSTREAM_TEMPLATE = """    # Upstream for {subdomain} (code-server, built-in)
     upstream codeserver_{subdomain} {{
         server {container_ip}:8080 max_fails=3 fail_timeout=5s;
         keepalive 32;
-    }}
-    upstream frontend_{subdomain} {{
-        server {container_ip}:3000 max_fails=3 fail_timeout=5s;
-        keepalive 16;
-    }}
-    upstream userapi_{subdomain} {{
-        server {container_ip}:8000 max_fails=3 fail_timeout=5s;
-        keepalive 16;
     }}
 """
 
@@ -212,32 +343,10 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
             proxy_pass http://codeserver_{subdomain};
         }}
 
-        # ─── User API server (port 8000) ───
-        location /api/ {{
-            proxy_pass http://userapi_{subdomain};
-            proxy_connect_timeout 10s;
-            proxy_send_timeout 300s;
-            proxy_read_timeout 300s;
-            proxy_intercept_errors on;
-            error_page 502 503 504 = @noservice_api;
-        }}
-
-        location @noservice_api {{
-            default_type application/json;
-            return 502 '{{"error":"API server is not running on port 8000. Start your API server to access this endpoint.","hint":"Run your server on port 8000 (e.g. uvicorn main:app --port 8000)"}}';
-        }}
-
-        # ─── Default: ?folder= → code-server, otherwise → Frontend (port 3000) ───
-        location / {{
-            # ?folder= parameter → code-server IDE
-            if ($arg_folder) {{
-                error_page 418 = @codeserver;
-                return 418;
-            }}
-            proxy_pass http://frontend_{subdomain};
-            proxy_intercept_errors on;
-            error_page 502 503 504 = @noservice_frontend;
-        }}
+        # ─── User custom port routes (ADR-026) — root + subpaths from customRoutes ───
+        # Generated per-user: root "/" (if defined) + "= /path" & "^~ /path/" for each.
+        # When no root route exists, a fallback "location /" is appended.
+{custom_locations}
 
         location @noservice_frontend {{
             default_type text/html;
@@ -300,10 +409,18 @@ def generate_nginx_config() -> str:
 
         for item in items:
             if item.get("status") == "active":
+                raw_routes = item.get("customRoutes", "[]")
+                try:
+                    parsed_routes = (
+                        json.loads(raw_routes) if isinstance(raw_routes, str) else (raw_routes or [])
+                    )
+                except (ValueError, TypeError):
+                    parsed_routes = []
                 routes.append({
                     "subdomain": item["subdomain"],
                     "container_ip": item.get("container_ip") or item.get("targetIp", ""),
                     "port": int(item.get("port", 8080)),
+                    "custom_routes": parsed_routes,
                 })
 
         # Handle pagination
@@ -314,22 +431,37 @@ def generate_nginx_config() -> str:
 
     logger.info(f"Found {len(routes)} active routes")
 
-    # Generate upstream entries (3 upstreams per user: code-server, frontend, API)
+    # Generate upstream + server entries with per-value validation (B-H1/B-M3).
     upstream_entries = []
-    for route in routes:
-        upstream_entries.append(UPSTREAM_TEMPLATE.format(
-            subdomain=route["subdomain"],
-            container_ip=route["container_ip"],
-        ))
-
-    # Generate server entries
     server_entries = []
     for route in routes:
+        sub = route["subdomain"]
+        cip = route["container_ip"]
+        if not is_valid_subdomain(sub):
+            logger.warning("skip invalid subdomain=%r", sub)
+            continue
+        if not is_valid_container_ip(cip):
+            logger.warning("skip subdomain=%r: invalid container_ip=%r", sub, cip)
+            continue
+        valid, status = validate_routes(sub, route["custom_routes"])
+
+        # code-server upstream (8080) — always built-in
+        upstream_entries.append(UPSTREAM_TEMPLATE.format(subdomain=sub, container_ip=cip))
+        custom_up = render_custom_upstreams(sub, valid, cip)
+        if custom_up:
+            upstream_entries.append(custom_up)
+
+        custom_locations = render_custom_locations(sub, valid)
+        if not any(r["path"] == "/" for r in valid):
+            custom_locations = (custom_locations + "\n" + FALLBACK_ROOT) if custom_locations else FALLBACK_ROOT
+
         server_entries.append(SERVER_TEMPLATE.format(
-            subdomain=route["subdomain"],
+            subdomain=sub,
             domain=DEV_DOMAIN,
             cloudfront_secret=CLOUDFRONT_SECRET,
+            custom_locations=custom_locations,
         ))
+        write_route_status(sub, status)
 
     # Render final config
     config = NGINX_TEMPLATE.format(
