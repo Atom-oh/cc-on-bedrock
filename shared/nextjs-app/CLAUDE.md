@@ -100,6 +100,9 @@
 - `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용)
 - `src/lib/slack-client.ts` - Slack API 클라이언트 (알림, 명령 처리)
 - `src/lib/validation.ts` - 입력 검증 유틸리티
+- `src/lib/iam-request-validation.ts` - **ADR-026** IAM 권한 신청 검증 (Resource:*·와일드카드·위험액션·교차계정 거부) + `buildIamExtensionRequest` + DEFAULT_SERVICE_ALLOWLIST/WILDCARD_OK_ACTIONS
+- `src/lib/iam-resource-annotator.ts` - **ADR-026** 신청 statements 의 advisory LLM 위험 주석 (Bedrock, 프롬프트 인젝션 격리)
+- `src/lib/approval-authz.ts` - **ADR-026** 승인 인가 (admin OR dept-manager, 저장 부서 기준, 순수·테스트가능)
 - `src/lib/utils.ts` - 공통 유틸리티 함수
 - `src/lib/i18n.tsx` - 다국어(한/영) 지원
 - `src/lib/types.ts` - 공유 타입 정의 (Provisioning, DiskUsage, Password, UserPortalTab 등)

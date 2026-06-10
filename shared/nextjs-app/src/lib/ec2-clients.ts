@@ -1029,10 +1029,17 @@ function grantRoleNames(subdomain: string, sub: string): string[] {
 
 export async function applyIamGrant(args: GrantArgs): Promise<{ attached: string[] }> {
   const { validateIamRequest, DEFAULT_SERVICE_ALLOWLIST, DEFAULT_WILDCARD_OK_ACTIONS } = await import("./iam-request-validation");
+  // Symmetric with the request-time path (container-request): without the account id
+  // the cross-account guard cannot run, so fail closed rather than silently skip it
+  // (review MINOR).
+  const accountId = args.accountId ?? process.env.AWS_ACCOUNT_ID;
+  if (!accountId) {
+    throw new Error("grant re-validation requires AWS_ACCOUNT_ID (cross-account guard) — server misconfigured");
+  }
   const v = validateIamRequest(args.statements, {
     serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
     wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
-    accountId: args.accountId ?? process.env.AWS_ACCOUNT_ID,
+    accountId,
     region: args.region ?? process.env.AWS_REGION,
   });
   if (!v.ok) throw new Error(`grant re-validation failed (not valid): ${v.errors.join("; ")}`);

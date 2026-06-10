@@ -54,6 +54,14 @@ describe("applyIamGrant — both roles, fail-loud, rollback", () => {
     expect(iam.send).not.toHaveBeenCalled();
   });
 
+it("throws when accountId is unavailable (fail-closed, symmetric with request path)", async () => {
+    const prev = process.env.AWS_ACCOUNT_ID; delete process.env.AWS_ACCOUNT_ID;
+    const iam = { send: vi.fn() };
+    await expect(applyIamGrant({ ...OPTS, accountId: undefined, iam: iam as never })).rejects.toThrow(/AWS_ACCOUNT_ID/);
+    expect(iam.send).not.toHaveBeenCalled();
+    if (prev) process.env.AWS_ACCOUNT_ID = prev;
+  });
+
   it("throws when both subdomain and sub are empty (no target role)", async () => {
     const iam = { send: vi.fn() };
     await expect(applyIamGrant({ ...OPTS, subdomain: "", sub: "", iam: iam as never })).rejects.toThrow(/no target role/i);
