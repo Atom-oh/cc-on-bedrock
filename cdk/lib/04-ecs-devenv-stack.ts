@@ -229,7 +229,9 @@ export class EcsDevenvStack extends cdk.Stack {
     // high ports is the shared Nginx proxy, which proxies only validated routes.
     // Range 1024-65535 avoids per-route SG redeploys when users add/remove custom ports.
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
-      sg.addIngressRule(nginxSg, ec2.Port.tcpRange(1024, 65535), 'Nginx → code-server + user custom ports');
+      // NOTE: EC2 SG rule descriptions only allow a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*
+      // — a unicode arrow here fails CloudFormation with "Invalid rule description".
+      sg.addIngressRule(nginxSg, ec2.Port.tcpRange(1024, 65535), 'Nginx to code-server + user custom ports');
     });
 
     // ─── Network Load Balancer (internet-facing for CloudFront access) ───
