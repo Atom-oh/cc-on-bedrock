@@ -121,8 +121,8 @@ export default function LocalModePage() {
       </SectionTitle>
       <P>
         {ko
-          ? "Dashboard 로그인 직후, 사용자는 두 가지 방법으로 8h STS 자격증명을 받을 수 있습니다 — 브라우저(/local 페이지) 또는 CLI(cc-bedrock-local). 발급된 자격증명으로 본인 PC에서 claude를 직접 실행하면, Bedrock invocation logging이 사용량을 추적하고 한도를 자동 집행합니다."
-          : "After Dashboard sign-in you can issue 8h STS credentials either via the /local page or the cc-bedrock-local CLI. Bedrock invocation logging tracks usage and the token-limit-enforcer Lambda automatically applies IAM Deny when the limit is exceeded."}
+          ? "Dashboard 로그인 직후, 사용자는 두 가지 방법으로 1h STS 자격증명을 받을 수 있습니다 — 브라우저(/local 페이지) 또는 CLI(cc-bedrock-local). 발급된 자격증명으로 본인 PC에서 claude를 직접 실행하면, Bedrock invocation logging이 사용량을 추적하고 한도를 자동 집행합니다. (CLI는 만료 10분 전 자동 갱신)"
+          : "After Dashboard sign-in you can issue 1h STS credentials either via the /local page or the cc-bedrock-local CLI (auto-refreshed ~10min before expiry). Bedrock invocation logging tracks usage and the token-limit-enforcer Lambda automatically applies IAM Deny when the limit is exceeded."}
       </P>
       <CodeBlock title={ko ? "거래 흐름" : "Transaction flow"}>
 {`User PC (cc-bedrock-local or /local page)
@@ -195,9 +195,9 @@ AWS_PROFILE_NAME=cc-bedrock
 AWS_REGION=ap-northeast-2
 
 # 모델 매핑 (Claude Code의 /model 픽커 슬롯)
-# Opus는 최신인 4.7로 두는 것을 권장
+# Opus는 최신인 4.8로 두는 것을 권장 (CLI 기본값과 일치)
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-7
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
 ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
 CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6`}
       </CodeBlock>
@@ -228,7 +228,7 @@ cc-bedrock-local logout`}
           </thead>
           <tbody className="divide-y divide-white/5 text-xs">
             {[
-              ["login", ko ? "비밀번호 프롬프트 → Cognito 인증 → 8h STS 발급 + refresh token 저장" : "Password prompt → Cognito auth → 8h STS issue + refresh token"],
+              ["login", ko ? "비밀번호 프롬프트 → Cognito 인증 → 1h STS 발급 + refresh token 저장" : "Password prompt → Cognito auth → 1h STS issue + refresh token"],
               ["refresh", ko ? "캐시된 refresh token으로 silent 재발급 (만료되면 실패)" : "Silent refresh using cached refresh token (fails if expired)"],
               ["logout", ko ? "refresh token + state 캐시 삭제" : "Clear refresh token + state cache"],
               ["status", ko ? "남은 TTL + 활성 Deny / 한도 상태 출력" : "Remaining TTL + Deny / limit state"],
@@ -335,7 +335,7 @@ cc-bedrock-local logout`}
         {[
           { name: "Haiku 4.5", weight: "1×", color: "from-emerald-500/20 to-emerald-500/5", text: "text-emerald-300" },
           { name: "Sonnet 4.6", weight: "~3.5×", color: "from-cyan-500/20 to-cyan-500/5", text: "text-cyan-300" },
-          { name: "Opus 4.6 / 4.7", weight: "~15×", color: "from-violet-500/20 to-violet-500/5", text: "text-violet-300" },
+          { name: "Opus 4.8", weight: "~15×", color: "from-violet-500/20 to-violet-500/5", text: "text-violet-300" },
         ].map((m, i) => (
           <div key={i} className={`rounded-xl border border-white/5 bg-gradient-to-br ${m.color} p-5`}>
             <div className={`text-2xl font-black ${m.text} mb-1`}>{m.weight}</div>
