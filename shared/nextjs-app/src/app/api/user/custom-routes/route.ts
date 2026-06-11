@@ -54,7 +54,10 @@ export async function PUT(req: Request) {
         { status: 409 },
       );
     }
-    const newVersion = await putCustomRoutes(subdomain, parsed.data.routes, routesVersion);
+    // M3: if the client echoed the version it loaded, use it as the CAS expectedVersion so a
+    // stale edit (another tab saved meanwhile) gets a 409 instead of silently overwriting.
+    const expectedVersion = parsed.data.version ?? routesVersion;
+    const newVersion = await putCustomRoutes(subdomain, parsed.data.routes, expectedVersion);
     const { mirrored } = await mirrorCustomRoutes(subdomain, parsed.data.routes, newVersion);
     return NextResponse.json({
       success: true,

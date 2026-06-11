@@ -28,6 +28,7 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
   const [routesSaving, setRoutesSaving] = useState(false);
   const [routesError, setRoutesError] = useState<string | null>(null);
   const [routesPending, setRoutesPending] = useState(false);
+  const [routesVersion, setRoutesVersion] = useState<number>(0);
 
   const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
   const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
@@ -35,18 +36,20 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
     ? `https://${user.subdomain}.${devSubdomain}.${domainName}`
     : null;
 
-  // Load custom routes
-  useEffect(() => {
-    fetch("/api/user/custom-routes")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.success) {
-          setRoutes(d.data.routes ?? []);
-          setRouteStatus(d.data.status ?? []);
-        }
-      })
-      .catch(() => {});
+  // Load custom routes (also re-used after save to refresh routeStatus + version)
+  const loadRoutes = useCallback(async () => {
+    try {
+      const res = await fetch("/api/user/custom-routes");
+      const d = await res.json();
+      if (d.success) {
+        setRoutes(d.data.routes ?? []);
+        setRouteStatus(d.data.status ?? []);
+        setRoutesVersion(d.data.version ?? 0);
+      }
+    } catch { /* ignore */ }
   }, []);
+
+  useEffect(() => { loadRoutes(); }, [loadRoutes]);
 
   const saveRoutes = async () => {
     setRoutesSaving(true);
@@ -55,14 +58,17 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
       const res = await fetch("/api/user/custom-routes", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ routes }),
+        // M3: echo the loaded version so a stale-tab save is rejected (409) not silently lost.
+        body: JSON.stringify({ routes, version: routesVersion }),
       });
       const d = await res.json();
       if (!res.ok || !d.success) {
-        setRoutesError(d.error ?? "저장 실패");
+        setRoutesError(res.status === 409 ? (d.error ?? "동시 수정 충돌 — 새로고침하세요") : (d.error ?? "저장 실패"));
+        if (res.status === 409) await loadRoutes(); // refresh to latest
         return;
       }
       setRoutesPending(d.data.pending === true);
+      await loadRoutes(); // MINOR: refresh routeStatus (✅/⚠️) + new version after save
     } finally {
       setRoutesSaving(false);
     }

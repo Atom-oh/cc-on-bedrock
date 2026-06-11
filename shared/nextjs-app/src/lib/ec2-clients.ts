@@ -28,6 +28,7 @@ import {
   DynamoDBClient,
   PutItemCommand,
   GetItemCommand,
+  BatchGetItemCommand,
   UpdateItemCommand,
   ScanCommand,
   DeleteItemCommand,
@@ -1597,6 +1598,35 @@ export async function getCustomRoutes(subdomain: string): Promise<CustomRoutesRe
     routeStatus: item.routeStatus,
     exists: true,
   };
+}
+
+/**
+ * 여러 subdomain의 customRoutes를 BatchGetItem 한 번(들)으로 조회 (M2: admin 목록 N+1 제거).
+ * 반환: Map<subdomain, CustomRoute[]>. 행 없으면 키 부재.
+ */
+export async function batchGetCustomRoutes(
+  subdomains: string[],
+): Promise<Map<string, CustomRoute[]>> {
+  const out = new Map<string, CustomRoute[]>();
+  const uniq = [...new Set(subdomains.filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += 100) {
+    const chunk = uniq.slice(i, i + 100);
+    let keys = chunk.map((s) => marshall({ user_id: s }));
+    // BatchGetItem may return UnprocessedKeys — retry a few times.
+    for (let attempt = 0; attempt < 3 && keys.length > 0; attempt++) {
+      const res = await ddbClient.send(new BatchGetItemCommand({
+        RequestItems: {
+          [INSTANCE_TABLE]: { Keys: keys, ProjectionExpression: "user_id, customRoutes" },
+        },
+      }));
+      for (const raw of res.Responses?.[INSTANCE_TABLE] ?? []) {
+        const item = unmarshall(raw);
+        out.set(item.user_id as string, (item.customRoutes as CustomRoute[]) ?? []);
+      }
+      keys = res.UnprocessedKeys?.[INSTANCE_TABLE]?.Keys ?? [];
+    }
+  }
+  return out;
 }
 
 /**

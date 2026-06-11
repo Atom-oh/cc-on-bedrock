@@ -407,6 +407,19 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
 """
 
 
+def _changed_subdomains(event: dict) -> set:
+    """Stream 이벤트에서 변경된 subdomain만 추출 (M1: routeStatus write를 변경 유저로 한정)."""
+    out = set()
+    for rec in (event or {}).get("Records", []):
+        try:
+            sub = rec["dynamodb"]["Keys"]["subdomain"]["S"]
+            if sub:
+                out.add(sub)
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
 def handler(event: dict, context: Any) -> dict:
     """
     Lambda handler triggered by DynamoDB Stream.
@@ -415,8 +428,8 @@ def handler(event: dict, context: Any) -> dict:
     logger.info(f"Received event with {len(event.get('Records', []))} records")
 
     try:
-        # Generate new config from all active routes
-        config = generate_nginx_config()
+        # Generate new config from all active routes; routeStatus written only for changed users.
+        config = generate_nginx_config(changed_subdomains=_changed_subdomains(event))
 
         # Upload to S3
         upload_config(config)
@@ -443,7 +456,7 @@ def handler(event: dict, context: Any) -> dict:
         }
 
 
-def generate_nginx_config() -> str:
+def generate_nginx_config(changed_subdomains=None) -> str:
     """
     Scan DynamoDB routing table and generate nginx config.
     Only includes routes with status='active'.
@@ -516,7 +529,10 @@ def generate_nginx_config() -> str:
             cloudfront_secret=CLOUDFRONT_SECRET,
             custom_locations=custom_locations,
         ))
-        write_route_status(sub, status)
+        # M1: only persist routeStatus for users actually changed by this Stream event
+        # (avoids O(N) write amplification on every routing change).
+        if changed_subdomains is None or sub in changed_subdomains:
+            write_route_status(sub, status)
 
     # Render final config
     config = NGINX_TEMPLATE.format(

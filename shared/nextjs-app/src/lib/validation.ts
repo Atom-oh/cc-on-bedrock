@@ -86,6 +86,9 @@ export const customRouteSchema = z.object({
 });
 
 export const customRoutesPayloadSchema = z.object({
+  // M3: client echoes the version it loaded → server uses it as the CAS expectedVersion
+  // (true optimistic lock; stale-client edits get a 409 instead of silently overwriting).
+  version: z.number().int().nonnegative().optional(),
   routes: z
     .array(customRouteSchema)
     .max(MAX_CUSTOM_ROUTES)

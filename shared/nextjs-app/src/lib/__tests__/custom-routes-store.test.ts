@@ -9,7 +9,7 @@ vi.mock('@aws-sdk/client-dynamodb', async (orig) => {
   };
 });
 
-import { getCustomRoutes, putCustomRoutes, DEFAULT_SEED_ROUTES } from '../ec2-clients';
+import { getCustomRoutes, putCustomRoutes, batchGetCustomRoutes, DEFAULT_SEED_ROUTES } from '../ec2-clients';
 import { marshall } from '@aws-sdk/util-dynamodb';
 
 beforeEach(() => sendMock.mockReset());
@@ -62,5 +62,29 @@ describe('putCustomRoutes', () => {
     const err = new Error('cond'); err.name = 'ConditionalCheckFailedException';
     sendMock.mockRejectedValueOnce(err);
     await expect(putCustomRoutes('alice', [], 1)).rejects.toThrow('version-conflict');
+  });
+});
+
+describe('batchGetCustomRoutes (M2: N+1 → BatchGetItem)', () => {
+  it('returns a map of subdomain → customRoutes in one batch', async () => {
+    sendMock.mockResolvedValueOnce({
+      Responses: {
+        'cc-user-instances': [
+          marshall({ user_id: 'alice', customRoutes: [{ path: '/a', port: 5000, label: 'A' }] }),
+          marshall({ user_id: 'bob', customRoutes: [] }),
+        ],
+      },
+      UnprocessedKeys: {},
+    });
+    const m = await batchGetCustomRoutes(['alice', 'bob', 'alice']); // dup deduped
+    expect(m.get('alice')).toHaveLength(1);
+    expect(m.get('bob')).toEqual([]);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns empty map for empty input without calling DDB', async () => {
+    const m = await batchGetCustomRoutes([]);
+    expect(m.size).toBe(0);
+    expect(sendMock).not.toHaveBeenCalled();
   });
 });

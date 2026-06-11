@@ -134,3 +134,16 @@ def test_custom_location_has_error_page():
     # M10: downed upstream → friendly page, not raw 502
     blocks = ncg.render_custom_locations("alice", [{"path": "/p", "port": 5173, "label": "v"}])
     assert "error_page 502 503 504 = @noservice_frontend" in blocks
+
+
+def test_changed_subdomains_from_stream_event():
+    # M1: only the subdomains in the stream event should get routeStatus writes
+    event = {"Records": [
+        {"dynamodb": {"Keys": {"subdomain": {"S": "alice"}}}},
+        {"dynamodb": {"Keys": {"subdomain": {"S": "bob"}}}},
+        {"dynamodb": {}},          # malformed — ignored
+        {"foo": "bar"},            # malformed — ignored
+    ]}
+    assert ncg._changed_subdomains(event) == {"alice", "bob"}
+    assert ncg._changed_subdomains({"Records": []}) == set()
+    assert ncg._changed_subdomains({}) == set()

@@ -65,6 +65,23 @@ describe('PUT /api/user/custom-routes', () => {
     expect(res.status).toBe(409);
     expect(putCustomRoutes).not.toHaveBeenCalled();
   });
+  it('uses client-echoed version as CAS expectedVersion (M3 optimistic lock)', async () => {
+    (getServerSession as any).mockResolvedValue({ user: { subdomain: 'alice' } });
+    getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 5, exists: true });
+    putCustomRoutes.mockResolvedValue(4);
+    mirrorCustomRoutes.mockResolvedValue({ mirrored: true });
+    // client loaded v3 (stale) and echoes it; server must use 3, not its current 5
+    await PUT(asReq({ version: 3, routes: [{ path: '/p', port: 5000, label: 'x' }] }));
+    expect(putCustomRoutes).toHaveBeenCalledWith('alice', expect.any(Array), 3);
+  });
+  it('falls back to server version when client omits version', async () => {
+    (getServerSession as any).mockResolvedValue({ user: { subdomain: 'alice' } });
+    getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 7, exists: true });
+    putCustomRoutes.mockResolvedValue(8);
+    mirrorCustomRoutes.mockResolvedValue({ mirrored: true });
+    await PUT(asReq({ routes: [{ path: '/p', port: 5000, label: 'x' }] }));
+    expect(putCustomRoutes).toHaveBeenCalledWith('alice', expect.any(Array), 7);
+  });
   it('409 on version conflict', async () => {
     (getServerSession as any).mockResolvedValue({ user: { subdomain: 'alice' } });
     getCustomRoutes.mockResolvedValue({ customRoutes: [], routesVersion: 0, exists: true });
