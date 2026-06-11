@@ -9,7 +9,7 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 8 stacks. `--context governa
 
 ### Stacks
 - `lib/01-network-stack.ts` - VPC, Subnets, NAT, VPC Endpoints, Route 53
-- `lib/02-security-stack.ts` - Cognito (Hosted UI domain 포함), ACM, KMS, Secrets Manager, IAM
+- `lib/02-security-stack.ts` - Cognito (Hosted UI domain 포함), ACM, KMS, Secrets Manager, IAM. Cognito 트리거 shim(POST_CONFIRMATION/POST_AUTHENTICATION → user-role-provisioner 비동기 invoke, ADR-027) 포함 — federated JIT 사용자 프로비저닝 fallback
 - `lib/03-usage-tracking-stack.ts` - DynamoDB (사용량 저장), Lambda (EventBridge 트리거), EventBridge Rules
 - `lib/04-ecs-devenv-stack.ts` - ECS Cluster, NLB+Nginx, DynamoDB Routing, **DevEnv CloudFront** (`*.dev.<domain>`, ADR-016), session-validator Lambda@Edge. `governanceOnly=true`일 때 skip.
 - `lib/05-dashboard-stack.ts` - Dashboard ECS Ec2Service, ALB, **Dashboard CloudFront** (`<dashboardSubdomain>.<domain>` only, ADR-016). NextAuth secret SSM(`/cc-on-bedrock/nextauth-secret`) 발행 — Stack 04의 session-validator가 런타임에 참조.
@@ -23,6 +23,7 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 8 stacks. `--context governa
 - `lib/lambda/sts-issuer.py` - Cognito ID 토큰 검증 → sts:AssumeRole 8h → 자격증명 반환 (Local Governance, ADR-014)
 - `lib/lambda/token-limit-enforcer.py` - usage 테이블 Stream consumer, normalized token 합산, 한도 초과 시 user role에 Deny policy 부착 (Local Governance, ADR-014)
 - `lib/lambda/limit-reset.py` - EventBridge cron(일/주/월), 카운터 리셋 + Deny policy detach (Local Governance, ADR-014)
+- `lib/lambda/cognito-provisioner-trigger.py` - Cognito user pool 트리거 shim (ADR-027). custom:subdomain 부재 시에만 user-role-provisioner를 `{"action":"ensure"}`로 비동기 invoke. fail-open (로그인을 절대 막지 않음, Cognito 5초 동기 타임아웃 대응)
 - `lib/lambda/nginx-config-gen.py` - Nginx 설정 생성 (DynamoDB Stream → S3). 유저당 3 upstream: code-server(8080), frontend(3000), API(8000)
 - `lib/lambda/ec2-idle-stop.py` - EC2 유휴 자동 중지 + Hibernate 지원 (ADR-010)
 - `lib/lambda/idle-check.py` - EC2 유휴 상태 확인 (SSM 기반 CPU/세션 체크)

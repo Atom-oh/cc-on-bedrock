@@ -1,7 +1,10 @@
+import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as route53 from 'aws-cdk-lib/aws-route53';
@@ -63,6 +66,39 @@ export class SecurityStack extends cdk.Stack {
         dept_manager_sub: new cognito.StringAttribute({ mutable: true }),
       },
     });
+
+    // ADR-027: Cognito trigger shim → user-role-provisioner (Stack 08).
+    // Federated (SAML/OIDC) JIT-created users emit no AdminCreateUser/SignUp
+    // CloudTrail event, so the ADR-022 EventBridge path never fires for them.
+    // POST_CONFIRMATION catches the JIT-creation moment; POST_AUTHENTICATION
+    // self-heals on every login any user the EventBridge path missed.
+    // The shim is fail-open and invokes the provisioner async (Cognito triggers
+    // are synchronous with a 5s hard timeout; an error would fail the login).
+    const provisionerFunctionName = 'cc-on-bedrock-user-role-provisioner';
+    const provisionerTrigger = new lambda.Function(this, 'CognitoProvisionerTrigger', {
+      functionName: 'cc-on-bedrock-cognito-provisioner-trigger',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'cognito-provisioner-trigger.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(4), // under Cognito's 5s trigger budget
+      memorySize: 128,
+      environment: {
+        PROVISIONER_FUNCTION_NAME: provisionerFunctionName,
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+    // Static function-name ARN, not a cross-stack reference: Stack 08 (which
+    // owns the provisioner) already depends on this stack, so importing its
+    // ARN here would be cyclic. If Stack 08 is not deployed, the shim's invoke
+    // fails and is swallowed (fail-open) — logins are unaffected.
+    provisionerTrigger.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [
+        `arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:${provisionerFunctionName}`,
+      ],
+    }));
+    this.userPool.addTrigger(cognito.UserPoolOperation.POST_CONFIRMATION, provisionerTrigger);
+    this.userPool.addTrigger(cognito.UserPoolOperation.POST_AUTHENTICATION, provisionerTrigger);
 
     // Cognito Hosted UI domain for OAuth login
     this.userPool.addDomain('CognitoDomain', {
