@@ -12,6 +12,7 @@ import {
   resetUserEnvironment,
 } from "@/lib/aws-clients";
 import { createUserSchema, updateUserSchema } from "@/lib/validation";
+import { batchGetCustomRoutes } from "@/lib/ec2-clients";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -28,7 +29,20 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, data: user });
     }
     const users = await listCognitoUsers();
-    return NextResponse.json({ success: true, data: users });
+    // M2: single BatchGetItem instead of N+1 per-user GetItem.
+    let routesBySubdomain = new Map<string, { path: string; port: number; label: string }[]>();
+    try {
+      routesBySubdomain = await batchGetCustomRoutes(
+        users.map((u) => u.subdomain).filter(Boolean),
+      );
+    } catch (err) {
+      console.warn("[users] batchGetCustomRoutes failed:", err instanceof Error ? err.message : err);
+    }
+    const withRoutes = users.map((u) => ({
+      ...u,
+      customRoutes: routesBySubdomain.get(u.subdomain) ?? [],
+    }));
+    return NextResponse.json({ success: true, data: withRoutes });
   } catch (err) {
     console.error("[users] GET", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });

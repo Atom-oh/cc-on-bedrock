@@ -13,6 +13,7 @@ import {
   Shield,
   HelpCircle,
   ChevronRight,
+  Terminal,
 } from "lucide-react";
 
 const docsSections = [
@@ -20,6 +21,7 @@ const docsSections = [
   { href: "/docs/architecture", label: { ko: "아키텍처", en: "Architecture" }, icon: Layers },
   { href: "/docs/getting-started", label: { ko: "시작하기", en: "Getting Started" }, icon: Rocket },
   { href: "/docs/user-guide", label: { ko: "사용자 가이드", en: "User Guide" }, icon: User },
+  { href: "/docs/local-mode", label: { ko: "Local 모드", en: "Local Mode" }, icon: Terminal },
   { href: "/docs/admin-guide", label: { ko: "관리자 가이드", en: "Admin Guide" }, icon: Settings },
   { href: "/docs/security", label: { ko: "보안", en: "Security" }, icon: Shield },
   { href: "/docs/faq", label: { ko: "FAQ", en: "FAQ" }, icon: HelpCircle },

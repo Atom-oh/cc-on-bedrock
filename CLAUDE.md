@@ -81,6 +81,7 @@ cd shared/nextjs-app && npx tsc --noEmit             # Type check
 cd shared/nextjs-app && npx vitest run               # Unit tests (vitest)
 
 # Tests
+bash tests/run-all.sh                          # Fast gate: vitest + pytest + ADR invariants (needs python3 -m pytest)
 bash tests/integration/test-e2e.sh             # Full E2E test
 bash tests/docker/test-devenv.sh               # Container tests
 bash scripts/verify-deployment.sh example.com  # Post-deploy verify
