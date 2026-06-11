@@ -103,6 +103,32 @@ export async function getCognitoUser(username: string): Promise<CognitoUser> {
   });
 }
 
+/**
+ * ADR-005: resolve the user's security policy from Cognito at instance-start
+ * time instead of trusting the (up to 8h stale) NextAuth session attribute,
+ * so an admin-applied DLP change takes effect at the very next launch.
+ * On lookup failure the fallback is strictly fail-closed: a stale session
+ * "open" is NEVER honored (an admin may have just tightened the policy);
+ * only "locked" is kept (more restrictive than the default), otherwise
+ * "restricted". A Cognito hiccup therefore can't block instance start, but
+ * also can't grant more network egress than the restricted tier.
+ */
+export async function getLiveSecurityPolicy(
+  username: string,
+  sessionFallback?: string
+): Promise<"open" | "restricted" | "locked"> {
+  const valid = (v?: string): v is "open" | "restricted" | "locked" =>
+    v === "open" || v === "restricted" || v === "locked";
+  try {
+    const u = await getCognitoUser(username);
+    if (valid(u.securityPolicy)) return u.securityPolicy;
+  } catch (err) {
+    console.warn(`[getLiveSecurityPolicy] Cognito lookup failed for ${username}:`, err);
+  }
+  // fail-closed: keep "locked" (stricter), downgrade everything else to "restricted"
+  return sessionFallback === "locked" ? "locked" : "restricted";
+}
+
 export async function createCognitoUser(
   input: CreateUserInput
 ): Promise<CognitoUser> {

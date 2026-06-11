@@ -150,7 +150,7 @@ export async function GET(req: NextRequest) {
           enabled: u.Enabled ?? false,
           status: u.UserStatus ?? "",
           subdomain: getAttr(u.Attributes, "custom:subdomain") ?? "",
-          securityPolicy: getAttr(u.Attributes, "custom:security_policy") ?? "open",
+          securityPolicy: getAttr(u.Attributes, "custom:security_policy") ?? "restricted",
           containerOs: getAttr(u.Attributes, "custom:container_os") ?? "ubuntu",
           resourceTier: getAttr(u.Attributes, "custom:resource_tier") ?? "standard",
           hasEnvironment: !!getAttr(u.Attributes, "custom:subdomain"),

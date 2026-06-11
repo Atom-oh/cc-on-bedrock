@@ -75,6 +75,58 @@ const SG_MAP: Record<string, string> = {
   locked: process.env.SG_DEVENV_LOCKED ?? "",
 };
 
+// ADR-005 container-layer DLP for EC2 mode: code-server reads these keys from
+// config.yaml (equivalent to --disable-file-downloads / --disable-file-uploads).
+// extensions-dir lock is applied separately with a directory-existence guard so
+// code-server never fails to start on an AMI without the curated dirs.
+function dlpCodeServerUserData(policy: string): { configLines: string[]; postLines: string[] } {
+  if (policy !== "restricted" && policy !== "locked") {
+    return { configLines: [], postLines: [] };
+  }
+  const extDir = policy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
+  return {
+    configLines: [
+      `disable-file-downloads: true`,
+      `disable-file-uploads: true`,
+    ],
+    postLines: [
+      `# DLP (${policy}): lock extensions dir only when the curated dir exists on the AMI`,
+      `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> /home/coder/.config/code-server/config.yaml; fi`,
+      `echo "SECURITY_POLICY=${policy}" >> /etc/environment`,
+    ],
+  };
+}
+
+/**
+ * Re-apply the container-layer DLP (code-server config) on a RUNNING instance
+ * via SSM. Used on policy change and on every restart of an existing instance
+ * (UserData only runs on first boot). Best-effort: the SG is the hard guarantee.
+ */
+async function syncDlpCodeServerConfig(
+  instanceId: string,
+  policy: "open" | "restricted" | "locked",
+): Promise<void> {
+  const extDir = policy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
+  const dlpOn = policy === "restricted" || policy === "locked";
+  await ssmClient.send(new SendCommandCommand({
+    InstanceIds: [instanceId],
+    DocumentName: "AWS-RunShellScript",
+    Parameters: {
+      commands: [
+        `CFG=/home/coder/.config/code-server/config.yaml`,
+        `sed -i '/^disable-file-downloads:/d;/^disable-file-uploads:/d;/^extensions-dir:/d' "$CFG"`,
+        ...(dlpOn ? [
+          `printf 'disable-file-downloads: true\\ndisable-file-uploads: true\\n' >> "$CFG"`,
+          `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> "$CFG"; fi`,
+        ] : []),
+        `grep -q '^SECURITY_POLICY=' /etc/environment && sed -i 's/^SECURITY_POLICY=.*/SECURITY_POLICY=${policy}/' /etc/environment || echo "SECURITY_POLICY=${policy}" >> /etc/environment`,
+        `systemctl restart code-server 2>/dev/null || true`,
+      ],
+    },
+    TimeoutSeconds: 30,
+  }));
+}
+
 // Instance tier → EC2 instance type mapping
 const INSTANCE_TIERS: Record<string, { type: string; cpu: string; memory: string }> = {
   light:    { type: "t4g.medium",  cpu: "2 vCPU",  memory: "4 GiB" },
@@ -109,6 +161,16 @@ export interface InstanceInfo {
  * - If no instance: RunInstances from Launch Template
  */
 export async function startInstance(input: StartInstanceInput): Promise<InstanceInfo> {
+  // Fail-closed: unknown/missing policy lands on the restricted tier, never open.
+  // Computed up front so BOTH paths (restart of an existing stopped instance and
+  // fresh RunInstances) enforce the same policy.
+  const effectivePolicy = SG_MAP[input.securityPolicy] ? input.securityPolicy : "restricted";
+  if (!SG_MAP[effectivePolicy]) {
+    // Misconfigured deployment (SG_DEVENV_* env missing) — fail loud, not with a
+    // cryptic RunInstances/ModifyNetworkInterface error downstream.
+    throw new Error(`No security group configured for policy "${effectivePolicy}" — check SG_DEVENV_* env vars`);
+  }
+
   // Check DynamoDB for existing instance
   const existing = await getUserInstance(input.subdomain);
 
@@ -140,6 +202,21 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         }));
       }
 
+      // ADR-005: UserData only runs on first boot, so a policy change made while
+      // the instance was stopped would otherwise never be enforced. Re-apply the
+      // current SG before start (ENI groups are mutable on stopped instances)...
+      try {
+        if (desc.eniId) {
+          await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
+            NetworkInterfaceId: desc.eniId,
+            Groups: [SG_MAP[effectivePolicy]],
+          }));
+          console.log(`[EC2] Re-applied ${effectivePolicy} SG on restart for ${input.subdomain}`);
+        }
+      } catch (err) {
+        console.warn(`[EC2] SG re-apply on restart failed for ${input.subdomain}:`, err);
+      }
+
       console.log(`[EC2] Starting existing instance ${existing.instanceId} for ${input.subdomain}`);
       await ec2Client.send(new StartInstancesCommand({
         InstanceIds: [existing.instanceId],
@@ -150,6 +227,14 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
       // Sync code-server password from Secrets Manager (UserData only runs on first boot)
       await syncCodeserverPassword(existing.instanceId, input.subdomain);
+
+      // ...and the container-layer DLP config once it's running (best-effort)
+      try {
+        await syncDlpCodeServerConfig(existing.instanceId, effectivePolicy);
+        console.log(`[EC2] Re-applied ${effectivePolicy} code-server DLP on restart for ${input.subdomain}`);
+      } catch (err) {
+        console.warn(`[EC2] code-server DLP re-apply on restart failed for ${input.subdomain}:`, err);
+      }
 
       // Update Claude CLI + start CWAgent (fire-and-forget)
       postStartSetup(existing.instanceId);
@@ -163,11 +248,24 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         privateIp: info.privateIp,
       });
 
-      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: input.securityPolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
+      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: effectivePolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
     }
 
     if (desc && desc.status === "running") {
       console.log(`[EC2] Instance ${existing.instanceId} already running for ${input.subdomain}`);
+      // Keep the SG in sync with the live policy so the returned securityPolicy
+      // is what's actually enforced (idempotent, non-disruptive — no restarts).
+      // Container-layer DLP resync is left to the changeSecurityPolicy path.
+      try {
+        if (desc.eniId) {
+          await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
+            NetworkInterfaceId: desc.eniId,
+            Groups: [SG_MAP[effectivePolicy]],
+          }));
+        }
+      } catch (err) {
+        console.warn(`[EC2] SG sync on already-running failed for ${input.subdomain}:`, err);
+      }
       return {
         instanceId: existing.instanceId,
         subdomain: input.subdomain,
@@ -175,7 +273,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         status: "running",
         privateIp: desc.privateIp,
         instanceType: desc.instanceType,
-        securityPolicy: input.securityPolicy,
+        securityPolicy: effectivePolicy,
         containerOs: existing.containerOs ?? "ubuntu",
       };
     }
@@ -204,7 +302,8 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     }
   }
 
-  const sg = SG_MAP[input.securityPolicy] || SG_MAP.open;
+  const sg = SG_MAP[effectivePolicy];
+  const dlp = dlpCodeServerUserData(effectivePolicy);
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
 
@@ -284,7 +383,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `auth: password`,
       `password: "${codeserverPassword}"`,
       `cert: false`,
+      ...dlp.configLines,
       `CSCFG`,
+      ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
@@ -350,7 +451,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       instanceId,
       username: input.username,
       department: input.department,
-      securityPolicy: input.securityPolicy,
+      securityPolicy: effectivePolicy,
       containerOs: osType,
       instanceType: info.instanceType,
       privateIp: info.privateIp,
@@ -367,7 +468,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     status: "running",
     privateIp: info.privateIp,
     instanceType: info.instanceType,
-    securityPolicy: input.securityPolicy,
+    securityPolicy: effectivePolicy,
     containerOs: osType,
   };
 }
@@ -622,7 +723,10 @@ export async function restoreFromSnapshot(
   console.log(`[EC2] Registered AMI ${restoredAmiId} from snapshot ${snapshotId}`);
 
   // 3. Launch instance from restored AMI (bypass normal SSM AMI lookup)
-  const sg = SG_MAP[(record?.securityPolicy ?? "restricted")] || SG_MAP.open;
+  const restorePolicy = record?.securityPolicy && SG_MAP[record.securityPolicy]
+    ? record.securityPolicy : "restricted";
+  const sg = SG_MAP[restorePolicy];
+  const dlp = dlpCodeServerUserData(restorePolicy);
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS["standard"];
   const instanceProfileName = await ensureUserInstanceProfile(subdomain, record?.username ?? "", record?.department ?? "default");
@@ -683,7 +787,9 @@ export async function restoreFromSnapshot(
       `auth: password`,
       `password: "${codeserverPassword}"`,
       `cert: false`,
+      ...dlp.configLines,
       `CSCFG`,
+      ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
@@ -809,7 +915,7 @@ export async function listInstances(): Promise<InstanceInfo[]> {
       status: ec2Info.status === "stopped" && r.status === "hibernated" ? "hibernated" : ec2Info.status,
       privateIp: ec2Info.privateIp,
       instanceType: ec2Info.instanceType,
-      securityPolicy: r.securityPolicy ?? "open",
+      securityPolicy: r.securityPolicy ?? "restricted",
       containerOs: r.containerOs ?? "ubuntu",
       launchTime: r.createdAt,
     };
@@ -988,6 +1094,16 @@ export async function changeSecurityPolicy(
       Groups: [newSgId],
     }));
     console.log(`[EC2] Security policy changed for ${subdomain}: → ${newPolicy} (SG: ${newSgId})`);
+
+    // ADR-005: also re-apply the container-layer DLP (code-server config) on the
+    // running instance so a tier change takes effect without a relaunch.
+    // Best-effort: SG swap above is the hard guarantee; config sync may lag.
+    try {
+      await syncDlpCodeServerConfig(record.instanceId, newPolicy);
+      console.log(`[EC2] code-server DLP config re-applied for ${subdomain} (${newPolicy})`);
+    } catch (err) {
+      console.warn(`[EC2] code-server DLP config sync failed for ${subdomain}:`, err);
+    }
   }
 
   // Update tags for next start
@@ -1175,7 +1291,7 @@ async function getUserInstance(subdomain: string): Promise<UserInstanceRecord | 
   }
 }
 
-async function describeInstance(instanceId: string): Promise<{ status: string; privateIp: string; instanceType: string } | null> {
+async function describeInstance(instanceId: string): Promise<{ status: string; privateIp: string; instanceType: string; eniId?: string } | null> {
   try {
     const result = await ec2Client.send(new DescribeInstancesCommand({
       InstanceIds: [instanceId],
@@ -1186,6 +1302,7 @@ async function describeInstance(instanceId: string): Promise<{ status: string; p
       status: inst.State?.Name ?? "unknown",
       privateIp: inst.PrivateIpAddress ?? "",
       instanceType: inst.InstanceType ?? "",
+      eniId: inst.NetworkInterfaces?.[0]?.NetworkInterfaceId,
     };
   } catch {
     return null;
