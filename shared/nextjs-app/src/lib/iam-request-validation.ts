@@ -66,16 +66,18 @@ function actionMatchesAny(action: string, patterns: string[]): boolean {
 // allowlist + dangerous-action denylist.
 const READ_WILDCARD_PREFIXES = ["get", "list", "describe", "batchget", "query", "scan"];
 
-/** True for a read-only wildcard op: exactly one trailing '*', no '?', no embedded '*',
- *  stem begins with a read prefix. e.g. "Get*", "List*", "BatchGet*" — but NOT "*", "Put*",
- *  "Get*Policy*" (embedded), "Get?" (glob), or "PutObject*" (write). `op` is the part after ':'. */
+/** True ONLY for a bare read-verb wildcard: a read prefix followed by a single trailing '*'.
+ *  Allowed: "Get*", "List*", "Describe*", "BatchGet*", "Query*", "Scan*".
+ *  Rejected: "*", "Put*", "GetObject*" / "GetBucketPolicy*" (verb+suffix → info-disclosure/escalation
+ *  bypass — gate consensus), "Get*Policy*" (embedded '*'), "Get?" (glob). `op` is the part after ':'.
+ *  Exact-match (===) not startsWith: a user wanting a specific read names it without a wildcard. */
 function isReadWildcardOp(op: string): boolean {
   if (!op || op.includes("?")) return false;
   if (!op.endsWith("*")) return false;
   const stem = op.slice(0, -1);
   if (stem.includes("*")) return false;
   const s = stem.toLowerCase();
-  return READ_WILDCARD_PREFIXES.some((p) => s === p || s.startsWith(p));
+  return READ_WILDCARD_PREFIXES.some((p) => s === p);
 }
 
 export function validateIamRequest(statements: IamStatement[], opts: ValidateOpts): ValidationResult {
@@ -125,11 +127,11 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
       }
     }
 
-    // Resource:'*' is allowed when every action either is a configured wildcard-ok
-    // action OR a read-only wildcard op (List*/Describe* frequently lack resource-level scoping).
-    const allActionsWildcardOk = actions.length > 0 && actions.every(
-      (a) => actionMatchesAny(a, opts.wildcardOkActions) || isReadWildcardOp((a.split(":")[1] ?? "")),
-    );
+    // Resource:'*' is allowed ONLY for the configured wildcard-ok actions (e.g. ec2:describe*,
+    // s3:listallmybuckets) — actions that genuinely lack resource-level scoping. Read-only wildcard
+    // ops (s3:Get*/List*) are NOT auto-granted Resource:* — they must be scoped to a concrete ARN,
+    // else `s3:Get*`+Resource:* = account-wide reads (gate consensus: codex/kiro HIGH).
+    const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions));
     for (const res of resources) {
       if (res === "*") {
         if (!allActionsWildcardOk) {

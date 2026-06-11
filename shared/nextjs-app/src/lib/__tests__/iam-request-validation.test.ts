@@ -144,9 +144,16 @@ describe("validateIamRequest — read-only wildcard actions (ADR-026 T8)", () =>
     const r = validateIamRequest([st(["s3:Get*"], ["arn:aws:s3:::my-bucket/data/*"])], OPTS);
     expect(r.ok).toBe(true);
   });
-  it("allows s3:List* with Resource:* (read-only)", () => {
-    const r = validateIamRequest([st(["s3:List*"], ["*"])], OPTS);
+  it("allows s3:List* scoped to a bucket ARN", () => {
+    const r = validateIamRequest([st(["s3:List*"], ["arn:aws:s3:::my-bucket"])], OPTS);
     expect(r.ok).toBe(true);
+  });
+  it("REJECTS s3:Get* with Resource:* (read wildcards are NOT auto-granted account-wide)", () => {
+    expect(validateIamRequest([st(["s3:Get*"], ["*"])], OPTS).ok).toBe(false);
+  });
+  it("REJECTS verb+suffix read wildcards (GetObject*/GetBucketPolicy*) — exact prefix only", () => {
+    expect(validateIamRequest([st(["s3:GetObject*"], ["arn:aws:s3:::b/x/*"])], OPTS).ok, "GetObject*").toBe(false);
+    expect(validateIamRequest([st(["s3:GetBucketPolicy*"], ["arn:aws:s3:::b"])], OPTS).ok, "GetBucketPolicy*").toBe(false);
   });
   it("allows dynamodb:Query* / Scan* / BatchGet* with a concrete table ARN", () => {
     const arn = "arn:aws:dynamodb:ap-northeast-2:180294183052:table/cc-on-bedrock-usage";
