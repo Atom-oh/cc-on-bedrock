@@ -58,6 +58,17 @@ describe('putCustomRoutes', () => {
     expect(cmd.input.TableName).toBe('cc-user-instances');
   });
 
+  it('guards against phantom-row upsert: condition requires the instance row to exist', async () => {
+    // If the instance row is deleted between the PUT handler's existence check
+    // and this UpdateItem, `attribute_not_exists(routesVersion)` would be true on
+    // the now-missing row and UpdateItem would UPSERT a phantom instance row.
+    // Requiring attribute_exists(user_id) makes the write a no-op on a missing row.
+    sendMock.mockResolvedValueOnce({});
+    await putCustomRoutes('alice', [{ path: '/p', port: 5000, label: 'x' }], 2);
+    const cmd = sendMock.mock.calls[0][0];
+    expect(cmd.input.ConditionExpression).toContain('attribute_exists(user_id)');
+  });
+
   it('throws version-conflict on ConditionalCheckFailedException', async () => {
     const err = new Error('cond'); err.name = 'ConditionalCheckFailedException';
     sendMock.mockRejectedValueOnce(err);

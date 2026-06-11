@@ -1761,7 +1761,11 @@ export async function putCustomRoutes(
       TableName: INSTANCE_TABLE,
       Key: marshall({ user_id: subdomain }),
       UpdateExpression: "SET customRoutes = :r, routesVersion = :nv",
-      ConditionExpression: "attribute_not_exists(routesVersion) OR routesVersion = :ev",
+      // attribute_exists(user_id): the instance row must already exist, so a delete
+      // racing between the PUT handler's existence check and this UpdateItem cannot
+      // UPSERT a phantom row (without it, attribute_not_exists(routesVersion) is true
+      // on a missing row → upsert). Mirrors config-gen's write_route_status guard.
+      ConditionExpression: "attribute_exists(user_id) AND (attribute_not_exists(routesVersion) OR routesVersion = :ev)",
       ExpressionAttributeValues: marshall({
         ":r": routes,
         ":nv": nextVersion,
