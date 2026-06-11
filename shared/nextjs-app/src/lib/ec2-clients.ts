@@ -1678,8 +1678,11 @@ export async function seedCustomRoutesIfUnset(subdomain: string): Promise<Custom
       ConditionExpression: "attribute_not_exists(customRoutes)",
       ExpressionAttributeValues: marshall({ ":r": DEFAULT_SEED_ROUTES, ":z": 0 }),
     }));
-  } catch {
-    /* race: 동시 seed — 무시 */
+  } catch (err) {
+    // Only the seed race (someone else seeded first) is expected/ignorable; surface anything else.
+    if (!(err instanceof Error && err.name === "ConditionalCheckFailedException")) {
+      console.warn("[seedCustomRoutesIfUnset] unexpected error:", err instanceof Error ? err.message : err);
+    }
   }
   return DEFAULT_SEED_ROUTES;
 }
