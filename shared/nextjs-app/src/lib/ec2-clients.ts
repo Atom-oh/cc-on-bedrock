@@ -1128,8 +1128,9 @@ async function registerRoute(subdomain: string, privateIp: string): Promise<void
   await ddbClient.send(new UpdateItemCommand({
     TableName: ROUTING_TABLE,
     Key: marshall({ subdomain }),
-    UpdateExpression: "SET container_ip = :ip, port = :p, #st = :s, registered_at = :t",
-    ExpressionAttributeNames: { "#st": "status" },
+    // NOTE: both `port` and `status` are DynamoDB reserved words → must be aliased.
+    UpdateExpression: "SET container_ip = :ip, #pt = :p, #st = :s, registered_at = :t",
+    ExpressionAttributeNames: { "#st": "status", "#pt": "port" },
     ExpressionAttributeValues: marshall({
       ":ip": privateIp, ":p": 8080, ":s": "active", ":t": new Date().toISOString(),
     }),
