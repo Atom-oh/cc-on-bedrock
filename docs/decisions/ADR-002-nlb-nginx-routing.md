@@ -48,7 +48,7 @@ Nginx가 Host 헤더 기반으로 사용자 컨테이너에 라우팅.
 
 ### 라우팅 경로
 ```
-Browser → CloudFront (*.dev.domain) → Lambda@Edge (Cognito auth) → NLB (TCP 80) → Nginx (Fargate ×2) → EC2 user instance
+Browser → CloudFront (*.dev.domain) → Lambda@Edge (NextAuth cookie validation) → NLB (TCP 80) → Nginx (Fargate ×2) → EC2 user instance
 ```
 
 Dashboard ALB는 별도 서비스로 `05-dashboard-stack.ts`에서 관리 (본 ADR scope 외).

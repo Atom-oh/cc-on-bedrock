@@ -45,14 +45,14 @@ bash scripts/build-ami.sh al2023  c7g.large    # AL2023 AMI 빌드
 
 핵심 판단: AMI 빌드 비용이 2배가 되지만, 사용자 자율성과 도구 호환성 검증 이득이 크다. 빌드는 GitHub Actions로 야간 cron 1회면 충분하므로 비용 부담은 무시 가능.
 
-### Legacy Fallback
+### Legacy Fallback (미구현)
 
-기존 `bash scripts/build-ami.sh c7g.large` (1-인자) 호출도 한동안 호환되도록 첫 인자가 `ubuntu|al2023`이 아니면 인스턴스 타입으로 간주하고 Ubuntu 빌드로 fallback. 6개월 후 제거.
+> ~~기존 `bash scripts/build-ami.sh c7g.large` (1-인자) 호출도 한동안 호환되도록 첫 인자가 `ubuntu|al2023`이 아니면 인스턴스 타입으로 간주하고 Ubuntu 빌드로 fallback.~~ — **구현되지 않음.** 실제 스크립트는 첫 인자가 `ubuntu|al2023`이 아니면 `exit 1`한다 (`scripts/build-ami.sh:19-22`). fallback 경로 없음.
 
 ## Changes
 
 ### Scripts
-- `scripts/build-ami.sh` — 162 → 276 lines. OS-type 분기 + 공통 setup 함수 추출
+- `scripts/build-ami.sh` — 현재 374 lines. OS-type 분기 + 공통 setup 함수 추출
 - SSM Parameter 신규: `/cc-on-bedrock/devenv/ami-id/ubuntu`, `/cc-on-bedrock/devenv/ami-id/al2023`
 
 ### Dashboard

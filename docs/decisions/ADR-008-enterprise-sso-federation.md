@@ -190,7 +190,7 @@ Federated 사용자 첫 로그인
 |------|------|
 | `shared/nextjs-app/src/lib/auth.ts` | CognitoProvider OAuth callback이 federated 토큰을 동일하게 처리. `profile["custom:subdomain"]` 등 이미 매핑됨 |
 | `shared/nextjs-app/src/middleware.ts` | `token.groups.includes("admin")` — auth source 무관 |
-| `cdk/lib/lambda/devenv-auth-edge/index.js` | Cognito Hosted UI가 IdP redirect를 투명하게 처리. Lambda@Edge는 Cognito 토큰만 검증 |
+| `cdk/lib/lambda/devenv-session-validator/index.js` | Federation redirect는 Dashboard NextAuth 로그인(Cognito Hosted UI → IdP)을 거쳐 NextAuth 세션 쿠키를 발급. Lambda@Edge는 Cognito 토큰이 아니라 이 NextAuth 세션 쿠키를 검증하므로 auth source(native/federated)와 무관 |
 | DynamoDB 테이블, EC2, Nginx routing | Identity-agnostic — subdomain 기반 |
 
 #### 변경 필요

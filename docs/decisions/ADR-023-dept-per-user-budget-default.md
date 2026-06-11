@@ -135,7 +135,7 @@ The third approach is preferable because:
 - ADR-014: Local Governance Mode (normalized token enforcer — separate dimension)
 - ADR-015: Dollar Budget × Normalized Token Limit Integration (dept-deny mechanism)
 - ADR-021: Wildcard Claude-Family IAM (USD-first enforcement context)
-- Code: `cdk/lib/lambda/budget-check.py:110-180`, `shared/nextjs-app/src/app/api/admin/budgets/route.ts`, `shared/nextjs-app/src/app/admin/budgets/budget-management.tsx`
+- Code: `cdk/lib/lambda/budget-check.py:125-185`, `shared/nextjs-app/src/app/api/admin/budgets/route.ts`, `shared/nextjs-app/src/app/admin/budgets/budget-management.tsx`
 
 ## Verification
 

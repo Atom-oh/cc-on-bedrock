@@ -34,7 +34,7 @@ CloudFront (*.dev.atomai.click)
 |------|------|
 | `cdk/lib/04-ecs-devenv-stack.ts` | CloudFront, NLB, Nginx ECS, DynamoDB routing, Lambda@Edge |
 | `cdk/lib/lambda/nginx-config-gen.py` | DynamoDB Stream → nginx.conf 생성 → S3 업로드 |
-| `cdk/lib/lambda/devenv-auth-edge/index.js` | Cognito OAuth + HMAC cookie + subdomain 검증 |
+| `cdk/lib/lambda/devenv-session-validator/index.js` | NextAuth session cookie validation + subdomain 검증 |
 | `shared/nextjs-app/src/lib/ec2-clients.ts` | EC2 UserData, `registerRoute(subdomain, privateIp)` |
 | `docker/nginx/reload.sh` | S3 nginx.conf 폴링 (5초) + hot-reload |
 
@@ -212,13 +212,13 @@ upstream userapi_{subdomain} {
 ### Dashboard에서의 URL 전달
 
 ```
-code-server IDE:  https://admin.dev.atomai.click/?folder=/home/coder
+code-server IDE:  https://admin.dev.atomai.click/?folder=/home/coder/workspace
 Frontend 미리보기: https://admin.dev.atomai.click/
 API 테스트:       https://admin.dev.atomai.click/api/
 ```
 
 Dashboard의 `environment-tab.tsx`에서:
-- **code-server URL**: `https://{subdomain}.dev.atomai.click/?folder=/home/coder`
+- **code-server URL**: `https://{subdomain}.dev.atomai.click/?folder=/home/coder/workspace`
 - **Preview URL**: `https://{subdomain}.dev.atomai.click/` (Frontend)
 - **API URL**: `https://{subdomain}.dev.atomai.click/api/` (API)
 
@@ -349,7 +349,7 @@ securityGroup.addIngressRule(nginxSg, ec2.Port.tcp(8000), 'Nginx → API server'
 code-server URL 변경:
 ```
 Before: https://admin.dev.atomai.click/
-After:  https://admin.dev.atomai.click/?folder=/home/coder
+After:  https://admin.dev.atomai.click/?folder=/home/coder/workspace
 ```
 
 Preview URL 추가:

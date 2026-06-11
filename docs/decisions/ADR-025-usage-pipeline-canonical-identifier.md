@@ -123,7 +123,7 @@ semantic:
       - shared/nextjs-app/src/app/api/admin/budgets/route.ts
 ```
 
-## Follow-ups
-- dual-write tracker 구현(1단계) → backfill 스크립트 → cutover.
-- EC2 task 역할 sub 태그 부여 방안 결정(provisioner/UserData).
-- 표시 계층 sub→subdomain 매핑(Cognito lookup vs GSI) 선택.
+## Follow-ups (RESOLVED — cutover 완료)
+- ~~dual-write tracker 구현(1단계) → backfill 스크립트 → cutover.~~ **RESOLVED**: tracker가 직접 `USER#{sub}` 단일 키로 기록하도록 cutover 완료. dual-write/backfill 단계는 불필요해져 생략됨.
+- ~~EC2 task 역할 sub 태그 부여 방안 결정(provisioner/UserData).~~ **RESOLVED**: 역할 sub 태그 방식은 채택하지 않음. 대신 `bedrock-usage-tracker._resolve_sub_from_subdomain()`이 EC2 subdomain→sub를 **Cognito ListUsers lookup**(`custom:subdomain` 필터)으로 역해석한다. 역할에 sub 태그를 추가하지 않는다.
+- ~~표시 계층 sub→subdomain 매핑(Cognito lookup vs GSI) 선택.~~ **RESOLVED**: Cognito lookup 방식 채택 (위와 동일 메커니즘, GSI 미사용).

@@ -91,8 +91,9 @@ const validatorArn = ssm.StringParameter.valueForStringParameter(
 
 ### Cert 사용
 
-- Dashboard CF: `*.atomai.click` (기존, dashboardCertificateArn context)
-- DevEnv CF: `*.dev.atomai.click` (기존 `85c9ded8-bab1-4cf0-9a5e-2a8d79b302b8`, 새 context `devenvCertArn`)
+- Dashboard CF: `*.atomai.click` (기존, `cloudfrontCertArn` context, us-east-1)
+- DevEnv CF: `*.dev.atomai.click` (기존 `85c9ded8-bab1-4cf0-9a5e-2a8d79b302b8`, context `devEnvCertArn`, us-east-1)
+- `dashboardCertArn` context는 ALB REGIONAL(ap-northeast-2) cert로, CloudFront에는 사용되지 않음
 - `unifiedCertArn` context는 폐기
 
 ### WAF
@@ -104,7 +105,7 @@ const validatorArn = ssm.StringParameter.valueForStringParameter(
 ### CDK 코드
 - **Stack 05 (Dashboard)**: DashboardStackProps에서 `sgOpen/sgRestricted/sgLocked/nlbDnsName` 제거. CloudFront aliases는 dashboard 도메인만. `OriginRouterConfigParam` SSM 제거. `originRouterFn` Lambda@Edge 제거. session-validator Lambda@Edge는 그대로 유지하고 currentVersion ARN을 SSM으로 export.
 - **Stack 04 (DevEnv)**: 신규 CloudFront distribution(NLB origin + session-validator edge function 참조) + Route 53 `*.dev` record. context로 `devenvCertArn` 입력. 기존 NLB 통과 secret(X-Custom-Secret) 보안 헤더는 그대로 사용.
-- **`bin/app.ts`**: `unifiedCertArn` context 제거(deprecation OK). `dashboardCertArn`, `devenvCertArn` 두 context. `governanceOnly=true`일 때 Stack 04 instantiation 완전 skip. Stack 05 props에 Stack 04 의존 제거.
+- **`bin/app.ts`**: `unifiedCertArn` context 제거(deprecation OK). CloudFront cert context는 `cloudfrontCertArn`(Dashboard CF, us-east-1)·`devEnvCertArn`(DevEnv CF, us-east-1) 두 개. `dashboardCertArn`은 ALB REGIONAL cert로 CloudFront에는 사용되지 않음. `governanceOnly=true`일 때 Stack 04 instantiation 완전 skip. Stack 05 props에 Stack 04 의존 제거.
 
 ### Dashboard Next.js
 - `STORAGE_TYPE=ec2` 모드의 EC2 생성 라우트는 `governanceOnly` 시 비활성화 (이미 sidebar 분기 있음, 페이지/API 레벨 가드 추가 — ADR-014 후속)
