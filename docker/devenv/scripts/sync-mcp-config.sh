@@ -16,8 +16,11 @@ CLAUDE_DIR="${CODER_HOME}/.claude"
 MCP_CONFIG="${CLAUDE_DIR}/mcp_servers.json"
 DEFAULT_REGION="ap-northeast-2"
 
-# Ensure .claude directory exists
+# Ensure .claude directory exists and is owned by coder
+# (this service runs as root; without chown the dir ends up root:root and
+#  coder can never write ~/.claude — breaks Claude Code state + self-update)
 mkdir -p "$CLAUDE_DIR"
+chown coder:coder "$CODER_HOME" "$CLAUDE_DIR" 2>/dev/null || true
 
 write_fallback_config() {
   local region="${REGION:-$DEFAULT_REGION}"
