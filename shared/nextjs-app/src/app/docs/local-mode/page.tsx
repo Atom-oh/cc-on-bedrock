@@ -197,8 +197,8 @@ AWS_REGION=ap-northeast-2
 # 모델 매핑 (Claude Code의 /model 픽커 슬롯)
 # Opus는 최신인 4.8로 두는 것을 권장 (CLI 기본값과 일치)
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
-ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]
+ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
 CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6`}
       </CodeBlock>
 
