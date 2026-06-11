@@ -18,6 +18,24 @@ LAMBDA = REPO / "cdk/lib/lambda/nginx-config-gen.py"
 
 
 def _load_module():
+    # The Lambda imports boto3/botocore and creates clients at import time. This
+    # test only needs the module's nginx template constants, so stub the AWS SDK
+    # in sys.modules — the test then runs even where boto3 isn't installed (and
+    # never makes a network/credential call), instead of failing with ImportError.
+    import sys
+    import types
+
+    if "boto3" not in sys.modules:
+        boto3_stub = types.ModuleType("boto3")
+        boto3_stub.client = lambda *a, **k: None
+        boto3_stub.resource = lambda *a, **k: None
+        sys.modules["boto3"] = boto3_stub
+    if "botocore.exceptions" not in sys.modules:
+        sys.modules.setdefault("botocore", types.ModuleType("botocore"))
+        botocore_exc = types.ModuleType("botocore.exceptions")
+        botocore_exc.ClientError = type("ClientError", (Exception,), {})
+        sys.modules["botocore.exceptions"] = botocore_exc
+
     os.environ.setdefault("AWS_REGION", "ap-northeast-2")
     spec = importlib.util.spec_from_file_location("nginx_config_gen", LAMBDA)
     m = importlib.util.module_from_spec(spec)
