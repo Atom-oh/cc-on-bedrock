@@ -3,7 +3,7 @@
 - **작성일**: 2026-06-09
 - **상태**: Approved (brainstorming) → writing-plans 대기
 - **확장 대상**: ADR-009 (DevEnv Multi-Port Routing) "향후 확장 — 사용자 커스텀 포트"
-- **신규 ADR**: ADR-025 (작성 예정)
+- **신규 ADR**: ADR-027 (작성 예정)
 - **관련 보안 리뷰**: `docs/reviews/domain-port-review-2026-06-09.md` — B-H1(nginx 입력 injection), B-H3(SG ingress = NginxSg)
 - **consensus 리뷰 반영**: co-agent 패널(codex+gemini) 2회차. 반영된 항목 — SG chaining/range(§6, accepted-risk), B-H1 subdomain/container_ip 검증(§5.2/§12), prefix 세그먼트 경계(§5), 동기화 version/조건부쓰기(§3), multi-segment path(§4 D9), route 상태 노출(§8.2), path-preserve 한계 명시(§8.1), legacy vpcCidr 제거+test(§6), seed 모순 해소(§11)
 
@@ -204,7 +204,7 @@ config-gen이 skip한 route는 UI가 "성공"으로 오인하면 안 된다.
 | `shared/nextjs-app/src/lib/aws-clients.ts` | 미러(version 조건부)·seed·user-instances 헬퍼 |
 | `shared/nextjs-app/src/components/user/settings-tab.tsx` | UI 섹션 |
 | `shared/nextjs-app/src/components/tables/users-table.tsx` | 노출 포트 컬럼 |
-| `docs/decisions/ADR-025-devenv-custom-port-exposure.md` | ADR-009 확장 신규 ADR |
+| `docs/decisions/ADR-027-devenv-custom-port-exposure.md` | ADR-009 확장 신규 ADR |
 | `shared/nextjs-app/src/lib/__tests__/custom-routes-validation.test.ts` | reserved=[8080]·루트·max5 반영 갱신 |
 | nginx-config-gen 테스트 | custom route 생성 + 불일치 skip (Python) |
 

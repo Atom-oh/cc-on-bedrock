@@ -28,6 +28,7 @@ import {
   DynamoDBClient,
   PutItemCommand,
   GetItemCommand,
+  BatchGetItemCommand,
   UpdateItemCommand,
   ScanCommand,
   DeleteItemCommand,
@@ -51,6 +52,7 @@ import {
   CreateSecretCommand,
 } from "@aws-sdk/client-secrets-manager";
 import { randomBytes } from "crypto";
+import type { CustomRoute, CustomRoutesRecord } from "@/lib/types";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const ec2Client = new EC2Client({ region });
@@ -1330,17 +1332,39 @@ async function isHibernateCapable(instanceId: string): Promise<boolean> {
 }
 
 async function registerRoute(subdomain: string, privateIp: string): Promise<void> {
-  await ddbClient.send(new PutItemCommand({
+  // ADR-027: seed default routes on first boot; carry authoritative customRoutes onto the
+  // routing-table row so config-gen renders them. (This is the LIVE path — startInstance/
+  // restoreFromSnapshot/changeTier/switchOs all call here.)
+  await seedCustomRoutesIfUnset(subdomain);
+  const { customRoutes, routesVersion } = await getCustomRoutes(subdomain);
+
+  // M7: UpdateItem (not PutItem) so a concurrent settings mirror with a newer routesVersion
+  // isn't wiped on restart/resize. Core registration fields always set.
+  await ddbClient.send(new UpdateItemCommand({
     TableName: ROUTING_TABLE,
-    Item: marshall({
-      subdomain,
-      container_ip: privateIp,
-      port: 8080,
-      status: "active",
-      registered_at: new Date().toISOString(),
+    Key: marshall({ subdomain }),
+    // NOTE: both `port` and `status` are DynamoDB reserved words → must be aliased.
+    UpdateExpression: "SET container_ip = :ip, #pt = :p, #st = :s, registered_at = :t",
+    ExpressionAttributeNames: { "#st": "status", "#pt": "port" },
+    ExpressionAttributeValues: marshall({
+      ":ip": privateIp, ":p": 8080, ":s": "active", ":t": new Date().toISOString(),
     }),
   }));
-  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080`);
+
+  // version-guarded customRoutes write (don't clobber a newer concurrent settings mirror)
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: ROUTING_TABLE,
+      Key: marshall({ subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :v",
+      ConditionExpression: "attribute_not_exists(routesVersion) OR routesVersion <= :v",
+      ExpressionAttributeValues: marshall({ ":r": JSON.stringify(customRoutes), ":v": routesVersion }),
+    }));
+  } catch (err) {
+    if (!(err instanceof Error && err.name === "ConditionalCheckFailedException")) throw err;
+    // newer mirror exists → keep it
+  }
+  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080 (+${customRoutes.length} custom)`);
 }
 
 async function deregisterRoute(subdomain: string): Promise<void> {
@@ -1668,4 +1692,118 @@ async function updateInstanceRecord(subdomain: string, updates: Record<string, s
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: values,
   }));
+}
+
+// ─── Custom Port Routes store (ADR-027) ───
+
+export const DEFAULT_SEED_ROUTES: CustomRoute[] = [
+  { path: "/", port: 3000, label: "Frontend" },
+  { path: "/api", port: 8000, label: "API" },
+];
+
+/** cc-user-instances 에서 customRoutes + version 조회. 없으면 [] / 0. */
+export async function getCustomRoutes(subdomain: string): Promise<CustomRoutesRecord> {
+  const result = await ddbClient.send(new GetItemCommand({
+    TableName: INSTANCE_TABLE,
+    Key: marshall({ user_id: subdomain }),
+  }));
+  if (!result.Item) return { customRoutes: [], routesVersion: 0, exists: false };
+  const item = unmarshall(result.Item);
+  return {
+    customRoutes: (item.customRoutes as CustomRoute[]) ?? [],
+    routesVersion: (item.routesVersion as number) ?? 0,
+    routeStatus: item.routeStatus,
+    exists: true,
+  };
+}
+
+/**
+ * 여러 subdomain의 customRoutes를 BatchGetItem 한 번(들)으로 조회 (M2: admin 목록 N+1 제거).
+ * 반환: Map<subdomain, CustomRoute[]>. 행 없으면 키 부재.
+ */
+export async function batchGetCustomRoutes(
+  subdomains: string[],
+): Promise<Map<string, CustomRoute[]>> {
+  const out = new Map<string, CustomRoute[]>();
+  const uniq = [...new Set(subdomains.filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += 100) {
+    const chunk = uniq.slice(i, i + 100);
+    let keys = chunk.map((s) => marshall({ user_id: s }));
+    // BatchGetItem may return UnprocessedKeys — retry a few times.
+    for (let attempt = 0; attempt < 3 && keys.length > 0; attempt++) {
+      const res = await ddbClient.send(new BatchGetItemCommand({
+        RequestItems: {
+          [INSTANCE_TABLE]: { Keys: keys, ProjectionExpression: "user_id, customRoutes" },
+        },
+      }));
+      for (const raw of res.Responses?.[INSTANCE_TABLE] ?? []) {
+        const item = unmarshall(raw);
+        out.set(item.user_id as string, (item.customRoutes as CustomRoute[]) ?? []);
+      }
+      keys = res.UnprocessedKeys?.[INSTANCE_TABLE]?.Keys ?? [];
+    }
+  }
+  return out;
+}
+
+/**
+ * customRoutes 를 expectedVersion 기반 조건부 쓰기로 갱신(lost-update 방지).
+ * 성공 시 새 version(=expectedVersion+1) 반환. 충돌 시 throw('version-conflict').
+ */
+export async function putCustomRoutes(
+  subdomain: string,
+  routes: CustomRoute[],
+  expectedVersion: number,
+): Promise<number> {
+  const nextVersion = expectedVersion + 1;
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :nv",
+      // attribute_exists(user_id): the instance row must already exist, so a delete
+      // racing between the PUT handler's existence check and this UpdateItem cannot
+      // UPSERT a phantom row (without it, attribute_not_exists(routesVersion) is true
+      // on a missing row → upsert). Mirrors config-gen's write_route_status guard.
+      ConditionExpression: "attribute_exists(user_id) AND (attribute_not_exists(routesVersion) OR routesVersion = :ev)",
+      ExpressionAttributeValues: marshall({
+        ":r": routes,
+        ":nv": nextVersion,
+        ":ev": expectedVersion,
+      }),
+    }));
+    return nextVersion;
+  } catch (err) {
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      throw new Error("version-conflict");
+    }
+    throw err;
+  }
+}
+
+/** customRoutes 미설정(속성 없음)이면 seed 1회 주입. 빈 배열은 "전부 삭제"로 보고 주입 안 함. */
+export async function seedCustomRoutesIfUnset(subdomain: string): Promise<CustomRoute[]> {
+  const result = await ddbClient.send(new GetItemCommand({
+    TableName: INSTANCE_TABLE,
+    Key: marshall({ user_id: subdomain }),
+  }));
+  const item = result.Item ? unmarshall(result.Item) : null;
+  if (item && Array.isArray(item.customRoutes)) {
+    return item.customRoutes as CustomRoute[]; // 이미 설정됨(빈 배열 포함)
+  }
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = if_not_exists(routesVersion, :z)",
+      ConditionExpression: "attribute_not_exists(customRoutes)",
+      ExpressionAttributeValues: marshall({ ":r": DEFAULT_SEED_ROUTES, ":z": 0 }),
+    }));
+  } catch (err) {
+    // Only the seed race (someone else seeded first) is expected/ignorable; surface anything else.
+    if (!(err instanceof Error && err.name === "ConditionalCheckFailedException")) {
+      console.warn("[seedCustomRoutesIfUnset] unexpected error:", err instanceof Error ? err.message : err);
+    }
+  }
+  return DEFAULT_SEED_ROUTES;
 }

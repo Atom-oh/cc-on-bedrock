@@ -29,6 +29,7 @@ export interface CognitoUser {
   storageType?: "ebs" | "efs";
   containerId?: string;
   groups: string[];
+  customRoutes?: CustomRoute[];
 }
 
 export interface CreateUserInput {
@@ -115,12 +116,26 @@ export interface ContainerInfo {
   customRoutes?: CustomRoute[];
 }
 
-// ─── Custom Port Routes (ADR-009 extension) ───
+// ─── Custom Port Routes (ADR-009 extension, ADR-027) ───
 
 export interface CustomRoute {
+  path: string;   // "/" 또는 "/preview", "/api/v1"
+  port: number;   // 1024-65535, 8080 제외
+  label: string;  // 1-32자
+}
+
+// config-gen 이 route별 반영 결과를 기록 (silent skip 방지)
+export interface RouteStatus {
   path: string;
-  port: number;
-  label: string;
+  state: "ok" | "rejected";
+  reason?: string;
+}
+
+export interface CustomRoutesRecord {
+  customRoutes: CustomRoute[];
+  routesVersion: number;        // 조건부 쓰기(CAS)용 단조증가 정수
+  routeStatus?: RouteStatus[];  // config-gen 기록
+  exists: boolean;              // cc-user-instances 행 존재 여부 (M9: phantom 행 방지)
 }
 
 export interface StartContainerInput {
