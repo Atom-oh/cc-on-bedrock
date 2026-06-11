@@ -29,7 +29,7 @@ Bedrock Opus 4.6 사용 시 단일 사용자가 일일 수십 달러를 소비�
 
 | 테이블 | PK | 주요 필드 | 용도 |
 |--------|-----|----------|------|
-| `cc-department-budgets` | `dept_id` | monthlyBudgetUsd, dailyLimitPerUser, allowedTiers, managerId, memberCount | 부서 예산 설정 |
+| `cc-department-budgets` | `dept_id` | monthlyBudget (canonical, admin/budgets가 기록·budget-check.py:145가 읽음), perUserMonthlyBudget (ADR-023 멤버별 cap), allowedTiers, memberCount, ~~dailyLimitPerUser~~/~~managerId~~ (미구현/planned — 읽는 Lambda 없음) | 부서 예산 설정 |
 | `cc-user-budgets` | `userId` | department, dailyTokenLimit, monthlyBudget, currentSpend | 개인 예산 (부서 종속) |
 | `cc-on-bedrock-usage` | `DEPT#{dept_id}` | 월별 집계 | 부서 사용량 (기존 테이블 확장) |
 
@@ -44,16 +44,16 @@ EventBridge (5분 주기) → budget-check Lambda
      - 80% 도달: SNS 경고 알림 (dept-manager + admin)
      - 100% 초과: 부서 전체 사용자 차단
        → Cognito에서 부서 멤버 목록 조회
-       → 각 멤버의 cc-on-bedrock-task-{subdomain} role에 DeptBudgetExceededDeny policy 부착
+       → 각 멤버의 cc-on-bedrock-task-{subdomain} role에 cc-bedrock-dept-budget-deny policy 부착
        → SNS 차단 알림
   4. 개인 일일 예산도 동일 루프에서 검사 (기존 로직 유지)
 ```
 
 ### 3. 차단/해제 메커니즘
 
-- **차단**: `iam:PutRolePolicy`로 `DeptBudgetExceededDeny` policy 부착 — Bedrock `InvokeModel*` Deny
+- **차단**: `iam:PutRolePolicy`로 `cc-bedrock-dept-budget-deny` policy 부착 — Bedrock `InvokeModel*` Deny (canonical 이름, xref ADR-015 2026-06-10 cutover. 구 `DeptBudgetExceededDeny`는 legacy delete-only)
 - **해제**: admin이 예산 증액 → 다음 5분 주기에 Lambda가 한도 미초과 확인 → `iam:DeleteRolePolicy`로 자동 해제
-- **개인 일일**: 매일 자정(KST) 자동 해제 — Lambda가 날짜 변경 감지 후 `BudgetExceededDeny` 삭제
+- **개인 일일**: 매일 자정(UTC, `datetime.utcnow()` 기준 — KST 아님) 자동 해제 — Lambda가 날짜 변경 감지 후 `cc-bedrock-user-daily-deny` 삭제 (구 `BudgetExceededDeny`는 legacy delete-only)
 
 ### 4. API 설계
 
@@ -123,7 +123,7 @@ EventBridge (5분 주기) → budget-check Lambda
 | `cc-user-budgets` 테이블 | 동일 파일 |
 | Budget Lambda (508줄) | `cdk/lib/lambda/budget-check.py` — 개인 일일 + 부서 월간 검사 |
 | EventBridge 5분 스케줄 | `03-usage-tracking-stack.ts` — `cc-on-bedrock-budget-check-schedule` |
-| IAM Deny 부착/해제 | `budget-check.py` — `BudgetExceededDeny` (개인), `DeptBudgetExceededDeny` (부서) |
+| IAM Deny 부착/해제 | `budget-check.py` — `cc-bedrock-user-daily-deny` (개인), `cc-bedrock-dept-budget-deny` (부서) — canonical 이름 (xref ADR-015). 구 `BudgetExceededDeny`/`DeptBudgetExceededDeny`는 legacy delete-only |
 | Admin API (GET/PUT) | `src/app/api/admin/budgets/route.ts` — 부서/개인 예산 설정 |
 | Dept Dashboard (515줄) | `src/app/dept/dept-dashboard.tsx` — 예산 게이지, 월간 트렌드, 멤버 테이블 |
 | 80% 경고 / 100% 차단 | `budget-check.py` — SNS 알림 + Cognito budget_exceeded 플래그 |

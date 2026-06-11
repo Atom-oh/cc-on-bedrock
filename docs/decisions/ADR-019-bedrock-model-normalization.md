@@ -15,7 +15,7 @@ Accepted (retrospective documentation 2026-05-12)
 |---|---|
 | `arn:aws:bedrock:us-east-1:123:inference-profile/global.anthropic.claude-sonnet-4-6-v1` | Application Inference Profile 호출 |
 | `arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6-20251015-v2:0` | 직접 foundation model 호출 |
-| `global.anthropic.claude-opus-4-6-v1[1m]` | Inference profile ID + 1M context suffix |
+| `global.anthropic.claude-opus-4-8-v1[1m]` | Inference profile ID + 1M context suffix |
 | `claude-haiku-4-5-20251001` | 직접 model 이름 |
 | `anthropic.claude-sonnet-4-5-v1:0` | 버전 + 콜론 suffix |
 
@@ -47,7 +47,7 @@ Accepted (retrospective documentation 2026-05-12)
 |---|---|
 | `arn:aws:bedrock:us-east-1:123:inference-profile/global.anthropic.claude-sonnet-4-6-v1` | `claude-sonnet-4-6` |
 | `arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6-20251015-v2:0` | `claude-sonnet-4-6` |
-| `global.anthropic.claude-opus-4-6-v1[1m]` | `claude-opus-4-6` |
+| `global.anthropic.claude-opus-4-8-v1[1m]` | `claude-opus-4-8` |
 | `claude-haiku-4-5-20251001` | `claude-haiku-4-5` |
 | `anthropic.claude-sonnet-4-5-v1:0` | `claude-sonnet-4-5` |
 
@@ -57,7 +57,7 @@ Accepted (retrospective documentation 2026-05-12)
 ```python
 PRICING = {
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-opus-4-6":   {"input": 15.0, "output": 75.0},
+    "claude-opus-4-8":   {"input": 15.0, "output": 75.0},
     "claude-haiku-4-5":  {"input": 0.80, "output": 4.0},
     ...
 }
@@ -105,7 +105,7 @@ ADR-014 `token-limit-enforcer.py`의 `_model_family()`도 같은 short form을 �
 
 ### Validation
 - 매 deploy 후 CloudWatch Logs에서 `Tracked: ` 라인이 예상 short form을 포함하는지 spot check
-- DynamoDB scan: `SELECT DISTINCT model FROM cc-on-bedrock-usage` 결과가 합리적인 family 셋 (`claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`)으로만 구성되는지 주기 점검
+- DynamoDB scan: `SELECT DISTINCT model FROM cc-on-bedrock-usage` 결과가 합리적인 family 셋 (`claude-sonnet-4-6`, `claude-opus-4-8`, `claude-haiku-4-5`)으로만 구성되는지 주기 점검
 
 ## Out of Scope
 - Anthropic 외 vendor(Cohere, Mistral 등)의 model ID 정규화 — 호출이 발생하지 않음

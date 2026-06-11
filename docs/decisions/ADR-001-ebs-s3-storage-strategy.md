@@ -49,5 +49,4 @@ ADR-004 (EC2-per-user, 2026-04-03)가 더 단순한 아키텍처로 동일 목�
 | Lambda + Step Functions | **불필요** | EC2 Stop/Start로 오케스트레이션 불필요 |
 
 ### 레거시 잔존 항목
-- `cdk/lib/04-ecs-devenv-stack.ts`: EFS FileSystem 생성 (ECS devenv 레거시)
 - `shared/nextjs-app/src/lib/types.ts`: `storageType: "ebs" | "efs"` 타입 정의

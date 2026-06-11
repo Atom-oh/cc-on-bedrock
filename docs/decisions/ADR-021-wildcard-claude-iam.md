@@ -50,7 +50,7 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 - `cdk/lib/04-ecs-devenv-stack.ts` — `ecsTaskRole` Bedrock 권한
 - `cdk/lib/05-dashboard-stack.ts` — `dashboardPolicy` BedrockAccess statement
 - `cdk/lib/07-ec2-devenv-stack.ts` — `devenvRole` BedrockAccess statement
-- `cdk/lib/lambda/sts-issuer.py` — `_allowed_model_arns()` 와일드카드 반환으로 단순화, `ALLOWED_MODELS` env var 제거
+- `cdk/lib/lambda/role_factory.py` — `allowed_model_arns()` 와일드카드 반환으로 단순화 (sts-issuer.py는 `from role_factory import ensure_role`), `ALLOWED_MODELS` env var 제거
 - `cdk/lib/08-local-governance-stack.ts` — `ALLOWED_MODELS` env / `allowedModels` prop 제거
 - `cdk/bin/app.ts` — `LocalGovernanceStack`의 `allowedModels` prop 전달 제거
 - `terraform/modules/security/main.tf` — `data.aws_iam_policy_document.bedrock` 동기화
@@ -58,7 +58,7 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 ### 무엇이 사라졌나
 - `ALLOWED_MODELS` env var (STS Issuer Lambda)
 - `allowedModels` prop (LocalGovernanceStack)
-- `_allowed_model_arns()` 내부의 model ID iteration / ARN 합성 로직
+- `allowed_model_arns()` (`role_factory.py`) 내부의 model ID iteration / ARN 합성 로직
 - STS Issuer inline policy의 per-dept `application-inference-profile/{prefix}-{dept}-*` 제약 (와일드카드 `application-inference-profile/*`로 통합)
 
 ### 무엇이 유지되나
@@ -86,7 +86,7 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 - **토큰 추적 복구**: 사용자 호출이 IAM Allow → Bedrock Invocation Log 생성 → `bedrock-usage-tracker` Lambda 정상 동작 → DynamoDB row 입력 토큰/출력 토큰 정상 집계
 - **모델 출시 추종성**: 새 Claude 4-7/4-8 출시 시 코드 변경 없음. CLI 디폴트만 변경하면 즉시 사용 가능
 - **Region prefix 흡수**: cross-region inference profile, multi-region 호출이 모두 동작
-- **정책 코드 단순화**: STS Issuer의 `_allowed_model_arns()`가 ~15줄 → 3줄. 8개 파일에서 model ID 분기 로직 제거
+- **정책 코드 단순화**: `role_factory.py`의 `allowed_model_arns()`가 ~15줄 → 3줄. 8개 파일에서 model ID 분기 로직 제거
 - **per-dept App Inference Profile 사용 자유**: 사용자가 dept profile / 직접 model ID 둘 다 사용 가능. dept attribution은 IAM role tag(ADR-011) + role name prefix로 보장됨
 - **Permission Boundary와 inline policy의 효력 일치**: 양쪽 다 같은 wildcard로 단순화되어 `effective = inline ∩ boundary` mismatch 위험 제거
 
@@ -120,7 +120,7 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 - ADR-015: Dollar Budget × Normalized Token Limit Integration (dept-budget deny)
 - ADR-019: Bedrock Model ID Normalization (호출 후 model ID parsing, 와일드카드 흡수의 사후 정규화 layer)
 - ADR-020: Runtime IAM Policy Upsert (`_ensure_role()` 매 호출 시 inline policy 덮어쓰기 — wildcard 마이그레이션도 이 경로로 자동 적용)
-- 코드: `cdk/lib/02-security-stack.ts:131-216`, `cdk/lib/lambda/sts-issuer.py:76-130`, `cdk/lib/08-local-governance-stack.ts:74-100`
+- 코드: `cdk/lib/02-security-stack.ts`, `cdk/lib/lambda/role_factory.py` (`allowed_model_arns()`), `cdk/lib/lambda/sts-issuer.py` (`from role_factory import ensure_role`), `cdk/lib/08-local-governance-stack.ts`
 
 ## Verification
 

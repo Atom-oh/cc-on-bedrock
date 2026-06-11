@@ -32,7 +32,7 @@ Native billing alone cannot support the 5-minute budget enforcement cycle requir
 ## Changes
 1. **IAM role tags**: Added `username`, `department`, `project` tags to per-user roles for cost allocation
 2. **Tag sync on reuse**: Existing roles get tags updated on each container start
-3. **Migration script**: One-time script to tag existing roles (`scripts/migrate-role-tags.sh`)
+3. **Migration script**: ~~One-time script to tag existing roles (`scripts/migrate-role-tags.sh`)~~ — **Removed per ADR-020**: the one-time tagging script was deleted in favor of runtime tag upsert on each container start (see "Tag sync on reuse" above), which makes a separate migration script unnecessary.
 4. **CUR 2.0 export**: CDK resource for CUR 2.0 Data Export with `INCLUDE_CALLER_IDENTITY: TRUE`
 5. **S3 bucket**: `cc-on-bedrock-cost-reports-{accountId}` for CUR 2.0 Parquet data
 

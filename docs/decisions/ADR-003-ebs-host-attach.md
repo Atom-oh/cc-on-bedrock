@@ -56,7 +56,6 @@ ADR-004 (EC2-per-user, 2026-04-03)가 ECS devenv 아키텍처를 폐기하면서
 `switchOs()` (Ubuntu ↔ AL2023 전환) 시에만 EBS snapshot을 생성하여 복구 지점 보존.
 이는 ADR-003의 주기적 lifecycle 관리가 아닌, 파괴적 작업의 안전장치.
 
-### Dead code 잔존
-- `cdk/lib/lambda/ebs-lifecycle.py` — CDK에서 미참조 (03-usage-tracking-stack.ts line 206에서 REMOVED 주석)
-- `cdk/lib/lambda/warm-stop.py` — 동일하게 미참조
-- `cdk/lib/02-security-stack.ts` — `cc-user-volumes` IAM ARN 참조 잔존 (stale)
+### 삭제된 항목
+- `cdk/lib/lambda/ebs-lifecycle.py` — 삭제됨 (파일 없음). CDK 미참조, `03-usage-tracking-stack.ts:256`에 REMOVED 주석만 잔존
+- `cdk/lib/lambda/warm-stop.py` — 삭제됨 (파일 없음)
