@@ -56,7 +56,7 @@ EC2-per-user 전환(ADR-004) 이후, 각 사용자에게 독립 EC2 인스턴스
 
 - per-user role `cc-on-bedrock-task-{subdomain}`에 `iam:PutRolePolicy`로 부착
 - **Permission Boundary** (`cc-on-bedrock-task-boundary`)가 최대 허용 범위 제한 — policy set이 boundary 밖 권한을 부여해도 실제 효과 없음
-- 기간 선택 (7일/30일/90일/영구), EventBridge 스케줄로 자동 만료 (policy 삭제)
+- 기간 선택(7일/30일/90일/영구) + EventBridge 스케줄 자동 만료(policy 삭제) — **계획됨, 미구현** (2026-06-10 기준). 현재 부여되는 IAM policy set은 영구이며, 해제는 admin이 수동으로 `removeIamPolicySet()`를 호출해 수행한다. 자동 만료 스케줄은 아직 없음 — [Implementation](#implementation) 참고
 
 ### 3. 신청/승인 Workflow
 
@@ -92,7 +92,7 @@ Admin → PUT /api/admin/approval-requests
 - **Policy set 관리**: 신규 서비스/패턴 추가 시 catalog 업데이트 필요 — 코드 변경 수반
 - **SG swap 지연**: 실행 중 인스턴스의 SG 교체는 기존 TCP 세션에 영향 없음 — 새 연결부터 적용
 - **단일 승인자 병목**: admin만 승인 가능 — dept-manager 위임은 미지원 (향후 확장 가능)
-- **EventBridge 만료**: IAM policy 자동 만료가 EventBridge 의존 — Lambda 장애 시 만료 누락 가능
+- **IAM policy 만료 미구현**: 기간 기반 자동 만료(7/30/90일)는 아직 구현되지 않았다 — 부여된 policy set은 영구이며 admin 수동 해제(`removeIamPolicySet()`)에 의존. 구현 시 EventBridge 스케줄에 종속되며 Lambda 장애 시 만료 누락 위험이 추가됨
 
 ## Alternatives Considered
 
@@ -119,7 +119,7 @@ Admin → PUT /api/admin/approval-requests
 
 ## Implementation
 
-전 항목 구현 완료 (2026-04-16 기준).
+핵심 항목 구현 완료 (2026-04-16 기준). **예외: IAM policy set 기간 기반 자동 만료(7/30/90일)는 미구현** — 아래 표 마지막 행 참고 (2026-06-10).
 
 | 구성요소 | 구현 위치 |
 |---------|---------|
@@ -127,7 +127,8 @@ Admin → PUT /api/admin/approval-requests
 | 인스턴스별 SG 선택 | `shared/nextjs-app/src/lib/ec2-clients.ts` — `SG_MAP`, `startInstance()` |
 | 실행 중 SG 교체 | `ec2-clients.ts` — `changeSecurityPolicy()` (ENI SG swap, 재시작 불필요) |
 | IAM Policy Set Catalog | `ec2-clients.ts` — `IAM_POLICY_SETS` (7개 사전 정의 정책) |
-| Policy 부착/제거 | `ec2-clients.ts` — `addIamPolicySet()`, `removeIamPolicySet()` |
+| Policy 부착/제거 | `ec2-clients.ts` — `addIamPolicySet()`, `removeIamPolicySet()` (수동 해제만; `removeIamPolicySet()`는 스케줄러에서 호출되지 않음) |
+| ~~Policy 기간 자동 만료(7/30/90일)~~ | **미구현** — duration 입력 필드·EventBridge 만료 규칙 없음. 부여된 policy set은 영구 (2026-06-10) |
 | 승인 요청 테이블 | `cdk/lib/03-usage-tracking-stack.ts` — `cc-on-bedrock-approval-requests` |
 | 사용자 신청 API | `src/app/api/user/container-request/route.ts` — tier/dlp/iam 3종 |
 | Admin 승인 API | `src/app/api/admin/approval-requests/route.ts` — approve/reject + 자동 적용 |
