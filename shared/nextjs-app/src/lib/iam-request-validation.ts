@@ -47,7 +47,7 @@ export interface ValidationResult {
 const DEFAULT_DANGEROUS: RegExp[] = [
   /:put[a-z]*policy$/i, // s3:PutBucketPolicy, sns:PutResourcePolicy, ...
   /:set[a-z]*attributes$/i, // sns:SetTopicAttributes, sqs:SetQueueAttributes
-  /^lambda:(add|remove)permission$/i,
+  /:(add|remove)permission$/i, // lambda/sqs/sns AddPermission/RemovePermission — opens resource policy cross-account/public
   /^iam:/i, // any iam:* (PassRole, CreateRole, ...)
   /^sts:assumerole/i,
   /:[a-z]*resourcepolicy$/i, // *PutResourcePolicy / *DeleteResourcePolicy
@@ -59,6 +59,25 @@ function actionMatchesAny(action: string, patterns: string[]): boolean {
     const pl = p.toLowerCase();
     return pl.endsWith("*") ? a.startsWith(pl.slice(0, -1)) : a === pl;
   });
+}
+
+// ADR-026 T8: read-only action prefixes that may use a single trailing '*' wildcard.
+// Low blast radius (List/Get/Describe = non-mutating); still subject to the service
+// allowlist + dangerous-action denylist.
+const READ_WILDCARD_PREFIXES = ["get", "list", "describe", "batchget", "query", "scan"];
+
+/** True ONLY for a bare read-verb wildcard: a read prefix followed by a single trailing '*'.
+ *  Allowed: "Get*", "List*", "Describe*", "BatchGet*", "Query*", "Scan*".
+ *  Rejected: "*", "Put*", "GetObject*" / "GetBucketPolicy*" (verb+suffix → info-disclosure/escalation
+ *  bypass — gate consensus), "Get*Policy*" (embedded '*'), "Get?" (glob). `op` is the part after ':'.
+ *  Exact-match (===) not startsWith: a user wanting a specific read names it without a wildcard. */
+function isReadWildcardOp(op: string): boolean {
+  if (!op || op.includes("?")) return false;
+  if (!op.endsWith("*")) return false;
+  const stem = op.slice(0, -1);
+  if (stem.includes("*")) return false;
+  const s = stem.toLowerCase();
+  return READ_WILDCARD_PREFIXES.some((p) => s === p);
 }
 
 export function validateIamRequest(statements: IamStatement[], opts: ValidateOpts): ValidationResult {
@@ -88,12 +107,16 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
         errors.push(`invalid action format: ${action}`);
         continue;
       }
-      // Reject ANY wildcard inside the action — requests must name specific
-      // actions, else partial wildcards (s3:Put*Policy, lambda:*Permission)
-      // evade both the "specific action" rule and the dangerous-action denylist.
+      // Wildcards in the action op are rejected EXCEPT read-only patterns
+      // (Get*/List*/Describe*/BatchGet*/Query*/Scan* — single trailing '*').
+      // Read wildcards still fall through to the allowlist + dangerous-action
+      // checks below; write/partial wildcards (s3:Put*Policy, lambda:*Permission,
+      // s3:*) stay rejected so they can't evade the dangerous-action denylist.
       if (op.includes("*") || op.includes("?")) {
-        errors.push(`wildcard not allowed in action: ${action}`);
-        continue;
+        if (!isReadWildcardOp(op)) {
+          errors.push(`wildcard not allowed in action (read-only Get*/List*/Describe*/BatchGet*/Query*/Scan* only): ${action}`);
+          continue;
+        }
       }
       actionServices.add(svc.toLowerCase());
       if (!allowlist.includes(svc.toLowerCase())) {
@@ -104,6 +127,10 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
       }
     }
 
+    // Resource:'*' is allowed ONLY for the configured wildcard-ok actions (e.g. ec2:describe*,
+    // s3:listallmybuckets) — actions that genuinely lack resource-level scoping. Read-only wildcard
+    // ops (s3:Get*/List*) are NOT auto-granted Resource:* — they must be scoped to a concrete ARN,
+    // else `s3:Get*`+Resource:* = account-wide reads (gate consensus: codex/kiro HIGH).
     const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions));
     for (const res of resources) {
       if (res === "*") {
