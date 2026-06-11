@@ -1,4 +1,4 @@
-"""Cognito user pool trigger shim → user-role-provisioner (ADR-027).
+"""Cognito user pool trigger shim → user-role-provisioner (ADR-028).
 
 Wired as POST_CONFIRMATION + POST_AUTHENTICATION on the user pool. Covers the
 gap in ADR-022: federated (SAML/OIDC) JIT-created users emit no AdminCreateUser

@@ -67,7 +67,7 @@ export class SecurityStack extends cdk.Stack {
       },
     });
 
-    // ADR-027: Cognito trigger shim → user-role-provisioner (Stack 08).
+    // ADR-028: Cognito trigger shim → user-role-provisioner (Stack 08).
     // Federated (SAML/OIDC) JIT-created users emit no AdminCreateUser/SignUp
     // CloudTrail event, so the ADR-022 EventBridge path never fires for them.
     // POST_CONFIRMATION catches the JIT-creation moment; POST_AUTHENTICATION

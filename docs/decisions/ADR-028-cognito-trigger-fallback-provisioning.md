@@ -5,7 +5,7 @@ verification_required: true
 builds_on: ADR-022
 ---
 
-# ADR-027: Cognito 트리거 기반 프로비저닝 fallback (federated JIT 사용자 대응)
+# ADR-028: Cognito 트리거 기반 프로비저닝 fallback (federated JIT 사용자 대응)
 
 **Status:** Accepted (구현 pending)
 **Date:** 2026-06-11
