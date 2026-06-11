@@ -85,6 +85,10 @@ export class Ec2DevenvStack extends cdk.Stack {
       ec2.Port.tcp(443),
       'HTTPS to VPC endpoints only',
     );
+    // Locked: DNS to the in-VPC Route 53 Resolver (.2) only — required for name
+    // resolution AND for DNS Firewall rules to see locked-tier queries at all.
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(53), 'DNS to VPC resolver');
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.udp(53), 'DNS UDP to VPC resolver');
 
     // ─── IAM Role (Bedrock + SSM + CloudWatch) ───
     this.devenvRole = new iam.Role(this, 'DevenvInstanceRole', {
