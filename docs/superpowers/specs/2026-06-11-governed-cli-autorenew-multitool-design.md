@@ -38,6 +38,7 @@ Additional requirement surfaced during design:
 | D2 | **Separate launcher binaries** via `$0`-basename dispatch: `ccb`, `ccb-claude`, `ccb-codex` (symlinks to one script). | User requirement: separate start commands, not a flag selector. One script to install/update. |
 | D3 | Main command renamed **`ccb`** (cc-bedrock); keep `cc-bedrock-local` as a back-compat symlink. | Short, avoids the `cc` C-compiler clash. |
 | D4 | **Widen the governed model ceiling** to permit OpenAI gpt models, scope `*openai.gpt-*` (family wildcard, mirroring the existing `*anthropic.claude-*`). Applied in **both** the permission boundary and the per-user role inline policy. | Codex uses `openai.gpt-5.5`; the boundary is the ceiling, so both must widen. Family wildcard matches ADR-021's Claude handling and survives version bumps. |
+| D5 | **Add OpenAI gpt pricing** to the usage tracker so `$`-budgets stay accurate. Keep the ceiling bounded (NOT unrestricted). | The tracker prices only Claude families; unrecognized models silently fall to the Sonnet `default` ($3/$15), so without this, ADR-015 `$`-budget enforcement is wrong for gpt. Unrestricting all models was rejected for this reason (unbounded mis-pricing + wider blast radius + would supersede ADR-021). |
 
 ## Architecture
 
@@ -99,6 +100,13 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*openai.gpt-*
 
 > Note on the EC2-mode base policy (`02-security-stack.ts:136` `bedrockPolicy`): used by the dashboard/EC2 task roles, not the Local role. Out of scope unless we also want Codex governed on EC2 DevEnv — **not** in this change.
 
+### C6 — OpenAI gpt pricing in the usage tracker (D5)
+`cdk/lib/lambda/bedrock-usage-tracker.py` prices only Claude families today (`PRICING` + `FAMILY_PRICING`, lines 48-63); unrecognized models fall to `default` (Sonnet $3/$15). Add:
+- A **family entry** `"gpt"` to `FAMILY_PRICING` (version-agnostic; `get_model_pricing` substring-matches `model_lower`, so `openai.gpt-5.5` → `gpt`).
+- Optionally exact-version rows in `PRICING` for precision.
+
+The actual `input`/`output` rates must be taken from the **authoritative AWS Bedrock pricing** for the OpenAI gpt models at implementation time (do not guess). Verify `normalize_model` (ADR-019) passes OpenAI ids through cleanly so the family match fires.
+
 ### C5 — Codex region/model note
 Codex's `config.toml` sets `[model_providers.amazon-bedrock.aws] region = us-east-2`. The new ARNs are region-`*` for foundation models, so the grant is region-agnostic. If the governed inference profile is region-specific, the launcher may pin region via `-c model_providers.amazon-bedrock.aws.region=<governed>`. To verify during implementation; default is to leave Codex's own region and rely on the region-`*` foundation-model ARNs.
 
@@ -113,6 +121,7 @@ Codex's `config.toml` sets `[model_providers.amazon-bedrock.aws] region = us-eas
 ## Security analysis
 - **Renewal (D1–D3): no change in posture.** Still 1h STS tokens, still role-chaining, still per-user role + Deny enforcement. We only automate renewal.
 - **Model ceiling (D4): a real widening.** The governed boundary now permits the OpenAI gpt family in addition to Claude. This extends ADR-021's "wildcard Claude family in the boundary" decision to a second vendor family. Documented via an **ADR-021 addendum**. Still bounded to `*openai.gpt-*` (no `bedrock:*`, no other services). The ADR-026 T6 CI check (`scripts/check-policyset-boundary.py`) does not gate Bedrock model ARNs, so it remains green.
+- **Cost accuracy (D5): preserved.** Because the ceiling stays bounded and we add gpt pricing, `$`-budget enforcement (ADR-015) remains accurate for every permitted model. Fully unrestricting was rejected precisely because it would book unpriced models at the Sonnet default and make budgets unreliable.
 
 ## Migration / backward compatibility
 - `cc-bedrock-local` kept as a symlink → `ccb`; existing docs/muscle memory keep working.
@@ -125,6 +134,7 @@ Codex's `config.toml` sets `[model_providers.amazon-bedrock.aws] region = us-eas
 - `$0` dispatch: `ccb-claude`/`ccb-codex`/`ccb` route correctly.
 - IAM: `scripts/check-policyset-boundary.py` still passes; a unit assertion that `allowed_model_arns()` includes both the Claude and the new `*openai.gpt-*` patterns; boundary synth contains the OpenAI ARNs.
 - `cdk synth` succeeds with the widened boundary.
+- Pricing: `get_model_pricing("openai.gpt-5.5")` resolves to the gpt family rate (not the Sonnet `default`); `normalize_model` passes OpenAI ids through cleanly.
 
 ## File-by-file change list
 | File | Change |
@@ -133,8 +143,10 @@ Codex's `config.toml` sets `[model_providers.amazon-bedrock.aws] region = us-eas
 | install/symlinks | `ccb`, `ccb-claude`, `ccb-codex` (+ `cc-bedrock-local` back-compat) → the script. |
 | `cdk/lib/02-security-stack.ts` | Add `*openai.gpt-*` foundation-model + inference-profile ARNs to the `cc-on-bedrock-task-boundary` InvokeModel statement. |
 | `cdk/lib/lambda/role_factory.py` | Add the same `*openai.gpt-*` ARNs to `allowed_model_arns()`. |
+| `cdk/lib/lambda/bedrock-usage-tracker.py` | Add a `"gpt"` `FAMILY_PRICING` entry (+ optional exact rows) with authoritative AWS rates, so gpt is not booked at the Sonnet default. |
 | `docs/decisions/ADR-014-*.md` | Addendum: credential_process auto-renew + `ccb`/`ccb-claude`/`ccb-codex` launcher model. |
 | `docs/decisions/ADR-021-*.md` | Addendum: OpenAI gpt family added to the governed model ceiling. |
+| `docs/decisions/ADR-019-*.md` | Brief note: gpt family added to `FAMILY_PRICING` (extension, no decision change). |
 | `tools/CLAUDE.md` | Rewrite for `ccb`/launchers/credential_process; fixes stale "8h" + `CC_BEDROCK_TOKEN` text (audit M14). |
 | `cdk/CLAUDE.md` | Note OpenAI in the boundary/role model ceiling. |
 
