@@ -47,7 +47,7 @@ export interface ValidationResult {
 const DEFAULT_DANGEROUS: RegExp[] = [
   /:put[a-z]*policy$/i, // s3:PutBucketPolicy, sns:PutResourcePolicy, ...
   /:set[a-z]*attributes$/i, // sns:SetTopicAttributes, sqs:SetQueueAttributes
-  /^lambda:(add|remove)permission$/i,
+  /:(add|remove)permission$/i, // lambda/sqs/sns AddPermission/RemovePermission — opens resource policy cross-account/public
   /^iam:/i, // any iam:* (PassRole, CreateRole, ...)
   /^sts:assumerole/i,
   /:[a-z]*resourcepolicy$/i, // *PutResourcePolicy / *DeleteResourcePolicy

@@ -160,4 +160,6 @@ semantic:
 - **읽기 와일드카드 허용**: `validateIamRequest`가 읽기 전용 와일드카드 액션
   (`Get*`/`List*`/`Describe*`/`BatchGet*`/`Query*`/`Scan*`, 단일 후행 `*`)을 허용.
   service allowlist + dangerous-action denylist는 여전히 통과해야 하며, `*`·`s3:*`·쓰기/임베디드
-  와일드카드(`Put*`/`Delete*`/`Get*Policy*`)·교차계정은 계속 거부. 읽기 전용 statement는 `Resource:*` 허용.
+  와일드카드(`Put*`/`Delete*`/`Get*Policy*`)·verb+suffix(`GetObject*`/`GetBucketPolicy*`)·교차계정은 계속 거부.
+  **읽기 와일드카드는 `Resource:*`를 자동 부여하지 않음** — 구체 ARN으로 스코프해야 함(`s3:Get*`+`Resource:*`는 거부).
+  Resource:*는 기존 `wildcardOkActions`(예: `ec2:describe*`)에만 한정. `(add|remove)permission`은 전 서비스 denylist.

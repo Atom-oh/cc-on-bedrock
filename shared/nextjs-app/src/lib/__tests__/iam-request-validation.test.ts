@@ -54,6 +54,13 @@ describe("validateIamRequest — rejects unsafe", () => {
   });
 
   // ADR-026 T8: read-only wildcards (s3:Get*) are now ALLOWED; write/embedded/glob stay rejected.
+  it("rejects (add|remove)permission across services (resource-policy delegation)", () => {
+    for (const a of ["sqs:AddPermission", "sns:AddPermission", "lambda:AddPermission", "sqs:RemovePermission"]) {
+      const arn = "arn:aws:sqs:ap-northeast-2:180294183052:cc-q";
+      expect(validateIamRequest([st([a], [arn])], OPTS).ok, a).toBe(false);
+    }
+  });
+
   it("rejects write/embedded/glob wildcard actions (Put*Policy, *Permission, PassRole*, Send?essage)", () => {
     for (const a of ["s3:Put*Policy", "lambda:*Permission", "iam:PassRole*", "sqs:Send?essage"]) {
       const r = validateIamRequest([st([a], ["arn:aws:s3:::b/x"])], OPTS);
