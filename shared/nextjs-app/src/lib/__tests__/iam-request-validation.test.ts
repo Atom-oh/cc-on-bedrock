@@ -53,8 +53,9 @@ describe("validateIamRequest — rejects unsafe", () => {
     }
   });
 
-  it("rejects partial-wildcard actions (s3:Put*Policy, s3:Get*, lambda:*Permission)", () => {
-    for (const a of ["s3:Put*Policy", "s3:Get*", "lambda:*Permission", "iam:PassRole*", "sqs:Send?essage"]) {
+  // ADR-026 T8: read-only wildcards (s3:Get*) are now ALLOWED; write/embedded/glob stay rejected.
+  it("rejects write/embedded/glob wildcard actions (Put*Policy, *Permission, PassRole*, Send?essage)", () => {
+    for (const a of ["s3:Put*Policy", "lambda:*Permission", "iam:PassRole*", "sqs:Send?essage"]) {
       const r = validateIamRequest([st([a], ["arn:aws:s3:::b/x"])], OPTS);
       expect(r.ok, a).toBe(false);
     }
@@ -135,5 +136,46 @@ describe("buildIamExtensionRequest", () => {
     for (const s of ["s3", "sqs", "sns", "dynamodb", "lambda"]) {
       expect(DEFAULT_SERVICE_ALLOWLIST).toContain(s);
     }
+  });
+});
+
+describe("validateIamRequest — read-only wildcard actions (ADR-026 T8)", () => {
+  it("allows s3:Get* with a scoped object ARN", () => {
+    const r = validateIamRequest([st(["s3:Get*"], ["arn:aws:s3:::my-bucket/data/*"])], OPTS);
+    expect(r.ok).toBe(true);
+  });
+  it("allows s3:List* with Resource:* (read-only)", () => {
+    const r = validateIamRequest([st(["s3:List*"], ["*"])], OPTS);
+    expect(r.ok).toBe(true);
+  });
+  it("allows dynamodb:Query* / Scan* / BatchGet* with a concrete table ARN", () => {
+    const arn = "arn:aws:dynamodb:ap-northeast-2:180294183052:table/cc-on-bedrock-usage";
+    for (const a of ["dynamodb:Query*", "dynamodb:Scan*", "dynamodb:BatchGet*"]) {
+      const r = validateIamRequest([st([a], [arn])], OPTS);
+      expect(r.ok, `${a} should pass`).toBe(true);
+    }
+  });
+  it("allows ec2:Describe* with Resource:*", () => {
+    expect(validateIamRequest([st(["ec2:Describe*"], ["*"])], OPTS).ok).toBe(true);
+  });
+
+  it("still rejects full service wildcard s3:*", () => {
+    expect(validateIamRequest([st(["s3:*"], ["*"])], OPTS).ok).toBe(false);
+  });
+  it("rejects write wildcards (Put*/Delete*/Create*)", () => {
+    for (const a of ["s3:Put*", "s3:Delete*", "dynamodb:Create*"]) {
+      expect(validateIamRequest([st([a], ["arn:aws:s3:::b/x/*"])], OPTS).ok, `${a} should fail`).toBe(false);
+    }
+  });
+  it("rejects embedded wildcard (Get*Policy*) and glob (?)", () => {
+    expect(validateIamRequest([st(["s3:Get*Policy*"], ["*"])], OPTS).ok).toBe(false);
+    expect(validateIamRequest([st(["s3:Get?"], ["*"])], OPTS).ok).toBe(false);
+  });
+  it("rejects read wildcard for a non-allowlist service (iam:Get*)", () => {
+    expect(validateIamRequest([st(["iam:Get*"], ["*"])], OPTS).ok).toBe(false);
+  });
+  it("rejects Resource:* when a write action is mixed with read wildcards", () => {
+    const r = validateIamRequest([st(["s3:List*", "s3:PutObject"], ["*"])], OPTS);
+    expect(r.ok).toBe(false);
   });
 });

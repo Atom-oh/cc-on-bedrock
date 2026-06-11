@@ -61,6 +61,23 @@ function actionMatchesAny(action: string, patterns: string[]): boolean {
   });
 }
 
+// ADR-026 T8: read-only action prefixes that may use a single trailing '*' wildcard.
+// Low blast radius (List/Get/Describe = non-mutating); still subject to the service
+// allowlist + dangerous-action denylist.
+const READ_WILDCARD_PREFIXES = ["get", "list", "describe", "batchget", "query", "scan"];
+
+/** True for a read-only wildcard op: exactly one trailing '*', no '?', no embedded '*',
+ *  stem begins with a read prefix. e.g. "Get*", "List*", "BatchGet*" — but NOT "*", "Put*",
+ *  "Get*Policy*" (embedded), "Get?" (glob), or "PutObject*" (write). `op` is the part after ':'. */
+function isReadWildcardOp(op: string): boolean {
+  if (!op || op.includes("?")) return false;
+  if (!op.endsWith("*")) return false;
+  const stem = op.slice(0, -1);
+  if (stem.includes("*")) return false;
+  const s = stem.toLowerCase();
+  return READ_WILDCARD_PREFIXES.some((p) => s === p || s.startsWith(p));
+}
+
 export function validateIamRequest(statements: IamStatement[], opts: ValidateOpts): ValidationResult {
   const errors: string[] = [];
   const dangerous = opts.dangerousActionDenylist ?? DEFAULT_DANGEROUS;
@@ -88,12 +105,16 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
         errors.push(`invalid action format: ${action}`);
         continue;
       }
-      // Reject ANY wildcard inside the action — requests must name specific
-      // actions, else partial wildcards (s3:Put*Policy, lambda:*Permission)
-      // evade both the "specific action" rule and the dangerous-action denylist.
+      // Wildcards in the action op are rejected EXCEPT read-only patterns
+      // (Get*/List*/Describe*/BatchGet*/Query*/Scan* — single trailing '*').
+      // Read wildcards still fall through to the allowlist + dangerous-action
+      // checks below; write/partial wildcards (s3:Put*Policy, lambda:*Permission,
+      // s3:*) stay rejected so they can't evade the dangerous-action denylist.
       if (op.includes("*") || op.includes("?")) {
-        errors.push(`wildcard not allowed in action: ${action}`);
-        continue;
+        if (!isReadWildcardOp(op)) {
+          errors.push(`wildcard not allowed in action (read-only Get*/List*/Describe*/BatchGet*/Query*/Scan* only): ${action}`);
+          continue;
+        }
       }
       actionServices.add(svc.toLowerCase());
       if (!allowlist.includes(svc.toLowerCase())) {
@@ -104,7 +125,11 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
       }
     }
 
-    const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions));
+    // Resource:'*' is allowed when every action either is a configured wildcard-ok
+    // action OR a read-only wildcard op (List*/Describe* frequently lack resource-level scoping).
+    const allActionsWildcardOk = actions.length > 0 && actions.every(
+      (a) => actionMatchesAny(a, opts.wildcardOkActions) || isReadWildcardOp((a.split(":")[1] ?? "")),
+    );
     for (const res of resources) {
       if (res === "*") {
         if (!allActionsWildcardOk) {
