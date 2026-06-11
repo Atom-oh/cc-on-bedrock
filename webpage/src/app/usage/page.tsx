@@ -47,7 +47,7 @@ bash deploy.sh`}
 
       <H2 id="modes">{t("3. 두 가지 개발환경 접속 모드", "3. Two dev-environment modes")}</H2>
 
-      <H3 id="ec2">3-A. EC2-per-user DevEnv (ADR-004)</H3>
+      <H3 id="ec2">3-A. EC2-per-user DevEnv</H3>
       <ol className="text-sm text-gray-400 space-y-1.5 list-decimal pl-5 mb-4">
         <li>{t("대시보드의 내 환경 페이지에서 EC2 인스턴스 Start", "Start your EC2 instance from My Environment")}</li>
         <li>{t("6 단계 SSE 프로비저닝 (Cold ~30s, Hibernation resume ~5s)", "6-step SSE provisioning (Cold ~30s, Hibernation resume ~5s)")}</li>
@@ -56,7 +56,7 @@ bash deploy.sh`}
         <li>{t("터미널에서 claude / kiro — Instance Profile 자격증명으로 Bedrock 직접 호출", "Terminal claude / kiro — Instance Profile credentials → Bedrock")}</li>
       </ol>
 
-      <H3 id="local">3-B. Local Governance (ADR-014)</H3>
+      <H3 id="local">3-B. Local Governance</H3>
       <CodeBlock lang="bash">
 {`# CLI 설치
 curl -fsSL https://cconbedrock-dashboard.<domain>/tools/cc-bedrock-local.sh \\

@@ -54,7 +54,8 @@
 - `src/app/api/user/keep-alive/route.ts` - 유휴 타임아웃 연장 (EBS)
 - `src/app/api/user/resource-review/route.ts` - AI 리소스 리뷰 (EBS 확장 전 사용량 분석)
 - `src/app/api/user/container-request/route.ts` - 인스턴스 생성 요청
-- `src/app/api/local/credentials/route.ts` - STS Issuer Lambda 호출, 8h Bedrock 자격증명 반환 (Local Governance, ADR-014)
+- `src/app/api/user/custom-routes/route.ts` - **포트 노출 CRUD** (GET/PUT, 본인 customRoutes, max 5, version CAS, routing-table 미러, ADR-027)
+- `src/app/api/local/credentials/route.ts` - STS Issuer Lambda 호출, 1h Bedrock 자격증명 반환 (role-chaining hard cap, CLI 자동 갱신; Local Governance, ADR-014)
 - `src/app/api/local/limits/route.ts` - 본인 사용자의 normalized token 한도/사용량/Deny 상태 조회 (Local Governance, ADR-014)
 
 ### Common
@@ -73,7 +74,7 @@
 - `environment-tab.tsx` - 환경 정보 탭 (프로비저닝, 상태, 멀티URL [IDE/WEB/API], 메트릭, 사용량)
 - `provisioning-progress.tsx` - SSE 6단계 프로비저닝 프로그레스 (Cancel, ARIA)
 - `storage-tab.tsx` - 스토리지 탭 (디스크 게이지, EBS 확장 신청, Keep-Alive)
-- `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보)
+- `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보, **포트 노출 CRUD** ADR-027, **IAM 권한신청 = resource-specific 커스텀 문장 폼** ADR-026 T8)
 - `first-launch-guide.tsx` - 첫 실행 가이드 (환경 설정 안내)
 - `welcome-onboarding.tsx` - 온보딩 워크플로우
 
@@ -93,13 +94,16 @@
 - `src/lib/auth.ts` - Cognito + NextAuth 설정 (JWT, 8h session, custom attributes, `.atomai.click` 쿠키 도메인)
 - `src/lib/aws-clients.ts` - Cognito 사용자 관리 + DynamoDB 라우팅 테이블
   - `listCognitoUsers()`, `createCognitoUser()`, `deleteCognitoUser()` 등
-  - `registerContainerRoute()` / `deregisterContainerRoute()` — Nginx 라우팅 등록
+  - `mirrorCustomRoutes()` (settings PUT의 version-guarded customRoutes 미러, ADR-027) / `deregisterContainerRoute()` (resetUserEnvironment) — 인스턴스 시작 시 라우팅 등록은 `ec2-clients.ts`의 `registerRoute()`
 - `src/lib/ec2-clients.ts` - EC2 인스턴스 관리 (start/stop, RunInstances, password sync, gateway policy)
   - **UserData boot script** — `startInstance` / `restoreFromSnapshot`에서 systemd unit `cc-cli-update.service`(oneshot, every boot)를 생성·enable해 Claude Code/Kiro CLI를 자동 업데이트. `User=coder`로 실행하되 `ExecStartPost`에 `+` prefix를 붙여 `/usr/local/bin` symlink 갱신만 root로 수행 (CWAgent, MCP config sync 포함)
 - `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 (EC2 CPU/Memory/Network/Disk)
 - `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용)
 - `src/lib/slack-client.ts` - Slack API 클라이언트 (알림, 명령 처리)
 - `src/lib/validation.ts` - 입력 검증 유틸리티
+- `src/lib/iam-request-validation.ts` - **ADR-026** IAM 권한 신청 검증 (Resource:*·쓰기/임베디드 와일드카드·위험액션·교차계정 거부; **읽기 와일드카드 Get*/List*/Describe*/BatchGet*/Query*/Scan* 허용** T8) + `buildIamExtensionRequest` + DEFAULT_SERVICE_ALLOWLIST/WILDCARD_OK_ACTIONS. 클라이언트(settings-tab)·서버 공유 단일 검증 출처
+- `src/lib/iam-resource-annotator.ts` - **ADR-026** 신청 statements 의 advisory LLM 위험 주석 (Bedrock, 프롬프트 인젝션 격리)
+- `src/lib/approval-authz.ts` - **ADR-026** 승인 인가 (admin OR dept-manager, 저장 부서 기준, 순수·테스트가능)
 - `src/lib/utils.ts` - 공통 유틸리티 함수
 - `src/lib/i18n.tsx` - 다국어(한/영) 지원
 - `src/lib/types.ts` - 공유 타입 정의 (Provisioning, DiskUsage, Password, UserPortalTab 등)

@@ -32,6 +32,8 @@ interface ApprovalRequest {
   newPolicy?: string;
   currentPolicy?: string;
   policySets?: string[];
+  statements?: string;
+  llmNote?: string;
   reason?: string;
   resourceTier?: string;
 }
@@ -127,13 +129,37 @@ export default function ApprovalsPage() {
       );
     }
     if (req.type === "iam_extension") {
+      // ADR-026: prefer free-form statements (action+resource); fall back to legacy policySets.
+      let parsed: Array<{ Action: string[]; Resource: string[] }> = [];
+      if (req.statements) {
+        try { parsed = JSON.parse(req.statements); } catch { parsed = []; }
+      }
       return (
-        <div className="flex flex-wrap gap-1">
-          {(req.policySets ?? []).map(ps => (
-            <span key={ps} className="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 text-[10px] font-bold border border-purple-500/20">
-              {getPolicyName(ps)}
-            </span>
-          ))}
+        <div className="flex flex-col gap-1.5">
+          {parsed.length > 0 ? (
+            <div className="flex flex-col gap-1">
+              {parsed.map((s, i) => (
+                <div key={i} className="text-[11px] font-mono text-gray-300">
+                  <span className="text-purple-400">{(s.Action ?? []).join(", ")}</span>
+                  <span className="text-gray-500"> on </span>
+                  <span className="text-gray-400">{(s.Resource ?? []).join(", ")}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {(req.policySets ?? []).map(ps => (
+                <span key={ps} className="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 text-[10px] font-bold border border-purple-500/20">
+                  {getPolicyName(ps)}
+                </span>
+              ))}
+            </div>
+          )}
+          {req.llmNote && (
+            <div className="rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] text-amber-200/90">
+              <span className="font-bold text-amber-400">AI review (advisory):</span> {req.llmNote}
+            </div>
+          )}
         </div>
       );
     }

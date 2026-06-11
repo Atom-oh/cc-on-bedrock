@@ -15,12 +15,12 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 8 stacks. `--context governa
 - `lib/05-dashboard-stack.ts` - Dashboard ECS Ec2Service, ALB, **Dashboard CloudFront** (`<dashboardSubdomain>.<domain>` only, ADR-016). NextAuth secret SSM(`/cc-on-bedrock/nextauth-secret`) 발행 — Stack 04의 session-validator가 런타임에 참조.
 - `lib/06-waf-stack.ts` - WAF WebACL (CloudFront, ALB)
 - `lib/07-ec2-devenv-stack.ts` - EC2-per-user DevEnv: Launch Template, DLP SG(open/restricted/locked), IAM Role, Instance Profile, DynamoDB(cc-user-instances). `governanceOnly=true`일 때 skip.
-- `lib/08-local-governance-stack.ts` - Local Governance Mode (ADR-014): STS Issuer Lambda + Function URL, per-user IAM role factory(MaxSessionDuration=12h), Application Inference Profile per dept, `cc-on-bedrock-limits` DynamoDB, token-limit-enforcer (usage table Stream consumer), limit-reset (EventBridge cron 일/주/월)
+- `lib/08-local-governance-stack.ts` - Local Governance Mode (ADR-014): STS Issuer Lambda + Function URL, per-user IAM role factory(MaxSessionDuration=1h — role-chaining hard cap), Application Inference Profile per dept, `cc-on-bedrock-limits` DynamoDB, token-limit-enforcer (usage table Stream consumer), limit-reset (EventBridge cron 일/주/월)
 
 ### Lambdas
 - `lib/lambda/bedrock-usage-tracker.py` - Bedrock API 호출 추적 (Invocation Logging → DynamoDB). usage 테이블에 Streams 활성 (token-limit-enforcer 트리거)
 - `lib/lambda/budget-check.py` - 예산/토큰한도 초과 확인 (5분 주기, IAM Deny Policy 동적 부착). Local Governance Mode의 backup path
-- `lib/lambda/sts-issuer.py` - Cognito ID 토큰 검증 → sts:AssumeRole 8h → 자격증명 반환 (Local Governance, ADR-014)
+- `lib/lambda/sts-issuer.py` - Cognito ID 토큰 검증 → sts:AssumeRole 1h (role-chaining hard cap, CLI 자동 갱신) → 자격증명 반환 (Local Governance, ADR-014)
 - `lib/lambda/token-limit-enforcer.py` - usage 테이블 Stream consumer, normalized token 합산, 한도 초과 시 user role에 Deny policy 부착 (Local Governance, ADR-014)
 - `lib/lambda/limit-reset.py` - EventBridge cron(일/주/월), 카운터 리셋 + Deny policy detach (Local Governance, ADR-014)
 - `lib/lambda/cognito-provisioner-trigger.py` - Cognito user pool 트리거 shim (ADR-028). custom:subdomain 부재 시에만 user-role-provisioner를 `{"action":"ensure"}`로 비동기 invoke. fail-open (로그인을 절대 막지 않음, Cognito 5초 동기 타임아웃 대응)

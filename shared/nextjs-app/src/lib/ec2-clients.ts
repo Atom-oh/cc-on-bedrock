@@ -28,6 +28,7 @@ import {
   DynamoDBClient,
   PutItemCommand,
   GetItemCommand,
+  BatchGetItemCommand,
   UpdateItemCommand,
   ScanCommand,
   DeleteItemCommand,
@@ -38,6 +39,7 @@ import {
   GetRoleCommand,
   CreateRoleCommand,
   PutRolePolicyCommand,
+  DeleteRolePolicyCommand,
   TagRoleCommand,
   CreateInstanceProfileCommand,
   AddRoleToInstanceProfileCommand,
@@ -50,6 +52,7 @@ import {
   CreateSecretCommand,
 } from "@aws-sdk/client-secrets-manager";
 import { randomBytes } from "crypto";
+import type { CustomRoute, CustomRoutesRecord } from "@/lib/types";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const ec2Client = new EC2Client({ region });
@@ -71,6 +74,58 @@ const SG_MAP: Record<string, string> = {
   restricted: process.env.SG_DEVENV_RESTRICTED ?? "",
   locked: process.env.SG_DEVENV_LOCKED ?? "",
 };
+
+// ADR-005 container-layer DLP for EC2 mode: code-server reads these keys from
+// config.yaml (equivalent to --disable-file-downloads / --disable-file-uploads).
+// extensions-dir lock is applied separately with a directory-existence guard so
+// code-server never fails to start on an AMI without the curated dirs.
+function dlpCodeServerUserData(policy: string): { configLines: string[]; postLines: string[] } {
+  if (policy !== "restricted" && policy !== "locked") {
+    return { configLines: [], postLines: [] };
+  }
+  const extDir = policy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
+  return {
+    configLines: [
+      `disable-file-downloads: true`,
+      `disable-file-uploads: true`,
+    ],
+    postLines: [
+      `# DLP (${policy}): lock extensions dir only when the curated dir exists on the AMI`,
+      `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> /home/coder/.config/code-server/config.yaml; fi`,
+      `echo "SECURITY_POLICY=${policy}" >> /etc/environment`,
+    ],
+  };
+}
+
+/**
+ * Re-apply the container-layer DLP (code-server config) on a RUNNING instance
+ * via SSM. Used on policy change and on every restart of an existing instance
+ * (UserData only runs on first boot). Best-effort: the SG is the hard guarantee.
+ */
+async function syncDlpCodeServerConfig(
+  instanceId: string,
+  policy: "open" | "restricted" | "locked",
+): Promise<void> {
+  const extDir = policy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
+  const dlpOn = policy === "restricted" || policy === "locked";
+  await ssmClient.send(new SendCommandCommand({
+    InstanceIds: [instanceId],
+    DocumentName: "AWS-RunShellScript",
+    Parameters: {
+      commands: [
+        `CFG=/home/coder/.config/code-server/config.yaml`,
+        `sed -i '/^disable-file-downloads:/d;/^disable-file-uploads:/d;/^extensions-dir:/d' "$CFG"`,
+        ...(dlpOn ? [
+          `printf 'disable-file-downloads: true\\ndisable-file-uploads: true\\n' >> "$CFG"`,
+          `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> "$CFG"; fi`,
+        ] : []),
+        `grep -q '^SECURITY_POLICY=' /etc/environment && sed -i 's/^SECURITY_POLICY=.*/SECURITY_POLICY=${policy}/' /etc/environment || echo "SECURITY_POLICY=${policy}" >> /etc/environment`,
+        `systemctl restart code-server 2>/dev/null || true`,
+      ],
+    },
+    TimeoutSeconds: 30,
+  }));
+}
 
 // Instance tier → EC2 instance type mapping
 const INSTANCE_TIERS: Record<string, { type: string; cpu: string; memory: string }> = {
@@ -106,6 +161,16 @@ export interface InstanceInfo {
  * - If no instance: RunInstances from Launch Template
  */
 export async function startInstance(input: StartInstanceInput): Promise<InstanceInfo> {
+  // Fail-closed: unknown/missing policy lands on the restricted tier, never open.
+  // Computed up front so BOTH paths (restart of an existing stopped instance and
+  // fresh RunInstances) enforce the same policy.
+  const effectivePolicy = SG_MAP[input.securityPolicy] ? input.securityPolicy : "restricted";
+  if (!SG_MAP[effectivePolicy]) {
+    // Misconfigured deployment (SG_DEVENV_* env missing) — fail loud, not with a
+    // cryptic RunInstances/ModifyNetworkInterface error downstream.
+    throw new Error(`No security group configured for policy "${effectivePolicy}" — check SG_DEVENV_* env vars`);
+  }
+
   // Check DynamoDB for existing instance
   const existing = await getUserInstance(input.subdomain);
 
@@ -137,6 +202,21 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         }));
       }
 
+      // ADR-005: UserData only runs on first boot, so a policy change made while
+      // the instance was stopped would otherwise never be enforced. Re-apply the
+      // current SG before start (ENI groups are mutable on stopped instances)...
+      try {
+        if (desc.eniId) {
+          await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
+            NetworkInterfaceId: desc.eniId,
+            Groups: [SG_MAP[effectivePolicy]],
+          }));
+          console.log(`[EC2] Re-applied ${effectivePolicy} SG on restart for ${input.subdomain}`);
+        }
+      } catch (err) {
+        console.warn(`[EC2] SG re-apply on restart failed for ${input.subdomain}:`, err);
+      }
+
       console.log(`[EC2] Starting existing instance ${existing.instanceId} for ${input.subdomain}`);
       await ec2Client.send(new StartInstancesCommand({
         InstanceIds: [existing.instanceId],
@@ -147,6 +227,14 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
       // Sync code-server password from Secrets Manager (UserData only runs on first boot)
       await syncCodeserverPassword(existing.instanceId, input.subdomain);
+
+      // ...and the container-layer DLP config once it's running (best-effort)
+      try {
+        await syncDlpCodeServerConfig(existing.instanceId, effectivePolicy);
+        console.log(`[EC2] Re-applied ${effectivePolicy} code-server DLP on restart for ${input.subdomain}`);
+      } catch (err) {
+        console.warn(`[EC2] code-server DLP re-apply on restart failed for ${input.subdomain}:`, err);
+      }
 
       // Update Claude CLI + start CWAgent (fire-and-forget)
       postStartSetup(existing.instanceId);
@@ -160,11 +248,24 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         privateIp: info.privateIp,
       });
 
-      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: input.securityPolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
+      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: effectivePolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
     }
 
     if (desc && desc.status === "running") {
       console.log(`[EC2] Instance ${existing.instanceId} already running for ${input.subdomain}`);
+      // Keep the SG in sync with the live policy so the returned securityPolicy
+      // is what's actually enforced (idempotent, non-disruptive — no restarts).
+      // Container-layer DLP resync is left to the changeSecurityPolicy path.
+      try {
+        if (desc.eniId) {
+          await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
+            NetworkInterfaceId: desc.eniId,
+            Groups: [SG_MAP[effectivePolicy]],
+          }));
+        }
+      } catch (err) {
+        console.warn(`[EC2] SG sync on already-running failed for ${input.subdomain}:`, err);
+      }
       return {
         instanceId: existing.instanceId,
         subdomain: input.subdomain,
@@ -172,7 +273,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         status: "running",
         privateIp: desc.privateIp,
         instanceType: desc.instanceType,
-        securityPolicy: input.securityPolicy,
+        securityPolicy: effectivePolicy,
         containerOs: existing.containerOs ?? "ubuntu",
       };
     }
@@ -201,7 +302,8 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     }
   }
 
-  const sg = SG_MAP[input.securityPolicy] || SG_MAP.open;
+  const sg = SG_MAP[effectivePolicy];
+  const dlp = dlpCodeServerUserData(effectivePolicy);
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
 
@@ -281,7 +383,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `auth: password`,
       `password: "${codeserverPassword}"`,
       `cert: false`,
+      ...dlp.configLines,
       `CSCFG`,
+      ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
@@ -298,6 +402,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"diskio":{"measurement":["read_bytes","write_bytes"],"resources":["*"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
+      `# Ensure ~/.claude is coder-owned before installing (cc-mcp-sync may have`,
+      `# created it as root first — breaks the installer and Claude Code state)`,
+      `mkdir -p /home/coder/.claude && chown -R coder:coder /home/coder/.claude`,
       `# Upgrade Claude Code + Kiro CLI (first boot)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
       `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
@@ -347,7 +454,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       instanceId,
       username: input.username,
       department: input.department,
-      securityPolicy: input.securityPolicy,
+      securityPolicy: effectivePolicy,
       containerOs: osType,
       instanceType: info.instanceType,
       privateIp: info.privateIp,
@@ -364,7 +471,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     status: "running",
     privateIp: info.privateIp,
     instanceType: info.instanceType,
-    securityPolicy: input.securityPolicy,
+    securityPolicy: effectivePolicy,
     containerOs: osType,
   };
 }
@@ -619,7 +726,10 @@ export async function restoreFromSnapshot(
   console.log(`[EC2] Registered AMI ${restoredAmiId} from snapshot ${snapshotId}`);
 
   // 3. Launch instance from restored AMI (bypass normal SSM AMI lookup)
-  const sg = SG_MAP[(record?.securityPolicy ?? "restricted")] || SG_MAP.open;
+  const restorePolicy = record?.securityPolicy && SG_MAP[record.securityPolicy]
+    ? record.securityPolicy : "restricted";
+  const sg = SG_MAP[restorePolicy];
+  const dlp = dlpCodeServerUserData(restorePolicy);
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS["standard"];
   const instanceProfileName = await ensureUserInstanceProfile(subdomain, record?.username ?? "", record?.department ?? "default");
@@ -680,7 +790,9 @@ export async function restoreFromSnapshot(
       `auth: password`,
       `password: "${codeserverPassword}"`,
       `cert: false`,
+      ...dlp.configLines,
       `CSCFG`,
+      ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
@@ -696,6 +808,9 @@ export async function restoreFromSnapshot(
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"diskio":{"measurement":["read_bytes","write_bytes"],"resources":["*"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
+      `# Ensure ~/.claude is coder-owned before installing (cc-mcp-sync may have`,
+      `# created it as root first — breaks the installer and Claude Code state)`,
+      `mkdir -p /home/coder/.claude && chown -R coder:coder /home/coder/.claude`,
       `# Upgrade Claude Code + Kiro CLI (first boot)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
       `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
@@ -806,7 +921,7 @@ export async function listInstances(): Promise<InstanceInfo[]> {
       status: ec2Info.status === "stopped" && r.status === "hibernated" ? "hibernated" : ec2Info.status,
       privateIp: ec2Info.privateIp,
       instanceType: ec2Info.instanceType,
-      securityPolicy: r.securityPolicy ?? "open",
+      securityPolicy: r.securityPolicy ?? "restricted",
       containerOs: r.containerOs ?? "ubuntu",
       launchTime: r.createdAt,
     };
@@ -985,6 +1100,16 @@ export async function changeSecurityPolicy(
       Groups: [newSgId],
     }));
     console.log(`[EC2] Security policy changed for ${subdomain}: → ${newPolicy} (SG: ${newSgId})`);
+
+    // ADR-005: also re-apply the container-layer DLP (code-server config) on the
+    // running instance so a tier change takes effect without a relaunch.
+    // Best-effort: SG swap above is the hard guarantee; config sync may lag.
+    try {
+      await syncDlpCodeServerConfig(record.instanceId, newPolicy);
+      console.log(`[EC2] code-server DLP config re-applied for ${subdomain} (${newPolicy})`);
+    } catch (err) {
+      console.warn(`[EC2] code-server DLP config sync failed for ${subdomain}:`, err);
+    }
   }
 
   // Update tags for next start
@@ -995,6 +1120,102 @@ export async function changeSecurityPolicy(
 
   await updateInstanceRecord(subdomain, { securityPolicy: newPolicy });
   return { applied: true };
+}
+
+// ─── ADR-026 T5: resource-specific grant onto BOTH the EC2 task role and the
+// Local Governance role. Server-side re-validates statements (never trust stored
+// data), skips legitimately-absent roles, and fail-loud with compensating rollback
+// on partial failure so approval state never diverges from actual IAM state. ───
+
+const GRANT_LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-";
+
+function isNoSuchEntity(e: unknown): boolean {
+  return (e as { name?: string })?.name === "NoSuchEntityException";
+}
+
+interface GrantArgs {
+  subdomain: string;
+  sub: string;
+  requestId: string;
+  statements: IamStatementInput[];
+  iam?: IAMClient;
+  accountId?: string;
+  region?: string;
+}
+type IamStatementInput = import("./iam-request-validation").IamStatement;
+
+function grantRoleNames(subdomain: string, sub: string): string[] {
+  const roles: string[] = [];
+  if (subdomain) roles.push(`cc-on-bedrock-task-${subdomain}`);
+  if (sub) roles.push(`${GRANT_LOCAL_ROLE_PREFIX}${sub}`);
+  return roles;
+}
+
+export async function applyIamGrant(args: GrantArgs): Promise<{ attached: string[] }> {
+  const { validateIamRequest, DEFAULT_SERVICE_ALLOWLIST, DEFAULT_WILDCARD_OK_ACTIONS } = await import("./iam-request-validation");
+  // Symmetric with the request-time path (container-request): without the account id
+  // the cross-account guard cannot run, so fail closed rather than silently skip it
+  // (review MINOR).
+  const accountId = args.accountId ?? process.env.AWS_ACCOUNT_ID;
+  if (!accountId) {
+    throw new Error("grant re-validation requires AWS_ACCOUNT_ID (cross-account guard) — server misconfigured");
+  }
+  const v = validateIamRequest(args.statements, {
+    serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
+    wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
+    accountId,
+    region: args.region ?? process.env.AWS_REGION,
+  });
+  if (!v.ok) throw new Error(`grant re-validation failed (not valid): ${v.errors.join("; ")}`);
+
+  const iam = args.iam ?? iamClient;
+  // PolicyName is per-requestId; requestId is a randomUUID per request (container-request),
+  // so there is no cross-request name collision — re-approving the same request just
+  // re-puts identical content (idempotent).
+  const policyName = `Grant-${args.requestId}`;
+  const roles = grantRoleNames(args.subdomain, args.sub);
+  if (roles.length === 0) {
+    // gate round-1 (Codex MAJOR): never silently "succeed" with zero target roles.
+    throw new Error("grant has no target role — both subdomain and sub are empty");
+  }
+  const doc = JSON.stringify({
+    Version: "2012-10-17",
+    Statement: args.statements.map((s) => ({ Effect: "Allow", Action: s.Action, Resource: s.Resource })),
+  });
+  const attached: string[] = [];
+  for (const roleName of roles) {
+    try {
+      await iam.send(new PutRolePolicyCommand({ RoleName: roleName, PolicyName: policyName, PolicyDocument: doc }));
+      attached.push(roleName);
+    } catch (e) {
+      if (isNoSuchEntity(e)) continue; // role legitimately absent (that mode unused)
+      // compensating rollback of already-attached roles, then fail loud.
+      const rollbackFailed: string[] = [];
+      for (const done of attached) {
+        try {
+          await iam.send(new DeleteRolePolicyCommand({ RoleName: done, PolicyName: policyName }));
+        } catch {
+          rollbackFailed.push(done); // orphan grant — surfaced below; reconcile (T8) is the backstop
+        }
+      }
+      const orphan = rollbackFailed.length ? ` ORPHAN GRANT on ${rollbackFailed.join(", ")} (run reconcile)` : "";
+      throw new Error(`grant attach failed on ${roleName}: ${e instanceof Error ? e.message : e}; rolled back ${attached.filter((r) => !rollbackFailed.includes(r)).join(", ") || "none"}.${orphan}`);
+    }
+  }
+  return { attached };
+}
+
+export async function removeIamGrant(args: { subdomain: string; sub: string; requestId: string; iam?: IAMClient }): Promise<void> {
+  const iam = args.iam ?? iamClient;
+  const policyName = `Grant-${args.requestId}`;
+  for (const roleName of grantRoleNames(args.subdomain, args.sub)) {
+    try {
+      await iam.send(new DeleteRolePolicyCommand({ RoleName: roleName, PolicyName: policyName }));
+    } catch (e) {
+      if (isNoSuchEntity(e)) continue; // role or policy already gone — fine
+      throw new Error(`grant remove failed on ${roleName}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
 }
 
 /**
@@ -1076,7 +1297,7 @@ async function getUserInstance(subdomain: string): Promise<UserInstanceRecord | 
   }
 }
 
-async function describeInstance(instanceId: string): Promise<{ status: string; privateIp: string; instanceType: string } | null> {
+async function describeInstance(instanceId: string): Promise<{ status: string; privateIp: string; instanceType: string; eniId?: string } | null> {
   try {
     const result = await ec2Client.send(new DescribeInstancesCommand({
       InstanceIds: [instanceId],
@@ -1087,6 +1308,7 @@ async function describeInstance(instanceId: string): Promise<{ status: string; p
       status: inst.State?.Name ?? "unknown",
       privateIp: inst.PrivateIpAddress ?? "",
       instanceType: inst.InstanceType ?? "",
+      eniId: inst.NetworkInterfaces?.[0]?.NetworkInterfaceId,
     };
   } catch {
     return null;
@@ -1116,17 +1338,39 @@ async function isHibernateCapable(instanceId: string): Promise<boolean> {
 }
 
 async function registerRoute(subdomain: string, privateIp: string): Promise<void> {
-  await ddbClient.send(new PutItemCommand({
+  // ADR-027: seed default routes on first boot; carry authoritative customRoutes onto the
+  // routing-table row so config-gen renders them. (This is the LIVE path — startInstance/
+  // restoreFromSnapshot/changeTier/switchOs all call here.)
+  await seedCustomRoutesIfUnset(subdomain);
+  const { customRoutes, routesVersion } = await getCustomRoutes(subdomain);
+
+  // M7: UpdateItem (not PutItem) so a concurrent settings mirror with a newer routesVersion
+  // isn't wiped on restart/resize. Core registration fields always set.
+  await ddbClient.send(new UpdateItemCommand({
     TableName: ROUTING_TABLE,
-    Item: marshall({
-      subdomain,
-      container_ip: privateIp,
-      port: 8080,
-      status: "active",
-      registered_at: new Date().toISOString(),
+    Key: marshall({ subdomain }),
+    // NOTE: both `port` and `status` are DynamoDB reserved words → must be aliased.
+    UpdateExpression: "SET container_ip = :ip, #pt = :p, #st = :s, registered_at = :t",
+    ExpressionAttributeNames: { "#st": "status", "#pt": "port" },
+    ExpressionAttributeValues: marshall({
+      ":ip": privateIp, ":p": 8080, ":s": "active", ":t": new Date().toISOString(),
     }),
   }));
-  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080`);
+
+  // version-guarded customRoutes write (don't clobber a newer concurrent settings mirror)
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: ROUTING_TABLE,
+      Key: marshall({ subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :v",
+      ConditionExpression: "attribute_not_exists(routesVersion) OR routesVersion <= :v",
+      ExpressionAttributeValues: marshall({ ":r": JSON.stringify(customRoutes), ":v": routesVersion }),
+    }));
+  } catch (err) {
+    if (!(err instanceof Error && err.name === "ConditionalCheckFailedException")) throw err;
+    // newer mirror exists → keep it
+  }
+  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080 (+${customRoutes.length} custom)`);
 }
 
 async function deregisterRoute(subdomain: string): Promise<void> {
@@ -1177,6 +1421,9 @@ async function postStartSetup(instanceId: string): Promise<void> {
       DocumentName: "AWS-RunShellScript",
       Parameters: {
         commands: [
+          `# Heal ~/.claude ownership (old AMI's cc-mcp-sync created it as root,`,
+          `# which breaks Claude Code state writes + the self-update below)`,
+          `mkdir -p /home/coder/.claude && chown -R coder:coder /home/coder/.claude`,
           `# Upgrade Claude Code + Kiro CLI (as coder user, symlink to /usr/local/bin)`,
           `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1 || true`,
           `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
@@ -1454,4 +1701,118 @@ async function updateInstanceRecord(subdomain: string, updates: Record<string, s
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: values,
   }));
+}
+
+// ─── Custom Port Routes store (ADR-027) ───
+
+export const DEFAULT_SEED_ROUTES: CustomRoute[] = [
+  { path: "/", port: 3000, label: "Frontend" },
+  { path: "/api", port: 8000, label: "API" },
+];
+
+/** cc-user-instances 에서 customRoutes + version 조회. 없으면 [] / 0. */
+export async function getCustomRoutes(subdomain: string): Promise<CustomRoutesRecord> {
+  const result = await ddbClient.send(new GetItemCommand({
+    TableName: INSTANCE_TABLE,
+    Key: marshall({ user_id: subdomain }),
+  }));
+  if (!result.Item) return { customRoutes: [], routesVersion: 0, exists: false };
+  const item = unmarshall(result.Item);
+  return {
+    customRoutes: (item.customRoutes as CustomRoute[]) ?? [],
+    routesVersion: (item.routesVersion as number) ?? 0,
+    routeStatus: item.routeStatus,
+    exists: true,
+  };
+}
+
+/**
+ * 여러 subdomain의 customRoutes를 BatchGetItem 한 번(들)으로 조회 (M2: admin 목록 N+1 제거).
+ * 반환: Map<subdomain, CustomRoute[]>. 행 없으면 키 부재.
+ */
+export async function batchGetCustomRoutes(
+  subdomains: string[],
+): Promise<Map<string, CustomRoute[]>> {
+  const out = new Map<string, CustomRoute[]>();
+  const uniq = [...new Set(subdomains.filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += 100) {
+    const chunk = uniq.slice(i, i + 100);
+    let keys = chunk.map((s) => marshall({ user_id: s }));
+    // BatchGetItem may return UnprocessedKeys — retry a few times.
+    for (let attempt = 0; attempt < 3 && keys.length > 0; attempt++) {
+      const res = await ddbClient.send(new BatchGetItemCommand({
+        RequestItems: {
+          [INSTANCE_TABLE]: { Keys: keys, ProjectionExpression: "user_id, customRoutes" },
+        },
+      }));
+      for (const raw of res.Responses?.[INSTANCE_TABLE] ?? []) {
+        const item = unmarshall(raw);
+        out.set(item.user_id as string, (item.customRoutes as CustomRoute[]) ?? []);
+      }
+      keys = res.UnprocessedKeys?.[INSTANCE_TABLE]?.Keys ?? [];
+    }
+  }
+  return out;
+}
+
+/**
+ * customRoutes 를 expectedVersion 기반 조건부 쓰기로 갱신(lost-update 방지).
+ * 성공 시 새 version(=expectedVersion+1) 반환. 충돌 시 throw('version-conflict').
+ */
+export async function putCustomRoutes(
+  subdomain: string,
+  routes: CustomRoute[],
+  expectedVersion: number,
+): Promise<number> {
+  const nextVersion = expectedVersion + 1;
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :nv",
+      // attribute_exists(user_id): the instance row must already exist, so a delete
+      // racing between the PUT handler's existence check and this UpdateItem cannot
+      // UPSERT a phantom row (without it, attribute_not_exists(routesVersion) is true
+      // on a missing row → upsert). Mirrors config-gen's write_route_status guard.
+      ConditionExpression: "attribute_exists(user_id) AND (attribute_not_exists(routesVersion) OR routesVersion = :ev)",
+      ExpressionAttributeValues: marshall({
+        ":r": routes,
+        ":nv": nextVersion,
+        ":ev": expectedVersion,
+      }),
+    }));
+    return nextVersion;
+  } catch (err) {
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      throw new Error("version-conflict");
+    }
+    throw err;
+  }
+}
+
+/** customRoutes 미설정(속성 없음)이면 seed 1회 주입. 빈 배열은 "전부 삭제"로 보고 주입 안 함. */
+export async function seedCustomRoutesIfUnset(subdomain: string): Promise<CustomRoute[]> {
+  const result = await ddbClient.send(new GetItemCommand({
+    TableName: INSTANCE_TABLE,
+    Key: marshall({ user_id: subdomain }),
+  }));
+  const item = result.Item ? unmarshall(result.Item) : null;
+  if (item && Array.isArray(item.customRoutes)) {
+    return item.customRoutes as CustomRoute[]; // 이미 설정됨(빈 배열 포함)
+  }
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: INSTANCE_TABLE,
+      Key: marshall({ user_id: subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = if_not_exists(routesVersion, :z)",
+      ConditionExpression: "attribute_not_exists(customRoutes)",
+      ExpressionAttributeValues: marshall({ ":r": DEFAULT_SEED_ROUTES, ":z": 0 }),
+    }));
+  } catch (err) {
+    // Only the seed race (someone else seeded first) is expected/ignorable; surface anything else.
+    if (!(err instanceof Error && err.name === "ConditionalCheckFailedException")) {
+      console.warn("[seedCustomRoutesIfUnset] unexpected error:", err instanceof Error ? err.message : err);
+    }
+  }
+  return DEFAULT_SEED_ROUTES;
 }

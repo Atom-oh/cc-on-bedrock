@@ -361,6 +361,7 @@ API:      https://admin.dev.atomai.click/api/
 ## 향후 확장 가능성
 
 - **사용자 커스텀 포트**: DynamoDB routing table에 `ports` 필드 추가하여 사용자별 포트 매핑 지원
+  > **실현됨: [ADR-027](ADR-027-devenv-custom-port-exposure.md)** — reserved=[8080], seed default(root→3000, /api→8000), 최대 5개, 세그먼트 경계 라우팅.
 - **포트 자동 감지**: EC2 에이전트가 LISTEN 포트를 감지하여 DynamoDB에 등록, Nginx 자동 설정
 - **HMR WebSocket**: Frontend dev server의 Hot Module Replacement WebSocket 지원 (이미 `Upgrade` 헤더 전달로 동작 예상)
 

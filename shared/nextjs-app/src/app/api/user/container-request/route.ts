@@ -9,6 +9,13 @@ import {
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { randomUUID } from "crypto";
 import { IAM_POLICY_SETS } from "@/lib/ec2-clients";
+import {
+  buildIamExtensionRequest,
+  DEFAULT_SERVICE_ALLOWLIST,
+  DEFAULT_WILDCARD_OK_ACTIONS,
+  type IamStatement,
+} from "@/lib/iam-request-validation";
+import { annotateIamRequest } from "@/lib/iam-resource-annotator";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
@@ -76,6 +83,9 @@ export async function POST(req: NextRequest) {
       requestId: { S: requestId },
       type: { S: type },
       email: { S: user.email },
+      // ADR-026 T2: persist the Cognito sub so approval can target the Local
+      // Governance role (cc-on-bedrock-local-user-{sub}) without a Cognito lookup.
+      sub: { S: user.id },
       subdomain: { S: subdomain },
       department: { S: (user as unknown as Record<string, string>).department ?? "default" },
       status: { S: "pending" },
@@ -100,18 +110,53 @@ export async function POST(req: NextRequest) {
       baseItem.currentPolicy = { S: user.securityPolicy ?? "restricted" };
       if (reason) baseItem.reason = { S: reason };
     } else if (type === "iam_extension") {
-      const { policySets, reason } = body as { policySets?: string[]; reason?: string };
-      if (!policySets || !Array.isArray(policySets) || policySets.length === 0) {
-        return NextResponse.json({ error: "policySets array is required" }, { status: 400 });
-      }
-      const invalid = policySets.filter(p => !IAM_POLICY_SETS[p]);
-      if (invalid.length > 0) {
-        return NextResponse.json(
-          { error: `Unknown policy sets: ${invalid.join(", ")}. Available: ${Object.keys(IAM_POLICY_SETS).join(", ")}` },
-          { status: 400 }
+      const { statements, policySets, reason } = body as {
+        statements?: IamStatement[];
+        policySets?: string[];
+        reason?: string;
+      };
+      // ADR-026: prefer free-form resource-specific `statements` (validated:
+      // Resource:* banned, dangerous actions denied). Legacy `policySets` kept
+      // for backward-compat until the request UI (T8) is migrated.
+      if (statements && Array.isArray(statements) && statements.length > 0) {
+        // Fail closed: without the platform account id we cannot enforce the
+        // cross-account ARN guard, so a missing AWS_ACCOUNT_ID is a config error,
+        // not a silent weakening of validation. (gate round-1: Gemini MAJOR)
+        const accountId = process.env.AWS_ACCOUNT_ID;
+        if (!accountId) {
+          return NextResponse.json(
+            { error: "Server misconfigured: AWS_ACCOUNT_ID is required to validate IAM requests" },
+            { status: 500 }
+          );
+        }
+        const built = buildIamExtensionRequest(
+          { statements, reason },
+          {
+            serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
+            wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
+            accountId,
+            region: process.env.AWS_REGION ?? region,
+          },
         );
+        if (!built.ok) {
+          return NextResponse.json({ error: "Invalid IAM request", details: built.errors }, { status: 400 });
+        }
+        baseItem.statements = { S: built.statementsJson! };
+        // ADR-026 T3/T8: advisory LLM risk note for the admin reviewer (graceful: null on failure).
+        const llmNote = await annotateIamRequest(statements);
+        if (llmNote) baseItem.llmNote = { S: llmNote };
+      } else if (policySets && Array.isArray(policySets) && policySets.length > 0) {
+        const invalid = policySets.filter((p) => !IAM_POLICY_SETS[p]);
+        if (invalid.length > 0) {
+          return NextResponse.json(
+            { error: `Unknown policy sets: ${invalid.join(", ")}. Available: ${Object.keys(IAM_POLICY_SETS).join(", ")}` },
+            { status: 400 }
+          );
+        }
+        baseItem.policySets = { L: policySets.map((p) => ({ S: p })) };
+      } else {
+        return NextResponse.json({ error: "statements[] (or legacy policySets[]) is required" }, { status: 400 });
       }
-      baseItem.policySets = { L: policySets.map(p => ({ S: p })) };
       if (reason) baseItem.reason = { S: reason };
     }
 

@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { UserSession, ContainerInfo } from "@/lib/types";
+import {
+  validateIamRequest,
+  DEFAULT_SERVICE_ALLOWLIST,
+  DEFAULT_WILDCARD_OK_ACTIONS,
+  type IamStatement,
+} from "@/lib/iam-request-validation";
 
 interface SettingsTabProps {
   user: UserSession;
@@ -21,11 +27,66 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
   const [copied, setCopied] = useState(false);
   const autoHideRef = useRef<NodeJS.Timeout | null>(null);
 
+  // ─── Exposed ports (custom routes, ADR-027) ───
+  type RouteRow = { path: string; port: number; label: string };
+  const [routes, setRoutes] = useState<RouteRow[]>([]);
+  const [routeStatus, setRouteStatus] = useState<{ path: string; state: string; reason?: string }[]>([]);
+  const [routesSaving, setRoutesSaving] = useState(false);
+  const [routesError, setRoutesError] = useState<string | null>(null);
+  const [routesPending, setRoutesPending] = useState(false);
+  const [routesVersion, setRoutesVersion] = useState<number>(0);
+
   const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
   const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
   const codeServerUrl = user.subdomain
     ? `https://${user.subdomain}.${devSubdomain}.${domainName}`
     : null;
+
+  // Load custom routes (also re-used after save to refresh routeStatus + version)
+  const loadRoutes = useCallback(async () => {
+    try {
+      const res = await fetch("/api/user/custom-routes");
+      const d = await res.json();
+      if (d.success) {
+        setRoutes(d.data.routes ?? []);
+        setRouteStatus(d.data.status ?? []);
+        setRoutesVersion(d.data.version ?? 0);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { loadRoutes(); }, [loadRoutes]);
+
+  const saveRoutes = async () => {
+    setRoutesSaving(true);
+    setRoutesError(null);
+    try {
+      const res = await fetch("/api/user/custom-routes", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // M3: echo the loaded version so a stale-tab save is rejected (409) not silently lost.
+        body: JSON.stringify({ routes, version: routesVersion }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.success) {
+        setRoutesError(res.status === 409 ? (d.error ?? "동시 수정 충돌 — 새로고침하세요") : (d.error ?? "저장 실패"));
+        if (res.status === 409) await loadRoutes(); // refresh to latest
+        return;
+      }
+      setRoutesPending(d.data.pending === true);
+      await loadRoutes(); // MINOR: refresh routeStatus (✅/⚠️) + new version after save
+    } finally {
+      setRoutesSaving(false);
+    }
+  };
+
+  const addRoute = () => {
+    if (routes.length >= 5) return;
+    setRoutes([...routes, { path: "/preview", port: 5173, label: "App" }]);
+  };
+  const removeRoute = (i: number) => setRoutes(routes.filter((_, idx) => idx !== i));
+  const updateRoute = (i: number, patch: Partial<RouteRow>) =>
+    setRoutes(routes.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
   // Fetch current code-server password
   useEffect(() => {
@@ -301,6 +362,77 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
             onSuccess={() => setSuccess("IAM extension request submitted")}
             onError={(msg) => setError(msg)}
           />
+
+          {/* ─── Exposed Ports (custom routes, ADR-027) ─── */}
+          <section className="mt-8">
+            <h3 className="text-sm font-semibold text-gray-200">포트 노출 / Exposed Ports</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              앱이 해당 path 밑에서 서빙되도록 설정 필요 (Vite <code>base</code>, Next <code>basePath</code>,
+              Streamlit <code>--server.baseUrlPath</code>). 최대 5개. 8080은 code-server 예약.
+            </p>
+            <div className="mt-3 space-y-2">
+              {routes.map((r, i) => {
+                const st = routeStatus.find((s) => s.path === r.path);
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      value={r.label}
+                      onChange={(e) => updateRoute(i, { label: e.target.value })}
+                      placeholder="Label"
+                      className="w-28 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
+                    />
+                    <input
+                      value={r.path}
+                      onChange={(e) => updateRoute(i, { path: e.target.value })}
+                      placeholder="/preview"
+                      className="w-32 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
+                    />
+                    <input
+                      type="number"
+                      value={r.port}
+                      onChange={(e) => updateRoute(i, { port: Number(e.target.value) })}
+                      placeholder="5173"
+                      className="w-24 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
+                    />
+                    <span className="text-xs text-gray-500 truncate">
+                      {codeServerUrl ? `${codeServerUrl}${r.path === "/" ? "" : r.path}` : ""}
+                    </span>
+                    {st &&
+                      (st.state === "ok" ? (
+                        <span className="text-xs text-green-400">✅</span>
+                      ) : (
+                        <span className="text-xs text-amber-400" title={st.reason}>
+                          ⚠️
+                        </span>
+                      ))}
+                    <button onClick={() => removeRoute(i)} className="text-xs text-red-400">
+                      삭제
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={addRoute}
+                disabled={routes.length >= 5}
+                className="text-sm px-3 py-1 rounded bg-gray-800 text-gray-200 disabled:opacity-50"
+              >
+                + 추가
+              </button>
+              <button
+                onClick={saveRoutes}
+                disabled={routesSaving}
+                className="text-sm px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
+              >
+                저장
+              </button>
+              {routesPending && (
+                <span className="text-xs text-amber-400">인스턴스 시작 시 반영됩니다</span>
+              )}
+              {routesError && <span className="text-xs text-red-400">{routesError}</span>}
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -390,40 +522,62 @@ function RequestSection({ title, current, options, type, fieldName, onSuccess, o
   );
 }
 
-const POLICY_SETS = [
-  { id: "dynamodb", name: "DynamoDB Access", desc: "Read/write cc-on-bedrock-* tables" },
-  { id: "s3_readwrite", name: "S3 Read/Write", desc: "Read/write user S3 prefix" },
-  { id: "sqs", name: "SQS Access", desc: "Send/receive on cc-on-bedrock-* queues" },
-  { id: "lambda_invoke", name: "Lambda Invoke", desc: "Invoke cc-on-bedrock-* functions" },
-  { id: "eks_readonly", name: "EKS Read-Only", desc: "Describe clusters/nodegroups" },
-  { id: "cloudwatch_full", name: "CloudWatch Full", desc: "Logs, metrics, dashboards" },
-  { id: "sns_publish", name: "SNS Publish", desc: "Publish to cc-on-bedrock-* topics" },
-  { id: "stepfunctions", name: "Step Functions", desc: "Execute cc-on-bedrock-* state machines" },
-];
+// ADR-026 T8: custom resource-specific IAM statement authoring (replaces preset POLICY_SETS).
+type StmtRow = { service: string; actions: string; resources: string };
+
+function buildStatements(rows: StmtRow[]) {
+  return rows
+    .map((r) => ({
+      Action: r.actions
+        .split(/[\s,]+/)
+        .filter(Boolean)
+        .map((a) => (a.includes(":") ? a : `${r.service}:${a}`)),
+      Resource: r.resources.split(/[\s,\n]+/).filter(Boolean),
+    }))
+    .filter((s) => s.Action.length > 0 || s.Resource.length > 0);
+}
 
 function IamRequestSection({ onSuccess, onError }: { onSuccess: () => void; onError: (msg: string) => void }) {
-  const [selectedSets, setSelectedSets] = useState<string[]>([]);
+  const [rows, setRows] = useState<StmtRow[]>([{ service: "s3", actions: "", resources: "" }]);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const toggle = (id: string) => {
-    setSelectedSets((prev) => prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]);
-  };
+  const built = buildStatements(rows);
+  // Client-side pre-validation mirrors the server validator (single source of truth).
+  // accountId/region omitted → cross-account/region is enforced server-side (fail-closed).
+  const clientErrors =
+    built.length > 0
+      ? validateIamRequest(built as IamStatement[], {
+          serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
+          wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
+        }).errors
+      : [];
+  const canSubmit = built.length > 0 && reason.trim().length > 0 && clientErrors.length === 0;
+
+  const addRow = () => setRows([...rows, { service: "s3", actions: "", resources: "" }]);
+  const removeRow = (i: number) => setRows(rows.filter((_, idx) => idx !== i));
+  const updateRow = (i: number, patch: Partial<StmtRow>) =>
+    setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
   const handleSubmit = async () => {
-    if (selectedSets.length === 0) { onError("Select at least one policy set"); return; }
-    if (!reason.trim()) { onError("Please provide a reason"); return; }
+    if (!canSubmit) { onError("Fix validation errors and provide a reason"); return; }
     setSubmitting(true);
     try {
       const res = await fetch("/api/user/container-request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "iam_extension", policySets: selectedSets, reason }),
+        body: JSON.stringify({ type: "iam_extension", statements: built, reason }),
       });
       const data = await res.json();
-      if (res.ok) { onSuccess(); setReason(""); setSelectedSets([]); setExpanded(false); }
-      else onError(data.error ?? "Request failed");
+      if (res.ok) {
+        onSuccess();
+        setReason("");
+        setRows([{ service: "s3", actions: "", resources: "" }]);
+        setExpanded(false);
+      } else {
+        onError(Array.isArray(data.details) ? data.details.join("; ") : (data.error ?? "Request failed"));
+      }
     } catch { onError("Network error"); }
     finally { setSubmitting(false); }
   };
@@ -431,48 +585,71 @@ function IamRequestSection({ onSuccess, onError }: { onSuccess: () => void; onEr
   return (
     <div className="bg-[#0d1117] rounded-lg p-4">
       <button onClick={() => setExpanded(!expanded)} className="flex items-center justify-between w-full">
-        <p className="text-sm font-medium text-gray-200">IAM Permission Extension</p>
+        <p className="text-sm font-medium text-gray-200">IAM Permission Extension (resource-specific)</p>
         <svg className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
       {expanded && (
         <div className="mt-3 space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            {POLICY_SETS.map((ps) => (
-              <button
-                key={ps.id}
-                onClick={() => toggle(ps.id)}
-                className={`p-2 rounded-lg border text-left transition-all ${
-                  selectedSets.includes(ps.id) ? "border-blue-500 bg-blue-900/20" : "border-gray-700 hover:border-gray-600"
-                }`}
-              >
-                <p className="text-xs font-medium text-gray-200">{ps.name}</p>
-                <p className="text-[10px] text-gray-500">{ps.desc}</p>
-              </button>
-            ))}
-          </div>
-          {selectedSets.length > 0 && (
-            <div className="space-y-2">
-              <input
-                type="text"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Reason for requesting access..."
-                className="w-full bg-[#161b22] border border-gray-700 rounded-lg p-2 text-sm text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-              />
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-gray-500">{selectedSets.length} policy set(s) selected</p>
-                <button
-                  onClick={handleSubmit}
-                  disabled={submitting || !reason.trim()}
-                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded-lg transition-colors"
+          <p className="text-[10px] text-gray-500">
+            서비스·액션·리소스 ARN을 직접 지정해 신청합니다. 읽기 와일드카드(Get*/List*/Describe*)만 허용,
+            `*`·`s3:*`·쓰기 와일드카드·교차계정은 거부됩니다. 관리자 승인 후 부여됩니다.
+          </p>
+          {rows.map((r, i) => (
+            <div key={i} className="border border-gray-700 rounded-lg p-2 space-y-2">
+              <div className="flex items-center gap-2">
+                <select
+                  value={r.service}
+                  onChange={(e) => updateRow(i, { service: e.target.value })}
+                  className="bg-[#161b22] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
                 >
-                  {submitting ? "Submitting..." : "Submit Request"}
-                </button>
+                  {DEFAULT_SERVICE_ALLOWLIST.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <span className="text-[10px] text-gray-500">Statement {i + 1}</span>
+                {rows.length > 1 && (
+                  <button onClick={() => removeRow(i)} className="ml-auto text-xs text-red-400">삭제</button>
+                )}
               </div>
+              <input
+                value={r.actions}
+                onChange={(e) => updateRow(i, { actions: e.target.value })}
+                placeholder="actions (예: GetObject, List*) — 콤마/공백 구분"
+                className="w-full bg-[#161b22] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600"
+              />
+              <textarea
+                value={r.resources}
+                onChange={(e) => updateRow(i, { resources: e.target.value })}
+                placeholder={"resource ARN (한 줄에 하나, 예: arn:aws:s3:::bucket/prefix/*)\n읽기 전용이면 * 가능"}
+                rows={2}
+                className="w-full bg-[#161b22] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600 font-mono"
+              />
             </div>
+          ))}
+          <button onClick={addRow} className="text-xs px-2 py-1 rounded bg-gray-800 text-gray-200">+ Statement 추가</button>
+
+          {clientErrors.length > 0 && (
+            <ul className="text-[10px] text-red-400 list-disc pl-4">
+              {clientErrors.slice(0, 6).map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
           )}
+
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason for requesting access..."
+            className="w-full bg-[#161b22] border border-gray-700 rounded-lg p-2 text-sm text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+          />
+          <div className="flex items-center justify-end">
+            <button
+              onClick={handleSubmit}
+              disabled={submitting || !canSubmit}
+              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded-lg transition-colors"
+            >
+              {submitting ? "Submitting..." : "Submit Request"}
+            </button>
+          </div>
         </div>
       )}
     </div>
