@@ -73,6 +73,28 @@ const SG_MAP: Record<string, string> = {
   locked: process.env.SG_DEVENV_LOCKED ?? "",
 };
 
+// ADR-005 container-layer DLP for EC2 mode: code-server reads these keys from
+// config.yaml (equivalent to --disable-file-downloads / --disable-file-uploads).
+// extensions-dir lock is applied separately with a directory-existence guard so
+// code-server never fails to start on an AMI without the curated dirs.
+function dlpCodeServerUserData(policy: string): { configLines: string[]; postLines: string[] } {
+  if (policy !== "restricted" && policy !== "locked") {
+    return { configLines: [], postLines: [] };
+  }
+  const extDir = policy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
+  return {
+    configLines: [
+      `disable-file-downloads: true`,
+      `disable-file-uploads: true`,
+    ],
+    postLines: [
+      `# DLP (${policy}): lock extensions dir only when the curated dir exists on the AMI`,
+      `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> /home/coder/.config/code-server/config.yaml; fi`,
+      `echo "SECURITY_POLICY=${policy}" >> /etc/environment`,
+    ],
+  };
+}
+
 // Instance tier → EC2 instance type mapping
 const INSTANCE_TIERS: Record<string, { type: string; cpu: string; memory: string }> = {
   light:    { type: "t4g.medium",  cpu: "2 vCPU",  memory: "4 GiB" },
@@ -203,7 +225,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   }
 
   // Fail-closed: unknown/missing policy lands on the restricted SG, never open.
-  const sg = SG_MAP[input.securityPolicy] || SG_MAP.restricted;
+  const effectivePolicy = SG_MAP[input.securityPolicy] ? input.securityPolicy : "restricted";
+  const sg = SG_MAP[effectivePolicy];
+  const dlp = dlpCodeServerUserData(effectivePolicy);
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
 
@@ -283,7 +307,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `auth: password`,
       `password: "${codeserverPassword}"`,
       `cert: false`,
+      ...dlp.configLines,
       `CSCFG`,
+      ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
@@ -621,7 +647,10 @@ export async function restoreFromSnapshot(
   console.log(`[EC2] Registered AMI ${restoredAmiId} from snapshot ${snapshotId}`);
 
   // 3. Launch instance from restored AMI (bypass normal SSM AMI lookup)
-  const sg = SG_MAP[(record?.securityPolicy ?? "restricted")] || SG_MAP.restricted;
+  const restorePolicy = record?.securityPolicy && SG_MAP[record.securityPolicy]
+    ? record.securityPolicy : "restricted";
+  const sg = SG_MAP[restorePolicy];
+  const dlp = dlpCodeServerUserData(restorePolicy);
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS["standard"];
   const instanceProfileName = await ensureUserInstanceProfile(subdomain, record?.username ?? "", record?.department ?? "default");
@@ -682,7 +711,9 @@ export async function restoreFromSnapshot(
       `auth: password`,
       `password: "${codeserverPassword}"`,
       `cert: false`,
+      ...dlp.configLines,
       `CSCFG`,
+      ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
@@ -987,6 +1018,34 @@ export async function changeSecurityPolicy(
       Groups: [newSgId],
     }));
     console.log(`[EC2] Security policy changed for ${subdomain}: → ${newPolicy} (SG: ${newSgId})`);
+
+    // ADR-005: also re-apply the container-layer DLP (code-server config) on the
+    // running instance so a tier change takes effect without a relaunch.
+    // Best-effort: SG swap above is the hard guarantee; config sync may lag.
+    try {
+      const extDir = newPolicy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
+      const dlpOn = newPolicy === "restricted" || newPolicy === "locked";
+      await ssmClient.send(new SendCommandCommand({
+        InstanceIds: [record.instanceId],
+        DocumentName: "AWS-RunShellScript",
+        Parameters: {
+          commands: [
+            `CFG=/home/coder/.config/code-server/config.yaml`,
+            `sed -i '/^disable-file-downloads:/d;/^disable-file-uploads:/d;/^extensions-dir:/d' "$CFG"`,
+            ...(dlpOn ? [
+              `printf 'disable-file-downloads: true\\ndisable-file-uploads: true\\n' >> "$CFG"`,
+              `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> "$CFG"; fi`,
+            ] : []),
+            `grep -q '^SECURITY_POLICY=' /etc/environment && sed -i 's/^SECURITY_POLICY=.*/SECURITY_POLICY=${newPolicy}/' /etc/environment || echo "SECURITY_POLICY=${newPolicy}" >> /etc/environment`,
+            `systemctl restart code-server 2>/dev/null || true`,
+          ],
+        },
+        TimeoutSeconds: 30,
+      }));
+      console.log(`[EC2] code-server DLP config re-applied for ${subdomain} (${newPolicy})`);
+    } catch (err) {
+      console.warn(`[EC2] code-server DLP config sync failed for ${subdomain}:`, err);
+    }
   }
 
   // Update tags for next start
