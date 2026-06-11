@@ -727,7 +727,7 @@ def set_cognito_budget_flag(sub: str, exceeded: bool):
                 ],
             )
     except Exception as e:
-        print(f"Cognito update failed for {username}: {e}")
+        print(f"Cognito update failed for {sub}: {e}")
 
 
 def check_department_budgets(user_spend):
