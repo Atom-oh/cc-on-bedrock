@@ -58,6 +58,13 @@ export class Ec2DevenvStack extends cdk.Stack {
       this.sgOpen.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(port), `${desc} from VPC (via Nginx)`);
     }
 
+    // In-VPC Route 53 Resolver IP (VPC base + 2). 32-bit integer math
+    // (equivalent to terraform cidrhost(cidr, 2)) — octet string arithmetic
+    // would break on CIDRs whose 4th octet is 254/255.
+    const baseInt = config.vpcCidr.split('/')[0].split('.')
+      .reduce((acc, o) => acc * 256 + parseInt(o, 10), 0) + 2;
+    const resolverIp = [24, 16, 8, 0].map((s) => (baseInt >>> s) & 255).join('.');
+
     this.sgRestricted = new ec2.SecurityGroup(this, 'DevenvSgRestricted', {
       vpc,
       description: 'DevEnv Restricted: code-server + frontend + API, limited outbound',
@@ -66,10 +73,12 @@ export class Ec2DevenvStack extends cdk.Stack {
     for (const { port, desc } of devenvPorts) {
       this.sgRestricted.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(port), `${desc} from VPC`);
     }
-    // Restricted outbound: HTTPS only (for Bedrock, ECR, SSM)
+    // Restricted outbound: HTTPS anywhere (Bedrock, ECR, SSM), but DNS ONLY via
+    // the VPC resolver — external DNS (e.g. 8.8.8.8) would bypass the Route 53
+    // DNS Firewall threat blocks entirely and enable DNS-tunnel exfiltration.
     this.sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'HTTPS outbound');
-    this.sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(53), 'DNS');
-    this.sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.udp(53), 'DNS UDP');
+    this.sgRestricted.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.tcp(53), 'DNS to VPC resolver (+2) only');
+    this.sgRestricted.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.udp(53), 'DNS UDP to VPC resolver (+2) only');
 
     this.sgLocked = new ec2.SecurityGroup(this, 'DevenvSgLocked', {
       vpc,
@@ -85,6 +94,10 @@ export class Ec2DevenvStack extends cdk.Stack {
       ec2.Port.tcp(443),
       'HTTPS to VPC endpoints only',
     );
+    // Locked: DNS to the in-VPC Route 53 Resolver (VPC base + 2) ONLY — same
+    // rationale as restricted above (resolverIp computed there).
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.tcp(53), 'DNS to VPC resolver (+2) only');
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.udp(53), 'DNS UDP to VPC resolver (+2) only');
 
     // ─── IAM Role (Bedrock + SSM + CloudWatch) ───
     this.devenvRole = new iam.Role(this, 'DevenvInstanceRole', {
