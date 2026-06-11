@@ -13,7 +13,10 @@ Behavior:
      - Permission boundary: cc-on-bedrock-task-boundary (ADR-011)
      - Inline policy: Bedrock InvokeModel on allowed models + inference profile
      - Tags: username/department/project/mode=local (ADR-011 cost allocation)
-  3. AssumeRole with DurationSeconds=28800 (8h), MaxSessionDuration on role = 12h
+  3. AssumeRole with DurationSeconds=3600 (1h) — this Lambda assumes another role
+     (role-chaining), which AWS hard-caps at 1h, so the ADR-014 8h intent is not
+     attainable; the CLI helper auto-refreshes when remaining TTL < 10min.
+     MaxSessionDuration on role = 1h to match.
   4. Return credentials + current limit_status (from cc-on-bedrock-limits DENY#active)
 
 Output contract (JSON):

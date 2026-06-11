@@ -50,7 +50,7 @@ Accepted (2026-05-12) — implemented in Stack 08 (`cdk/lib/08-local-governance-
 [로컬 PC]
   Claude Code (CLAUDE_CODE_USE_BEDROCK=1, AWS_PROFILE=cc-bedrock)
     │
-    │ AWS SigV4 (STS 자격증명, TTL 8h, MaxSessionDuration 12h)
+    │ AWS SigV4 (STS 자격증명, TTL 1h — role-chaining 한계, CLI 자동 갱신)
     ▼
 [AWS]
   Cognito 로그인 → Dashboard → STS Issuer Lambda
@@ -112,8 +112,8 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 ## Changes
 
 ### 새로 추가
-- **`cdk/lib/08-local-governance-stack.ts`** — STS Issuer Lambda, per-user role factory(MaxSessionDuration=12h), Application Inference Profile per dept, `cc-on-bedrock-limits` 테이블, `token-limit-enforcer` Lambda (DynamoDB Stream consumer)
-- **STS Issuer Lambda** (`cdk/lib/lambda/sts-issuer.py`) — Cognito ID 토큰 검증 → `sts:AssumeRole`(DurationSeconds=28800) → 8h 자격증명 반환
+- **`cdk/lib/08-local-governance-stack.ts`** — STS Issuer Lambda, per-user role factory(MaxSessionDuration=1h), Application Inference Profile per dept, `cc-on-bedrock-limits` 테이블, `token-limit-enforcer` Lambda (DynamoDB Stream consumer)
+- **STS Issuer Lambda** (`cdk/lib/lambda/sts-issuer.py`) — Cognito ID 토큰 검증 → `sts:AssumeRole`(DurationSeconds=3600) → 1h 자격증명 반환 (role-chaining 한계, CLI 자동 갱신)
 - **Token Limit Enforcer Lambda** (`cdk/lib/lambda/token-limit-enforcer.py`) — DynamoDB Stream에서 usage 업데이트 수신 → 합산 normalized tokens 조회 → 한도 초과 시 user role에 Deny policy attach
 - **Limit Reset Lambda** (`cdk/lib/lambda/limit-reset.py`) — EventBridge cron(일/주/월) → Deny detach + 카운터 리셋
 - **Dashboard 페이지** `shared/nextjs-app/app/local/page.tsx` — "Get Credentials" 버튼, `aws configure` 스니펫, 남은 토큰 게이지
@@ -137,7 +137,7 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 - Guardrail: 부서 Guardrail ID 강제 (IAM condition `bedrock:GuardrailIdentifier`)
 
 ## Security
-- 자격증명 TTL: **8시간**, `MaxSessionDuration=12h`. IAM은 호출 시점 평가이므로 Deny 부착은 이미 발급된 세션에도 즉시 적용됨
+- 자격증명 TTL: **1시간** (`MaxSessionDuration=1h`). STS Issuer Lambda 자체가 role을 assume하는 role-chaining이라 AWS가 1h를 hard cap으로 강제(28800s 요청은 `ValidationError`)하므로 본 ADR이 처음 의도한 8h가 아닌 1h다. CLI 도우미(`cc-bedrock-local.sh`)가 잔여 TTL<10분 시 자동 갱신. IAM은 호출 시점 평가이므로 Deny 부착은 이미 발급된 세션에도 즉시 적용됨
 - Local PC 도난 대비: 부서 관리자 콘솔에서 즉시 role disable 가능
 - VPN/IP 제한 옵션: IAM condition `aws:SourceIp` 부서 정책에 따라
 - 모델 제한: 승인된 모델 ARN 외 호출 시 IAM Deny
@@ -157,7 +157,7 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 ### Negative
 - **차단 latency 1-3분** — Bedrock Invocation Logging 지연이 하한 (게이트웨이 없이 단축 불가). 한도 ~5% 안전 마진 운영 필요
 - **프롬프트 단위 DLP** — Bedrock Guardrails에 의존, 커스텀 inline 룰 한계
-- **자격증명 유출 노출창 8h** — Deny policy 또는 role disable로 즉시 차단은 가능하나 노출창 자체는 STS TTL에 종속
+- **자격증명 유출 노출창 1h** — Deny policy 또는 role disable로 즉시 차단은 가능하나 노출창 자체는 STS TTL(1h, role-chaining 한계)에 종속. CLI 자동 갱신으로 장기 사용은 유지됨
 - **IAM role 인플레이션** — 사용자당 1개 role 누적. AWS 계정 IAM role 한도(기본 1,000)에 근접 시 페이즈드 cleanup 필요
 - **개발자 PC가 신뢰 경계** — 멀티유저 PC, 키체인 미사용 환경에서는 추가 통제(VPN, MFA on STS Issuer endpoint) 필요
 

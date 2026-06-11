@@ -9,6 +9,8 @@ verification_required: false
 ## Status
 Accepted (2026-05-12) — supersedes [ADR-013](ADR-013-unified-cloudfront-auth.md). Split implemented (DevenvCf in Stack 04, DashboardCf in Stack 05); `cdk/lib/lambda/devenv-origin-router/` archived per Migration Plan Step 4.
 
+> **As-built deviation (2026-06-10):** the "shared session-validator Lambda@Edge on both distributions" design below was **not** implemented as written. The dashboard CloudFront authenticates via NextAuth middleware instead of an edge validator, so the validator runs only on the DevEnv CF and the SSM-sharing mechanism was dropped. See the [Addendum](#addendum-2026-06-10--as-built-edge-auth-model) for the actual model.
+
 ## Context
 
 ADR-013은 Dashboard와 DevEnv를 단일 CloudFront distribution 뒤에 두고 Lambda@Edge `viewer-request`(session-validator)와 `origin-request`(origin-router)로 host 기반 분기 라우팅을 도입했다. NextAuth 세션 쿠키를 `.atomai.click`으로 공유해 두 표면이 같은 인증을 사용하는 구조다.
@@ -161,6 +163,20 @@ CloudFormation export 제거 + CloudFront 도메인 이전이 동시 deploy로 �
 ### Out of Scope
 - 통합 인증 외의 다른 ADR-013 의도(예: cookie 공유 메커니즘 단순화)는 분리 후에도 그대로 작동
 - `dev.atomai.click` 외 다른 sub-platform 도메인을 추가하는 경우는 별도 검토
+
+## Addendum (2026-06-10) — As-Built Edge Auth Model
+
+The implementation diverged from the "shared EdgeFunction" design in §Decision / §Architecture. The split itself (two distributions, origin-router removed) shipped as planned, but the **edge authentication** is split by surface rather than shared:
+
+| | Design (above) | As-built |
+|---|---|---|
+| DevEnv CF (Stack 04) | session-validator `viewer-request` Lambda@Edge | **same** — `DevenvSessionValidator` EdgeFunction (`04-ecs-devenv-stack.ts:409,444`) validates the NextAuth JWE cookie |
+| Dashboard CF (Stack 05) | **shared** session-validator EdgeFunction | **no edge function** — the dashboard's own NextAuth middleware enforces the session (`05-dashboard-stack.ts:413`) |
+| Cross-stack sharing | SSM param `/cc-on-bedrock/session-validator-version-arn` | **not created** — never needed, since the validator is defined once in Stack 04 only |
+
+**Why:** the dashboard ECS app already runs NextAuth middleware on every request, so a duplicate edge validator in front of it added latency and a second propagation surface for no security gain. The edge validator is only needed for the DevEnv CF, which fronts per-user Nginx origins that have no application-layer session check. The `*.atomai.click` cookie domain (§미마이그레이션) still gives both surfaces the same session, exactly as the core rationale intended — only the *enforcement point* differs (edge for DevEnv, middleware for Dashboard).
+
+**Net effect on this ADR's claims:** §Decision line "양 distribution에서 동일 함수를 공유", the §Architecture "Lambda@Edge 공유" code sketch, and the §Changes "currentVersion ARN을 SSM으로 export" item are superseded by this addendum. The Rationale table row "Lambda@Edge: viewer만 (한 함수 공유)" should read "viewer (DevEnv CF only); Dashboard CF uses NextAuth middleware".
 
 ## References
 - ADR-013: Unified Dashboard + DevEnv CloudFront (this ADR supersedes)

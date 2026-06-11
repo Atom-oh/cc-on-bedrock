@@ -107,7 +107,7 @@ export default function LocalGovernancePage() {
         <h1 className="text-2xl font-semibold">Local Governance Mode</h1>
         <p className="text-sm text-gray-600 mt-1">
           Use Claude Code from your local machine against Amazon Bedrock under governed
-          per-user STS credentials (8-hour TTL). Token usage and limits are enforced via{" "}
+          per-user STS credentials (1-hour TTL, auto-refreshed by the CLI helper). Token usage and limits are enforced via{" "}
           <code>cc-on-bedrock-local-user-*</code> IAM roles.
         </p>
       </header>

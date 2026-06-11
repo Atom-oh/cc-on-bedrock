@@ -223,8 +223,9 @@ else
       "systemctl enable amazon-ssm-agent",
       "# Install CloudWatch Agent",
       "dnf install -y amazon-cloudwatch-agent",
-      "# EC2 Hibernation agent",
+      "# EC2 Hibernation agent + KASLR disable (ADR-010 — required for resume on AL2023)",
       "dnf install -y ec2-hibinit-agent",
+      "grubby --update-kernel=ALL --args=nokaslr",
       "# Cleanup",
       "dnf clean all && rm -rf /tmp/*"
     ]' \
