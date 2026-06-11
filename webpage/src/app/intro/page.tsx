@@ -15,8 +15,8 @@ export default function IntroPage() {
       )}
       tags={[
         { label: "v2", color: "cyan" },
-        { label: "ADR-004", color: "purple" },
-        { label: "ADR-014", color: "green" },
+        { label: "Multi-mode", color: "purple" },
+        { label: "Zero infra option", color: "green" },
       ]}
     >
       <H2 id="modes">{t("1. 두 가지 배포 프로파일", "1. Two deployment profiles")}</H2>
@@ -29,7 +29,7 @@ export default function IntroPage() {
         ]}
         rows={[
           {
-            mode: <strong className="text-white">EC2-per-user DevEnv (ADR-004)</strong>,
+            mode: <strong className="text-white">EC2-per-user DevEnv</strong>,
             how: t(
               "사용자별 전용 EC2 (ARM64) + 브라우저 code-server",
               "Dedicated EC2 (ARM64) + browser code-server"
@@ -38,10 +38,10 @@ export default function IntroPage() {
             gov: t("동일", "Same"),
           },
           {
-            mode: <strong className="text-white">Local Governance (ADR-014)</strong>,
+            mode: <strong className="text-white">Local Governance</strong>,
             how: t(
-              "사용자 PC에서 claude 직접 실행, /local 페이지에서 8h STS 자격증명 발급",
-              "Run claude on your PC, issue 8h STS credentials via /local"
+              "사용자 PC에서 claude 직접 실행, /local 페이지에서 STS 자격증명 발급",
+              "Run claude on your PC, issue STS credentials via /local"
             ),
             infra: t("0 (Bedrock 호출만 과금)", "0 (Bedrock invocations only)"),
             gov: t("동일", "Same"),
@@ -60,12 +60,12 @@ export default function IntroPage() {
         <li>
           <strong className="text-white">Bedrock Direct Mode:</strong>{" "}
           {t(
-            "per-user IAM Role(EC2) 또는 STS 자격증명(Local)으로 Bedrock 직접 호출 — LiteLLM 같은 proxy 없음",
-            "Direct Bedrock invocation via per-user IAM role (EC2) or STS (Local) — no LiteLLM-style proxy"
+            "per-user IAM Role(EC2) 또는 STS 자격증명(Local)으로 Bedrock 직접 호출 — proxy 없음",
+            "Direct Bedrock invocation via per-user IAM role (EC2) or STS (Local) — no proxy"
           )}
         </li>
         <li>
-          <strong className="text-white">{t("사용자별 IAM 사전 프로비저닝 (ADR-022)", "Per-user IAM pre-provisioning (ADR-022)")}:</strong>{" "}
+          <strong className="text-white">{t("사용자별 IAM 사전 프로비저닝", "Per-user IAM pre-provisioning")}:</strong>{" "}
           {t(
             "Cognito 사용자 가입 시 EventBridge로 IAM role + Cognito custom 속성 사전 생성, 첫 로그인 race condition 제거",
             "EventBridge pre-creates the IAM role and Cognito custom attrs on user creation — no first-login race"
@@ -83,14 +83,14 @@ export default function IntroPage() {
           ALB/NLB → Cognito → Security Groups (DLP 3-tier) → VPC Endpoints → DNS Firewall → IAM Permission Boundary
         </li>
         <li>
-          <strong className="text-white">{t("이중 거버넌스 (ADR-015)", "Dual governance (ADR-015)")}:</strong>{" "}
+          <strong className="text-white">{t("이중 거버넌스", "Dual governance")}:</strong>{" "}
           {t(
             "USD 예산(budget-check 5분 주기) + Normalized 토큰 한도(token-limit-enforcer, usage table Stream 소비)",
             "USD budget (budget-check 5-min cron) + Normalized token limit (token-limit-enforcer, usage table Stream consumer)"
           )}
         </li>
         <li>
-          <strong className="text-white">{t("서버리스 사용량 추적 (ADR-019)", "Serverless usage tracking (ADR-019)")}:</strong>{" "}
+          <strong className="text-white">{t("서버리스 사용량 추적", "Serverless usage tracking")}:</strong>{" "}
           Bedrock invocation logging → CloudWatch Logs → Subscription Filter →{" "}
           <Code>bedrock-usage-tracker</Code> Lambda → DynamoDB
         </li>
@@ -115,10 +115,10 @@ export default function IntroPage() {
           { model: <strong className="text-white">Claude Haiku 4.5</strong>, id: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
         ]}
       />
-      <Callout type="info" title={t("Wildcard IAM (ADR-021)", "Wildcard IAM (ADR-021)")}>
+      <Callout type="info" title={t("Wildcard IAM", "Wildcard IAM")}>
         {t(
-          "IAM은 ADR-021의 wildcard Claude family ARN으로 부여돼 신규 Claude 모델이 추가되면 IAM 변경 없이 즉시 사용 가능합니다.",
-          "IAM grants use the wildcard Claude family ARN (ADR-021), so newly released Claude models are usable without policy changes."
+          "IAM은 wildcard Claude family ARN으로 부여돼 신규 Claude 모델이 추가되면 IAM 변경 없이 즉시 사용 가능합니다.",
+          "IAM grants use the wildcard Claude family ARN, so newly released Claude models are usable without policy changes."
         )}
       </Callout>
 
@@ -132,12 +132,12 @@ export default function IntroPage() {
         rows={[
           { n: "01", stack: <strong className="text-white">Network</strong>, what: "VPC · Subnets · NAT · VPC Endpoints · DNS Firewall · Route 53" },
           { n: "02", stack: <strong className="text-white">Security</strong>, what: "Cognito · ACM · KMS · Secrets Manager · IAM Roles + Permission Boundary" },
-          { n: "03", stack: <strong className="text-white">Usage Tracking</strong>, what: t("Bedrock invocation logging + tracker / budget-check / ec2-idle-stop / audit / gateway-manager Lambdas (ADR-019)", "Bedrock invocation logging + tracker / budget-check / ec2-idle-stop / audit / gateway-manager Lambdas (ADR-019)") },
+          { n: "03", stack: <strong className="text-white">Usage Tracking</strong>, what: "Bedrock invocation logging + tracker / budget-check / ec2-idle-stop / audit / gateway-manager Lambdas" },
           { n: "04", stack: <strong className="text-white">ECS Dashboard infra</strong>, what: "NLB + Nginx Fargate + DynamoDB routing table" },
-          { n: "05", stack: <strong className="text-white">Dashboard</strong>, what: "Next.js standalone + Unified CloudFront + Lambda@Edge (session-validator + origin-router, ADR-013)" },
+          { n: "05", stack: <strong className="text-white">Dashboard</strong>, what: "Next.js standalone + Unified CloudFront + Lambda@Edge (session-validator + origin-router)" },
           { n: "06", stack: <strong className="text-white">WAF</strong>, what: "CLOUDFRONT-scope WebACL (us-east-1)" },
-          { n: "07", stack: <strong className="text-white">EC2 DevEnv</strong>, what: "Launch Template (ARM64) · DLP SGs (open/restricted/locked) · Hibernation (ADR-010)" },
-          { n: "08", stack: <strong className="text-white">Local Governance</strong>, what: "STS Issuer Lambda · cc-on-bedrock-limits · token-limit-enforcer · UserRoleProvisioner (ADR-014/022/024)" },
+          { n: "07", stack: <strong className="text-white">EC2 DevEnv</strong>, what: "Launch Template (ARM64) · DLP SGs (open/restricted/locked) · Hibernation" },
+          { n: "08", stack: <strong className="text-white">Local Governance</strong>, what: "STS Issuer Lambda · cc-on-bedrock-limits · token-limit-enforcer · UserRoleProvisioner" },
         ]}
       />
       <CodeBlock title={t("배포 명령", "Deploy command")} lang="bash">
