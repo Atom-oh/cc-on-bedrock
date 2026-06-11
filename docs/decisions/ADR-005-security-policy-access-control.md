@@ -30,14 +30,22 @@ EC2-per-user 전환(ADR-004) 이후, 각 사용자에게 독립 EC2 인스턴스
 
 | Layer | Open | Restricted | Locked |
 |-------|------|-----------|--------|
-| **Security Group** | all outbound | HTTPS + DNS only | VPC CIDR HTTPS only |
+| **Security Group** | all outbound | HTTPS(any) + DNS(VPC resolver만) | VPC CIDR HTTPS + DNS(VPC resolver만) |
 | **code-server** | 기본 | file upload/download 차단 | + extension 읽기 전용 |
-| **DNS Firewall** | 허용 | 위협 도메인 차단 | 화이트리스트만 허용 |
+| **DNS Firewall** | VPC 공통 위협 차단 | VPC 공통 위협 차단 + 관리 도메인 목록 | (동일 — per-tier 분리 불가, 아래 정정 참조) |
 | **Extension 제어** | 자유 설치 | 승인된 extension만 | 읽기 전용 (설치 불가) |
 
 - Cognito `custom:security_policy` 속성에 저장
 - 실행 중 인스턴스: `ec2:ModifyInstanceAttribute`로 SG 즉시 교체
 - 정지 인스턴스: 다음 Start 시 해당 SG로 launch
+
+**DNS Firewall 정정 (2026-06-11):** Route 53 Resolver DNS Firewall 은 **VPC 단위로만**
+연결되며 인스턴스/SG/tier 단위 스코프가 불가능하다. 따라서 원안의 Locked "화이트리스트만 허용"
+(default-deny + allowlist)은 현 단일-VPC 구조에서 달성 불가 — VPC 전역 default-deny 는 Open tier
+사용자까지 차단한다. 현 동작: AWS 관리형 위협 목록 4종(BLOCK) + admin 이 추가하는 도메인
+ALLOW/BLOCK 목록이 **VPC 전체에 공통 적용**된다. admin UI 의 tier 필드는 분류용 메타데이터일 뿐
+집행 스코프가 아니다. per-tier DNS 화이트리스트가 필요해지면 (a) locked 전용 VPC 분리 + 별도
+rule group, 또는 (b) 인스턴스 수준 resolver 제한(UserData) 을 별도 ADR 로 결정한다.
 
 ### 2. IAM 확장: 사전 정의 Policy Set Catalog
 

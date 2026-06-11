@@ -78,19 +78,21 @@ resource "aws_security_group" "restricted" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  # DNS ONLY via the VPC resolver — external DNS (e.g. 8.8.8.8) would bypass
+  # the Route 53 DNS Firewall threat blocks and enable DNS-tunnel exfiltration.
   egress {
-    description = "DNS TCP"
+    description = "DNS to VPC resolver (+2) only"
     from_port   = 53
     to_port     = 53
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["${cidrhost(var.vpc_cidr, 2)}/32"]
   }
   egress {
-    description = "DNS UDP"
+    description = "DNS UDP to VPC resolver (+2) only"
     from_port   = 53
     to_port     = 53
     protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["${cidrhost(var.vpc_cidr, 2)}/32"]
   }
 
   tags = { Name = "cc-devenv-sg-restricted" }
@@ -118,6 +120,25 @@ resource "aws_security_group" "locked" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr]
+  }
+
+  # DNS to the in-VPC Route 53 Resolver (VPC base + 2) ONLY — required for name
+  # resolution AND for DNS Firewall rules to see locked-tier queries. Scoped to
+  # the single resolver IP so a rogue in-VPC DNS server can't bypass the firewall.
+  egress {
+    description = "DNS to VPC resolver (+2) only"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = ["${cidrhost(var.vpc_cidr, 2)}/32"]
+  }
+
+  egress {
+    description = "DNS UDP to VPC resolver (+2) only"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["${cidrhost(var.vpc_cidr, 2)}/32"]
   }
 
   tags = { Name = "cc-devenv-sg-locked" }

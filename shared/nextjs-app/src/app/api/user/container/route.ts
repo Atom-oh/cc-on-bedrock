@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getCognitoUser } from "@/lib/aws-clients";
+import { getCognitoUser, getLiveSecurityPolicy } from "@/lib/aws-clients";
 import {
   startInstance,
   stopInstance,
@@ -146,7 +146,8 @@ export async function POST(req: NextRequest) {
         subdomain: user.subdomain,
         username: user.email,
         department,
-        securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+        // ADR-005: live Cognito value, not the (up to 8h stale) session attribute
+        securityPolicy: await getLiveSecurityPolicy(user.email, user.securityPolicy),
         resourceTier: tierToUse,
       });
       return NextResponse.json({ success: true, data: { taskArn: result.instanceId } });

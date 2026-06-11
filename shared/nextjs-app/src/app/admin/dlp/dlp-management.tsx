@@ -198,12 +198,16 @@ export default function DlpManagement() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">DLP Tier</label>
+              <label className="block text-xs text-gray-500 mb-1">DLP Tier (label only)</label>
               <select value={newTier} onChange={(e) => setNewTier(e.target.value as "restricted" | "locked")}
                 className="w-full bg-[#0d1117] border border-gray-700 rounded-lg p-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none">
                 <option value="restricted">Restricted</option>
                 <option value="locked">Locked</option>
               </select>
+              {/* ADR-005 정정: DNS Firewall은 VPC 단위 — tier별 스코프 불가 */}
+              <p className="text-[10px] text-amber-500/80 mt-1">
+                DNS rules apply VPC-wide (all tiers). Tier is a classification label, not an enforcement scope.
+              </p>
             </div>
           </div>
           <div>
@@ -233,7 +237,7 @@ export default function DlpManagement() {
       {lists.length === 0 && !showCreate ? (
         <div className="bg-[#161b22] rounded-xl border border-gray-800 p-12 text-center">
           <p className="text-gray-500 text-sm">No domain lists configured yet.</p>
-          <p className="text-gray-600 text-xs mt-1">Create an ALLOW list for the Restricted tier to whitelist trusted domains.</p>
+          <p className="text-gray-600 text-xs mt-1">Create ALLOW (exception) or DENY lists. Rules apply to the whole VPC on top of the managed threat blocks.</p>
         </div>
       ) : (
         <div className="space-y-4">
