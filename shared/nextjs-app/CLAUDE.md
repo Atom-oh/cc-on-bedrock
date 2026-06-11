@@ -94,7 +94,7 @@
 - `src/lib/auth.ts` - Cognito + NextAuth 설정 (JWT, 8h session, custom attributes, `.atomai.click` 쿠키 도메인)
 - `src/lib/aws-clients.ts` - Cognito 사용자 관리 + DynamoDB 라우팅 테이블
   - `listCognitoUsers()`, `createCognitoUser()`, `deleteCognitoUser()` 등
-  - `registerContainerRoute()` / `deregisterContainerRoute()` — Nginx 라우팅 등록
+  - `mirrorCustomRoutes()` (settings PUT의 version-guarded customRoutes 미러, ADR-027) / `deregisterContainerRoute()` (resetUserEnvironment) — 인스턴스 시작 시 라우팅 등록은 `ec2-clients.ts`의 `registerRoute()`
 - `src/lib/ec2-clients.ts` - EC2 인스턴스 관리 (start/stop, RunInstances, password sync, gateway policy)
   - **UserData boot script** — `startInstance` / `restoreFromSnapshot`에서 systemd unit `cc-cli-update.service`(oneshot, every boot)를 생성·enable해 Claude Code/Kiro CLI를 자동 업데이트. `User=coder`로 실행하되 `ExecStartPost`에 `+` prefix를 붙여 `/usr/local/bin` symlink 갱신만 root로 수행 (CWAgent, MCP config sync 포함)
 - `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 (EC2 CPU/Memory/Network/Disk)
