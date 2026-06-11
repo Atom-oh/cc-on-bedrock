@@ -55,7 +55,7 @@
 - `src/app/api/user/resource-review/route.ts` - AI 리소스 리뷰 (EBS 확장 전 사용량 분석)
 - `src/app/api/user/container-request/route.ts` - 인스턴스 생성 요청
 - `src/app/api/user/custom-routes/route.ts` - **포트 노출 CRUD** (GET/PUT, 본인 customRoutes, max 5, version CAS, routing-table 미러, ADR-027)
-- `src/app/api/local/credentials/route.ts` - STS Issuer Lambda 호출, 8h Bedrock 자격증명 반환 (Local Governance, ADR-014)
+- `src/app/api/local/credentials/route.ts` - STS Issuer Lambda 호출, 1h Bedrock 자격증명 반환 (role-chaining hard cap, CLI 자동 갱신; Local Governance, ADR-014)
 - `src/app/api/local/limits/route.ts` - 본인 사용자의 normalized token 한도/사용량/Deny 상태 조회 (Local Governance, ADR-014)
 
 ### Common

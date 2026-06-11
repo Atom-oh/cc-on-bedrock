@@ -313,7 +313,11 @@ http {{
 # frontend(3000)/API(8000) and any other ports now come from customRoutes (ADR-027).
 UPSTREAM_TEMPLATE = """    # Upstream for {subdomain} (code-server, built-in)
     upstream codeserver_{subdomain} {{
-        server {container_ip}:8080 max_fails=3 fail_timeout=5s;
+        # max_fails=0: never passively mark this single backend DOWN. During the
+        # ~30-60s code-server boot, transient 502s would otherwise take the whole
+        # upstream offline (fail_timeout window) and cascade 502s; instead each
+        # request retries and is intercepted into the @loading_codeserver page.
+        server {container_ip}:8080 max_fails=0;
         keepalive 32;
     }}
 """
@@ -370,12 +374,18 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         # ─── code-server internal paths (WebSocket, assets, extensions) ───
         location /_static/ {{
             proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
         location /healthz {{
             proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
         location /manifest.json {{
             proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
         # Match BOTH `/stable-<hash>/...` (asset paths) AND `/stable-<hash>?...`
         # (WebSocket reconnection endpoint — no trailing slash, query string only).
@@ -383,15 +393,23 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         # and silently fell back to frontend:3000 → "WebSocket close with status code 1006".
         location ~ ^/stable-[a-f0-9]+(/|$|\?) {{
             proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
         location ~ ^/vscode-remote-resource/ {{
             proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
         location ~ ^/out/ {{
             proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
         location ~ ^/webview/ {{
             proxy_pass http://codeserver_{subdomain};
+            proxy_intercept_errors on;
+            error_page 502 503 504 = @loading_codeserver;
         }}
 
         # ─── User custom port routes (ADR-027) — root + subpaths from customRoutes ───

@@ -4,7 +4,7 @@
 End-user CLI helpers and operational prompts. The most important artifact is `cc-bedrock-local.sh`, the **Local Governance Mode** user CLI (ADR-014).
 
 ## Key Files
-- `cc-bedrock-local.sh` — Local Governance Mode CLI wrapper. Fetches 8h STS credentials from the Dashboard (`/api/local/credentials`), writes `~/.aws/credentials [cc-bedrock]`, and exec's `claude` with `CLAUDE_CODE_USE_BEDROCK=1`. ADR-014.
+- `cc-bedrock-local.sh` — Local Governance Mode CLI wrapper. Fetches 1h STS credentials from the Dashboard (`/api/local/credentials`), writes `~/.aws/credentials [cc-bedrock]`, and exec's `claude` with `CLAUDE_CODE_USE_BEDROCK=1`. Re-fetches on each `run`/`claude` when cached TTL < 10min (launch-time only). ADR-014.
 - `prompts/` — Reserved for shared LLM prompt templates (currently empty)
 - `scripts/` — Reserved for additional shell helpers (currently empty)
 
@@ -20,7 +20,7 @@ AWS_REGION=ap-northeast-2
 EOF
 
 # Operations
-cc-bedrock-local refresh             # fetch fresh 8h STS credentials
+cc-bedrock-local refresh             # fetch fresh 1h STS credentials
 cc-bedrock-local status              # remaining TTL + Deny/limit state
 cc-bedrock-local run -- claude       # auto-refresh + exec claude
 cc-bedrock-local config              # print active config
