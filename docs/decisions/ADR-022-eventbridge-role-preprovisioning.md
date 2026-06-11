@@ -9,6 +9,7 @@ verification_required: true
 **Status:** Accepted
 **Date:** 2026-05-14 (v1) · revised 2026-05-15 (v2 — expanded scope)
 **Supersedes:** part of [ADR-020 runtime IAM policy upsert](ADR-020-runtime-iam-policy-upsert.md) (lazy create at first login)
+**Extended by:** [ADR-028 Cognito trigger fallback provisioning](ADR-028-cognito-trigger-fallback-provisioning.md) — federated JIT users emit no `AdminCreateUser`/`SignUp` CloudTrail event, so the EventBridge path never fires for them
 
 ## Context
 
