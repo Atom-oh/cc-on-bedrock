@@ -15,7 +15,9 @@ Behavior:
      - Tags: username/department/project/mode=local (ADR-011 cost allocation)
   3. AssumeRole with DurationSeconds=3600 (1h) — this Lambda assumes another role
      (role-chaining), which AWS hard-caps at 1h, so the ADR-014 8h intent is not
-     attainable; the CLI helper auto-refreshes when remaining TTL < 10min.
+     attainable; the CLI helper re-fetches on its next run/launch when the
+     cached TTL is < 10min (launch-time only — no in-session background refresh
+     yet, so a single continuous session > 1h can expire mid-work).
      MaxSessionDuration on role = 1h to match.
   4. Return credentials + current limit_status (from cc-on-bedrock-limits DENY#active)
 
@@ -56,7 +58,8 @@ ACCOUNT_ID = os.environ["ACCOUNT_ID"]
 LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
 # AWS role chaining hard-caps assumed-role sessions at 1h whenever the caller is itself
 # an assumed-role. The STS Issuer Lambda's execution role IS an assumed role, so the
-# 3600s default holds; the CLI helper auto-refreshes when remaining TTL < 10min.
+# 3600s default holds; the CLI helper re-fetches on its next run/launch when the
+# cached TTL is < 10min (launch-time only, no in-session background refresh yet).
 SESSION_DURATION_SECONDS = int(os.environ.get("SESSION_DURATION_SECONDS", "3600"))
 INFERENCE_PROFILE_PREFIX = os.environ.get("INFERENCE_PROFILE_PREFIX", "cc-on-bedrock")
 

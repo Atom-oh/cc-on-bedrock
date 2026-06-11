@@ -157,7 +157,7 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 ### Negative
 - **차단 latency 1-3분** — Bedrock Invocation Logging 지연이 하한 (게이트웨이 없이 단축 불가). 한도 ~5% 안전 마진 운영 필요
 - **프롬프트 단위 DLP** — Bedrock Guardrails에 의존, 커스텀 inline 룰 한계
-- **자격증명 유출 노출창 1h** — Deny policy 또는 role disable로 즉시 차단은 가능하나 노출창 자체는 STS TTL(1h, role-chaining 한계)에 종속. CLI 자동 갱신으로 장기 사용은 유지됨
+- **자격증명 유출 노출창 1h** — Deny policy 또는 role disable로 즉시 차단은 가능하나 노출창 자체는 STS TTL(1h, role-chaining 한계)에 종속. CLI는 `run`/`claude` **재실행 시점에만** 갱신하므로(백그라운드 갱신 없음), 1h를 넘기는 **단일 연속 세션**은 토큰 만료로 중단될 수 있다 — 무중단 갱신은 `credential_process` 도입(`docs/superpowers/specs/2026-06-11-governed-cli-autorenew-multitool-design.md`) 전까지 미지원
 - **IAM role 인플레이션** — 사용자당 1개 role 누적. AWS 계정 IAM role 한도(기본 1,000)에 근접 시 페이즈드 cleanup 필요
 - **개발자 PC가 신뢰 경계** — 멀티유저 PC, 키체인 미사용 환경에서는 추가 통제(VPN, MFA on STS Issuer endpoint) 필요
 
