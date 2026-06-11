@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import {
   DynamoDBClient,
-  QueryCommand,
+  GetItemCommand,
   ScanCommand,
   PutItemCommand,
   UpdateItemCommand,
@@ -62,18 +62,18 @@ export async function GET(req: NextRequest) {
           currentTokens: 0,
         };
       } else {
+        // cc-department-budgets is keyed by `dept_id` (partition key) with a plain
+        // department id — NOT a `PK`/`DEPT#…` composite. A single-item lookup, so
+        // GetItem (matches admin/budgets writer + budget-check.py enforcement).
         const budgetResult = await dynamodb.send(
-          new QueryCommand({
+          new GetItemCommand({
             TableName: DEPT_BUDGETS_TABLE,
-            KeyConditionExpression: "PK = :pk",
-            ExpressionAttributeValues: {
-              ":pk": { S: `DEPT#${department}` },
-            },
+            Key: { dept_id: { S: department } },
           })
         );
 
-        if (budgetResult.Items && budgetResult.Items.length > 0) {
-          const item = unmarshall(budgetResult.Items[0]);
+        if (budgetResult.Item) {
+          const item = unmarshall(budgetResult.Item);
           budget = {
             department: item.department ?? department,
             monthlyBudget: item.monthlyBudget ?? 1000,

@@ -391,6 +391,9 @@ export class SecurityStack extends cdk.Stack {
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets`,
             // ADR-014: Local Governance limits table (CRUD on LIMIT/DENY items, read counters)
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-limits`,
+            // ADR-007: MCP dept config — applyGatewayPolicy() reads this during instance
+            // provisioning; the dashboard role (not just the task boundary) needs access.
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dept-mcp-config`,
           ],
         }),
         // ADR-014: admin reset endpoint detaches Deny policy from local-user roles
