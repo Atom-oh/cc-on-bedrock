@@ -120,22 +120,23 @@ resource "aws_security_group" "locked" {
     cidr_blocks = [var.vpc_cidr]
   }
 
-  # DNS to the in-VPC Route 53 Resolver only — required for name resolution
-  # AND for DNS Firewall rules to see locked-tier queries at all.
+  # DNS to the in-VPC Route 53 Resolver (VPC base + 2) ONLY — required for name
+  # resolution AND for DNS Firewall rules to see locked-tier queries. Scoped to
+  # the single resolver IP so a rogue in-VPC DNS server can't bypass the firewall.
   egress {
-    description = "DNS to VPC resolver"
+    description = "DNS to VPC resolver (+2) only"
     from_port   = 53
     to_port     = 53
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = ["${cidrhost(var.vpc_cidr, 2)}/32"]
   }
 
   egress {
-    description = "DNS UDP to VPC resolver"
+    description = "DNS UDP to VPC resolver (+2) only"
     from_port   = 53
     to_port     = 53
     protocol    = "udp"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = ["${cidrhost(var.vpc_cidr, 2)}/32"]
   }
 
   tags = { Name = "cc-devenv-sg-locked" }

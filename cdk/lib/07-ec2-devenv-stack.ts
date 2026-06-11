@@ -85,10 +85,14 @@ export class Ec2DevenvStack extends cdk.Stack {
       ec2.Port.tcp(443),
       'HTTPS to VPC endpoints only',
     );
-    // Locked: DNS to the in-VPC Route 53 Resolver (.2) only — required for name
-    // resolution AND for DNS Firewall rules to see locked-tier queries at all.
-    this.sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(53), 'DNS to VPC resolver');
-    this.sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.udp(53), 'DNS UDP to VPC resolver');
+    // Locked: DNS to the in-VPC Route 53 Resolver (VPC base + 2) ONLY — required
+    // for name resolution AND for DNS Firewall rules to see locked-tier queries.
+    // Scoped to the single resolver IP (not the whole VPC CIDR) so a rogue in-VPC
+    // DNS server can't be used to bypass the firewall or tunnel data out.
+    const resolverIp = config.vpcCidr.split('/')[0].split('.').slice(0, 3).join('.')
+      + '.' + (parseInt(config.vpcCidr.split('/')[0].split('.')[3], 10) + 2);
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.tcp(53), 'DNS to VPC resolver (+2) only');
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.udp(53), 'DNS UDP to VPC resolver (+2) only');
 
     // ─── IAM Role (Bedrock + SSM + CloudWatch) ───
     this.devenvRole = new iam.Role(this, 'DevenvInstanceRole', {
