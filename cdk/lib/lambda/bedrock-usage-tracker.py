@@ -40,7 +40,11 @@ ec2_client = boto3.client("ec2")
 cognito_client = boto3.client("cognito-idp")
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 
-# Bedrock pricing (ap-northeast-2, per 1M tokens)
+# Bedrock pricing (ap-northeast-2, per 1M tokens).
+# Exact per-version entries allow overriding a specific version if its price
+# diverges from its family. New versions that are NOT listed here fall back to
+# FAMILY_PRICING below (see get_model_pricing) — so e.g. claude-opus-4-8 is
+# priced as Opus, not silently as the Sonnet-level "default".
 PRICING = {
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-opus-4-6": {"input": 15.0, "output": 75.0},
@@ -48,6 +52,15 @@ PRICING = {
     "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
     "claude-opus-4-5": {"input": 15.0, "output": 75.0},
     "default": {"input": 3.0, "output": 15.0},
+}
+
+# Family-level fallback (version-agnostic). Mirrors the opus/sonnet/haiku family
+# matching in token-limit-enforcer.py so cost pricing stays correct for future
+# model versions (opus-4-8, sonnet-4-7, opus-5, …) without a code change.
+FAMILY_PRICING = {
+    "opus": {"input": 15.0, "output": 75.0},
+    "sonnet": {"input": 3.0, "output": 15.0},
+    "haiku": {"input": 0.80, "output": 4.0},
 }
 
 # Anthropic prompt-cache pricing multipliers (relative to base input rate).
@@ -60,6 +73,8 @@ CACHE_WRITE_MULTIPLIER = 1.25
 
 # Cache: identity_arn → (username, department)
 _task_cache: dict = {}
+# ADR-025: subdomain → Cognito sub (UUID) cache for the EC2 task-role path.
+_sub_cache: dict = {}
 # Cache: subdomain → department (from EC2 instance tags)
 _dept_cache: dict = {}
 
@@ -110,14 +125,46 @@ def _resolve_department(subdomain: str) -> str:
     return "default"
 
 
+def _resolve_sub_from_subdomain(subdomain: str) -> str | None:
+    """EC2 path: map a subdomain → Cognito sub (UUID). ADR-025 canonical key.
+
+    The EC2 task role name carries only the subdomain, but usage rows are keyed
+    by the immutable Cognito sub. Resolve via a ListUsers filter and cache.
+    Returns None on miss/transient failure (caller falls back to subdomain).
+    """
+    if not USER_POOL_ID or not _is_valid_username(subdomain):
+        return None
+    if subdomain in _sub_cache:
+        return _sub_cache[subdomain]
+    try:
+        resp = cognito_client.list_users(
+            UserPoolId=USER_POOL_ID,
+            Filter=f'custom:subdomain = "{subdomain}"',
+            Limit=1,
+        )
+        for user in resp.get("Users", []):
+            for attr in user.get("Attributes", []):
+                if attr["Name"] == "sub":
+                    _sub_cache[subdomain] = attr["Value"]
+                    return attr["Value"]
+    except Exception as e:
+        print(f"[sub-lookup] failed for subdomain={subdomain}: {e}")
+    return None
+
+
 def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
-    """Resolve username and department from IAM role ARN.
+    """Resolve (sub, subdomain, department) from an IAM role ARN.
+
+    ADR-025: the canonical user key is the Cognito sub (UUID) — immutable and
+    present for every user (EC2 and Local-only). `subdomain` is returned for
+    display + EC2 task-role construction downstream and may be None.
 
     Identity ARN format:
       arn:aws:sts::ACCOUNT:assumed-role/cc-on-bedrock-task-{subdomain}/SESSION
+      arn:aws:sts::ACCOUNT:assumed-role/cc-on-bedrock-local-user-{sub}/SESSION
     """
     if not identity_arn:
-        return None, None
+        return None, None, None
 
     cache_key = identity_arn
     if cache_key in _task_cache:
@@ -128,33 +175,38 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
 
     # EC2 per-user mode: role name is cc-on-bedrock-task-{subdomain}
     if role_name.startswith(TASK_ROLE_PREFIX):
-        candidate = role_name[len(TASK_ROLE_PREFIX):]
-        if not _is_valid_username(candidate):
-            print(f"Skipping non-user task role: {role_name} (subdomain={candidate!r})")
-            return None, None
-        dept = _resolve_department(candidate)
-        _task_cache[cache_key] = (candidate, dept)
-        print(f"Resolved {role_name} → {candidate}({dept})")
-        return candidate, dept
+        subdomain = role_name[len(TASK_ROLE_PREFIX):]
+        if not _is_valid_username(subdomain):
+            print(f"Skipping non-user task role: {role_name} (subdomain={subdomain!r})")
+            return None, None, None
+        dept = _resolve_department(subdomain)
+        sub = _resolve_sub_from_subdomain(subdomain)
+        if sub is None:
+            # Transient Cognito miss: fall back to subdomain as the key so we
+            # never DROP usage. Do NOT cache — retry resolution next event.
+            print(f"[ADR-025] sub unresolved for {role_name}; keying by subdomain temporarily")
+            return subdomain, subdomain, dept
+        _task_cache[cache_key] = (sub, subdomain, dept)
+        print(f"Resolved {role_name} → sub={sub} subdomain={subdomain}({dept})")
+        return sub, subdomain, dept
 
     # Local Governance Mode (ADR-014): role name is cc-on-bedrock-local-user-{cognito_sub}.
-    # Username (Cognito username == dashboard subdomain) and department are stored in role tags
-    # by sts-issuer.py. We key DynamoDB by username so /user page lookups (PK=USER#{subdomain}) hit.
+    # The sub IS the role-name suffix (canonical key, ADR-025). subdomain/department
+    # come from role tags set by sts-issuer.py (subdomain may be absent for Local-only users).
     if role_name.startswith(LOCAL_ROLE_PREFIX):
-        cognito_sub = role_name[len(LOCAL_ROLE_PREFIX):]
+        sub = role_name[len(LOCAL_ROLE_PREFIX):]
         (user_tag, dept_tag), cacheable = _resolve_user_dept_from_role_tags(role_name)
-        # Prefer username tag if it looks like a valid subdomain; otherwise fall back to cognito_sub.
-        user = user_tag if _is_valid_username(user_tag) else cognito_sub
-        dept = dept_tag or _resolve_department(user) or "default"
+        subdomain = user_tag if _is_valid_username(user_tag) else None
+        dept = dept_tag or (_resolve_department(subdomain) if subdomain else "default") or "default"
         # Only cache on confirmed results — transient IAM errors must NOT poison the warm container.
         if cacheable:
-            _task_cache[cache_key] = (user, dept)
-        print(f"Resolved {role_name} → {user}({dept}) [local{'' if cacheable else ', uncached'}]")
-        return user, dept
+            _task_cache[cache_key] = (sub, subdomain, dept)
+        print(f"Resolved {role_name} → sub={sub} subdomain={subdomain}({dept}) [local{'' if cacheable else ', uncached'}]")
+        return sub, subdomain, dept
 
     # Not a cc-on-bedrock per-user role — skip tracking
     print(f"Skipping non-user role: {role_name}")
-    return None, None
+    return None, None, None
 
 
 def _is_valid_username(candidate: str) -> bool:
@@ -188,11 +240,24 @@ def _resolve_user_dept_from_role_tags(role_name: str) -> tuple:
 
 
 def get_model_pricing(model_id: str) -> dict:
-    """Get pricing for a model ID."""
+    """Get pricing for a model ID.
+
+    Resolution order:
+      1) exact per-version match in PRICING (lets a version override its family),
+      2) family fallback (opus/sonnet/haiku) — version-agnostic, so new versions
+         like claude-opus-4-8 are priced as Opus instead of the generic default,
+      3) generic default (Sonnet-level) for anything unrecognized.
+    """
     model_lower = model_id.lower()
+    # 1) exact version match (skip the generic "default" sentinel)
     for key, price in PRICING.items():
-        if key in model_lower:
+        if key != "default" and key in model_lower:
             return price
+    # 2) family fallback
+    for family, price in FAMILY_PRICING.items():
+        if family in model_lower:
+            return price
+    # 3) generic default
     return PRICING["default"]
 
 
@@ -248,34 +313,47 @@ def estimate_cost(
     ) / 1_000_000
 
 
-def upsert_usage(username: str, department: str, date_str: str, model: str,
+def upsert_usage(sub: str, subdomain: str | None, department: str, date_str: str, model: str,
                  input_tokens: int, output_tokens: int, cost: float, latency_ms: int = 0,
                  cache_read_tokens: int = 0, cache_write_tokens: int = 0):
-    """Atomic upsert to DynamoDB."""
+    """Atomic upsert to DynamoDB.
+
+    ADR-025: rows are keyed by the Cognito sub (PK=USER#{sub}). `subdomain` is
+    stored as a display attribute (used by dashboards and by budget-check to
+    build the EC2 task-role name); it may be None for Local-only users.
+    """
     try:
+        set_clause = (
+            "SET department = :dept, model = :model, #dt = :date, updatedAt = :now"
+        )
+        names = {"#dt": "date"}
+        values = {
+            ":dept": department,
+            ":model": model,
+            ":date": date_str,
+            ":now": datetime.utcnow().isoformat(),
+            ":inp": input_tokens,
+            ":out": output_tokens,
+            ":total": input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
+            ":cr": cache_read_tokens,
+            ":cw": cache_write_tokens,
+            ":one": 1,
+            ":cost": Decimal(str(round(cost, 6))),
+            ":lat": latency_ms,
+        }
+        if subdomain:
+            set_clause += ", subdomain = :subdomain"
+            values[":subdomain"] = subdomain
         table.update_item(
-            Key={"PK": f"USER#{username}", "SK": f"{date_str}#{model}"},
+            Key={"PK": f"USER#{sub}", "SK": f"{date_str}#{model}"},
             UpdateExpression=(
-                "SET department = :dept, model = :model, #dt = :date, updatedAt = :now "
+                set_clause + " "
                 "ADD inputTokens :inp, outputTokens :out, totalTokens :total, "
                 "cacheReadTokens :cr, cacheWriteTokens :cw, "
                 "requests :one, estimatedCost :cost, latencySumMs :lat"
             ),
-            ExpressionAttributeNames={"#dt": "date"},
-            ExpressionAttributeValues={
-                ":dept": department,
-                ":model": model,
-                ":date": date_str,
-                ":now": datetime.utcnow().isoformat(),
-                ":inp": input_tokens,
-                ":out": output_tokens,
-                ":total": input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
-                ":cr": cache_read_tokens,
-                ":cw": cache_write_tokens,
-                ":one": 1,
-                ":cost": Decimal(str(round(cost, 6))),
-                ":lat": latency_ms,
-            },
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
         )
         # Department aggregate
         table.update_item(
@@ -302,7 +380,7 @@ def upsert_usage(username: str, department: str, date_str: str, model: str,
         cache_str = ""
         if cache_read_tokens or cache_write_tokens:
             cache_str = f" cacheR:{cache_read_tokens} cacheW:{cache_write_tokens}"
-        print(f"Tracked: {username}({department}) {model} in:{input_tokens} out:{output_tokens}{cache_str} ${cost:.6f}{lat_str}")
+        print(f"Tracked: sub={sub} subdomain={subdomain}({department}) {model} in:{input_tokens} out:{output_tokens}{cache_str} ${cost:.6f}{lat_str}")
     except Exception as e:
         print(f"DynamoDB error: {e}")
 
@@ -352,15 +430,15 @@ def process_invocation_log(log_event: dict):
     date_str = timestamp[:10]
 
     # Resolve user — skip if not a cc-on-bedrock role
-    username, department = resolve_user_from_arn(identity_arn, source_ip)
-    if username is None:
+    sub, subdomain, department = resolve_user_from_arn(identity_arn, source_ip)
+    if sub is None:
         return
 
     model = normalize_model(model_id)
     cost = estimate_cost(model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
 
     upsert_usage(
-        username, department, date_str, model,
+        sub, subdomain, department, date_str, model,
         input_tokens, output_tokens, cost, latency_ms,
         cache_read_tokens=cache_read_tokens,
         cache_write_tokens=cache_write_tokens,
@@ -389,14 +467,14 @@ def process_cloudtrail_event(detail: dict):
     date_str = event_time[:10]
     model_id = request_params.get("modelId", "unknown")
 
-    username, department = resolve_user_from_arn(identity_arn, source_ip)
-    if username is None:
+    sub, subdomain, department = resolve_user_from_arn(identity_arn, source_ip)
+    if sub is None:
         return
 
     model = normalize_model(model_id)
 
     # CloudTrail doesn't have token counts — track request count only
-    upsert_usage(username, department, date_str, model, 0, 0, 0)
+    upsert_usage(sub, subdomain, department, date_str, model, 0, 0, 0)
 
 
 def handler(event, context):

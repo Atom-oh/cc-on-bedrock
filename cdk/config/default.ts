@@ -65,7 +65,7 @@ export const defaultConfig: CcOnBedrockConfig = {
   devSubdomain: 'dev',
   dashboardSubdomain: 'cconbedrock-dashboard',
   cognitoDomainPrefix: 'cc-on-bedrock-ent',
-  opusModelId: 'global.anthropic.claude-opus-4-6-v1[1m]',
+  opusModelId: 'global.anthropic.claude-opus-4-8[1m]',
   sonnetModelId: 'global.anthropic.claude-sonnet-4-6[1m]',
   ecsHostInstanceType: 't4g.xlarge',  // Dashboard only in EC2 mode; use m7g.4xlarge for ECS mode
   ecsClusterName: 'cc-on-bedrock-devenv',

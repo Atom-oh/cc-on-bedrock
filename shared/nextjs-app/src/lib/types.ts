@@ -16,6 +16,7 @@ export interface UserSession {
 
 export interface CognitoUser {
   username: string;
+  sub?: string;          // immutable Cognito sub (UUID); authoritative user identity (ADR-025)
   email: string;
   enabled: boolean;
   status: string;

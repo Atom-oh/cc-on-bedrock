@@ -9,7 +9,7 @@ export default function SecurityPage() {
     <PageShell
       title={t("보안", "Security")}
       subtitle={t("기업 환경에서도 안전하게 사용할 수 있도록 설계된 7계층 보안 모델.", "A 7-layer security model designed for enterprise use.")}
-      tags={[{ label: "DLP 3-tier", color: "red" }, { label: "ADR-022", color: "purple" }, { label: "ADR-024", color: "purple" }]}
+      tags={[{ label: "DLP 3-tier", color: "red" }, { label: "Permission Boundary", color: "purple" }, { label: "Per-user IAM", color: "purple" }]}
     >
       <H2 id="layers">{t("1. 7계층 보안 모델", "1. 7-layer security model")}</H2>
       <Table
@@ -22,7 +22,7 @@ export default function SecurityPage() {
           { l: "L1", comp: "CloudFront", func: "TLS 1.2+ · AWS Shield" },
           { l: "L2", comp: "ALB / NLB", func: t("CloudFront Prefix List + X-Custom-Secret 헤더 강제", "CloudFront prefix list + X-Custom-Secret header") },
           { l: "L3", comp: "Cognito", func: t("이메일/비밀번호 + 그룹 기반 (admin/user/dept-manager)", "Email/password + group-based (admin/user/dept-manager)") },
-          { l: "L4", comp: "Security Groups", func: t("DLP 3단계: Open / Restricted / Locked (ADR-005)", "DLP 3 tiers: Open / Restricted / Locked (ADR-005)") },
+          { l: "L4", comp: "Security Groups", func: t("DLP 3단계: Open / Restricted / Locked", "DLP 3 tiers: Open / Restricted / Locked") },
           { l: "L5", comp: "VPC Endpoints", func: t("인터넷을 거치지 않는 내부 전송", "Private intra-AWS transit") },
           { l: "L6", comp: "DNS Firewall", func: t("AWS 위협 5개 리스트 + 사용자 정의 차단", "5 AWS Managed lists + custom blocks") },
           { l: "L7", comp: "IAM + DLP", func: t("Permission Boundary + Deny on overspend + 모델별 ACL", "Permission Boundary + Deny on overspend + per-model ACL") },
@@ -63,20 +63,20 @@ export default function SecurityPage() {
       />
       <P>{t("두 role 모두:", "Both roles share:")}</P>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
-        <li>{t("Bedrock: ADR-021의 wildcard Claude family ARN (신규 모델 즉시 사용)", "Bedrock: ADR-021 wildcard Claude family ARN (new models work immediately)")}</li>
+        <li>{t("Bedrock: wildcard Claude family ARN (신규 모델 즉시 사용)", "Bedrock: wildcard Claude family ARN (new models work immediately)")}</li>
         <li>{t("S3 / DynamoDB: 본인 데이터 경로만", "S3 / DynamoDB: own data paths only")}</li>
         <li>{t("CloudWatch: 로그 쓰기만", "CloudWatch: write-only")}</li>
         <li>Permission Boundary: <Code>cc-on-bedrock-task-boundary</Code> {t("강제 → 권한 확장 방지", "enforces — no privilege escalation")}</li>
       </ul>
 
-      <Callout type="info" title={t("IAM 사전 프로비저닝 (ADR-022)", "IAM pre-provisioning (ADR-022)")}>
+      <Callout type="info" title={t("IAM 사전 프로비저닝", "IAM pre-provisioning")}>
         {t(
           "Cognito 사용자 가입 시 EventBridge 가 UserRoleProvisioner Lambda 를 트리거해 per-user role + Cognito custom attrs 사전 생성. 첫 로그인 시 IAM eventual consistency race 제거.",
           "EventBridge fires UserRoleProvisioner Lambda on Cognito user creation, pre-provisioning per-user role + custom attrs. Eliminates first-login IAM eventual-consistency race."
         )}
       </Callout>
 
-      <Callout type="warn" title={t("Cognito 삭제 → 자동 cleanup (ADR-024)", "Cognito deletion → auto cleanup (ADR-024)")}>
+      <Callout type="warn" title={t("Cognito 삭제 → 자동 cleanup", "Cognito deletion → auto cleanup")}>
         {t(
           "사용자 삭제 시 EventBridge 가 자동으로 IAM role + DDB entries + EC2 instance + Secrets 정리. Dashboard 는 IdP-safe degraded mode 로 유실 사용자 그래프를 보여줍니다.",
           "On user delete, EventBridge automatically cleans up IAM role + DDB entries + EC2 instance + Secrets. Dashboard renders an IdP-safe degraded view for orphaned data."

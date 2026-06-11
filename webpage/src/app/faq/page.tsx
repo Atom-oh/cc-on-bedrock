@@ -61,7 +61,7 @@ export default function FaqPage() {
         <li><strong className="text-white">user</strong> — {t("기본 — My Environment, AI Assistant, Analytics", "Default — My Environment, AI Assistant, Analytics")}</li>
       </ul>
 
-      <H2 id="usage">{t("사용량 추적 (ADR-019)", "Usage tracking (ADR-019)")}</H2>
+      <H2 id="usage">{t("사용량 추적", "Usage tracking")}</H2>
       <CodeBlock>
 {`EC2 instance (Instance Profile)
 또는 사용자 PC (Local Mode, STS)
@@ -105,14 +105,14 @@ export default function FaqPage() {
         )}
       </Callout>
 
-      <H2 id="iam">{t("IAM 격리 (ADR-022 / 024)", "IAM isolation (ADR-022 / 024)")}</H2>
+      <H2 id="iam">{t("IAM 격리", "IAM isolation")}</H2>
       <ul className="text-sm text-gray-400 space-y-1.5 list-disc pl-5 mb-4">
         <li><strong className="text-white">EC2:</strong> <Code>cc-on-bedrock-task-{"{subdomain}"}</Code> Instance Profile</li>
         <li><strong className="text-white">Local:</strong> <Code>cc-on-bedrock-local-user-{"{sub_short}"}</Code> STS AssumeRole 대상</li>
-        <li>{t("Bedrock: ADR-021 wildcard Claude family ARN — 신규 모델 출시 시 IAM 변경 없이 즉시 사용", "Bedrock: ADR-021 wildcard ARN — new models work without policy changes")}</li>
+        <li>{t("Bedrock: wildcard Claude family ARN — 신규 모델 출시 시 IAM 변경 없이 즉시 사용", "Bedrock: wildcard ARN — new models work without policy changes")}</li>
         <li>Permission Boundary <Code>cc-on-bedrock-task-boundary</Code> {t("강제", "enforced")}</li>
-        <li>{t("Cognito 사용자 가입 → EventBridge가 사전 프로비저닝 (ADR-022)", "Cognito user creation → EventBridge pre-provisions (ADR-022)")}</li>
-        <li>{t("사용자 삭제 → EventBridge가 자동 정리 (ADR-024)", "User deletion → EventBridge auto-cleans (ADR-024)")}</li>
+        <li>{t("Cognito 사용자 가입 → EventBridge가 사전 프로비저닝", "Cognito user creation → EventBridge pre-provisions")}</li>
+        <li>{t("사용자 삭제 → EventBridge가 자동 정리", "User deletion → EventBridge auto-cleans")}</li>
       </ul>
 
       <H2 id="deploy">{t("배포 / 멀티 리전", "Deployment / multi-region")}</H2>

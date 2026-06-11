@@ -35,6 +35,7 @@ type UsageResponse = {
     resetAt: string | null;
   }>;
   denyActive: { reason?: string; resetAt?: string; period?: string } | null;
+  budgetDeny: { active: boolean; currentSpend: number; budget: number; releaseAt: string } | null;
 };
 
 function pct(used: number, max: number): number {
@@ -111,7 +112,7 @@ export default function LocalGovernancePage() {
         </p>
       </header>
 
-      {/* Deny banner */}
+      {/* Deny banner — token limit */}
       {usage?.denyActive && (
         <div className="rounded border border-red-300 bg-red-50 p-4 text-sm">
           <div className="font-semibold text-red-700">
@@ -120,6 +121,22 @@ export default function LocalGovernancePage() {
           <div className="text-red-700">{usage.denyActive.reason}</div>
           <div className="text-red-700">
             Resets at {usage.denyActive.resetAt} (in {formatRemaining(usage.denyActive.resetAt)})
+          </div>
+        </div>
+      )}
+
+      {/* Deny banner — USD budget exceeded */}
+      {usage?.budgetDeny?.active && (
+        <div className="rounded border border-red-300 bg-red-50 p-4 text-sm">
+          <div className="font-semibold text-red-700">
+            Bedrock access is blocked — budget exceeded
+          </div>
+          <div className="text-red-700">
+            Spend ${usage.budgetDeny.currentSpend.toFixed(2)} / budget ${usage.budgetDeny.budget.toFixed(2)}
+          </div>
+          <div className="text-red-700">
+            Auto-releases at {usage.budgetDeny.releaseAt} (in {formatRemaining(usage.budgetDeny.releaseAt)}),
+            or within ~5 min once an admin raises your budget.
           </div>
         </div>
       )}
