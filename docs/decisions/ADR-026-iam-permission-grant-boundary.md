@@ -150,3 +150,14 @@ semantic:
 - T5 승인 시 양쪽 역할 부착(fail-loud, 보상 rollback) — `applyIamGrant`/`removeIamGrant`
 - T6 `신청가능 서비스 allowlist ⊆ boundary` synth-JSON CI 게이트
 - T7 승인 authz: admin OR dept-manager(저장된 부서) · T8 기존 부여분 reconcile + admin UI
+
+## Update (2026-06-11) — T8 신청 UI 완료 + 읽기 와일드카드 허용
+- **T8 신청 UI 완료**: `settings-tab.tsx` `IamRequestSection`을 프리셋 `POLICY_SETS` 객관식에서
+  **resource-specific 커스텀 문장 폼**(service 드롭다운→actions→ARN, statement 반복)으로 교체.
+  제출 = `{ type:iam_extension, statements:[{Action[],Resource[]}] }`. 클라이언트가
+  `validateIamRequest`를 재사용해 사전 검증(단일 출처), 서버가 cross-account 포함 최종 검증(fail-closed).
+  `policySets` API 분기는 backward-compat로 유지하되 UI는 미사용.
+- **읽기 와일드카드 허용**: `validateIamRequest`가 읽기 전용 와일드카드 액션
+  (`Get*`/`List*`/`Describe*`/`BatchGet*`/`Query*`/`Scan*`, 단일 후행 `*`)을 허용.
+  service allowlist + dangerous-action denylist는 여전히 통과해야 하며, `*`·`s3:*`·쓰기/임베디드
+  와일드카드(`Put*`/`Delete*`/`Get*Policy*`)·교차계정은 계속 거부. 읽기 전용 statement는 `Resource:*` 허용.

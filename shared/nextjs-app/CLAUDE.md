@@ -74,7 +74,7 @@
 - `environment-tab.tsx` - 환경 정보 탭 (프로비저닝, 상태, 멀티URL [IDE/WEB/API], 메트릭, 사용량)
 - `provisioning-progress.tsx` - SSE 6단계 프로비저닝 프로그레스 (Cancel, ARIA)
 - `storage-tab.tsx` - 스토리지 탭 (디스크 게이지, EBS 확장 신청, Keep-Alive)
-- `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보, **포트 노출 CRUD** ADR-027)
+- `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보, **포트 노출 CRUD** ADR-027, **IAM 권한신청 = resource-specific 커스텀 문장 폼** ADR-026 T8)
 - `first-launch-guide.tsx` - 첫 실행 가이드 (환경 설정 안내)
 - `welcome-onboarding.tsx` - 온보딩 워크플로우
 
@@ -101,7 +101,7 @@
 - `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용)
 - `src/lib/slack-client.ts` - Slack API 클라이언트 (알림, 명령 처리)
 - `src/lib/validation.ts` - 입력 검증 유틸리티
-- `src/lib/iam-request-validation.ts` - **ADR-026** IAM 권한 신청 검증 (Resource:*·와일드카드·위험액션·교차계정 거부) + `buildIamExtensionRequest` + DEFAULT_SERVICE_ALLOWLIST/WILDCARD_OK_ACTIONS
+- `src/lib/iam-request-validation.ts` - **ADR-026** IAM 권한 신청 검증 (Resource:*·쓰기/임베디드 와일드카드·위험액션·교차계정 거부; **읽기 와일드카드 Get*/List*/Describe*/BatchGet*/Query*/Scan* 허용** T8) + `buildIamExtensionRequest` + DEFAULT_SERVICE_ALLOWLIST/WILDCARD_OK_ACTIONS. 클라이언트(settings-tab)·서버 공유 단일 검증 출처
 - `src/lib/iam-resource-annotator.ts` - **ADR-026** 신청 statements 의 advisory LLM 위험 주석 (Bedrock, 프롬프트 인젝션 격리)
 - `src/lib/approval-authz.ts` - **ADR-026** 승인 인가 (admin OR dept-manager, 저장 부서 기준, 순수·테스트가능)
 - `src/lib/utils.ts` - 공통 유틸리티 함수
