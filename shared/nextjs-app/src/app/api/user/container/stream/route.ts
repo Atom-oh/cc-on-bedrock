@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { startInstance, listInstances } from "@/lib/ec2-clients";
+import { getLiveSecurityPolicy } from "@/lib/aws-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
@@ -125,7 +126,8 @@ export async function POST(req: NextRequest) {
           subdomain,
           username: user.email,
           department,
-          securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+          // ADR-005: live Cognito value, not the (up to 8h stale) session attribute
+          securityPolicy: await getLiveSecurityPolicy(user.email, user.securityPolicy),
           resourceTier: tierToUse as "light" | "standard" | "power",
         });
         send(3, "task_definition", "completed", { message: "Instance configured" });

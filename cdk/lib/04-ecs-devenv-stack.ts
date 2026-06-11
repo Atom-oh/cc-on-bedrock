@@ -224,9 +224,12 @@ export class EcsDevenvStack extends cdk.Stack {
     });
     nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
 
-    // Allow Nginx → DevEnv containers on port 8080
+    // Allow Nginx → DevEnv: code-server (8080) + user custom ports (ADR-027).
+    // Source is NginxSg only (SG chaining, B-H3) — the only host that can reach these
+    // high ports is the shared Nginx proxy, which proxies only validated routes.
+    // Range 1024-65535 avoids per-route SG redeploys when users add/remove custom ports.
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
-      sg.addIngressRule(nginxSg, ec2.Port.tcp(8080), 'Allow from Nginx proxy');
+      sg.addIngressRule(nginxSg, ec2.Port.tcpRange(1024, 65535), 'Nginx → code-server + user custom ports');
     });
 
     // ─── Network Load Balancer (internet-facing for CloudFront access) ───
@@ -279,12 +282,24 @@ export class EcsDevenvStack extends cdk.Stack {
         DEV_DOMAIN: `${config.devSubdomain}.${config.domainName}`,
         REGION: cdk.Aws.REGION,
         CLOUDFRONT_SECRET: cloudfrontSecret.secretValue.unsafeUnwrap(),
+        // ADR-027: container_ip validation (B-M3) — must match the platform VPC or
+        // config-gen rejects every IP and drops all routes (C1 outage). Empty falls back
+        // to RFC1918-private-only in the Lambda, but we wire the real CIDR here.
+        VPC_CIDR: config.vpcCidr,
+        // ADR-027: routeStatus is written to cc-user-instances (NOT routing-table) so the
+        // user API surfaces it AND we avoid the routing-table Stream feedback loop (H4/H5).
+        INSTANCE_TABLE: 'cc-user-instances',
       },
     });
 
     // Grant Lambda permissions
     routingTable.grantReadData(nginxConfigLambda);
     userDataBucket.grantWrite(nginxConfigLambda);
+    // routeStatus write to cc-user-instances (Stack 07-owned; ARN pattern avoids cyclic ref)
+    nginxConfigLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:UpdateItem'],
+      resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-instances`],
+    }));
 
     // DynamoDB Stream -> Lambda trigger
     nginxConfigLambda.addEventSource(new lambdaEventSources.DynamoEventSource(routingTable, {

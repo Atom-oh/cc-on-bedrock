@@ -45,8 +45,11 @@ def _load_module():
 
 def _server_block() -> str:
     m = _load_module()
+    # custom_locations: ADR-027 user routes are rendered separately; empty here —
+    # this test targets the built-in code-server locations' boot-502 interception.
     return m.SERVER_TEMPLATE.format(
-        subdomain="user01", domain="dev.example.com", cloudfront_secret="sek"
+        subdomain="user01", domain="dev.example.com", cloudfront_secret="sek",
+        custom_locations="",
     )
 
 

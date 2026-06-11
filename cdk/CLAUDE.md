@@ -23,7 +23,7 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 8 stacks. `--context governa
 - `lib/lambda/sts-issuer.py` - Cognito ID 토큰 검증 → sts:AssumeRole 1h (role-chaining hard cap, CLI 자동 갱신) → 자격증명 반환 (Local Governance, ADR-014)
 - `lib/lambda/token-limit-enforcer.py` - usage 테이블 Stream consumer, normalized token 합산, 한도 초과 시 user role에 Deny policy 부착 (Local Governance, ADR-014)
 - `lib/lambda/limit-reset.py` - EventBridge cron(일/주/월), 카운터 리셋 + Deny policy detach (Local Governance, ADR-014)
-- `lib/lambda/nginx-config-gen.py` - Nginx 설정 생성 (DynamoDB Stream → S3). 유저당 3 upstream: code-server(8080), frontend(3000), API(8000)
+- `lib/lambda/nginx-config-gen.py` - Nginx 설정 생성 (DynamoDB Stream → S3). code-server(8080) built-in + 사용자 customRoutes(seed: root→3000, /api→8000) 검증·렌더 (ADR-027). 보간 전 subdomain·container_ip·path·port 전수 재검증(B-H1), 세그먼트 경계 location
 - `lib/lambda/ec2-idle-stop.py` - EC2 유휴 자동 중지 + Hibernate 지원 (ADR-010)
 - `lib/lambda/idle-check.py` - EC2 유휴 상태 확인 (SSM 기반 CPU/세션 체크)
 - `lib/lambda/gateway-manager.py` - MCP Gateway lifecycle 관리 (DDB Streams trigger, ADR-007)

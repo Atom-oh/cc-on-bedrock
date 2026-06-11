@@ -18,9 +18,12 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
 - ※ **Module-exists-but-not-wired** (modules present under `modules/`, root `main.tf` does not call them yet):
   - `usage-tracking/` — CDK Stack 03 (DynamoDB Streams, Lambda, EventBridge)
   - `local-governance/` — CDK Stack 08 (ADR-014: STS Issuer, token-limit-enforcer, limit-reset, `cc-on-bedrock-limits` table)
-  - `ec2-devenv/` — CDK Stack 07 (ADR-004 Launch Template + DLP SGs)
   - `waf/` — CDK Stack 06 (CLOUDFRONT-scope WebACL, us-east-1)
+- ※ **Wired (parity restored)**:
+  - `ec2-devenv/` — CDK Stack 07 (ADR-004 Launch Template + DLP SGs) — root 연결 완료 (2026-06-11). `task_permission_boundary_arn`은 tfvars로 전달 (CDK Stack 02 생성분)
 - ※ **Still missing (no module yet)**:
+  - Route 53 Resolver **DNS Firewall** (CDK 01-network-stack) — TF 미구현, DLP DNS 계층은 CDK 전용
+  - `modules/ecs-devenv/`의 중복 DLP SG 세트 — deprecated ECS 경로용, `SECURITY_POLICY="open"` 하드코딩. ec2-devenv 모듈이 정본; ECS 경로 제거 시 함께 정리
   - ADR-022 `UserRoleProvisioner` Lambda + EventBridge `cc-on-bedrock-cognito-user-created` rule + DLQ + Cognito triggers — defer to follow-up PR
   - ADR-016 CloudFront split — `modules/dashboard/`는 단일 CloudFront. CDK는 Dashboard CF (Stack 05) + DevEnv CF (Stack 04) 분리. `*.dev.<domain>` ACM 인증서는 us-east-1 별도 필요
   - `governanceOnly` 플래그 동등 변수 (CDK context → TF variable)

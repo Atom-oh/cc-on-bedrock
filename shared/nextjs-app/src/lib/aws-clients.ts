@@ -103,6 +103,32 @@ export async function getCognitoUser(username: string): Promise<CognitoUser> {
   });
 }
 
+/**
+ * ADR-005: resolve the user's security policy from Cognito at instance-start
+ * time instead of trusting the (up to 8h stale) NextAuth session attribute,
+ * so an admin-applied DLP change takes effect at the very next launch.
+ * On lookup failure the fallback is strictly fail-closed: a stale session
+ * "open" is NEVER honored (an admin may have just tightened the policy);
+ * only "locked" is kept (more restrictive than the default), otherwise
+ * "restricted". A Cognito hiccup therefore can't block instance start, but
+ * also can't grant more network egress than the restricted tier.
+ */
+export async function getLiveSecurityPolicy(
+  username: string,
+  sessionFallback?: string
+): Promise<"open" | "restricted" | "locked"> {
+  const valid = (v?: string): v is "open" | "restricted" | "locked" =>
+    v === "open" || v === "restricted" || v === "locked";
+  try {
+    const u = await getCognitoUser(username);
+    if (valid(u.securityPolicy)) return u.securityPolicy;
+  } catch (err) {
+    console.warn(`[getLiveSecurityPolicy] Cognito lookup failed for ${username}:`, err);
+  }
+  // fail-closed: keep "locked" (stricter), downgrade everything else to "restricted"
+  return sessionFallback === "locked" ? "locked" : "restricted";
+}
+
 export async function createCognitoUser(
   input: CreateUserInput
 ): Promise<CognitoUser> {
@@ -274,27 +300,11 @@ export async function resetUserEnvironment(
 
 const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
 
-export async function registerContainerRoute(
-  subdomain: string,
-  privateIp: string
-): Promise<void> {
-  const { DynamoDBClient, PutItemCommand } = await import("@aws-sdk/client-dynamodb");
-  const ddb = new DynamoDBClient({ region });
-
-  await ddb.send(new PutItemCommand({
-    TableName: ROUTING_TABLE,
-    Item: {
-      subdomain: { S: subdomain },
-      targetIp: { S: privateIp },
-      port: { N: "8080" },
-      status: { S: "active" },
-      updatedAt: { S: new Date().toISOString() },
-      domain: { S: `${subdomain}.${devSubdomain}.${domainName}` },
-    },
-  }));
-
-  console.log(`[Routing] Registered: ${subdomain} → ${privateIp}:8080`);
-}
+// NOTE: route registration on instance start lives in ec2-clients.ts `registerRoute`
+// (the live path — startInstance/restoreFromSnapshot/changeTier/switchOs). The former
+// duplicate `registerContainerRoute` here was dead code and was removed (ADR-027 review).
+// `mirrorCustomRoutes` (below) is the version-guarded customRoutes write used by the
+// settings API; `deregisterContainerRoute` is still used by resetUserEnvironment.
 
 export async function deregisterContainerRoute(
   subdomain: string
@@ -308,5 +318,38 @@ export async function deregisterContainerRoute(
   }));
 
   console.log(`[Routing] Deregistered: ${subdomain}`);
+}
+
+/**
+ * 인스턴스 active 일 때 routing-table 행의 customRoutes 만 patch.
+ * routing-table 행의 routesVersion 이 더 최신(부팅 register가 더 최신)이면 덮어쓰지 않음 — hot-update 유실 방지.
+ */
+export async function mirrorCustomRoutes(
+  subdomain: string,
+  routes: { path: string; port: number; label: string }[],
+  version: number
+): Promise<{ mirrored: boolean }> {
+  const { DynamoDBClient, UpdateItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: ROUTING_TABLE,
+      Key: { subdomain: { S: subdomain } },
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :v",
+      ConditionExpression:
+        "attribute_exists(subdomain) AND (attribute_not_exists(routesVersion) OR routesVersion <= :v)",
+      ExpressionAttributeValues: {
+        ":r": { S: JSON.stringify(routes) },
+        ":v": { N: String(version) },
+      },
+    }));
+    return { mirrored: true };
+  } catch (err) {
+    // 행 없음(인스턴스 미가동) 또는 더 최신 version → mirror skip (영속본은 user-instances)
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      return { mirrored: false };
+    }
+    throw err;
+  }
 }
 
