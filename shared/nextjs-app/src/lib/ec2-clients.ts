@@ -202,7 +202,8 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     }
   }
 
-  const sg = SG_MAP[input.securityPolicy] || SG_MAP.open;
+  // Fail-closed: unknown/missing policy lands on the restricted SG, never open.
+  const sg = SG_MAP[input.securityPolicy] || SG_MAP.restricted;
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
 
@@ -620,7 +621,7 @@ export async function restoreFromSnapshot(
   console.log(`[EC2] Registered AMI ${restoredAmiId} from snapshot ${snapshotId}`);
 
   // 3. Launch instance from restored AMI (bypass normal SSM AMI lookup)
-  const sg = SG_MAP[(record?.securityPolicy ?? "restricted")] || SG_MAP.open;
+  const sg = SG_MAP[(record?.securityPolicy ?? "restricted")] || SG_MAP.restricted;
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS["standard"];
   const instanceProfileName = await ensureUserInstanceProfile(subdomain, record?.username ?? "", record?.department ?? "default");
@@ -807,7 +808,7 @@ export async function listInstances(): Promise<InstanceInfo[]> {
       status: ec2Info.status === "stopped" && r.status === "hibernated" ? "hibernated" : ec2Info.status,
       privateIp: ec2Info.privateIp,
       instanceType: ec2Info.instanceType,
-      securityPolicy: r.securityPolicy ?? "open",
+      securityPolicy: r.securityPolicy ?? "restricted",
       containerOs: r.containerOs ?? "ubuntu",
       launchTime: r.createdAt,
     };

@@ -14,7 +14,8 @@ trap cleanup SIGTERM SIGINT
 echo "=== CC-on-Bedrock Devenv Container Starting ==="
 
 USER_HOME="/home/coder"
-SECURITY_POLICY="${SECURITY_POLICY:-open}"
+# Fail-closed: containers launched without an explicit policy run restricted.
+SECURITY_POLICY="${SECURITY_POLICY:-restricted}"
 SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 
 # --- Per-user directory isolation ---
