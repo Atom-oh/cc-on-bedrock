@@ -61,7 +61,7 @@ export default function DeploymentPage() {
         <li>IAM Permission Boundary <Code>cc-on-bedrock-task-boundary</Code></li>
       </ul>
 
-      <H3 id="s3">Step 3 — Usage Tracking (03) · ADR-019</H3>
+      <H3 id="s3">Step 3 — Usage Tracking (03)</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>{t("Bedrock invocation logging → CloudWatch Logs (textDataDeliveryEnabled: false, 비용 ~99% 절감)", "Bedrock invocation logging → CloudWatch Logs (text/image/embedding off, ~99% cost cut)")}</li>
         <li>{t("Subscription Filter → bedrock-usage-tracker Lambda (IAM role prefix 매칭)", "Subscription Filter → bedrock-usage-tracker Lambda (IAM role prefix match)")}</li>
@@ -76,7 +76,7 @@ export default function DeploymentPage() {
         <li>Lambda <Code>nginx-config-gen</Code> + S3 sync</li>
       </ul>
 
-      <H3 id="s5">Step 5 — Dashboard (05) · ADR-013/016/017</H3>
+      <H3 id="s5">Step 5 — Dashboard (05)</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>Next.js Standalone ECS Task (rolling deployment + circuit breaker)</li>
         <li>{t("통합 CloudFront — Dashboard + DevEnv 라우팅", "Unified CloudFront — routes Dashboard + DevEnv")}</li>
@@ -94,17 +94,17 @@ export default function DeploymentPage() {
         <li>Launch Template (ARM64 t4g.large, Ubuntu 24.04 또는 AL2023)</li>
         <li>{t("부팅 시 SSM Parameter Store에서 Cognito Client ID/Secret 로드", "Boot loads Cognito Client ID/Secret from SSM Parameter Store")}</li>
         <li>cloud-init이 code-server + Claude Code + Kiro CLI 설치/실행</li>
-        <li>DLP Security Groups (ADR-005) — open / restricted / locked</li>
-        <li>Hibernation (ADR-010, 60-day rotation 한도)</li>
+        <li>DLP Security Groups — open / restricted / locked</li>
+        <li>Hibernation (60-day rotation 한도)</li>
       </ul>
 
-      <H3 id="s8">Step 8 — Local Governance (08) · ADR-014</H3>
+      <H3 id="s8">Step 8 — Local Governance (08)</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>STS Issuer Lambda + Function URL (IAM auth)</li>
         <li>cc-on-bedrock-limits DynamoDB</li>
         <li>token-limit-enforcer Lambda (usage table Stream consumer)</li>
         <li>limit-reset Lambda + 3 EventBridge crons (daily/weekly/monthly KST)</li>
-        <li>UserRoleProvisioner Lambda + EventBridge <Code>cognito-user-created</Code> rule + DLQ (ADR-022)</li>
+        <li>UserRoleProvisioner Lambda + EventBridge <Code>cognito-user-created</Code> rule + DLQ</li>
         <li>SNS alert topic</li>
       </ul>
 
