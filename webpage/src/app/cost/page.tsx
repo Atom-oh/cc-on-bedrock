@@ -23,7 +23,7 @@ export default function CostPage() {
         rows={[
           { item: "EC2 t4g.large", price: "$0.0832 / hr", note: t("8h/day 기준 ~$20/월", "~$20/mo at 8h/day") },
           { item: "EBS gp3 root", price: "$0.08 / GB·월", note: t("40 GB 기본 → ~$3.2/월", "40 GB default → ~$3.2/mo") },
-          { item: "Hibernation EBS", price: t("동일 (RAM 덤프 저장 포함)", "Same (RAM dump included)"), note: "ADR-010" },
+          { item: "Hibernation EBS", price: t("동일 (RAM 덤프 저장 포함)", "Same (RAM dump included)"), note: t("Hibernation 활성 시", "When hibernation enabled") },
           { item: <strong className="text-white">Bedrock API</strong>, price: t("모델/토큰별 종량제", "Per-model/token"), note: t("아래 단가 참조", "See pricing below") },
         ]}
       />
@@ -59,11 +59,11 @@ export default function CostPage() {
           { model: "Claude Haiku 4.5", input: "$0.80", output: "$4.00" },
         ]}
       />
-      <Callout type="info" title={t("Normalized token 가중치 (ADR-015)", "Normalized token weights (ADR-015)")}>
+      <Callout type="info" title={t("Normalized token 가중치", "Normalized token weights")}>
         Haiku 1× · Sonnet ~3.5× · Opus ~15× — {t("다른 모델 간 가중치를 일관되게 적용해 한도 관리.", "consistent cross-model weighting for limit tracking.")}
       </Callout>
 
-      <H2 id="pipeline">{t("4. 사용량 추적 파이프라인 (ADR-019)", "4. Usage tracking pipeline (ADR-019)")}</H2>
+      <H2 id="pipeline">{t("4. 사용량 추적 파이프라인", "4. Usage tracking pipeline")}</H2>
       <CodeBlock>
 {`EC2 instance (Instance Profile credentials)
 또는 사용자 PC (Local Mode, STS credentials)
@@ -82,7 +82,7 @@ export default function CostPage() {
         )}
       </P>
 
-      <H2 id="budget">{t("5. 예산 / 한도 제어 (ADR-015)", "5. Budget / limit enforcement (ADR-015)")}</H2>
+      <H2 id="budget">{t("5. 예산 / 한도 제어", "5. Budget / limit enforcement")}</H2>
       <H3>{t("5.1 USD 예산", "5.1 USD budget")} <Code>budget-check</Code></H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>{t("5분 주기 Lambda", "5-min cron Lambda")}</li>
@@ -102,7 +102,7 @@ export default function CostPage() {
 
       <H2 id="tips">{t("6. 비용 절감 팁", "6. Cost-saving tips")}</H2>
       <ul className="text-sm text-gray-400 space-y-2 list-disc pl-5 mb-4">
-        <li>{t("Hibernation 활성화 (ADR-010): ~5초 resume → 사용자가 stop을 꺼리지 않음", "Enable Hibernation (ADR-010): ~5s resume so users actually stop")}</li>
+        <li>{t("Hibernation 활성화: ~5초 resume → 사용자가 stop을 꺼리지 않음", "Enable Hibernation: ~5s resume so users actually stop")}</li>
         <li>{t("ec2-idle-stop: CPU/Network 메트릭 기반 자동 stop. EBS는 유지", "ec2-idle-stop: auto-stop by CPU/Network metrics. EBS retained")}</li>
         <li>{t("EBS 적정 크기: 40 GB 시작 → user portal에서 확장 신청", "Right-size EBS: start 40 GB → request expand from user portal")}</li>
         <li>{t("Local Mode 활용: 본인 PC가 빠른 사용자는 Local로 → EC2 비용 0", "Use Local Mode: power-user PCs → zero EC2 cost")}</li>

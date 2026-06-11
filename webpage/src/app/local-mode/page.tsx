@@ -16,7 +16,7 @@ export default function LocalModePage() {
         "Run claude directly on your laptop while still enforcing company governance (budget limits, IAM permission boundary, usage tracking). No EC2 DevEnv instance is provisioned — Bedrock invocations only."
       )}
       tags={[
-        { label: "ADR-014", color: "cyan" },
+        { label: "Local Mode", color: "cyan" },
         { label: t("추천", "Recommended"), color: "green" },
         { label: t("비용 0", "Zero infra"), color: "orange" },
       ]}
@@ -196,7 +196,7 @@ cc-bedrock-local logout       # 토큰 캐시 삭제`}
         <img src={asset("/img/local-admin-tokens.png")} alt="/admin/tokens" width={1440} height={900} className="w-full h-auto" />
       </div>
 
-      <H3>{t("Normalized 토큰 가중치 (ADR-015)", "Normalized token weights (ADR-015)")}</H3>
+      <H3>{t("Normalized 토큰 가중치", "Normalized token weights")}</H3>
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
           { name: "Haiku 4.5", weight: "1×", color: "from-accent-green/30 to-accent-green/5", text: "text-accent-green" },
