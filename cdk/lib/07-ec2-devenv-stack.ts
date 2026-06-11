@@ -89,8 +89,11 @@ export class Ec2DevenvStack extends cdk.Stack {
     // for name resolution AND for DNS Firewall rules to see locked-tier queries.
     // Scoped to the single resolver IP (not the whole VPC CIDR) so a rogue in-VPC
     // DNS server can't be used to bypass the firewall or tunnel data out.
-    const resolverIp = config.vpcCidr.split('/')[0].split('.').slice(0, 3).join('.')
-      + '.' + (parseInt(config.vpcCidr.split('/')[0].split('.')[3], 10) + 2);
+    // 32-bit integer math (equivalent to terraform cidrhost(cidr, 2)) — octet
+    // string arithmetic would break on CIDRs whose 4th octet is 254/255.
+    const baseInt = config.vpcCidr.split('/')[0].split('.')
+      .reduce((acc, o) => acc * 256 + parseInt(o, 10), 0) + 2;
+    const resolverIp = [24, 16, 8, 0].map((s) => (baseInt >>> s) & 255).join('.');
     this.sgLocked.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.tcp(53), 'DNS to VPC resolver (+2) only');
     this.sgLocked.addEgressRule(ec2.Peer.ipv4(`${resolverIp}/32`), ec2.Port.udp(53), 'DNS UDP to VPC resolver (+2) only');
 

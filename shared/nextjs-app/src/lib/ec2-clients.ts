@@ -95,6 +95,36 @@ function dlpCodeServerUserData(policy: string): { configLines: string[]; postLin
   };
 }
 
+/**
+ * Re-apply the container-layer DLP (code-server config) on a RUNNING instance
+ * via SSM. Used on policy change and on every restart of an existing instance
+ * (UserData only runs on first boot). Best-effort: the SG is the hard guarantee.
+ */
+async function syncDlpCodeServerConfig(
+  instanceId: string,
+  policy: "open" | "restricted" | "locked",
+): Promise<void> {
+  const extDir = policy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
+  const dlpOn = policy === "restricted" || policy === "locked";
+  await ssmClient.send(new SendCommandCommand({
+    InstanceIds: [instanceId],
+    DocumentName: "AWS-RunShellScript",
+    Parameters: {
+      commands: [
+        `CFG=/home/coder/.config/code-server/config.yaml`,
+        `sed -i '/^disable-file-downloads:/d;/^disable-file-uploads:/d;/^extensions-dir:/d' "$CFG"`,
+        ...(dlpOn ? [
+          `printf 'disable-file-downloads: true\\ndisable-file-uploads: true\\n' >> "$CFG"`,
+          `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> "$CFG"; fi`,
+        ] : []),
+        `grep -q '^SECURITY_POLICY=' /etc/environment && sed -i 's/^SECURITY_POLICY=.*/SECURITY_POLICY=${policy}/' /etc/environment || echo "SECURITY_POLICY=${policy}" >> /etc/environment`,
+        `systemctl restart code-server 2>/dev/null || true`,
+      ],
+    },
+    TimeoutSeconds: 30,
+  }));
+}
+
 // Instance tier → EC2 instance type mapping
 const INSTANCE_TIERS: Record<string, { type: string; cpu: string; memory: string }> = {
   light:    { type: "t4g.medium",  cpu: "2 vCPU",  memory: "4 GiB" },
@@ -129,6 +159,11 @@ export interface InstanceInfo {
  * - If no instance: RunInstances from Launch Template
  */
 export async function startInstance(input: StartInstanceInput): Promise<InstanceInfo> {
+  // Fail-closed: unknown/missing policy lands on the restricted tier, never open.
+  // Computed up front so BOTH paths (restart of an existing stopped instance and
+  // fresh RunInstances) enforce the same policy.
+  const effectivePolicy = SG_MAP[input.securityPolicy] ? input.securityPolicy : "restricted";
+
   // Check DynamoDB for existing instance
   const existing = await getUserInstance(input.subdomain);
 
@@ -160,6 +195,24 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         }));
       }
 
+      // ADR-005: UserData only runs on first boot, so a policy change made while
+      // the instance was stopped would otherwise never be enforced. Re-apply the
+      // current SG before start (ENI groups are mutable on stopped instances)...
+      try {
+        const eniId = (await ec2Client.send(new DescribeInstancesCommand({
+          InstanceIds: [existing.instanceId],
+        }))).Reservations?.[0]?.Instances?.[0]?.NetworkInterfaces?.[0]?.NetworkInterfaceId;
+        if (eniId) {
+          await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
+            NetworkInterfaceId: eniId,
+            Groups: [SG_MAP[effectivePolicy]],
+          }));
+          console.log(`[EC2] Re-applied ${effectivePolicy} SG on restart for ${input.subdomain}`);
+        }
+      } catch (err) {
+        console.warn(`[EC2] SG re-apply on restart failed for ${input.subdomain}:`, err);
+      }
+
       console.log(`[EC2] Starting existing instance ${existing.instanceId} for ${input.subdomain}`);
       await ec2Client.send(new StartInstancesCommand({
         InstanceIds: [existing.instanceId],
@@ -170,6 +223,14 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
       // Sync code-server password from Secrets Manager (UserData only runs on first boot)
       await syncCodeserverPassword(existing.instanceId, input.subdomain);
+
+      // ...and the container-layer DLP config once it's running (best-effort)
+      try {
+        await syncDlpCodeServerConfig(existing.instanceId, effectivePolicy);
+        console.log(`[EC2] Re-applied ${effectivePolicy} code-server DLP on restart for ${input.subdomain}`);
+      } catch (err) {
+        console.warn(`[EC2] code-server DLP re-apply on restart failed for ${input.subdomain}:`, err);
+      }
 
       // Update Claude CLI + start CWAgent (fire-and-forget)
       postStartSetup(existing.instanceId);
@@ -183,7 +244,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         privateIp: info.privateIp,
       });
 
-      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: input.securityPolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
+      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: effectivePolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
     }
 
     if (desc && desc.status === "running") {
@@ -195,7 +256,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         status: "running",
         privateIp: desc.privateIp,
         instanceType: desc.instanceType,
-        securityPolicy: input.securityPolicy,
+        securityPolicy: effectivePolicy,
         containerOs: existing.containerOs ?? "ubuntu",
       };
     }
@@ -224,8 +285,6 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     }
   }
 
-  // Fail-closed: unknown/missing policy lands on the restricted SG, never open.
-  const effectivePolicy = SG_MAP[input.securityPolicy] ? input.securityPolicy : "restricted";
   const sg = SG_MAP[effectivePolicy];
   const dlp = dlpCodeServerUserData(effectivePolicy);
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
@@ -375,7 +434,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       instanceId,
       username: input.username,
       department: input.department,
-      securityPolicy: input.securityPolicy,
+      securityPolicy: effectivePolicy,
       containerOs: osType,
       instanceType: info.instanceType,
       privateIp: info.privateIp,
@@ -392,7 +451,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     status: "running",
     privateIp: info.privateIp,
     instanceType: info.instanceType,
-    securityPolicy: input.securityPolicy,
+    securityPolicy: effectivePolicy,
     containerOs: osType,
   };
 }
@@ -1023,25 +1082,7 @@ export async function changeSecurityPolicy(
     // running instance so a tier change takes effect without a relaunch.
     // Best-effort: SG swap above is the hard guarantee; config sync may lag.
     try {
-      const extDir = newPolicy === "locked" ? "/opt/extensions-readonly" : "/opt/extensions-approved";
-      const dlpOn = newPolicy === "restricted" || newPolicy === "locked";
-      await ssmClient.send(new SendCommandCommand({
-        InstanceIds: [record.instanceId],
-        DocumentName: "AWS-RunShellScript",
-        Parameters: {
-          commands: [
-            `CFG=/home/coder/.config/code-server/config.yaml`,
-            `sed -i '/^disable-file-downloads:/d;/^disable-file-uploads:/d;/^extensions-dir:/d' "$CFG"`,
-            ...(dlpOn ? [
-              `printf 'disable-file-downloads: true\\ndisable-file-uploads: true\\n' >> "$CFG"`,
-              `if [ -d ${extDir} ]; then echo "extensions-dir: ${extDir}" >> "$CFG"; fi`,
-            ] : []),
-            `grep -q '^SECURITY_POLICY=' /etc/environment && sed -i 's/^SECURITY_POLICY=.*/SECURITY_POLICY=${newPolicy}/' /etc/environment || echo "SECURITY_POLICY=${newPolicy}" >> /etc/environment`,
-            `systemctl restart code-server 2>/dev/null || true`,
-          ],
-        },
-        TimeoutSeconds: 30,
-      }));
+      await syncDlpCodeServerConfig(record.instanceId, newPolicy);
       console.log(`[EC2] code-server DLP config re-applied for ${subdomain} (${newPolicy})`);
     } catch (err) {
       console.warn(`[EC2] code-server DLP config sync failed for ${subdomain}:`, err);
