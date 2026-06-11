@@ -273,39 +273,11 @@ export async function resetUserEnvironment(
 
 const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
 
-export async function registerContainerRoute(
-  subdomain: string,
-  privateIp: string
-): Promise<void> {
-  const { DynamoDBClient, UpdateItemCommand } = await import("@aws-sdk/client-dynamodb");
-  const ddb = new DynamoDBClient({ region });
-
-  // 부팅 시 seed (미설정이면 1회). 이미 설정돼 있으면 기존값 사용.
-  const { seedCustomRoutesIfUnset, getCustomRoutes } = await import("@/lib/ec2-clients");
-  await seedCustomRoutesIfUnset(subdomain);
-  const { customRoutes, routesVersion } = await getCustomRoutes(subdomain);
-
-  // M7: UpdateItem(core fields)으로 등록 — 무조건 PutItem이면 부팅 register가
-  // 진행 중인 settings mirror(더 최신 routesVersion)를 덮어쓸 수 있음.
-  // customRoutes는 아래 version-guarded mirror로만 기록(stale 덮어쓰기 방지).
-  await ddb.send(new UpdateItemCommand({
-    TableName: ROUTING_TABLE,
-    Key: { subdomain: { S: subdomain } },
-    UpdateExpression: "SET targetIp = :ip, port = :p, #st = :s, updatedAt = :u, #dn = :d",
-    ExpressionAttributeNames: { "#st": "status", "#dn": "domain" },
-    ExpressionAttributeValues: {
-      ":ip": { S: privateIp },
-      ":p": { N: "8080" },
-      ":s": { S: "active" },
-      ":u": { S: new Date().toISOString() },
-      ":d": { S: `${subdomain}.${devSubdomain}.${domainName}` },
-    },
-  }));
-  // version-guarded customRoutes 기록 (newer mirror 있으면 skip)
-  await mirrorCustomRoutes(subdomain, customRoutes, routesVersion);
-
-  console.log(`[Routing] Registered: ${subdomain} → ${privateIp}:8080 (+${customRoutes.length} custom)`);
-}
+// NOTE: route registration on instance start lives in ec2-clients.ts `registerRoute`
+// (the live path — startInstance/restoreFromSnapshot/changeTier/switchOs). The former
+// duplicate `registerContainerRoute` here was dead code and was removed (ADR-027 review).
+// `mirrorCustomRoutes` (below) is the version-guarded customRoutes write used by the
+// settings API; `deregisterContainerRoute` is still used by resetUserEnvironment.
 
 export async function deregisterContainerRoute(
   subdomain: string

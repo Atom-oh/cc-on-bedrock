@@ -1117,17 +1117,38 @@ async function isHibernateCapable(instanceId: string): Promise<boolean> {
 }
 
 async function registerRoute(subdomain: string, privateIp: string): Promise<void> {
-  await ddbClient.send(new PutItemCommand({
+  // ADR-027: seed default routes on first boot; carry authoritative customRoutes onto the
+  // routing-table row so config-gen renders them. (This is the LIVE path — startInstance/
+  // restoreFromSnapshot/changeTier/switchOs all call here.)
+  await seedCustomRoutesIfUnset(subdomain);
+  const { customRoutes, routesVersion } = await getCustomRoutes(subdomain);
+
+  // M7: UpdateItem (not PutItem) so a concurrent settings mirror with a newer routesVersion
+  // isn't wiped on restart/resize. Core registration fields always set.
+  await ddbClient.send(new UpdateItemCommand({
     TableName: ROUTING_TABLE,
-    Item: marshall({
-      subdomain,
-      container_ip: privateIp,
-      port: 8080,
-      status: "active",
-      registered_at: new Date().toISOString(),
+    Key: marshall({ subdomain }),
+    UpdateExpression: "SET container_ip = :ip, port = :p, #st = :s, registered_at = :t",
+    ExpressionAttributeNames: { "#st": "status" },
+    ExpressionAttributeValues: marshall({
+      ":ip": privateIp, ":p": 8080, ":s": "active", ":t": new Date().toISOString(),
     }),
   }));
-  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080`);
+
+  // version-guarded customRoutes write (don't clobber a newer concurrent settings mirror)
+  try {
+    await ddbClient.send(new UpdateItemCommand({
+      TableName: ROUTING_TABLE,
+      Key: marshall({ subdomain }),
+      UpdateExpression: "SET customRoutes = :r, routesVersion = :v",
+      ConditionExpression: "attribute_not_exists(routesVersion) OR routesVersion <= :v",
+      ExpressionAttributeValues: marshall({ ":r": JSON.stringify(customRoutes), ":v": routesVersion }),
+    }));
+  } catch (err) {
+    if (!(err instanceof Error && err.name === "ConditionalCheckFailedException")) throw err;
+    // newer mirror exists → keep it
+  }
+  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080 (+${customRoutes.length} custom)`);
 }
 
 async function deregisterRoute(subdomain: string): Promise<void> {

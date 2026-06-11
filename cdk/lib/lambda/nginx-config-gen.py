@@ -121,12 +121,13 @@ def validate_routes(subdomain, routes):
             logger.warning("skip non-dict route entry: %r", r)
             continue
         path, port = r.get("path"), r.get("port")
+        spath = str(path)  # routeStatus.path is typed string in the API/UI — coerce poison input
         if not is_valid_route_path(path):
             logger.warning("skip route path=%r (invalid/reserved)", path)
-            status.append({"path": path, "state": "rejected", "reason": "invalid or reserved path"})
+            status.append({"path": spath, "state": "rejected", "reason": "invalid or reserved path"})
         elif not is_valid_route_port(port):
             logger.warning("skip route path=%r port=%r (invalid/reserved port)", path, port)
-            status.append({"path": path, "state": "rejected", "reason": "invalid or reserved port"})
+            status.append({"path": spath, "state": "rejected", "reason": "invalid or reserved port"})
         elif path in seen_paths or port in seen_ports:
             logger.warning("skip duplicate route path=%r port=%r", path, port)
             status.append({"path": path, "state": "rejected", "reason": "duplicate path or port"})
