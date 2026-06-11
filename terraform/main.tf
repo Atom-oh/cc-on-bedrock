@@ -62,3 +62,15 @@ module "dashboard" {
   cloudfront_secret_value             = module.security.cloudfront_secret_value
   instance_type                       = var.dashboard_instance_type
 }
+
+# ---- 07 EC2 Dev Environment (ADR-004 per-user EC2 + DLP SGs) ------------------
+module "ec2_devenv" {
+  source = "./modules/ec2-devenv"
+
+  vpc_id               = module.network.vpc_id
+  vpc_cidr             = module.network.vpc_cidr
+  kms_key_arn          = module.security.kms_key_arn
+  devenv_instance_type = var.devenv_instance_type
+  # task_permission_boundary_arn intentionally left default ("") — the boundary
+  # is created by CDK Stack 02; pass its ARN via tfvars when running TF-only.
+}

@@ -55,3 +55,24 @@ output "dashboard_cloudfront_domain" {
   description = "Dashboard CloudFront domain"
   value       = module.dashboard.cloudfront_domain
 }
+
+# EC2 DevEnv (ADR-004) — DLP security groups, consumed as SG_DEVENV_* env vars
+output "devenv_sg_open_id" {
+  description = "DLP open-tier security group"
+  value       = module.ec2_devenv.sg_open_id
+}
+
+output "devenv_sg_restricted_id" {
+  description = "DLP restricted-tier security group"
+  value       = module.ec2_devenv.sg_restricted_id
+}
+
+output "devenv_sg_locked_id" {
+  description = "DLP locked-tier security group"
+  value       = module.ec2_devenv.sg_locked_id
+}
+
+output "devenv_launch_template_id" {
+  description = "Per-user DevEnv launch template"
+  value       = module.ec2_devenv.launch_template_id
+}

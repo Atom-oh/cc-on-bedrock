@@ -85,3 +85,9 @@ variable "dashboard_instance_type" {
   type    = string
   default = "t4g.xlarge"
 }
+
+variable "devenv_instance_type" {
+  description = "Per-user DevEnv EC2 instance type (ADR-004)"
+  type        = string
+  default     = "t4g.large"
+}
