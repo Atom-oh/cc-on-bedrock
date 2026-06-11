@@ -30,7 +30,7 @@ EC2-per-user 전환(ADR-004) 이후, 각 사용자에게 독립 EC2 인스턴스
 
 | Layer | Open | Restricted | Locked |
 |-------|------|-----------|--------|
-| **Security Group** | all outbound | HTTPS + DNS only | VPC CIDR HTTPS + DNS(VPC resolver) only |
+| **Security Group** | all outbound | HTTPS(any) + DNS(VPC resolver만) | VPC CIDR HTTPS + DNS(VPC resolver만) |
 | **code-server** | 기본 | file upload/download 차단 | + extension 읽기 전용 |
 | **DNS Firewall** | VPC 공통 위협 차단 | VPC 공통 위협 차단 + 관리 도메인 목록 | (동일 — per-tier 분리 불가, 아래 정정 참조) |
 | **Extension 제어** | 자유 설치 | 승인된 extension만 | 읽기 전용 (설치 불가) |

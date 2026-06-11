@@ -163,6 +163,11 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Computed up front so BOTH paths (restart of an existing stopped instance and
   // fresh RunInstances) enforce the same policy.
   const effectivePolicy = SG_MAP[input.securityPolicy] ? input.securityPolicy : "restricted";
+  if (!SG_MAP[effectivePolicy]) {
+    // Misconfigured deployment (SG_DEVENV_* env missing) — fail loud, not with a
+    // cryptic RunInstances/ModifyNetworkInterface error downstream.
+    throw new Error(`No security group configured for policy "${effectivePolicy}" — check SG_DEVENV_* env vars`);
+  }
 
   // Check DynamoDB for existing instance
   const existing = await getUserInstance(input.subdomain);
@@ -199,12 +204,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // the instance was stopped would otherwise never be enforced. Re-apply the
       // current SG before start (ENI groups are mutable on stopped instances)...
       try {
-        const eniId = (await ec2Client.send(new DescribeInstancesCommand({
-          InstanceIds: [existing.instanceId],
-        }))).Reservations?.[0]?.Instances?.[0]?.NetworkInterfaces?.[0]?.NetworkInterfaceId;
-        if (eniId) {
+        if (desc.eniId) {
           await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
-            NetworkInterfaceId: eniId,
+            NetworkInterfaceId: desc.eniId,
             Groups: [SG_MAP[effectivePolicy]],
           }));
           console.log(`[EC2] Re-applied ${effectivePolicy} SG on restart for ${input.subdomain}`);
@@ -249,6 +251,19 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
     if (desc && desc.status === "running") {
       console.log(`[EC2] Instance ${existing.instanceId} already running for ${input.subdomain}`);
+      // Keep the SG in sync with the live policy so the returned securityPolicy
+      // is what's actually enforced (idempotent, non-disruptive — no restarts).
+      // Container-layer DLP resync is left to the changeSecurityPolicy path.
+      try {
+        if (desc.eniId) {
+          await ec2Client.send(new ModifyNetworkInterfaceAttributeCommand({
+            NetworkInterfaceId: desc.eniId,
+            Groups: [SG_MAP[effectivePolicy]],
+          }));
+        }
+      } catch (err) {
+        console.warn(`[EC2] SG sync on already-running failed for ${input.subdomain}:`, err);
+      }
       return {
         instanceId: existing.instanceId,
         subdomain: input.subdomain,
@@ -1274,7 +1289,7 @@ async function getUserInstance(subdomain: string): Promise<UserInstanceRecord | 
   }
 }
 
-async function describeInstance(instanceId: string): Promise<{ status: string; privateIp: string; instanceType: string } | null> {
+async function describeInstance(instanceId: string): Promise<{ status: string; privateIp: string; instanceType: string; eniId?: string } | null> {
   try {
     const result = await ec2Client.send(new DescribeInstancesCommand({
       InstanceIds: [instanceId],
@@ -1285,6 +1300,7 @@ async function describeInstance(instanceId: string): Promise<{ status: string; p
       status: inst.State?.Name ?? "unknown",
       privateIp: inst.PrivateIpAddress ?? "",
       instanceType: inst.InstanceType ?? "",
+      eniId: inst.NetworkInterfaces?.[0]?.NetworkInterfaceId,
     };
   } catch {
     return null;
