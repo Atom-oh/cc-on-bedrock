@@ -10,6 +10,7 @@ DynamoDB Schema:
   PK: USER#{username}  SK: {date}#{model}
   GSI: PK starts_with DEPT# for department queries
 """
+from __future__ import annotations
 import json
 import os
 import gzip
@@ -71,10 +72,10 @@ FAMILY_PRICING = {
 CACHE_READ_MULTIPLIER = 0.1
 CACHE_WRITE_MULTIPLIER = 1.25
 
-# Cache: identity_arn → (username, department)
+# Cache: identity_arn → (email, subdomain, department)
 _task_cache: dict = {}
-# ADR-025: subdomain → Cognito sub (UUID) cache for the EC2 task-role path.
-_sub_cache: dict = {}
+# ADR-029: subdomain → email (from EC2 instance tag / Cognito) for the EC2 task-role path.
+_email_cache: dict = {}
 # Cache: subdomain → department (from EC2 instance tags)
 _dept_cache: dict = {}
 
@@ -125,43 +126,72 @@ def _resolve_department(subdomain: str) -> str:
     return "default"
 
 
-def _resolve_sub_from_subdomain(subdomain: str) -> str | None:
-    """EC2 path: map a subdomain → Cognito sub (UUID). ADR-025 canonical key.
+def _resolve_email_from_subdomain(subdomain: str) -> str | None:
+    """EC2 path: map a subdomain → user email (ADR-029 canonical key).
 
-    The EC2 task role name carries only the subdomain, but usage rows are keyed
-    by the immutable Cognito sub. Resolve via a ListUsers filter and cache.
-    Returns None on miss/transient failure (caller falls back to subdomain).
+    The EC2 task role name carries only the subdomain. The canonical usage key
+    is the email, obtained from the instance tag `cc:user`/`username` (set by the
+    Dashboard on every per-user instance) or, as a fallback, the Cognito `email`
+    attribute (username == subdomain). Returns None on miss (caller skips the
+    record rather than writing a bad key).
     """
-    if not USER_POOL_ID or not _is_valid_username(subdomain):
+    if not _is_valid_username(subdomain):
         return None
-    if subdomain in _sub_cache:
-        return _sub_cache[subdomain]
+    if subdomain in _email_cache:
+        return _email_cache[subdomain]
+
+    # EC2 instance tags first (cc:user / username == email)
     try:
-        resp = cognito_client.list_users(
-            UserPoolId=USER_POOL_ID,
-            Filter=f'custom:subdomain = "{subdomain}"',
-            Limit=1,
+        resp = ec2_client.describe_instances(
+            Filters=[
+                {"Name": "tag:subdomain", "Values": [subdomain]},
+                {"Name": "tag:managed_by", "Values": ["cc-on-bedrock"]},
+            ],
+            MaxResults=5,
         )
-        for user in resp.get("Users", []):
-            for attr in user.get("Attributes", []):
-                if attr["Name"] == "sub":
-                    _sub_cache[subdomain] = attr["Value"]
-                    return attr["Value"]
+        for reservation in resp.get("Reservations", []):
+            for inst in reservation.get("Instances", []):
+                tags = {t["Key"]: t["Value"] for t in inst.get("Tags", [])}
+                email = tags.get("cc:user") or tags.get("username")
+                if email and "@" in email:
+                    email = email.strip().lower()
+                    _email_cache[subdomain] = email
+                    return email
     except Exception as e:
-        print(f"[sub-lookup] failed for subdomain={subdomain}: {e}")
+        print(f"EC2 email tag lookup failed for {subdomain}: {e}")
+
+    # Fallback: Cognito email attribute (username == subdomain)
+    if USER_POOL_ID:
+        try:
+            resp = cognito_client.list_users(
+                UserPoolId=USER_POOL_ID,
+                Filter=f'username = "{subdomain}"',
+                Limit=1,
+            )
+            for user in resp.get("Users", []):
+                attrs = {a["Name"]: a["Value"] for a in user.get("Attributes", [])}
+                email = attrs.get("email")
+                if email and "@" in email:
+                    email = email.strip().lower()
+                    _email_cache[subdomain] = email
+                    return email
+        except Exception as e:
+            print(f"Cognito email lookup failed for {subdomain}: {e}")
+
     return None
 
 
 def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
-    """Resolve (sub, subdomain, department) from an IAM role ARN.
+    """Resolve (email, subdomain, department) from an IAM role ARN.
 
-    ADR-025: the canonical user key is the Cognito sub (UUID) — immutable and
-    present for every user (EC2 and Local-only). `subdomain` is returned for
-    display + EC2 task-role construction downstream and may be None.
+    ADR-029 (B′): the canonical user key is the lowercased email. `subdomain` is
+    returned for display + IAM role-name construction downstream. Cognito sub is
+    not used. Returns (None, ...) when the email cannot be resolved so the caller
+    skips the record rather than writing a non-canonical key.
 
     Identity ARN format:
       arn:aws:sts::ACCOUNT:assumed-role/cc-on-bedrock-task-{subdomain}/SESSION
-      arn:aws:sts::ACCOUNT:assumed-role/cc-on-bedrock-local-user-{sub}/SESSION
+      arn:aws:sts::ACCOUNT:assumed-role/cc-on-bedrock-local-user-{subdomain}/SESSION
     """
     if not identity_arn:
         return None, None, None
@@ -180,29 +210,29 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
             print(f"Skipping non-user task role: {role_name} (subdomain={subdomain!r})")
             return None, None, None
         dept = _resolve_department(subdomain)
-        sub = _resolve_sub_from_subdomain(subdomain)
-        if sub is None:
-            # Transient Cognito miss: fall back to subdomain as the key so we
-            # never DROP usage. Do NOT cache — retry resolution next event.
-            print(f"[ADR-025] sub unresolved for {role_name}; keying by subdomain temporarily")
-            return subdomain, subdomain, dept
-        _task_cache[cache_key] = (sub, subdomain, dept)
-        print(f"Resolved {role_name} → sub={sub} subdomain={subdomain}({dept})")
-        return sub, subdomain, dept
+        email = _resolve_email_from_subdomain(subdomain)
+        if email is None:
+            # No email resolvable — skip rather than write a bad key (ADR-029).
+            print(f"[ADR-029] email unresolved for {role_name}; skipping record")
+            return None, subdomain, dept
+        _task_cache[cache_key] = (email, subdomain, dept)
+        print(f"Resolved {role_name} → email={email} subdomain={subdomain}({dept})")
+        return email, subdomain, dept
 
-    # Local Governance Mode (ADR-014): role name is cc-on-bedrock-local-user-{cognito_sub}.
-    # The sub IS the role-name suffix (canonical key, ADR-025). subdomain/department
-    # come from role tags set by sts-issuer.py (subdomain may be absent for Local-only users).
+    # Local Governance Mode (ADR-014): role name is cc-on-bedrock-local-user-{subdomain}.
+    # email/subdomain/department come from role tags set by sts-issuer.py.
     if role_name.startswith(LOCAL_ROLE_PREFIX):
-        sub = role_name[len(LOCAL_ROLE_PREFIX):]
-        (user_tag, dept_tag), cacheable = _resolve_user_dept_from_role_tags(role_name)
-        subdomain = user_tag if _is_valid_username(user_tag) else None
+        (email_tag, sub_tag, dept_tag), cacheable = _resolve_user_dept_from_role_tags(role_name)
+        email = email_tag.strip().lower() if email_tag and "@" in email_tag else None
+        subdomain = sub_tag if _is_valid_username(sub_tag) else None
         dept = dept_tag or (_resolve_department(subdomain) if subdomain else "default") or "default"
-        # Only cache on confirmed results — transient IAM errors must NOT poison the warm container.
+        if email is None:
+            print(f"[ADR-029] email unresolved for {role_name}; skipping record")
+            return None, subdomain, dept
         if cacheable:
-            _task_cache[cache_key] = (sub, subdomain, dept)
-        print(f"Resolved {role_name} → sub={sub} subdomain={subdomain}({dept}) [local{'' if cacheable else ', uncached'}]")
-        return sub, subdomain, dept
+            _task_cache[cache_key] = (email, subdomain, dept)
+        print(f"Resolved {role_name} → email={email} subdomain={subdomain}({dept}) [local{'' if cacheable else ', uncached'}]")
+        return email, subdomain, dept
 
     # Not a cc-on-bedrock per-user role — skip tracking
     print(f"Skipping non-user role: {role_name}")
@@ -217,26 +247,28 @@ def _is_valid_username(candidate: str) -> bool:
 
 
 def _resolve_user_dept_from_role_tags(role_name: str) -> tuple:
-    """Read username + department tags from a Local Governance IAM role (ADR-014).
-    Returns ((username, department), cacheable). cacheable=False on transient errors so the
-    caller skips caching and retries on the next event.
+    """Read email + subdomain + department tags from a Local Governance IAM role.
+    Returns ((email, subdomain, department), cacheable). cacheable=False on transient
+    errors so the caller skips caching and retries on the next event. (ADR-029: the
+    canonical key is email; `subdomain`/`username` tag drives the role name.)
     """
     try:
         resp = boto3.client("iam").get_role(RoleName=role_name)
         tags = {t["Key"]: t["Value"] for t in resp.get("Role", {}).get("Tags", [])}
-        return (tags.get("username", ""), tags.get("department", "")), True
+        subdomain = tags.get("subdomain") or tags.get("username", "")
+        return (tags.get("email", ""), subdomain, tags.get("department", "")), True
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code", "")
-        # NoSuchEntity is terminal — role truly doesn't exist, fall back to cognito_sub and cache.
+        # NoSuchEntity is terminal — role truly doesn't exist.
         if code == "NoSuchEntity":
             print(f"IAM role not found: {role_name}")
-            return ("", ""), True
+            return ("", "", ""), True
         # Throttling/AccessDenied/InternalFailure → transient; do NOT cache.
         print(f"IAM GetRole transient error for {role_name}: {code}")
-        return ("", ""), False
+        return ("", "", ""), False
     except Exception as e:
         print(f"IAM role tag lookup failed for {role_name}: {e}")
-        return ("", ""), False
+        return ("", "", ""), False
 
 
 def get_model_pricing(model_id: str) -> dict:
@@ -313,15 +345,16 @@ def estimate_cost(
     ) / 1_000_000
 
 
-def upsert_usage(sub: str, subdomain: str | None, department: str, date_str: str, model: str,
+def upsert_usage(email: str, subdomain: str | None, department: str, date_str: str, model: str,
                  input_tokens: int, output_tokens: int, cost: float, latency_ms: int = 0,
                  cache_read_tokens: int = 0, cache_write_tokens: int = 0):
     """Atomic upsert to DynamoDB.
 
-    ADR-025: rows are keyed by the Cognito sub (PK=USER#{sub}). `subdomain` is
-    stored as a display attribute (used by dashboards and by budget-check to
-    build the EC2 task-role name); it may be None for Local-only users.
+    ADR-029 (B′): rows are keyed by the lowercased email (PK=USER#{email}).
+    `subdomain` is stored as a row attribute — it drives the IAM role names
+    (`task-{subdomain}`, `local-user-{subdomain}`) used by the enforcer. No sub.
     """
+    email = (email or "").strip().lower()
     try:
         set_clause = (
             "SET department = :dept, model = :model, #dt = :date, updatedAt = :now"
@@ -345,7 +378,7 @@ def upsert_usage(sub: str, subdomain: str | None, department: str, date_str: str
             set_clause += ", subdomain = :subdomain"
             values[":subdomain"] = subdomain
         table.update_item(
-            Key={"PK": f"USER#{sub}", "SK": f"{date_str}#{model}"},
+            Key={"PK": f"USER#{email}", "SK": f"{date_str}#{model}"},
             UpdateExpression=(
                 set_clause + " "
                 "ADD inputTokens :inp, outputTokens :out, totalTokens :total, "
@@ -380,7 +413,7 @@ def upsert_usage(sub: str, subdomain: str | None, department: str, date_str: str
         cache_str = ""
         if cache_read_tokens or cache_write_tokens:
             cache_str = f" cacheR:{cache_read_tokens} cacheW:{cache_write_tokens}"
-        print(f"Tracked: sub={sub} subdomain={subdomain}({department}) {model} in:{input_tokens} out:{output_tokens}{cache_str} ${cost:.6f}{lat_str}")
+        print(f"Tracked: email={email} subdomain={subdomain}({department}) {model} in:{input_tokens} out:{output_tokens}{cache_str} ${cost:.6f}{lat_str}")
     except Exception as e:
         print(f"DynamoDB error: {e}")
 
@@ -429,16 +462,16 @@ def process_invocation_log(log_event: dict):
     timestamp = data.get("timestamp", datetime.utcnow().isoformat())
     date_str = timestamp[:10]
 
-    # Resolve user — skip if not a cc-on-bedrock role
-    sub, subdomain, department = resolve_user_from_arn(identity_arn, source_ip)
-    if sub is None:
+    # Resolve user — skip if not a cc-on-bedrock role or email unresolved
+    email, subdomain, department = resolve_user_from_arn(identity_arn, source_ip)
+    if email is None:
         return
 
     model = normalize_model(model_id)
     cost = estimate_cost(model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
 
     upsert_usage(
-        sub, subdomain, department, date_str, model,
+        email, subdomain, department, date_str, model,
         input_tokens, output_tokens, cost, latency_ms,
         cache_read_tokens=cache_read_tokens,
         cache_write_tokens=cache_write_tokens,
@@ -467,14 +500,14 @@ def process_cloudtrail_event(detail: dict):
     date_str = event_time[:10]
     model_id = request_params.get("modelId", "unknown")
 
-    sub, subdomain, department = resolve_user_from_arn(identity_arn, source_ip)
-    if sub is None:
+    email, subdomain, department = resolve_user_from_arn(identity_arn, source_ip)
+    if email is None:
         return
 
     model = normalize_model(model_id)
 
     # CloudTrail doesn't have token counts — track request count only
-    upsert_usage(sub, subdomain, department, date_str, model, 0, 0, 0)
+    upsert_usage(email, subdomain, department, date_str, model, 0, 0, 0)
 
 
 def handler(event, context):
