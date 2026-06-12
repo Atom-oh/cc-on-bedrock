@@ -81,3 +81,15 @@ IAM 롤 네이밍 불변. DEPT# 불변. 이메일 변경(불변 전제). dual-re
 - backfill: sub/subdomain→email re-key, 전 SK종류(LIMIT/DENY/COUNTER/WARN), SK충돌 전카운터 ADD, 합계보존, 미매핑 보존.
 - consumers(local/limits, sts-issuer, admin/budgets) email+dual-read.
 - `tests/run-all.sh` green.
+
+---
+
+## 10. P2 Round-2 보강 (추가 CRITICAL/MAJOR)
+- **C-R2.1 COUNTER 누적 공백**: dual-read는 LIMIT/DENY 읽기뿐 아니라 **해당 period의 COUNTER를 sub-키 + email-키 둘 다 합산**해 한도와 비교(전환기). 안 그러면 email-키 카운터가 0부터 시작해 near-limit 사용자가 backfill 전까지 under-count → 우회. (enforcer/budget-check 공통)
+- **C-R2.2 상태 레코드 sub/subdomain 속성**: enforcer가 쓰는 `DENY#active`(및 COUNTER#) 레코드에 **`sub`,`subdomain` 속성 기록**. budget-check/limit-reset는 request context 없이 이 속성으로 IAM 롤명(`task-{subdomain}`/`local-user-{sub}`)을 구성·detach. dual-read로 sub-키 레코드를 만났을 땐 **PK suffix가 곧 식별자**(legacy 레코드는 속성 부재 가능 → PK에서 추출).
+- **M-R2.3 cc-user-budgets backfill**: 관리자 명시 USD 예산이 `cc-user-budgets`(user_id=sub)로 저장됨 → backfill에 **`USER#{sub}`→`USER#{email}` re-key 포함**. 누락 시 `budget-check._effective_user_budget(email)` 미스 → 명시 cap이 dept/global로 fallback.
+- **M-R2.4 budget-flag sub 필터**: `budget-check.set_cognito_budget_flag`이 `Filter='sub="{user}"'` — email PK면 매칭 0 → `custom:budget_exceeded` 미설정/미해제. 행 sub 속성으로 해석하거나 email 필터로 수정.
+- **M-R2.5 lowercase 전역**: 소문자 정규화를 키 빌더뿐 아니라 **모든 email 비교**에 적용 — `budget-check._is_valid_user`/`_load_valid_user_keys`, `api/admin/budgets` GET `validUserKeys`. 안 하면 혼합대소문자 email이 `USER#{email.lower()}` PK와 불일치 → row SKIP(spend 유실·deny 미해제).
+- **M-R2.6 legacy 스크립트**: `scripts/cleanup-stale-budget-users.py`, `scripts/reconcile-iam-grants-to-local.py`가 PK=sub 가정 → 점검·정렬.
+- **MINOR LIMIT# 충돌 정책**: backfill에서 **ADD는 COUNTER#/usage 수치 카운터에만**. `LIMIT#`/`DENY#active`는 합산 아님 — email-키(신규) 우선(prefer-new), 없으면 sub-키 이관.
+- **MINOR CloudWatch**: 트래커 메트릭 차원 sub→email 변경 시 historical series 단절 — `cloudwatch-client.ts`/문서에 명시.
