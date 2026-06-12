@@ -59,8 +59,8 @@ ACCOUNT_ID = os.environ["ACCOUNT_ID"]
 LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
 # AWS role chaining hard-caps assumed-role sessions at 1h whenever the caller is itself
 # an assumed-role. The STS Issuer Lambda's execution role IS an assumed role, so the
-# 3600s default holds; the CLI helper re-fetches on its next run/launch when the
-# cached TTL is < 10min (launch-time only, no in-session background refresh yet).
+# 3600s default holds; in-session continuity comes from the CLI's credential_process
+# hook, which the AWS SDK re-invokes before each Expiration (ADR-029).
 SESSION_DURATION_SECONDS = int(os.environ.get("SESSION_DURATION_SECONDS", "3600"))
 INFERENCE_PROFILE_PREFIX = os.environ.get("INFERENCE_PROFILE_PREFIX", "cc-on-bedrock")
 

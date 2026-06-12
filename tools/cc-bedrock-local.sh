@@ -172,10 +172,16 @@ sts_exchange() {  # sts_exchange <access_token>
 }
 
 # Absolute path of this script — written into ~/.aws/config as the
-# credential_process command, so it must survive cwd changes and aliases.
+# credential_process command, so it must survive cwd changes and bare-name
+# invocations from PATH ("cc-bedrock-local"): $0 is then not a path, and
+# readlink -f would silently resolve it against $PWD to a non-existent file.
 script_abspath() {
-  if readlink -f "$0" 2>/dev/null; then return; fi          # GNU
-  python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$0"  # macOS/BSD
+  local src="$0"
+  if [[ "${src}" != */* ]]; then
+    src="$(command -v "${src}" 2>/dev/null || echo "${src}")"
+  fi
+  if readlink -f "${src}" 2>/dev/null; then return; fi      # GNU
+  python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${src}"  # macOS/BSD
 }
 
 # ADR-029: install a credential_process profile instead of static keys.
@@ -187,9 +193,10 @@ script_abspath() {
 #   leftover static-key block from the pre-ADR-029 flow would silently pin the
 #   session to expiring keys.
 setup_aws_profile() {
-  local self
+  local self created=0
   self="$(script_abspath)"
   mkdir -p "$(dirname "${AWS_CONFIG_FILE}")"
+  [[ -f "${AWS_CONFIG_FILE}" ]] || created=1
   touch "${AWS_CONFIG_FILE}"
   python3 - "${AWS_CONFIG_FILE}" "${AWS_PROFILE_NAME}" "${self}" "${AWS_REGION}" <<'PY'
 import sys, re, os
@@ -210,7 +217,11 @@ if cleaned != content:
     open(path, "w").write(cleaned)
 PY
   fi
-  chmod 600 "${AWS_CONFIG_FILE}" 2>/dev/null || true
+  # Only tighten permissions on a file WE created — ~/.aws/config is shared
+  # with other profiles/tools and is not secret material (unlike credentials).
+  if (( created )); then
+    chmod 600 "${AWS_CONFIG_FILE}" 2>/dev/null || true
+  fi
 }
 
 save_state() { echo "$1" > "${STATE_FILE}"; chmod 600 "${STATE_FILE}"; }
@@ -317,13 +328,18 @@ do_credential_process() {
   #    (5 min, not 10 — the SDK already refreshes ahead of Expiration; the
   #    margin only guards clock skew between us, AWS, and the SDK.)
   if [[ -f "${STATE_FILE}" ]]; then
-    local exp exp_e now_e
+    local exp exp_e now_e cached_json
     exp="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credentials"]["expiration"])' "${STATE_FILE}" 2>/dev/null || true)"
     if [[ -n "${exp}" ]]; then
       exp_e="$(iso_to_epoch "${exp}")"; now_e="$(epoch_now)"
       if (( exp_e - now_e > 300 )); then
-        emit_credentials_json "${STATE_FILE}"
-        return 0
+        # Buffer before printing so a corrupt state.json falls through to a
+        # fresh re-issue instead of dying mid-emit (stdout must stay clean).
+        if cached_json="$(emit_credentials_json "${STATE_FILE}" 2>/dev/null)"; then
+          echo "${cached_json}"
+          return 0
+        fi
+        say "state.json unreadable — re-issuing credentials"
       fi
     fi
   fi
@@ -407,6 +423,9 @@ do_run() {
       do_login
     fi
   fi
+  # ADR-029: idempotent — make sure the credential_process profile exists even
+  # when the cached state was still fresh (migration from the static-key flow).
+  setup_aws_profile
 
   CLAUDE_CODE_USE_BEDROCK=1 \
     AWS_PROFILE="${AWS_PROFILE_NAME}" \
