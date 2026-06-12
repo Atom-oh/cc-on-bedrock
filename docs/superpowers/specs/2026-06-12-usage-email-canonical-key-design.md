@@ -13,7 +13,8 @@ ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_su
 ## 2. 결정 (B′ — sub 전면 제거)
 - **canonical 키 = email**(`USER#{email}`), **소문자 정규화**(`email.strip().lower()` — 키 빌더·backfill 전부). 조직상 이메일=고유·재직중 불변.
 - **모든 IAM 롤 네이밍 = subdomain**: `task-{subdomain}` **및 `local-user-{subdomain}`**(기존 `local-user-{sub}`에서 변경). subdomain = email local-part의 DNS/IAM-safe 정규화형(`derive_subdomain`)이라 곧 "email id"이며 task롤/DNS/nginx가 이미 사용 → 내부 불일치 해소.
-- **sub는 end-state에서 키도 행 속성도 아니다**(완전 제거). usage 행 end-state는 `email`·`subdomain`·`department`만. **전환기 한정**으로만 행에 `sub`를 보존(dual-name-write가 구 롤명 `local-user-{sub}`을 구성하는 데 필요) — cleanup PR(§5.6)에서 삭제. enforcer/budget-check/limit-reset는 행 `subdomain`에서 신규 롤명 구성; subdomain 없으면 fail-safe skip.
+- **sub는 end-state에서 식별자가 아니다**(완전 제거). usage 행은 `email`·`subdomain`·`department`만(항상 — sub 없음). enforcer/budget-check/limit-reset는 행 `subdomain`에서 신규 롤명 구성; subdomain 없으면 fail-safe skip.
+- **전환기 sub 출처 = 사용자별 `USER#{email}/LIMIT#` 레코드의 `sub` 속성**(usage 행 origin에 비의존 — P2-R3-R3 CRITICAL). dual-name-write가 구 롤명 `local-user-{sub}`을 구성할 때 행이 아니라 **이 안정 레코드**에서 sub를 읽는다. backfill(§4)이 기존 전 사용자의 LIMIT# 레코드에 sub를 채움(없으면 default LIMIT# 생성). cleanup PR(§5.6)에서 제거. **신규 사용자는 구 sub-롤이 없으므로 sub 불필요**(subdomain 단일 롤명).
 - **전체 email을 롤명에 안 씀**: 64자 한도(prefix 25 + 39자 초과 email 깨짐)·롤↔DNS 불일치·`@`/`.` 파싱 위험. 정규화 local-part(=subdomain)만.
 - **Local 롤 충돌가드 신설**: EC2 task 롤에 이미 있는 가드(같은 이름·다른 소유자 → raise)를 Local 롤 provisioning에도 적용(`john.doe@a`·`john_doe@b`→`john-doe` 공유 대신 거부).
 - 이메일·subdomain 출처: **인프라 태그**. EC2=인스턴스 태그 `cc:user`/`username`(=email, Dashboard가 전 경로 부착 — 확인됨) + `subdomain` 태그, Local=롤 `email`·`subdomain` 태그(sts-issuer 추가). 쓰기 시점 Cognito 조회 없음.
@@ -24,15 +25,15 @@ ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_su
 ### 3.1 트래커 `bedrock-usage-tracker.py`
 - PK=`USER#{email_lower}`. 깨진 `_resolve_sub_from_subdomain`(custom 필터)·subdomain fallback·`_sub_cache`·sub 관련 코드 **전면 제거**.
 - **EC2 경로**: describe-instances(이미 dept 조회에 사용)로 `cc:user`/`username` 태그=email + `subdomain` 태그 획득. email 없으면(예외) **레코드 skip+경고**(잘못된 키로 안 씀).
-- **Local 경로**: 롤 `email`·`subdomain` 태그 사용. **전환기 sub 출처**: 구 롤(`local-user-{sub}`)이면 suffix=sub, 신 롤이면 롤 `sub` 태그(T8이 신규 롤에 부착). (구 롤엔 T8이 email/subdomain 태그도 부착해 트래커가 구세션 사용자를 skip하지 않음 — P2-R3-R2.)
-- 행 속성: end-state `email`,`subdomain`,`department`. **전환기 한정** `sub`도 기록(dual-name-write용, cleanup PR에서 제거). **EC2 경로는 sub 부재 허용**(EC2 세션은 `task-{subdomain}` 롤 집행이라 Local 롤 dual-name 불필요); **Local 경로는 전환기 sub 필수**.
+- **Local 경로**: 롤 `email`·`subdomain` 태그 사용. (구 롤엔 T8이 email/subdomain 태그를 부착해 트래커가 구세션 사용자를 skip하지 않음 — P2-R3-R2.)
+- 행 속성: `email`,`subdomain`,`department` (**EC2·Local 공통, sub 없음**). 전환기 sub는 행이 아니라 §3.3대로 LIMIT# 레코드에서 해석(P2-R3-R3 — 하이브리드 사용자 EC2-행이 sub 없어 dual-name 못 만드는 우회 차단).
 
 ### 3.2 sts-issuer `sts-issuer.py`
 - Local 롤 AssumeRole Tags에 `email`·`subdomain` 추가. **AssumeRole 타깃 dual-name(P2-R3-R2 C2)**: `local-user-{subdomain}` **먼저 시도 → NoSuchEntity/AccessDenied면 `local-user-{sub}` fallback**(payload.sub 존재 시; 전환기 한정, cleanup PR에서 신롤 단일). 신롤은 §5 step2에서 이미 생성돼 있으므로 정상 경로는 subdomain. `_get_limit_status`도 §3.8.
 
 ### 3.3 token-limit-enforcer `token-limit-enforcer.py` (Local 집행)
 - 한도 조회 `USER#{email}/LIMIT#`. **전환기 dual-read**: email 미스 시 행 `subdomain`으로 구 `USER#{subdomain}/LIMIT#` 및(legacy) sub-키 fallback(backfill 완료 후 제거). 집행 공백 방지(CRITICAL #1).
-- **dual-name-write(P2-R3 C1)**: Deny 부착 대상 = `local-user-{행.subdomain}` + (전환기) `local-user-{행.sub}` **둘 다**(NoSuchEntity면 해당 이름 skip). `subdomain` 없으면 **전체 skip+경고**(fail-safe).
+- **dual-name-write(P2-R3 C1)**: Deny 부착 대상 = `local-user-{행.subdomain}` + (전환기) `local-user-{LIMIT#.sub}` **둘 다**(NoSuchEntity면 해당 이름 skip). **전환기 sub는 usage 행이 아니라 `USER#{email}/LIMIT#` 레코드에서 읽는다**(origin 비의존 — 하이브리드 사용자가 EC2-행으로 트리거돼도 구 Local 롤 Deny 가능, P2-R3-R3). `subdomain` 없으면 **전체 skip+경고**(fail-safe).
 - **owner-tag 검증(P2-R3 M4)**: 부착 전 롤의 `email` 태그가 행 email과 **일치할 때만** 부착 — subdomain 충돌로 타 사용자 롤에 Deny 거는 것 방지.
 - **DENY#active/COUNTER#/WARN#** 키도 email 기준 기록 + `subdomain`(+전환기 `sub`) 속성 동반(budget-check/limit-reset가 롤명 재구성에 사용).
 - 변경 사이트: `_get_user_limit`(123), PK 파싱(159), `_attach_deny`(222 — `role_names=[local-user-{subdomain}, local-user-{sub}]` 전환기), 카운터/DENY 쓰기 — **전부 열거·수정**.
@@ -65,8 +66,8 @@ ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_su
 ## 4. Backfill `scripts/migrate-usage-to-email.py` (+ IAM 롤 생성, blue-green)
 1. Cognito **ListUsers 전수**(페이지네이션) → `{sub→email_lower, subdomain→email_lower, sub→subdomain}`. **`subdomain→owners` 사전계산**: 동일 subdomain에 둘 이상 email이 매핑되면 **충돌**(P2-R3 M4) — 해당 사용자 **abort·로그·admin 알림**(공유 금지, 임의 병합 금지).
 2. **usage re-key**: `USER#{sub}`·`USER#{subdomain}` → `USER#{email}`를 **delete-old + put-new**(copy 아님 — 두 PK 동시존재로 dual-read 이중합산 방지, P2-R3 M5/M6). SK 충돌 시 **모든 수치 카운터 ADD**(input/output/total/requests/cost).
-3. **limits 테이블 전 SK 종류 re-key**(delete-old+put-new): `LIMIT#*`, `DENY#active`, `COUNTER#*`, `WARN#*` (CRITICAL #2) → `USER#{email}`. COUNTER/usage만 ADD; **LIMIT/DENY/WARN prefer-new(overwrite, ADD 금지)**. DENY#active는 활성 deny 보존 + `subdomain`(+전환기 `sub`) 속성 채움. cc-user-budgets도 re-key(M-R2.3).
-4. **IAM 롤 생성(승인됨, blue-green)**: 배포된 `local-user-{sub}` 열거 → `local-user-{subdomain}` **신규 생성 — 전체 구성 복제**(trust·inline·**managed policies·permissions boundary·tags·path·max-session-duration**, P2-R3 M-codex) + **active Deny 복제** + `email`/`subdomain`/**`sub`** 태그. **구롤에도 `email`/`subdomain` 태그 부착**(트래커 skip 방지). **구롤 삭제는 안 함**(§5 cleanup PR로 연기 — 두 이름 동시존재로 enforcement·AssumeRole 공백 0). 충돌 subdomain은 §4.1대로 skip.
+3. **limits 테이블 전 SK 종류 re-key**(delete-old+put-new): `LIMIT#*`, `DENY#active`, `COUNTER#*`, `WARN#*` (CRITICAL #2) → `USER#{email}`. COUNTER/usage만 ADD; **LIMIT/DENY/WARN prefer-new(overwrite, ADD 금지)**. **전 사용자 `USER#{email}/LIMIT#` 레코드에 전환기 `sub`·`subdomain` 속성 기록**(없으면 default LIMIT# 레코드 생성 — dual-name sub 출처, P2-R3-R3). DENY#active는 활성 deny 보존 + `subdomain`(+전환기 `sub`) 속성 채움. cc-user-budgets도 re-key(M-R2.3).
+4. **IAM 롤 생성(승인됨, blue-green)**: 배포된 `local-user-{sub}` 열거 → `local-user-{subdomain}` **신규 생성 — 전체 구성 복제**(trust·inline·**managed policies·permissions boundary·tags·path·max-session-duration**, P2-R3 M-codex) + **active Deny 복제** + `email`/`subdomain` 태그. **구롤에도 `email`/`subdomain` 태그 부착**(트래커 skip 방지). **구롤 삭제는 안 함**(§5 cleanup PR로 연기 — 두 이름 동시존재로 enforcement·AssumeRole 공백 0). 충돌 subdomain은 §4.1대로 skip.
 5. **migration_done 플래그**: §5 step5(신규 writer **검증 통과 후**) 세팅 → enforcer/budget-check가 COUNTER dual-sum 중단(step3 즉시 아님 — 구키 누락 방지, P2-R3-R2; over-count 방지, P2-R3 M5).
 6. **검증**: 전 카운터 합계 보존(±0). 미매핑(sub/subdomain→email 미발견) 키·롤 **로그·보존**(삭제 금지).
 7. dry-run 기본 + `--apply`. (구롤 삭제는 별도 cleanup 스크립트/PR, 신규 writer 검증 후.)
@@ -75,13 +76,13 @@ ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_su
 **원칙: 신규 롤을 "구롤 삭제 없이" 먼저 만들어 두 이름이 동시 존재하게 한 뒤 writer를 전환한다. 구롤 삭제는 신규 writer 검증 후 cleanup PR에서만.** (writer가 없는 롤에 Deny/AssumeRole 시도하는 창을 원천 제거 — P2-R3 C1/C2.)
 
 1. **provisioner 배포**(T4b): 신규 사용자 → `local-user-{subdomain}` + 충돌가드. (collision은 409로 surface, Lambda 크래시 금지.)
-2. **IAM 롤 생성 backfill**(T8-IAM, `--apply`): 배포된 각 `local-user-{sub}`마다 `local-user-{subdomain}`를 **전체 구성 복제**(trust·inline·managed·permissions boundary·tags·path·max-session) + **active Deny 복제** + **신롤에 `sub` 태그**(트래커 sub 출처) 후 **생성만**(구롤 삭제 안 함). **구 `local-user-{sub}` 롤에도 `email`·`subdomain` 태그 부착**(트래커가 구세션 사용자 skip 방지, P2-R3-R2). `subdomain→owner` 사전계산해 **충돌(동일 subdomain·다른 email) 발견 시 해당 사용자 abort·로그·admin 알림**(공유 금지). 이 시점 모든 사용자가 **두 이름 다 보유** → 어느 enforcer(구=sub명/신=subdomain명)든 부착 성공.
-3. **DynamoDB re-key backfill**(T8-DDB, `--apply`): usage/limits/budgets를 `USER#{email}`로 **delete-old + put-new**(copy 아님 — 두 PK 동시존재로 인한 dual-read 이중합산 방지, P2-R3 M5/M6). COUNTER/usage만 ADD, LIMIT/DENY/WARN prefer-new(overwrite).
+2. **IAM 롤 생성 backfill**(T8-IAM, `--apply`): 배포된 각 `local-user-{sub}`마다 `local-user-{subdomain}`를 **전체 구성 복제**(trust·inline·managed·permissions boundary·tags·path·max-session) + **active Deny 복제** 후 **생성만**(구롤 삭제 안 함). **구 `local-user-{sub}` 롤에도 `email`·`subdomain` 태그 부착**(트래커가 구세션 사용자 skip 방지, P2-R3-R2). `subdomain→owner` 사전계산해 **충돌(동일 subdomain·다른 email) 발견 시 해당 사용자 abort·로그·admin 알림**(공유 금지). 이 시점 모든 사용자가 **두 이름 다 보유** → 어느 enforcer(구=sub명/신=subdomain명)든 부착 성공.
+3. **DynamoDB re-key backfill**(T8-DDB, `--apply`): usage/limits/budgets를 `USER#{email}`로 **delete-old + put-new**(copy 아님 — 두 PK 동시존재로 인한 dual-read 이중합산 방지, P2-R3 M5/M6). COUNTER/usage만 ADD, LIMIT/DENY/WARN prefer-new(overwrite). **전 사용자 LIMIT# 레코드에 전환기 `sub`·`subdomain` 기록**(없으면 default 생성 — dual-name sub 출처, P2-R3-R3).
 4. **신규 writer 배포**(T1·T3·T4·T7·sts-issuer): email-키 + `local-user-{subdomain}` 타깃 + **dual-name-write/assume**(구 `local-user-{sub}`도 부착/시도, 행 sub 존재 시). 신규 롤이 모두 존재하므로 정상 경로 안전.
 5. **검증**: 샘플 사용자 AssumeRole(신롤) + Deny 부착/detach 왕복 + 한도 카운터 합계 일치. **검증 통과 후 `migration_done` 플래그 세팅**(step3 아님 — 구 writer가 step3→4 창에 쓰는 구키 COUNTER를 신 enforcer가 누락하지 않도록, P2-R3-R2). 이후 COUNTER dual-sum 중단.
-6. **cleanup PR**(검증 후): 구 `local-user-{sub}` 롤 삭제 + 전환기 코드(dual-read·dual-name·sub lookup·행 sub 속성·COUNTER dual-sum) 제거.
+6. **cleanup PR**(검증 후): 구 `local-user-{sub}` 롤 삭제 + 전환기 코드·상태(dual-read·dual-name·LIMIT#/DENY# 전환기 `sub` 속성·COUNTER dual-sum) 제거.
 
-> **전환기 안전망**: (a) sts-issuer·enforcer·budget-check·limit-reset는 `{subdomain}` 롤 시도 → NoSuchEntity면 `{sub}` 롤 fallback(**dual-name on write/assume**, 구롤이 아직 존재하는 1–5단계 동안). dual-name 구 이름 구성을 위해 행에 **`sub`를 전환기-한정 속성으로 유지**(cleanup PR에서 제거). (b) COUNTER dual-sum은 **`migration_done` 플래그로 게이트**(플래그 set 후 즉시 중단 — 후속 PR 대기 금지, over-count 방지).
+> **전환기 안전망**: (a) sts-issuer·enforcer·budget-check·limit-reset는 `{subdomain}` 롤 시도 → NoSuchEntity면 `{sub}` 롤 fallback(**dual-name on write/assume**, 구롤이 아직 존재하는 1–6단계 동안). dual-name 구 이름 구성을 위한 전환기 `sub`는 **사용자별 `USER#{email}/LIMIT#`·`DENY#active` 레코드**에서 읽음(usage 행 origin 비의존 — P2-R3-R3; cleanup PR에서 제거). (b) COUNTER dual-sum은 **`migration_done` 플래그로 게이트**(step5 검증 후 set — over-count·구키 누락 방지).
 
 ## 6. 변경 파일
 tracker · sts-issuer · token-limit-enforcer · **budget-check** · limit-reset · **user-role-provisioner(롤명)** · admin/limits · **admin/budgets** · **api/local/limits** · api/usage · api/user/usage · usage-client.ts · cloudwatch-client.ts · `scripts/migrate-usage-to-email.py`(신규, 롤 재생성 포함) · ADR-029(신규)·ADR-025(superseded) · 테스트.
