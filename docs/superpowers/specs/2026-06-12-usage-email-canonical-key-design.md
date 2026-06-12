@@ -1,92 +1,83 @@
-# usage canonical key = email (ADR-025 supersede) — 설계 (Spec)
+# usage canonical key = email (ADR-025 supersede) — 설계 (Spec, P2-hardened)
 
-- **작성일**: 2026-06-12
+- **작성일**: 2026-06-12 · **개정**: P2 게이트 6 CRITICAL+MAJOR 반영
 - **상태**: Approved (brainstorming) → writing-plans 대기
-- **신규 ADR**: **ADR-029** (ADR-025 "canonical=Cognito sub" supersede). ※ 028은 cognito-trigger-fallback이 선점
+- **신규 ADR**: **ADR-029** (ADR-025 supersede)
 - **브랜치**: `feat/usage-email-key` (off origin/main `64fde66`)
-- **진단 근거**: 이번 세션 usage 매핑 진단 — `cc-on-bedrock-usage`에 `USER#{sub}`·`USER#{subdomain}` 혼재로 동일인 분할 + 한도 집행 undercount.
 
 ---
 
 ## 1. 문제 (진단 확정)
-ADR-025가 canonical 키를 Cognito sub(UUID)로 정했으나:
-1. **혼합 키 공존**: EC2 경로의 `_resolve_sub_from_subdomain`이 `Filter='custom:subdomain=...'`를 쓰는데 **Cognito ListUsers는 custom 속성 필터 미지원 → 항상 실패 → `USER#{subdomain}` fallback**. Local 경로만 `USER#{sub}`. 동일인이 `USER#atomoh`(724K) + `USER#{sub}`(159K)로 분할.
-2. **한도 집행 undercount(HIGH)**: `token-limit-enforcer`가 PK를 sub로 가정 → `USER#{subdomain}` 사용량은 존재하지 않는 한도에 조회 → 집행 누락(우회 가능).
-3. **가독성**: 대시보드가 UUID 노출.
+ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_subdomain`이 **Cognito 미지원 custom:subdomain 필터** → 항상 실패 → `USER#{subdomain}` fallback. Local만 `USER#{sub}`. 동일인 분할 + `token-limit-enforcer`가 PK=sub 가정 → `USER#{subdomain}` 사용량 집행 누락(우회). UUID 가독성 불량.
 
 ## 2. 결정
-- **canonical 키 = email** (`USER#{email}`). 조직 정책상 이메일=사용자 고유·재직 중 불변(퇴사까지). ADR-025 supersede.
-- **sub·subdomain은 키가 아니라 usage 행의 속성으로 보존** — enforcer가 Local 롤명(`cc-on-bedrock-local-user-{sub}`) 구성에 sub 필요. IAM 롤 네이밍은 변경하지 않음(sub 유지).
-- 이메일은 **양쪽 writer가 인프라 태그에서 직접 획득** → 쓰기 시점 Cognito 조회 불필요.
+- **canonical 키 = email**(`USER#{email}`), **소문자 정규화**(`email.strip().lower()` — 키 빌더·backfill 전부). 조직상 이메일=고유·재직중 불변.
+- **sub·subdomain은 usage 행 속성**으로 보존(enforcer/budget-check가 IAM 롤명 구성에 사용). **IAM 롤 네이밍 불변**(`task-{subdomain}`, `local-user-{sub}`).
+- 이메일 출처: **인프라 태그**. EC2=인스턴스 태그 `cc:user`/`username`(Dashboard가 전 경로에서 부착 — 확인됨), Local=롤 `email` 태그(sts-issuer 추가). 쓰기 시점 Cognito 조회 없음.
 
-## 3. 컴포넌트별 변경
+## 3. 컴포넌트 변경 (전 consumer 열거 — P2 보강)
 
-### 3.1 usage 트래커 `cdk/lib/lambda/bedrock-usage-tracker.py`
-- PK = `USER#{email}` (SK 불변: `{date}#{model}`).
-- **EC2 경로**: 깨진 `_resolve_sub_from_subdomain`(custom 필터) + subdomain fallback **제거**. 이메일은 EC2 인스턴스 태그 `username`(=email) 또는 `cc:user`에서 획득(트래커가 이미 describe-instances로 태그 읽음). sub/subdomain도 태그/조회로 함께 채워 행 속성에 기록.
-- **Local 경로**: 롤 태그의 `email` 사용(§3.2). sub는 롤명 suffix.
-- 행 속성: `email`(키), `sub`, `subdomain`, `department` 기록.
+### 3.1 트래커 `bedrock-usage-tracker.py`
+- PK=`USER#{email_lower}`. 깨진 `_resolve_sub_from_subdomain`(custom 필터)·subdomain fallback **제거**.
+- **EC2 경로**: describe-instances(이미 dept 조회에 사용)로 `cc:user`/`username` 태그=email 획득. subdomain=tag, sub=선택. email 없으면(예외) **레코드 skip+경고**(잘못된 키로 안 씀).
+- **Local 경로**: 롤 `email` 태그 사용, sub=롤 suffix, subdomain=태그.
+- 행 속성: `email`,`sub`,`subdomain`,`department`.
 
-### 3.2 sts-issuer `cdk/lib/lambda/sts-issuer.py`
-- Local 롤 AssumeRole 태그에 **`email` 추가**(payload에 이미 email 존재). 기존 username/department 옆에.
+### 3.2 sts-issuer `sts-issuer.py`
+- Local 롤 AssumeRole Tags에 `email` 추가(payload.email 존재). `_get_limit_status`도 §3.8.
 
-### 3.3 token-limit-enforcer `cdk/lib/lambda/token-limit-enforcer.py`
-- 한도 조회 키 `USER#{email}/LIMIT#{period}` (PK에서 email 추출).
-- Local 롤명은 **PK가 아니라 usage 행(NewImage)의 `sub` 속성**에서 구성 → email→sub Cognito 조회 불필요. NewImage에 `sub` 없으면(구 데이터) skip + 경고.
-- DENY#active / 카운터 키도 email 기준.
+### 3.3 token-limit-enforcer `token-limit-enforcer.py` (Local 집행)
+- 한도 조회 `USER#{email}/LIMIT#`. **전환기 dual-read**: email 미스 시 행 `sub` 속성으로 `USER#{sub}/LIMIT#` fallback(backfill 완료 후 제거). 집행 공백 방지(CRITICAL #1).
+- Local 롤명은 **행 `sub` 속성**에서 `local-user-{sub}`. `sub` 없으면 **skip+경고**(잘못된 롤 Deny 금지, fail-safe).
+- **DENY#active/COUNTER#/WARN#** 키도 email 기준 기록.
+- 변경 사이트: `_get_user_limit`(123), PK 파싱(159), `_attach_deny`(223), 카운터/DENY 쓰기 — **전부 열거·수정**.
 
-### 3.4 limits 테이블 + admin UI `cc-on-bedrock-limits`, `api/admin/limits/route.ts`
-- PK `USER#{email}/LIMIT#`. 표시/입력 키를 email로. (DEPT#는 불변.)
-- 기존 `USER#{sub}/LIMIT#` → `USER#{email}/LIMIT#` 마이그레이션(§4).
+### 3.4 budget-check `budget-check.py` (CRITICAL #5 — 집행, audit 아님)
+- USD/토큰 한도 초과 시 IAM Deny 부착(EC2 task 롤 + Local 롤). PK→email로, 롤명은 **행 sub/subdomain 속성**에서 `task-{subdomain}`·`local-user-{sub}` 구성(현재 `local-user-{user}`=PK 직접은 깨짐). **dual-read 전환** 동일 적용.
 
-### 3.5 리더 `shared/nextjs-app/src/lib/usage-client.ts` + 대시보드
-- PK가 곧 email → 그대로 표시(가독성 해결). 행 속성 `subdomain` 동반 표시.
-- 집계는 email 기준 단일 키 → 분할 해소.
+### 3.5 limits 테이블 + admin/limits API
+- PK `USER#{email}/LIMIT#`. CRUD 키·표시 email.
 
-### 3.6 limit-reset / budget-check (감사)
-- `limit-reset.py`(카운터 리셋·Deny detach): email 키 정렬.
-- `budget-check.py`(EC2 backup path): usage 키 소비 시 email 정렬(EC2 모드 영향 점검).
+### 3.6 admin/budgets PUT mirror (CRITICAL #4)
+- `api/admin/budgets/route.ts:215`가 `cc-on-bedrock-limits` PK=`USER#{id}` 기록(2nd writer). `id`를 email로 정렬 — 안 하면 sub-키 한도를 email enforcer가 못 읽어 cap 무력화.
 
-## 4. Backfill (1회 마이그레이션 스크립트 `scripts/migrate-usage-to-email.py`)
-1. Cognito **ListUsers 전수 1회**(페이지네이션) → `{sub→email, subdomain→email}` 맵 (custom 필터 불가 → 전수 스캔).
-2. **usage**: 각 `USER#{sub}`·`USER#{subdomain}` 행을 `USER#{email}`로 re-key. SK(`date#model`) 충돌 시 토큰 카운터 `ADD` 병합. 원본 행은 검증 후 삭제.
-3. **limits**: `USER#{sub}/LIMIT#` → `USER#{email}/LIMIT#`.
-4. **검증**: 병합 전후 totalTokens 합계 동일(±0). 매핑 안 되는 키(sub/subdomain→email 미발견)는 로그·보존(삭제 안 함).
-5. dry-run 모드(기본) + `--apply`.
+### 3.7 read consumers (CRITICAL #3 — 누락분 전부)
+- `api/local/limits/route.ts`(USER#{sub} 카운터+한도+DENY 읽기) → email + dual-read.
+- `sts-issuer.py _get_limit_status(sub)`(USER#{sub}/DENY#active) → email + dual-read(토큰 발급 시 limitStatus).
+- `api/admin/limits/reset/route.ts`(USER#{sub}/DENY#active) → email.
+- `api/usage`, `api/user/usage`, `usage-client.ts`, `cloudwatch-client.ts` → email 집계/표시(+subdomain 라벨).
 
-## 5. Cutover 순서 (집행 공백 방지)
-1. 트래커·enforcer·limits-UI·리더를 **email-키로 동시 배포** (행에 sub 속성 기록 시작).
-2. **backfill** 실행(limits 먼저 → usage). 
-3. 잔재 sub/subdomain 키 행은 backfill로 흡수, 이후 미생성.
-> 동시성: 배포~backfill 사이 신규 쓰기는 이미 email-키이므로 충돌 없음. 구 sub-키 한도 조회는 backfill 전까지 미스 가능(짧은 윈도우) — 배포 직후 backfill 권장.
+### 3.8 limit-reset `limit-reset.py` (CRITICAL #2 — 상태머신 consumer, audit 아님)
+- DENY#active/COUNTER#/WARN# 스캔·삭제·Deny detach를 email 키로. backfill이 이들도 re-key(§4).
+
+## 4. Backfill `scripts/migrate-usage-to-email.py`
+1. Cognito **ListUsers 전수**(페이지네이션) → `{sub→email_lower, subdomain→email_lower}`.
+2. **usage**: `USER#{sub}`·`USER#{subdomain}` → `USER#{email}`. SK 충돌 시 **모든 수치 카운터 ADD**(inputTokens/outputTokens/totalTokens/requests/estimatedCost — totalTokens만 아님, MAJOR).
+3. **limits 테이블 전 SK 종류 re-key**: `LIMIT#*`, **`DENY#active`, `COUNTER#*`, `WARN#*`** (CRITICAL #2) → `USER#{email}`로. DENY#active는 활성 deny 보존.
+4. **검증**: 전 카운터 합계 보존(±0). 미매핑(sub/subdomain→email 미발견) 키 **로그·보존**(삭제 금지).
+5. dry-run 기본 + `--apply`.
+
+## 5. Cutover (집행 공백 0 — CRITICAL #1)
+1. **enforcer·budget-check·sts-issuer·local-limits를 dual-read(email→sub/subdomain fallback)로 먼저 배포** — 구·신 키 모두 조회되어 공백 없음.
+2. **backfill 실행**(limits/usage/DENY/COUNTER/WARN re-key, 배포 직후 자동 — "수동 나중" 금지).
+3. backfill 완료 검증 후 **dual-read fallback 제거**(후속 PR) — 단순화.
+> writer는 1단계부터 email-키. dual-read가 전환기 동안 구 sub-키 한도/deny도 읽어 enforcement 연속성 보장.
 
 ## 6. 변경 파일
-| 파일 | 변경 |
-|---|---|
-| `cdk/lib/lambda/bedrock-usage-tracker.py` | PK=email, custom-filter/fallback 제거, sub/subdomain 속성 |
-| `cdk/lib/lambda/sts-issuer.py` | Local 롤 email 태그 |
-| `cdk/lib/lambda/token-limit-enforcer.py` | email 키 조회, 롤명은 행 sub 속성 |
-| `cdk/lib/lambda/limit-reset.py` | email 키 |
-| `cdk/lib/lambda/budget-check.py` | email 키 정렬(점검) |
-| `shared/nextjs-app/src/app/api/admin/limits/route.ts` | email 키 CRUD |
-| `shared/nextjs-app/src/lib/usage-client.ts` | email 표시·집계 |
-| `scripts/migrate-usage-to-email.py` | **신규** backfill(dry-run/apply) |
-| `docs/decisions/ADR-029-usage-email-canonical-key.md` | **신규** (ADR-025 supersede) |
-| `docs/decisions/ADR-025-*.md` | superseded 표기 |
-| 테스트 | 트래커/enforcer email-키 단위테스트, backfill 병합 테스트 |
+tracker · sts-issuer · token-limit-enforcer · **budget-check** · limit-reset · admin/limits · **admin/budgets** · **api/local/limits** · api/usage · api/user/usage · usage-client.ts · cloudwatch-client.ts · `scripts/migrate-usage-to-email.py`(신규) · ADR-029(신규)·ADR-025(superseded) · 테스트.
 
-## 7. 비범위 (YAGNI)
-- **IAM 롤 네이밍 불변**(`...task-{subdomain}`, `...local-user-{sub}`) — usage/limits 키만 email.
-- DEPT# 키 불변.
-- 이메일 변경 시나리오(조직상 불변 전제 — 변경 발생 시 수동 reconcile).
+## 7. 비범위
+IAM 롤 네이밍 불변. DEPT# 불변. 이메일 변경(불변 전제). dual-read 제거는 backfill 후 후속.
 
-## 8. 보안 고려
-- **한도 집행 키 변경(HIGH 민감)**: backfill·cutover 동시성, enforcer가 행 sub 속성 누락 시 fail-safe(skip+경고, 잘못된 롤에 Deny 금지). 단위테스트로 email-키 조회·롤 타겟 검증.
-- backfill은 dry-run 기본 + 합계 검증 + 미매핑 보존(데이터 손실 방지).
-- 다른 세션의 ADR-025 코드와 겹침 → 머지 충돌 가능, 신중.
+## 8. 보안
+- 한도 집행 키 변경(HIGH): **dual-read 전환 + backfill-first**로 공백 0. enforcer/budget-check는 행 sub/subdomain 누락 시 **fail-safe skip**(오롤 Deny 금지).
+- backfill dry-run+전카운터 합계검증+미매핑 보존(무손실).
+- email 소문자 정규화로 대소문자 분할 방지.
+- ADR-029 `verification_required: true` → 불변식: (a) usage/limits 신규 쓰기에 `USER#{sub}`/`USER#{subdomain}` 키 부재, (b) enforcer/budget-check가 행 sub 없을 때 Deny 미부착. CI/테스트로 검증.
 
-## 9. 테스트 전략
-- 트래커: EC2/Local 경로가 `USER#{email}` + sub/subdomain 속성 기록(태그 mock).
-- enforcer: `USER#{email}` 한도 조회, 롤명을 행 sub 속성에서 구성, sub 없으면 skip.
-- backfill: sub/subdomain→email re-key + SK 충돌 ADD 병합 + 합계 보존(mock DDB).
+## 9. 테스트
+- 트래커: EC2(태그 email)/Local(롤 email) → `USER#{email_lower}`+sub/subdomain 속성; email 없으면 skip.
+- enforcer/budget-check: email 조회 + dual-read fallback + 행 sub로 롤명 + sub 없으면 skip.
+- backfill: sub/subdomain→email re-key, 전 SK종류(LIMIT/DENY/COUNTER/WARN), SK충돌 전카운터 ADD, 합계보존, 미매핑 보존.
+- consumers(local/limits, sts-issuer, admin/budgets) email+dual-read.
 - `tests/run-all.sh` green.
