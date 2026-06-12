@@ -17,6 +17,9 @@ ADR-025는 canonical 사용자 키를 Cognito sub(UUID)로 정했다. 운영 중
 조직 정책상 **이메일은 사용자별 고유·재직 중 불변**(퇴사까지) — ADR-025가 sub를 택한 주 근거(이메일 가변성)가 이 환경에선 성립하지 않는다.
 
 ## Decision (B′ — sub 전면 제거)
+**근거 명시**: Cognito `sub`(UUID v4)는 **가독성이 전혀 없어**(대시보드·로그·롤명 모두 불투명) 식별자로 부적합하다. 이메일이 조직상 고유·불변이므로, **가독성 있는 식별자 = email(키)·subdomain(리소스명, =정규화된 email id)** 으로 단일화한다.
+**subdomain 유니크 불변식 명시**: subdomain은 **플랫폼 전역에서 유니크 — 중복 이름을 허용하지 않는다.** 두 사용자가 같은 subdomain(→같은 롤·같은 한도 PK)을 절대 공유하지 않는다. email local-part 충돌(`john.doe@a`·`john_doe@b`→`john-doe`) 시 provisioner가 **disambiguation(suffix 부여: `john-doe`, `john-doe-2`, …)으로 유니크를 보장**하고, 부여된 subdomain은 Cognito `custom:subdomain`에 저장돼 이후 결정적으로 재사용된다(이미 배정된 기존 사용자는 그대로).
+
 플랫폼 식별자를 **두 축으로 단일화**하고 Cognito sub를 식별자에서 **완전히 제거**한다:
 - **usage·limits의 canonical 키 = email** (`USER#{email}`, 소문자 정규화). 비즈니스/감사/한도 키.
 - **모든 IAM 롤 네이밍 = subdomain** (`cc-on-bedrock-task-{subdomain}`, `cc-on-bedrock-local-user-{subdomain}`). subdomain은 **email local-part의 DNS/IAM-safe 정규화형**(`derive_subdomain`: 소문자, `[a-z0-9-]`, 3–30자)이라 곧 "email id"이며, 이미 EC2 task 롤·DNS(`{subdomain}.{domain}`)·nginx `X-Auth-User`·routing-table이 쓰는 단일 이름이다. Local 롤만 sub였던 **내부 불일치를 해소**한다.

@@ -11,6 +11,8 @@
 ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_subdomain`이 **Cognito 미지원 custom:subdomain 필터** → 항상 실패 → `USER#{subdomain}` fallback. Local만 `USER#{sub}`. 동일인 분할 + `token-limit-enforcer`가 PK=sub 가정 → `USER#{subdomain}` 사용량 집행 누락(우회). UUID 가독성 불량.
 
 ## 2. 결정 (B′ — sub 전면 제거)
+> **근거(명시)**: `sub`(UUID)는 가독성이 없어 식별자로 부적합 → 가독성 있는 **email(키) + subdomain(리소스명)** 으로 단일화. **subdomain은 전역 유니크 — 중복 이름 불허**(두 사용자가 같은 subdomain/롤/한도 공유 금지). 충돌 시 provisioner가 suffix disambiguation(`john-doe-2`)으로 유니크 보장, Cognito `custom:subdomain`에 저장.
+
 - **canonical 키 = email**(`USER#{email}`), **소문자 정규화**(`email.strip().lower()` — 키 빌더·backfill 전부). 조직상 이메일=고유·재직중 불변.
 - **모든 IAM 롤 네이밍 = subdomain**: `task-{subdomain}` **및 `local-user-{subdomain}`**(기존 `local-user-{sub}`에서 변경). subdomain = email local-part의 DNS/IAM-safe 정규화형(`derive_subdomain`)이라 곧 "email id"이며 task롤/DNS/nginx가 이미 사용 → 내부 불일치 해소.
 - **sub는 end-state에서 식별자가 아니다**(완전 제거). usage 행은 `email`·`subdomain`·`department`만(항상 — sub 없음). enforcer/budget-check/limit-reset는 행 `subdomain`에서 신규 롤명 구성; subdomain 없으면 fail-safe skip.
@@ -18,7 +20,7 @@ ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_su
 - **전체 email을 롤명에 안 씀**: 64자 한도(prefix 25 + 39자 초과 email 깨짐)·롤↔DNS 불일치·`@`/`.` 파싱 위험. 정규화 local-part(=subdomain)만.
 - **Local 롤 충돌가드 신설**: EC2 task 롤에 이미 있는 가드(같은 이름·다른 소유자 → raise)를 Local 롤 provisioning에도 적용(`john.doe@a`·`john_doe@b`→`john-doe` 공유 대신 거부).
 - 이메일·subdomain 출처: **인프라 태그**. EC2=인스턴스 태그 `cc:user`/`username`(=email, Dashboard가 전 경로 부착 — 확인됨) + `subdomain` 태그, Local=롤 `email`·`subdomain` 태그(sts-issuer 추가). 쓰기 시점 Cognito 조회 없음.
-- **마이그레이션(재생성 승인됨)**: 배포된 `local-user-{sub}` 롤 → 삭제 후 `local-user-{subdomain}` 재생성(trust·inline 정책 복제); sts-issuer AssumeRole 타깃 subdomain 전환. IAM rename 불가 → 신규+구롤삭제.
+- **마이그레이션(재생성 승인됨, blue-green — §5)**: 배포된 `local-user-{sub}` 롤 → **먼저 `local-user-{subdomain}` 신규 생성**(전체 구성+active Deny 복제, 구롤 유지) → writer 전환·검증 → **검증 후에만 구롤 삭제**(cleanup PR). IAM rename 불가 → 신규생성+검증후 구롤삭제(즉시삭제 아님 — 집행·AssumeRole 공백 0). sts-issuer AssumeRole 타깃 subdomain 전환(전환기 dual-name).
 
 ## 3. 컴포넌트 변경 (전 consumer 열거 — P2 보강)
 
@@ -59,8 +61,8 @@ ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_su
 
 ### 3.9 provisioner `user-role-provisioner.py` (롤명 sub→subdomain — NEW)
 - Local 롤 생성 `cc-on-bedrock-local-user-{sub}`(L524) → **`cc-on-bedrock-local-user-{subdomain}`**.
-- **충돌가드 신설**: `_ensure_ec2_task_role`의 가드(같은 이름·다른 소유자 태그 → raise)를 Local 롤 생성에도 동일 적용. 롤 태그에 `email`·`subdomain` 기록.
-- **충돌 예외 처리(P2-R3 M4/M5)**: 충돌 RuntimeError를 잡아 **클린 에러로 surface**(직접-invoke=구조화 에러, Dashboard 경로=409 Conflict) — Lambda 미처리 크래시 금지. admin 알림.
+- **subdomain 유니크 보장(disambiguation)**: `derive_subdomain` 후보가 **다른 email 소유자**로 이미 존재하면(롤 태그/Cognito custom:subdomain 조회) **suffix로 유니크 확보**(`john-doe`→`john-doe-2`→…, 30자 한도). 배정값을 `custom:subdomain`에 저장해 결정적 재사용. **중복 이름 0**(공유 금지). 기존 배정 사용자는 그대로.
+- 충돌·예외는 클린 에러로 surface(직접-invoke=구조화 에러, Dashboard=명시 메시지) — Lambda 미처리 크래시 금지.
 - deprovision 경로(L644 등) 롤명 derivation을 sub→subdomain으로(전환기엔 sub명도 정리 대상). subdomain 복구 블록은 그대로(롤 태그/Cognito **ListUsers-by-username**에서 복구 — 깨진 custom-filter 경로 아님).
 
 ## 4. Backfill `scripts/migrate-usage-to-email.py` (+ IAM 롤 생성, blue-green)
