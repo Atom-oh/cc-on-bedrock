@@ -76,30 +76,32 @@ export async function GET(req: NextRequest) {
           const item = unmarshall(budgetResult.Item);
           budget = {
             department: item.department ?? department,
-            monthlyBudget: item.monthlyBudget ?? 1000,
+            // 0 = unlimited (matches budget-check.py: cap <= 0 → no deny). Don't
+            // invent a fake 1000 cap for depts that are intentionally uncapped.
+            monthlyBudget: item.monthlyBudget ?? 0,
             currentSpend: item.currentSpend ?? 0,
-            monthlyTokenLimit: item.monthlyTokenLimit ?? 10000000,
+            monthlyTokenLimit: item.monthlyTokenLimit ?? 0,
             currentTokens: item.currentTokens ?? 0,
           };
         } else {
-          // Return default budget if not found
+          // No budget row → unlimited (0), consistent with enforcement.
           budget = {
             department,
-            monthlyBudget: 1000,
+            monthlyBudget: 0,
             currentSpend: 0,
-            monthlyTokenLimit: 10000000,
+            monthlyTokenLimit: 0,
             currentTokens: 0,
           };
         }
       }
     } catch (err) {
       console.warn("[dept] Budget fetch error:", err);
-      // Return default budget on error
+      // On fetch error, show unlimited (0) rather than a fabricated cap.
       budget = {
         department,
-        monthlyBudget: 1000,
+        monthlyBudget: 0,
         currentSpend: 0,
-        monthlyTokenLimit: 10000000,
+        monthlyTokenLimit: 0,
         currentTokens: 0,
       };
     }
