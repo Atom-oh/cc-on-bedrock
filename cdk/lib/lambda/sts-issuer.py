@@ -15,9 +15,10 @@ Behavior:
      - Tags: username/department/project/mode=local (ADR-011 cost allocation)
   3. AssumeRole with DurationSeconds=3600 (1h) — this Lambda assumes another role
      (role-chaining), which AWS hard-caps at 1h, so the ADR-014 8h intent is not
-     attainable; the CLI helper re-fetches on its next run/launch when the
-     cached TTL is < 10min (launch-time only — no in-session background refresh
-     yet, so a single continuous session > 1h can expire mid-work).
+     attainable. In-session continuity is the CLI's job (ADR-029): the AWS SDK
+     profile uses `credential_process = cc-bedrock-local.sh credential-process`,
+     which the SDK re-invokes before each Expiration — sessions of any length
+     survive the 1h cap as long as the Cognito refresh token (30d) is alive.
      MaxSessionDuration on role = 1h to match.
   4. Return credentials + current limit_status (from cc-on-bedrock-limits DENY#active)
 
