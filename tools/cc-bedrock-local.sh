@@ -4,6 +4,13 @@
 # Subcommands:
 #   login         password prompt → Cognito USER_PASSWORD_AUTH → STS issue
 #   refresh       silent only (cached refresh token; fails if expired)
+#   credential-process  AWS SDK credential_process hook (ADR-029) — emits
+#                 {"Version":1,AccessKeyId,...,Expiration} JSON. Serves from
+#                 cache while TTL > 5min, silently re-issues otherwise. Never
+#                 prompts; exits 1 with a re-login hint when the Cognito
+#                 refresh token is dead. Wired into ~/.aws/config so the SDK
+#                 auto-refreshes MID-SESSION — long claude sessions no longer
+#                 die at the 1h STS role-chaining cap.
 #   logout        clear cached refresh token + state
 #   change-email  prompt new email (+ password) and persist to config
 #   status        remaining TTL + Deny / limit state
@@ -28,6 +35,7 @@ CFG_FILE="${CFG_DIR}/config"
 STATE_FILE="${CFG_DIR}/state.json"
 TOKEN_CACHE="${CFG_DIR}/cognito-tokens.json"
 AWS_CREDS_FILE="${HOME}/.aws/credentials"
+AWS_CONFIG_FILE="${HOME}/.aws/config"
 
 mkdir -p "${CFG_DIR}"
 
@@ -163,20 +171,57 @@ sts_exchange() {  # sts_exchange <access_token>
     --data '{}'
 }
 
-write_aws_creds() {  # write_aws_creds <sts_response_json>
-  local snippet
-  snippet="$(echo "$1" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["profileSnippet"])')"
-  mkdir -p "$(dirname "${AWS_CREDS_FILE}")"
-  touch "${AWS_CREDS_FILE}"
-  chmod 600 "${AWS_CREDS_FILE}"
-  python3 - "${AWS_CREDS_FILE}" "${AWS_PROFILE_NAME}" "${snippet}" <<'PY'
+# Absolute path of this script — written into ~/.aws/config as the
+# credential_process command, so it must survive cwd changes and bare-name
+# invocations from PATH ("cc-bedrock-local"): $0 is then not a path, and
+# readlink -f would silently resolve it against $PWD to a non-existent file.
+script_abspath() {
+  local src="$0"
+  if [[ "${src}" != */* ]]; then
+    src="$(command -v "${src}" 2>/dev/null || echo "${src}")"
+  fi
+  if readlink -f "${src}" 2>/dev/null; then return; fi      # GNU
+  python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${src}"  # macOS/BSD
+}
+
+# ADR-029: install a credential_process profile instead of static keys.
+# - ~/.aws/config [profile X] gets `credential_process = <this script> credential-process`
+#   so the AWS SDK re-invokes us whenever cached credentials approach Expiration —
+#   true in-session refresh; long claude sessions survive the 1h role-chaining cap.
+# - Any stale [X] section in ~/.aws/credentials is REMOVED: entries in the
+#   credentials file take precedence over config-file credential_process, so a
+#   leftover static-key block from the pre-ADR-029 flow would silently pin the
+#   session to expiring keys.
+setup_aws_profile() {
+  local self created=0
+  self="$(script_abspath)"
+  mkdir -p "$(dirname "${AWS_CONFIG_FILE}")"
+  [[ -f "${AWS_CONFIG_FILE}" ]] || created=1
+  touch "${AWS_CONFIG_FILE}"
+  python3 - "${AWS_CONFIG_FILE}" "${AWS_PROFILE_NAME}" "${self}" "${AWS_REGION}" <<'PY'
 import sys, re, os
-path, profile, snippet = sys.argv[1], sys.argv[2], sys.argv[3]
+path, profile, self_path, region = sys.argv[1:5]
 content = open(path).read() if os.path.exists(path) else ""
-content = re.sub(rf"\[{re.escape(profile)}\].*?(?=^\[|\Z)", "", content, flags=re.M | re.S).rstrip() + "\n"
-snippet = re.sub(r"\[cc-bedrock\]", f"[{profile}]", snippet, count=1)
-open(path, "w").write(content + "\n" + snippet.rstrip() + "\n")
+content = re.sub(rf"\[profile {re.escape(profile)}\].*?(?=^\[|\Z)", "", content, flags=re.M | re.S).rstrip() + "\n"
+block = f"\n[profile {profile}]\ncredential_process = {self_path} credential-process\nregion = {region}\n"
+open(path, "w").write(content + block)
 PY
+  # Migration: drop the legacy static-key section (it would shadow credential_process)
+  if [[ -f "${AWS_CREDS_FILE}" ]]; then
+    python3 - "${AWS_CREDS_FILE}" "${AWS_PROFILE_NAME}" <<'PY'
+import sys, re, os
+path, profile = sys.argv[1], sys.argv[2]
+content = open(path).read()
+cleaned = re.sub(rf"\[{re.escape(profile)}\].*?(?=^\[|\Z)", "", content, flags=re.M | re.S).rstrip() + "\n"
+if cleaned != content:
+    open(path, "w").write(cleaned)
+PY
+  fi
+  # Only tighten permissions on a file WE created — ~/.aws/config is shared
+  # with other profiles/tools and is not secret material (unlike credentials).
+  if (( created )); then
+    chmod 600 "${AWS_CONFIG_FILE}" 2>/dev/null || true
+  fi
 }
 
 save_state() { echo "$1" > "${STATE_FILE}"; chmod 600 "${STATE_FILE}"; }
@@ -244,15 +289,83 @@ issue_sts() {  # issue_sts <access_token>
   local sts_resp
   sts_resp=$(sts_exchange "$1")
   if echo "${sts_resp}" | python3 -c 'import json,sys; sys.exit(0 if "credentials" in json.loads(sys.stdin.read()) else 1)' 2>/dev/null; then
-    write_aws_creds "${sts_resp}"
+    setup_aws_profile
     save_state "${sts_resp}"
     local exp
     exp="$(echo "${sts_resp}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["credentials"]["expiration"])')"
-    echo "✓ STS credentials written: profile=${AWS_PROFILE_NAME}, expires=${exp}"
+    echo "✓ credential_process profile=${AWS_PROFILE_NAME} installed, current creds expire=${exp} (SDK auto-renews in-session)"
   else
     echo "${sts_resp}" >&2
     die "dashboard refused STS issue"
   fi
+}
+
+# ─── credential-process (AWS SDK hook, ADR-029) ─────────────
+# Contract: print ONE JSON object {"Version":1,...,"Expiration"} on stdout and
+# nothing else; all diagnostics go to stderr. The SDK re-invokes this command
+# shortly before Expiration, which is what keeps multi-hour sessions alive.
+# MUST never prompt (runs headless inside the SDK) — when the Cognito refresh
+# token is dead it exits 1 so the SDK surfaces an error telling the user to
+# run 'cc-bedrock-local login' (once per ~30 days).
+emit_credentials_json() {  # emit_credentials_json <state_file>
+  python3 - "$1" <<'PY'
+import json, sys
+creds = json.load(open(sys.argv[1]))["credentials"]
+print(json.dumps({
+    "Version": 1,
+    "AccessKeyId": creds["accessKeyId"],
+    "SecretAccessKey": creds["secretAccessKey"],
+    "SessionToken": creds["sessionToken"],
+    "Expiration": creds["expiration"],
+}))
+PY
+}
+
+do_credential_process() {
+  require_config
+
+  # 1) Cache hit: serve current creds while they have > 5 min left.
+  #    (5 min, not 10 — the SDK already refreshes ahead of Expiration; the
+  #    margin only guards clock skew between us, AWS, and the SDK.)
+  if [[ -f "${STATE_FILE}" ]]; then
+    local exp exp_e now_e cached_json
+    exp="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credentials"]["expiration"])' "${STATE_FILE}" 2>/dev/null || true)"
+    if [[ -n "${exp}" ]]; then
+      exp_e="$(iso_to_epoch "${exp}")"; now_e="$(epoch_now)"
+      if (( exp_e - now_e > 300 )); then
+        # Buffer before printing so a corrupt state.json falls through to a
+        # fresh re-issue instead of dying mid-emit (stdout must stay clean).
+        if cached_json="$(emit_credentials_json "${STATE_FILE}" 2>/dev/null)"; then
+          echo "${cached_json}"
+          return 0
+        fi
+        say "state.json unreadable — re-issuing credentials"
+      fi
+    fi
+  fi
+
+  # 2) Silent re-issue: Cognito refresh token → access token → STS exchange.
+  [[ -f "${TOKEN_CACHE}" ]] || { say "no cached session — run 'cc-bedrock-local login'"; return 1; }
+  local refresh_token access_token resp sts_resp
+  refresh_token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("refreshToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
+  [[ -n "${refresh_token}" ]] || { say "no refresh token cached — run 'cc-bedrock-local login'"; return 1; }
+
+  resp=$(cognito_refresh_request "${refresh_token}")
+  access_token=$(echo "${resp}" | parse_cognito_token "AccessToken" 2>/dev/null || echo "")
+  if [[ -z "${access_token}" ]]; then
+    say "Cognito refresh token expired (30-day window) — run 'cc-bedrock-local login'"
+    return 1
+  fi
+  cache_tokens "${access_token}" "${refresh_token}"
+
+  sts_resp=$(sts_exchange "${access_token}")
+  if ! echo "${sts_resp}" | python3 -c 'import json,sys; sys.exit(0 if "credentials" in json.loads(sys.stdin.read()) else 1)' 2>/dev/null; then
+    echo "${sts_resp}" >&2
+    say "dashboard refused STS issue (token limit Deny active? check 'cc-bedrock-local status')"
+    return 1
+  fi
+  save_state "${sts_resp}"
+  emit_credentials_json "${STATE_FILE}"
 }
 
 # ─── logout (clear cache + state) ───────────────────────────
@@ -310,6 +423,9 @@ do_run() {
       do_login
     fi
   fi
+  # ADR-029: idempotent — make sure the credential_process profile exists even
+  # when the cached state was still fresh (migration from the static-key flow).
+  setup_aws_profile
 
   CLAUDE_CODE_USE_BEDROCK=1 \
     AWS_PROFILE="${AWS_PROFILE_NAME}" \
@@ -338,6 +454,9 @@ do_claude() {
       do_login
     fi
   fi
+  # ADR-029: idempotent — make sure the credential_process profile exists even
+  # when the cached state was still fresh (migration from the static-key flow).
+  setup_aws_profile
 
   if [[ -n "${ANTHROPIC_MODEL}" ]]; then
     echo "[Bedrock] pinned=${ANTHROPIC_MODEL} (forces /model Custom slot)"
@@ -462,6 +581,8 @@ cc-bedrock-local — Local Governance Mode CLI (ADR-014)
 Subcommands:
   login                       prompt password (email from config) → login + STS issue
   refresh                     silent only — uses cached refresh token
+  credential-process          AWS SDK credential_process hook (auto-wired into
+                              ~/.aws/config at login; renews mid-session — ADR-029)
   logout                      clear cached session
   change-email                prompt new email + password, update config, re-login
   status                      session state + limit/deny state
@@ -479,6 +600,7 @@ sub="${1:-}"; shift || true
 case "${sub}" in
   login)        do_login "$@" ;;
   refresh)      do_refresh "$@" ;;
+  credential-process|credential_process) do_credential_process ;;
   logout)       do_logout ;;
   change-email|change_email) do_change_email ;;
   status)       do_status "$@" ;;
