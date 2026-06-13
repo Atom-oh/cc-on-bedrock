@@ -34,6 +34,11 @@ presentation** gap — no new data capture, schema, or Lambda work.
 - CSV export, alerting, scheduled reports.
 - New DynamoDB GSI. Current scan + `department` FilterExpression is adequate at
   present user counts; revisit `dept-date-index` only past a few hundred users.
+  **Caveat (codex finding #5):** `getUsageRecords` paginates the Scan but caps at
+  `MAX_PAGES`, so an over-wide window can silently truncate. Mitigation in this
+  feature: default the chart to a bounded window (e.g. last 30 days) and, if the
+  Scan hits `MAX_PAGES`, surface a "range truncated — narrow the dates" notice
+  rather than showing partial data as if complete. A GSI is the real fix later.
 
 ## Architecture
 
@@ -67,34 +72,56 @@ async function getUserDailyTrend(params: {
   startDate: string;
   endDate: string;
   department?: string;   // when set, only this department's records
+  userId?: string;       // when set, only this user (self-view single series)
   topN?: number;         // default 8
 }): Promise<UserDailyTrend>;
 ```
 
+> **Consensus review fix (codex+gemini, 2/2):** `userId` was missing from the
+> original signature, leaving the regular-user self-view with no data-layer
+> scoping path. `getUsageRecords` already supports `userId` (a single-partition
+> Query); pass it through. When `userId` is set, Top-N/others is moot (one
+> series).
+
 Logic:
-1. `getUsageRecords({ startDate, endDate, department })` — already supports both
-   filters.
+1. `getUsageRecords({ startDate, endDate, department, userId })` — supports all
+   three filters (userId → Query on one partition; department → Scan + filter).
 2. Pivot to `(userId × date)` summing `estimatedCost` and `totalTokens`.
 3. Rank users by window-total cost; keep top `topN`, fold the rest into a single
    `others` series (summed per date). Set `othersCount`. The series set is fixed
    by **cost ranking and does not change when the UI toggles to tokens** — so
    lines never appear/disappear on toggle (stable legend). A token-heavy user
    outside the cost top-N therefore shows inside `others`; acceptable trade-off
-   for a stable view.
+   for a stable view (independently flagged by gemini — accepted, not a defect).
 4. Emit parallel `cost[]` and `tokens[]` point arrays over the **same** date
-   axis (zero-filled for missing user/date cells) so the client toggle needs no
-   refetch.
+   axis so the client toggle needs no refetch. The axis is the **full calendar
+   range** `startDate..endDate` (every day generated, zero-filled), not just
+   dates that appear in records — so zero-usage days render as zero, not gaps
+   (codex finding #6).
 
 ### 2. API — `/api/usage/route.ts`
 
-New branch `type=user_daily_trend`. **Scope is decided server-side from the
-session; client-supplied scope params are ignored** (security boundary):
+New branch **`action=user_daily_trend`**. The existing route dispatches on the
+`action` query param via `switch (action)` (NOT `type`) — the branch and all UI
+fetches must use `action` or they never reach the handler (codex finding #4).
+**Scope is decided server-side from the session; client-supplied scope params
+are ignored** (security boundary):
 
 | Session role                       | Effective filter                         |
 |------------------------------------|------------------------------------------|
 | `isAdmin`                          | none (all users)                         |
 | `isDeptManager` (not admin)        | `department = session.department` forced |
 | neither                            | `userId = session.subdomain` forced (single series) |
+
+**Fail-closed on missing scope attribute (codex finding #2 — high).** The
+existing route uses `effectiveUserId = isAdmin ? userId : session.subdomain`,
+which **fails open**: if a non-admin's `subdomain` (or a dept-manager's
+`department`) is `undefined`, the filter is dropped and the query returns *all*
+users. This branch MUST instead return **403** when the required scope attribute
+is absent:
+- dept-manager with empty `session.department` → 403 (never an unfiltered scan)
+- regular user with empty `session.subdomain` → 403
+Only `isAdmin` may run with no scope filter.
 
 Date range comes from existing `start_date` / `end_date` query params (same as
 other `/api/usage` types). `topN` accepts an optional clamp (default 8, max ~15).
@@ -122,13 +149,23 @@ New `components/charts/user-daily-trend-chart.tsx` wrapping the existing
 - assigns a stable color per series key; `others` gets a muted gray.
 - caption when `othersCount > 0`: e.g. "Top 8 users shown · others (n) folded".
 
-Mounts:
-- **`/monitoring`** (admin) — new section, fetches `type=user_daily_trend`.
-- **dept-manager** — same `/monitoring` section is visible to dept-managers
-  (server scopes to their department automatically). Gate the section on
-  `isAdmin || isDeptManager`.
-- **`/analytics`** self-view — same component; server returns the single
-  own-user series, so it renders one line.
+Mounts — **placement revised per codex finding #3 (high).** `/monitoring`
+redirects every non-admin at the page level
+(`monitoring/page.tsx`: `if (!session.user.isAdmin) redirect("/analytics")`) and
+also hosts admin-only health/container/infra panels. Relaxing that guard to admit
+dept-managers would expose all of that, not just the new chart. So instead of
+opening `/monitoring`, mount the chart where each audience already has access:
+
+- **`/monitoring`** (admin only) — new section; admin sees all users. Page guard
+  unchanged.
+- **`/analytics`** — non-admins already reach this page (the monitoring redirect
+  sends them here). Mount the same `UserDailyTrendChart` here for **both**
+  dept-managers and regular users. The server scope (section 2) decides what they
+  get: dept-manager → their department's multi-line; regular user → own single
+  line. No page-guard change needed, and no admin-only content is exposed.
+
+This keeps RBAC at two layers: the page each role can already load, plus the
+server-side scope that fills the chart.
 
 Date range uses the existing `FilterBar`.
 
@@ -142,8 +179,8 @@ getUserDailyTrend()  → pivot (user×date) → Top-N + others → {cost[],token
    │  /api/usage?type=user_daily_trend  (server-side RBAC scope)
    ▼
 UserDailyTrendChart  → MultiLineChart + cost/token toggle + others caption
-   ├── /monitoring   (admin: all · dept-manager: own dept)
-   └── /analytics    (user: own single series)
+   ├── /monitoring   (admin only: all users — page guard unchanged)
+   └── /analytics    (dept-manager: own dept multi-line · user: own single series)
 ```
 
 ## RBAC / Security
@@ -166,6 +203,11 @@ UserDailyTrendChart  → MultiLineChart + cost/token toggle + others caption
   - department filter passes through to `getUsageRecords`.
 - **API scope test** — assert the route forces `department`/`userId` from
   session regardless of incoming params (admin vs dept-manager vs user).
+- **Fail-closed test (codex #2)** — dept-manager with empty `session.department`
+  and regular user with empty `session.subdomain` each get **403**, never an
+  unfiltered result set.
+- **Full-date-axis test (codex #6)** — a window with a gap day yields a zero
+  point for that day in every series, not a missing date.
 - **Type check** — `npx tsc --noEmit`.
 - Manual: 6-11/6-12 window → psungbum + atomoh lines match the verified
   $5.55 / $0.55 figures; toggle flips to tokens; dept-manager login sees only
@@ -178,7 +220,7 @@ UserDailyTrendChart  → MultiLineChart + cost/token toggle + others caption
 - `shared/nextjs-app/src/lib/auth.ts` — session `department` + `isDeptManager`
 - `shared/nextjs-app/src/lib/types.ts` — `UserSession` fields
 - `shared/nextjs-app/src/components/charts/user-daily-trend-chart.tsx` — new
-- `shared/nextjs-app/src/app/monitoring/monitoring-dashboard.tsx` — mount (admin + dept-manager)
-- `shared/nextjs-app/src/app/analytics/analytics-dashboard.tsx` — mount (self-view)
+- `shared/nextjs-app/src/app/monitoring/monitoring-dashboard.tsx` — mount (admin only)
+- `shared/nextjs-app/src/app/analytics/analytics-dashboard.tsx` — mount (dept-manager dept view + regular-user self-view)
 - `shared/nextjs-app/src/lib/__tests__/` — new unit tests
 - `shared/nextjs-app/CLAUDE.md` — document the new lib fn + API type
