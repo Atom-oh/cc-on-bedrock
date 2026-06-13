@@ -33,27 +33,38 @@ sns = boto3.client("sns") if SNS_TOPIC_ARN else None
 KST = timezone(timedelta(hours=9))
 
 
-def _detach(sub: str) -> bool:
-    """Detach the deny policy from the user's Local Governance role.
+def _role_for_item(item: dict):
+    """Resolve the Local Governance role name for a DENY#active record (ADR-029 B′).
 
-    ADR-025: the limits-table `USER#{sub}` key now holds the Cognito sub, and the
-    role name is exactly cc-on-bedrock-local-user-{sub} — so it is constructed
-    directly (the old `username`-tag reverse index is no longer needed).
-    NoSuchEntity (no Local role for this user) is treated as a normal skip.
+    The limits PK is now the email, so the role name comes from the record's
+    `subdomain` attribute (written by the enforcer): cc-on-bedrock-local-user-
+    {subdomain}. Never derive the role from an email PK suffix. Legacy rows keyed
+    by a non-email identifier (sub/subdomain, no '@') still resolve via the suffix.
+    Returns None when no valid identifier is available (fail-safe).
     """
-    role_names = [f"{ROLE_PREFIX}{sub}"]
-    any_detached = False
-    for role in role_names:
-        try:
-            iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
-            print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")
-            any_detached = True
-        except iam.exceptions.NoSuchEntityException:
-            continue
-        except Exception as e:
-            print(f"[RESET] detach failed for {role}: {e}")
-            continue
-    return any_detached
+    subdomain = (item.get("subdomain") or "").strip()
+    if subdomain:
+        return f"{ROLE_PREFIX}{subdomain}"
+    suffix = item.get("PK", "")[len("USER#"):]
+    if suffix and "@" not in suffix:  # legacy sub/subdomain-keyed row
+        return f"{ROLE_PREFIX}{suffix}"
+    return None  # email PK without subdomain attr → cannot safely build a role
+
+
+def _detach(role: str) -> bool:
+    """Detach the deny policy from the given Local Governance role.
+    NoSuchEntity (no Local role for this user) is treated as a normal skip."""
+    if not role:
+        return False
+    try:
+        iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
+        print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")
+        return True
+    except iam.exceptions.NoSuchEntityException:
+        return False
+    except Exception as e:
+        print(f"[RESET] detach failed for {role}: {e}")
+        return False
 
 
 def _scan_deny_active(period: str):
@@ -158,13 +169,12 @@ def handler(event, context):
 
     detached = 0
     for item in _scan_deny_active(period):
-        sub = item["PK"][len("USER#"):]
-        if _detach(sub):
+        if _detach(_role_for_item(item)):
             detached += 1
         try:
             limits.delete_item(Key={"PK": item["PK"], "SK": "DENY#active"})
         except Exception as e:
-            print(f"[RESET] delete DENY#active failed for {sub}: {e}")
+            print(f"[RESET] delete DENY#active failed for {item.get('PK')}: {e}")
 
     bucket = _previous_bucket(period)
     counters = _delete_counters(period, bucket)
