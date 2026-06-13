@@ -7,8 +7,8 @@ cd "$(dirname "$0")/.."
 echo "== Next.js dashboard: typecheck + vitest =="
 ( cd shared/nextjs-app && npx tsc --noEmit && npx vitest run )
 
-echo "== nginx config generator: code-server boot 502 interception (unit) =="
-python3 -m pytest tests/unit/test_nginx_config_gen.py -q
+echo "== Python unit tests (nginx config-gen, usage-tracker pricing, …) =="
+python3 -m pytest tests/unit/ -q
 
 echo "== ADR-026: boundary ⊇ service-allowlist invariant (self-test) =="
 python3 scripts/check-policyset-boundary.py --self-test

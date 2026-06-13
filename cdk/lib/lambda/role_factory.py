@@ -35,6 +35,8 @@ def allowed_model_arns() -> list:
     return [
         "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
         f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
+        "arn:aws:bedrock:*::foundation-model/*embed*",
+        f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*embed*",
         f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",
     ]
 

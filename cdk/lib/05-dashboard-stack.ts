@@ -89,6 +89,8 @@ export class DashboardStack extends cdk.Stack {
       resources: [
         `arn:aws:bedrock:*::foundation-model/*anthropic.claude-*`,
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+        `arn:aws:bedrock:*::foundation-model/*embed*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*embed*`,
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:application-inference-profile/*`,
       ],
     }));
