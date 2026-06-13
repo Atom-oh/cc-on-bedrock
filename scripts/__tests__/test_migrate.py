@@ -131,3 +131,26 @@ def test_backfill_merges_two_sources_into_one_email():
     mig._migrate_table(t, maps, _Args(), "usage")
     merged = t.store[("USER#atomoh@example.com", "2026-06-10#m")]
     assert merged["inputTokens"] == Decimal("700")  # 400 + 300 sum-preserved
+
+
+class _FakeBudgetTable:
+    def __init__(self, items):
+        self.store = {i["user_id"]: dict(i) for i in items}
+    def scan(self, **kw):
+        return {"Items": [dict(v) for v in self.store.values()]}
+    def put_item(self, Item):
+        self.store[Item["user_id"]] = dict(Item)
+    def delete_item(self, Key):
+        self.store.pop(Key["user_id"], None)
+
+
+def test_budget_rekey_deletes_orphan_uuid_row():
+    # the live bug: UUID budget row lingered next to the email row in the UI
+    maps = mig.build_identity_maps([_user("84c82d0c-sub", "psungbum@example.com", "psungbum")])
+    t = _FakeBudgetTable([{"user_id": "84c82d0c-sub", "monthlyBudget": Decimal("50")}])
+    mig._migrate_user_budgets(t, maps, _Args())
+    assert "psungbum@example.com" in t.store
+    assert "84c82d0c-sub" not in t.store, "stale UUID budget row must be deleted"
+    # idempotent re-run: email row stays, no resurrection
+    mig._migrate_user_budgets(t, maps, _Args())
+    assert list(t.store.keys()) == ["psungbum@example.com"]

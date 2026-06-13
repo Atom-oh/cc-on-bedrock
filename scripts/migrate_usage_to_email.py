@@ -12,9 +12,14 @@ Merge policy on SK conflict (target row already exists):
   * usage rows + COUNTER#* : ADD numeric counters (sum-preserving)
   * LIMIT# / DENY#active / WARN# : prefer-new (overwrite, never sum)
 
+DynamoDB source rows are ALWAYS deleted on --apply (every re-key moves the row to
+a NEW USER#{email} PK, so the old sub/subdomain row is an orphan — leaving it would
+double counters on re-run and show duplicate UUID+email entries in the UI).
+
 IAM: for each deployed cc-on-bedrock-local-user-{sub}, create
 cc-on-bedrock-local-user-{subdomain} cloning the full config + active Deny.
-Old roles are kept unless --delete-old (blue-green; safe to verify first).
+Old roles are kept unless --delete-old (blue-green — keep until active ≤1h
+sessions expire, then delete). --delete-old gates ONLY role deletion.
 
 SAFETY: dry-run by DEFAULT. --apply to write. Idempotent. Subdomain collisions
 (one subdomain → multiple emails) ABORT that user (never merge/share).
@@ -138,7 +143,7 @@ def main():
     ap.add_argument("--limits-table", default="cc-on-bedrock-limits")
     ap.add_argument("--user-budgets-table", default="cc-user-budgets")
     ap.add_argument("--apply", action="store_true", help="actually write (default: dry-run)")
-    ap.add_argument("--delete-old", action="store_true", help="delete old sub/subdomain rows + roles")
+    ap.add_argument("--delete-old", action="store_true", help="delete legacy local-user-{sub} IAM roles (DynamoDB source rows are always deleted on --apply; this gates only role deletion — keep old roles until active ≤1h sessions expire)")
     ap.add_argument("--skip-roles", action="store_true", help="skip IAM role recreation")
     args = ap.parse_args()
 
@@ -185,12 +190,14 @@ def _migrate_table(table, maps, args, label):
             if existing and not is_limit:
                 new_item = merge_counters(existing, new_item)
                 merged += 1
-            # Idempotency (P4 CRITICAL): summed rows (usage + COUNTER#) MUST delete
-            # their source in the same pass, else a re-run re-adds the source into
-            # the already-merged target → doubled counters/spend. prefer-new rows
-            # (LIMIT/DENY/WARN) overwrite, so re-runs are naturally idempotent;
-            # their source is removed only with --delete-old.
-            delete_src = args.apply and (not is_limit or args.delete_old)
+            # Every re-key moves the row to a NEW PK (USER#{email}), so the source
+            # is ALWAYS an orphan — delete it in the same pass. This is required for
+            # (a) idempotency on summed rows (else re-run doubles counters) and
+            # (b) avoiding duplicate/stale rows for prefer-new rows (LIMIT/DENY/WARN)
+            # that would otherwise linger under the old sub/subdomain key and show
+            # up twice in the UI. --delete-old gates only IAM ROLE deletion (active
+            # sessions), never DynamoDB rows.
+            delete_src = args.apply
             print(f"  [{label}] {old_key['PK']} | SK={old_key['SK']} → {new_item['PK']}"
                   f"{' (merge)' if existing and not is_limit else ''}{' +del-src' if delete_src else ''}")
             if args.apply:
@@ -224,11 +231,12 @@ def _migrate_user_budgets(table, maps, args):
                 continue
             new_item = dict(item)
             new_item["user_id"] = email
-            print(f"  [budgets] {uid} → {email}")
+            print(f"  [budgets] {uid} → {email} +del-src")
             if args.apply:
                 table.put_item(Item=new_item)
-                if args.delete_old:
-                    table.delete_item(Key={"user_id": uid})
+                # 1:1 re-key to a NEW key → old uid row is an orphan; always delete
+                # (else the UI shows both the UUID and the email row).
+                table.delete_item(Key={"user_id": uid})
             rekeyed += 1
         last = resp.get("LastEvaluatedKey")
         if not last:
