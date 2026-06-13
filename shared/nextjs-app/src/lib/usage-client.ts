@@ -102,13 +102,19 @@ function eachDate(startDate: string, endDate: string): string[] {
   return out;
 }
 
-const OTHERS_KEY = "others";
+// Series dataKeys are namespaced so a subdomain can never collide with the
+// chart's reserved "date" x-axis key or the aggregate series. Subdomains are
+// validated [a-z0-9-]{3,30} (ADR-022), so a leading "u_"/"__" prefix (illegal
+// chars for a subdomain) is guaranteed collision-free.
+export const OTHERS_KEY = "__others__";
+const userKey = (subdomain: string) => `u_${subdomain}`;
 
 /**
  * Pure pivot of usage records into a (user x date) trend, Top-N by window cost
  * with the rest folded into a single "others" series. Cost and tokens share the
  * SAME full-calendar date axis (zero-filled) so the UI can toggle without refetch.
  * The series set is fixed by cost ranking (stable legend across toggle).
+ * Series `key` is a namespaced dataKey; `name` is the human label (raw subdomain).
  */
 export function buildUserDailyTrend(
   records: UsageRecord[],
@@ -134,7 +140,7 @@ export function buildUserDailyTrend(
   const rest = ranked.slice(topN);
   const othersCount = rest.length;
 
-  const series: UserDailyTrendSeries[] = top.map((u) => ({ key: u, name: u, totalCost: totalCost.get(u) ?? 0 }));
+  const series: UserDailyTrendSeries[] = top.map((u) => ({ key: userKey(u), name: u, totalCost: totalCost.get(u) ?? 0 }));
   if (othersCount > 0) {
     series.push({
       key: OTHERS_KEY,
@@ -146,7 +152,7 @@ export function buildUserDailyTrend(
   const build = (src: Map<string, Map<string, number>>): UserDailyTrendPoint[] =>
     dates.map((date) => {
       const point: UserDailyTrendPoint = { date };
-      for (const u of top) point[u] = src.get(u)?.get(date) ?? 0;
+      for (const u of top) point[userKey(u)] = src.get(u)?.get(date) ?? 0;
       if (othersCount > 0) point[OTHERS_KEY] = rest.reduce((s, u) => s + (src.get(u)?.get(date) ?? 0), 0);
       return point;
     });

@@ -128,8 +128,8 @@ export async function GET(req: NextRequest) {
           return NextResponse.json({ error: "start_date must be <= end_date" }, { status: 400 });
         }
         const today = new Date().toISOString().slice(0, 10);
-        if (startDate > today) {
-          return NextResponse.json({ error: "start_date cannot be in the future" }, { status: 400 });
+        if (startDate > today || endDate > today) {
+          return NextResponse.json({ error: "date range cannot be in the future" }, { status: 400 });
         }
         const spanDays = Math.round(
           (Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86_400_000,

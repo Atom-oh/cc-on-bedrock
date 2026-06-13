@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import MultiLineChart from "./multi-line-chart";
-import type { UserDailyTrend } from "@/lib/usage-client";
+import { OTHERS_KEY, type UserDailyTrend } from "@/lib/usage-client";
 
 const PALETTE = [
   "#60a5fa", "#34d399", "#fbbf24", "#f87171", "#a78bfa",
@@ -22,7 +22,7 @@ export default function UserDailyTrendChart({ trend, title = "User Daily Usage" 
   const series = trend.series.map((s, i) => ({
     key: s.key,
     name: s.name,
-    color: s.key === "others" ? OTHERS_COLOR : PALETTE[i % PALETTE.length],
+    color: s.key === OTHERS_KEY ? OTHERS_COLOR : PALETTE[i % PALETTE.length],
   }));
   const data = metric === "cost" ? trend.cost : trend.tokens;
   const yFormatter =
