@@ -1,5 +1,6 @@
 ---
-status: Accepted
+status: Superseded
+superseded_by: ADR-029
 date: 2026-06-09
 verification_required: true
 builds_on: ADR-014
@@ -7,7 +8,9 @@ builds_on: ADR-014
 
 # ADR-025: 사용량/한도 파이프라인의 canonical 유저 식별자 = Cognito sub
 
-**Status:** Accepted — 코드 cutover 구현 완료(usage-tracker/budget-check/enforcer sub-키), stale 비-Cognito 레코드 정리 완료(2026-06-10, `scripts/cleanup-stale-budget-users.py`)
+> **⚠ Superseded by [ADR-029](ADR-029-usage-email-canonical-key.md) (2026-06-13).** 운영 진단: sub 키는 (a) 트래커 EC2 경로의 `custom:subdomain` 필터가 Cognito 미지원 → 항상 실패 → `USER#{subdomain}` fallback으로 **동일인 분할 + 집행 우회**, (b) UUID라 가독성 0. ADR-029는 canonical 키를 **email**, 모든 IAM 롤명을 **subdomain**으로 전환하고 sub를 식별자에서 제거한다.
+
+**Status:** Superseded by ADR-029 — (구) 코드 cutover 구현 완료(usage-tracker/budget-check/enforcer sub-키), stale 비-Cognito 레코드 정리 완료(2026-06-10, `scripts/cleanup-stale-budget-users.py`)
 **Date:** 2026-06-09
 **Builds on:** [ADR-014 Local Governance Mode](ADR-014-local-governance-mode.md)
 **Collaboration:** co-agent 패널(Kiro CLI · Codex · Gemini) 의사결정, Claude chair 합성

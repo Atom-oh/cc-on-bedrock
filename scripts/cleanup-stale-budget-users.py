@@ -44,11 +44,14 @@ def load_valid_keys(cognito, pool_id: str) -> set:
             params["PaginationToken"] = pagination_token
         result = cognito.list_users(**params)
         for u in result.get("Users", []):
+            # ADR-029 (B′): canonical key is email (lowercased). Lowercase every
+            # identity key so an email-keyed USER# row is recognised as valid and
+            # never deleted as "stale". sub/subdomain kept for back-compat.
             if u.get("Username"):
-                keys.add(u["Username"])
+                keys.add(u["Username"].strip().lower())
             for attr in u.get("Attributes", []):
                 if attr["Name"] in ("sub", "custom:subdomain", "email") and attr.get("Value"):
-                    keys.add(attr["Value"])
+                    keys.add(attr["Value"].strip().lower())
         pagination_token = result.get("PaginationToken")
         if not pagination_token:
             break
@@ -96,7 +99,7 @@ def main():
     budgets_table = ddb.Table(args.user_budgets_table)
     stale_budgets = [
         item for item in scan_all(budgets_table)
-        if str(item.get("user_id", "")) not in valid
+        if str(item.get("user_id", "")).strip().lower() not in valid
     ]
     print(f"[{args.user_budgets_table}] stale rows: {len(stale_budgets)}")
     for item in stale_budgets:
@@ -116,7 +119,7 @@ def main():
             FilterExpression="begins_with(PK, :p)",
             ExpressionAttributeValues={":p": "USER#"},
         )
-        if str(item["PK"]).replace("USER#", "") not in valid
+        if str(item["PK"]).replace("USER#", "").strip().lower() not in valid
     ]
     # Distinct identities for a readable summary
     ids = sorted({str(i["PK"]).replace("USER#", "") for i in stale_usage})
