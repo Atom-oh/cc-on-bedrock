@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 # pre-provisioner Lambda (user-role-provisioner.py) reuses the exact same logic
 # (ADR-022). With pre-provisioning in place, ensure_role's exists-branch runs at
 # first login and AssumeRole succeeds on attempt #1.
-from role_factory import ensure_role
+from role_factory import ensure_role, derive_subdomain
 
 REGION = os.environ["AWS_REGION"]
 ACCOUNT_ID = os.environ["ACCOUNT_ID"]
@@ -68,10 +68,10 @@ ddb = boto3.resource("dynamodb")
 limits_table = ddb.Table(LIMITS_TABLE)
 
 
-def _get_limit_status(sub: str) -> dict:
-    """Read DENY#active item from limits table."""
+def _get_limit_status(user_key: str) -> dict:
+    """Read DENY#active item from limits table (ADR-029: keyed by email)."""
     try:
-        resp = limits_table.get_item(Key={"PK": f"USER#{sub}", "SK": "DENY#active"})
+        resp = limits_table.get_item(Key={"PK": f"USER#{(user_key or '').strip().lower()}", "SK": "DENY#active"})
         item = resp.get("Item")
         if not item:
             return {"denyActive": False, "denyReason": None, "resetAt": None}
@@ -143,22 +143,31 @@ def handler(event, context):
             return _http(400, {"error": "invalid JSON body"})
 
     sub = payload.get("sub")
-    username = payload.get("username") or sub
-    email = payload.get("email", "")
+    email = (payload.get("email") or "").strip().lower()
     department = payload.get("department", "default")
     project = payload.get("project", "default")
 
-    if not sub:
-        return _http(400, {"error": "sub is required"})
+    if not email:
+        return _http(400, {"error": "email is required"})
+
+    # ADR-029 (B′): the Local role is named by subdomain. Prefer the caller-supplied
+    # subdomain (= Cognito custom:subdomain, may be disambiguated) and fall back to
+    # deriving it from the email local-part.
+    subdomain = payload.get("subdomain") or ""
+    if not subdomain:
+        try:
+            subdomain = derive_subdomain(email)
+        except ValueError as e:
+            return _http(400, {"error": f"cannot derive subdomain from email: {e}"})
 
     try:
-        ensure_result = ensure_role(sub, username, department, project)
+        ensure_result = ensure_role(subdomain, email, department, project)
         role_arn = ensure_result["roleArn"]
         if ensure_result["created"]:
             # Pre-provisioner missed this user (rare; usually CloudTrail delay or
             # event filter mismatch). Sleep briefly so the retry loop has a higher
             # chance of succeeding on attempt #1.
-            print(f"WARN ensure_role created role inline (pre-provisioner missed sub={sub}); sleeping 3s")
+            print(f"WARN ensure_role created role inline (pre-provisioner missed subdomain={subdomain}); sleeping 3s")
             time.sleep(3)
     except Exception as e:
         print(f"ensure_role failed: {e}")
@@ -167,10 +176,12 @@ def handler(event, context):
     try:
         resp = _assume_role_with_retry(
             role_arn,
-            f"local-{username[:32]}",
+            f"local-{subdomain[:32]}",
             SESSION_DURATION_SECONDS,
             [
-                {"Key": "username", "Value": username},
+                {"Key": "email", "Value": email},
+                {"Key": "subdomain", "Value": subdomain},
+                {"Key": "username", "Value": email},  # back-compat
                 {"Key": "department", "Value": department or "default"},
                 {"Key": "mode", "Value": "local"},
             ],
@@ -198,7 +209,7 @@ def handler(event, context):
         },
         "profileSnippet": _profile_snippet(creds),
         "envSnippet": _env_snippet(),
-        "limitStatus": _get_limit_status(sub),
+        "limitStatus": _get_limit_status(email),
         "roleArn": role_arn,
         "inferenceProfileArn": inference_profile_arn,
         "region": REGION,

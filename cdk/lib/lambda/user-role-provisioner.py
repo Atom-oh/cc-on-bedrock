@@ -21,6 +21,7 @@ Single source of truth for everything that must exist when a Cognito user is bor
 Also supports direct invoke for backfill / manual repair:
    {"action":"ensure","sub":"...","username":"...","department":"...","project":"..."}
 """
+from __future__ import annotations
 import json
 import os
 import re
@@ -85,6 +86,48 @@ def derive_subdomain(email_or_username: str) -> str:
             f"sanitized result {truncated!r} (must be >= 3 chars and end alphanumeric)"
         )
     return truncated
+
+
+LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
+
+
+def _subdomain_owner_email(subdomain: str) -> str | None:
+    """Return the email that owns the Local role `local-user-{subdomain}`, or None
+    if no such role exists. Used to detect a subdomain collision before assigning."""
+    try:
+        resp = iam.list_role_tags(RoleName=f"{LOCAL_ROLE_PREFIX}{subdomain}")
+        for t in resp.get("Tags", []):
+            if t["Key"] in ("email", "username") and t.get("Value"):
+                return t["Value"].strip().lower()
+        return ""  # role exists but untagged → treat as taken (unknown owner)
+    except iam.exceptions.NoSuchEntityException:
+        return None
+    except Exception as e:
+        print(f"[subdomain] owner lookup failed for {subdomain}: {e}")
+        # Unknown — be conservative and treat as taken so we don't collide.
+        return ""
+
+
+def _assign_unique_subdomain(base: str, email: str, sub: str) -> str:
+    """ADR-029 (B′): guarantee a globally-unique subdomain (no duplicate names).
+
+    If the base subdomain's Local role is already owned by a DIFFERENT email,
+    append a numeric suffix (john-doe → john-doe-2 → …) until free, staying within
+    the 30-char limit. Idempotent for the same user (returns base when the role is
+    unowned or owned by this email).
+    """
+    email_l = (email or "").strip().lower()
+    owner = _subdomain_owner_email(base)
+    if owner is None or owner == email_l:
+        return base  # free, or already ours
+    for n in range(2, 100):
+        suffix = f"-{n}"
+        candidate = f"{base[:30 - len(suffix)].rstrip('-')}{suffix}"
+        owner = _subdomain_owner_email(candidate)
+        if owner is None or owner == email_l:
+            print(f"[subdomain] '{base}' taken by {owner!r}; assigned unique '{candidate}' for {email_l}")
+            return candidate
+    raise RuntimeError(f"could not assign a unique subdomain for {email_l} from base {base!r}")
 
 
 def _admin_get_user_by_sub(sub: str) -> dict:
@@ -329,8 +372,14 @@ def _provision_user(info: dict) -> dict:
     project = info["project"]
     internal_username = info["username_internal"]
 
-    subdomain = derive_subdomain(email)
-    sub_changed = info.get("existing_subdomain") != subdomain
+    # Prefer an already-assigned subdomain (custom:subdomain) so a disambiguated
+    # value (e.g. john-doe-2) is reused deterministically and never re-derived.
+    existing_sd = info.get("existing_subdomain") or ""
+    if existing_sd:
+        subdomain = existing_sd
+    else:
+        subdomain = _assign_unique_subdomain(derive_subdomain(email), email, sub)
+    sub_changed = existing_sd != subdomain
     if sub_changed:
         _write_subdomain(internal_username, subdomain)
 
@@ -347,7 +396,7 @@ def _provision_user(info: dict) -> dict:
         _write_dept_manager_sub(internal_username, manager_sub)
 
     local_result = ensure_role(
-        sub=sub, username=email, department=department, project=project,
+        subdomain=subdomain, email=email, department=department, project=project,
     )
     ec2_result = _ensure_ec2_task_role(subdomain, email, department, sub)
 
@@ -521,36 +570,42 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
     `override_subdomain` is the operator escape hatch for cases where the
     local-user role is missing or its email tag can't be sanitized — pass it
     explicitly via direct-invoke."""
-    local_role = f"cc-on-bedrock-local-user-{sub}"
+    # ADR-029 (B′): the Local role is named by subdomain (local-user-{subdomain});
+    # usage/limits rows are keyed by email. Recover both from Cognito (best-effort —
+    # the user may already be deleted) or the operator-provided override. The
+    # legacy sub-named role (local-user-{sub}) is also reaped for back-compat.
+    legacy_local_role = f"cc-on-bedrock-local-user-{sub}"
     result: dict = {"sub": sub, "subdomain": override_subdomain}
+    email = ""
+    try:
+        u = _admin_get_user_by_sub(sub)
+        attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])} if u else {}
+        email = (attrs.get("email") or "").strip().lower()
+        if not result.get("subdomain"):
+            result["subdomain"] = attrs.get("custom:subdomain") or (
+                derive_subdomain(email) if email else None
+            )
+    except Exception as e:
+        print(f"WARN deprovision sub={sub}: Cognito recovery failed ({e}); relying on override")
 
-    # Recover subdomain via the local-user role's `username` tag (= email).
-    # If the caller already passed an explicit subdomain (direct-invoke path
-    # for users created before ADR-022, or where the local-role is missing),
-    # honor that and skip the tag lookup.
-    if result.get("subdomain"):
-        pass  # caller-provided
-    else:
+    # Legacy fallback: recover subdomain from the old sub-named role's tags.
+    if not result.get("subdomain"):
         try:
-            tag_resp = iam.list_role_tags(RoleName=local_role)
-            tag_map = {t["Key"]: t["Value"] for t in tag_resp.get("Tags", [])}
-            email = tag_map.get("username") or ""
-            if email:
-                try:
-                    result["subdomain"] = derive_subdomain(email)
-                except ValueError as e:
-                    # Surface the error so the operator can re-invoke with an
-                    # explicit subdomain. Without this, EC2/DDB/Secret cleanup
-                    # silently no-ops and orphan resources accumulate.
-                    print(f"ERROR deprovision sub={sub} email={email}: subdomain derivation failed ({e}); "
-                          f"re-invoke with {{\"action\":\"deprovision\",\"sub\":\"{sub}\",\"subdomain\":\"<value>\"}}")
-                    result["subdomainError"] = str(e)
+            tag_map = {t["Key"]: t["Value"] for t in iam.list_role_tags(RoleName=legacy_local_role).get("Tags", [])}
+            email = email or (tag_map.get("email") or tag_map.get("username") or "").strip().lower()
+            if tag_map.get("subdomain"):
+                result["subdomain"] = tag_map["subdomain"]
+            elif email:
+                result["subdomain"] = derive_subdomain(email)
         except iam.exceptions.NoSuchEntityException:
-            print(f"WARN deprovision sub={sub}: local-user role absent; cannot recover subdomain. "
-                  f"Re-invoke with explicit subdomain if EC2-side cleanup is needed.")
-            result["subdomainError"] = "local_role_missing"
+            result["subdomainError"] = "subdomain_unrecoverable"
+        except Exception as e:
+            print(f"WARN deprovision sub={sub}: legacy role recovery failed ({e})")
 
     subdomain = result["subdomain"]
+    result["email"] = email
+    # B′ Local role (subdomain-named) is the primary cleanup target.
+    local_role = f"cc-on-bedrock-local-user-{subdomain}" if subdomain else legacy_local_role
 
     # EC2 instances tagged with the subdomain (if known)
     if subdomain:
@@ -587,23 +642,28 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
     # Limits-table rows (Local Governance) — per-user counter / deny / warn
     # share PK=USER#{sub}; sweep all SKs. Paginated because daily counters can
     # accumulate past the 1MB / 100-item single-page response window.
+    # ADR-029: limits rows are keyed by email; sweep that PK plus the legacy
+    # sub-keyed PK (back-compat for rows written before the migration).
     try:
         deleted_limits = 0
         paginator = ddb.get_paginator("query")
-        for page in paginator.paginate(
-            TableName=LIMITS_TABLE,
-            KeyConditionExpression="PK = :pk",
-            ExpressionAttributeValues={":pk": {"S": f"USER#{sub}"}},
-        ):
-            for item in page.get("Items", []):
-                ddb.delete_item(
-                    TableName=LIMITS_TABLE,
-                    Key={"PK": item["PK"], "SK": item["SK"]},
-                )
-                deleted_limits += 1
+        sweep_pks = [f"USER#{email}"] if email else []
+        sweep_pks.append(f"USER#{sub}")  # legacy
+        for pk in sweep_pks:
+            for page in paginator.paginate(
+                TableName=LIMITS_TABLE,
+                KeyConditionExpression="PK = :pk",
+                ExpressionAttributeValues={":pk": {"S": pk}},
+            ):
+                for item in page.get("Items", []):
+                    ddb.delete_item(
+                        TableName=LIMITS_TABLE,
+                        Key={"PK": item["PK"], "SK": item["SK"]},
+                    )
+                    deleted_limits += 1
         result["limitsRowsDeleted"] = deleted_limits
     except Exception as e:
-        print(f"limits sweep for sub={sub} failed: {e}")
+        print(f"limits sweep for sub={sub}/email={email} failed: {e}")
         result["limitsRowsDeleted"] = f"error: {e.__class__.__name__}"
 
     # Aggregate any partial-failure markers. Three shapes carry an error:
@@ -639,9 +699,10 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
         )
 
     # All other cleanup succeeded — safe to drop the local-user role last.
-    # (Done after the aggregator so the role's `username` tag remains
-    # available to recover subdomain on retry if any earlier step failed.)
+    # Delete the B′ subdomain-named role plus any legacy sub-named role.
     result["localGovRole"] = _safe_delete_role(local_role)
+    if subdomain and legacy_local_role != local_role:
+        result["legacyLocalGovRole"] = _safe_delete_role(legacy_local_role)
 
     return result
 
