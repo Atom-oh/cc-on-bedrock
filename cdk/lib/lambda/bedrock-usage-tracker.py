@@ -10,6 +10,7 @@ DynamoDB Schema:
   PK: USER#{username}  SK: {date}#{model}
   GSI: PK starts_with DEPT# for department queries
 """
+from __future__ import annotations  # PEP 563: lazy annotations (3.12 `X | None` parses on older runtimes/tests too)
 import json
 import os
 import gzip
@@ -61,6 +62,10 @@ FAMILY_PRICING = {
     "opus": {"input": 15.0, "output": 75.0},
     "sonnet": {"input": 3.0, "output": 15.0},
     "haiku": {"input": 0.80, "output": 4.0},
+    # Bedrock embeddings (Titan/Cohere) are input-only — no output tokens. Rate is a
+    # conservative representative (~$0.02-0.10/1M across Titan v2/v1/Cohere); without
+    # this, embeddings fall to the Sonnet $3/$15 default and over-count cost/budget.
+    "embed": {"input": 0.10, "output": 0.0},
 }
 
 # Anthropic prompt-cache pricing multipliers (relative to base input rate).

@@ -122,6 +122,34 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 - ADR-020: Runtime IAM Policy Upsert (`_ensure_role()` 매 호출 시 inline policy 덮어쓰기 — wildcard 마이그레이션도 이 경로로 자동 적용)
 - 코드: `cdk/lib/02-security-stack.ts`, `cdk/lib/lambda/role_factory.py` (`allowed_model_arns()`), `cdk/lib/lambda/sts-issuer.py` (`from role_factory import ensure_role`), `cdk/lib/08-local-governance-stack.ts`
 
+## Addendum (2026-06-13) — Embedding models added to the governed ceiling
+
+원안의 천장은 **Claude 패밀리(`*anthropic.claude-*`)** 전용이라, Bedrock 임베딩 모델
+(`amazon.titan-embed-*`, `cohere.embed-*` 등)은 `bedrock:InvokeModel`이 boundary에서
+silent deny 됐다. IAM 신청 시스템(ADR-026)의 `DEFAULT_SERVICE_ALLOWLIST`에도 `bedrock`이
+없어 셀프서비스 신청 대상도 아니었다.
+
+**결정:** governed 모델 천장을 임베딩 패밀리까지 확장한다 — Claude가 허용되는 **모든 grant
+지점**에 `*embed*` ARN 쌍을 추가(천장이자 실권한):
+- `arn:aws:bedrock:*::foundation-model/*embed*`
+- `arn:aws:bedrock:*:{account}:inference-profile/*embed*`
+
+적용 지점: **CDK 8곳** — boundary + base bedrockPolicy(`02-security-stack.ts`), per-user 역할
+(`role_factory.py`, `user-role-provisioner.py`, `ec2-clients.ts`, `07-ec2-devenv-stack.ts`),
+ecsTaskRole(`04-ecs-devenv-stack.ts`), dashboard 역할(`05-dashboard-stack.ts`). **Terraform 2곳**
+(IaC parity, CLAUDE.md 3-way 규정) — `terraform/modules/security/main.tf`,
+`terraform/modules/ec2-devenv/main.tf`. (CloudFormation은 per-model bedrock ARN grant이 없어 해당 없음.)
+즉 임베딩은 이제 Claude와 동일하게 "거버넌스 허용 모델 패밀리"로 취급된다.
+
+**비용:** 임베딩은 input-only 과금(output 토큰 없음)이라 `bedrock-usage-tracker.py`
+`FAMILY_PRICING`에 `"embed"`(input 0.10/1M, output 0) 추가 — 없으면 Sonnet 기본가($3/$15)로
+잘못 계산돼 예산이 부풀려짐. 대표값(Titan v2 $0.02 / Cohere·Titan v1 $0.10)이라 모델별 정밀
+과금이 필요하면 `PRICING`에 정확한 버전 엔트리를 추가.
+
+**범위 주의:** `*embed*` 와일드카드는 신규/모든 임베딩 모델을 자동 허용한다(유지보수 0,
+대신 천장이 넓음). 특정 임베딩만 허용하려면 패턴을 좁힐 것. ADR-026 신청 UI에는 여전히
+미노출(Bedrock 모델은 신청이 아니라 천장 정책으로 관리).
+
 ## Verification
 
 ```yaml
