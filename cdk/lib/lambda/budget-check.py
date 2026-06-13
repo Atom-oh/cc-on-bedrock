@@ -10,6 +10,7 @@ Actions:
     80%: SNS warning alert to dept managers
     100%: Block all department users via IAM Deny Policy
 """
+from __future__ import annotations
 import os
 import json
 import boto3
@@ -67,14 +68,14 @@ def get_today_usage():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "")  # ADR-025: this is the Cognito sub
+            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-029: email
             if not _is_valid_user(user):
                 continue  # stale non-Cognito identity (e.g. raw IAM principal) — skip
             cost = float(item.get("estimatedCost", 0))
             dept = item.get("department", "default")
             sd = item.get("subdomain")
             if sd:
-                _subdomain_by_sub[user] = sd  # for EC2 task-role construction
+                _subdomain_by_user[user] = sd  # for IAM role-name construction
             if user in user_spend:
                 user_spend[user]["cost"] += cost
             else:
@@ -102,14 +103,14 @@ def get_monthly_usage_by_department():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "")  # ADR-025: Cognito sub
+            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-029: email
             if not _is_valid_user(user):
                 continue  # stale non-Cognito identity — skip
             cost = float(item.get("estimatedCost", 0))
             dept = item.get("department", "default")
             sd = item.get("subdomain")
             if sd:
-                _subdomain_by_sub[user] = sd
+                _subdomain_by_user[user] = sd
             if dept in dept_spend:
                 dept_spend[dept]["cost"] += cost
                 dept_spend[dept]["users"].add(user)
@@ -269,11 +270,11 @@ def get_user_department(subdomain: str) -> str:
         return "default"
 
 
-# ADR-025: per-handler map of Cognito sub → subdomain, populated from the
+# ADR-029 (B′): per-handler map of email → subdomain, populated from the
 # `subdomain` attribute on usage rows during get_today_usage / monthly scans.
-# Lets _candidate_role_names build the EC2 task-role name (which uses subdomain)
-# for a sub-keyed user. Reset at handler entry.
-_subdomain_by_sub: dict = {}
+# Lets _candidate_role_names build BOTH IAM role names (local-user-{subdomain},
+# task-{subdomain}) for an email-keyed user. Reset at handler entry.
+_subdomain_by_user: dict = {}
 
 # Set of identifiers that belong to a real Cognito user (sub + custom:subdomain +
 # email + username). Usage rows keyed by anything else — e.g. a raw IAM principal
@@ -301,10 +302,12 @@ def _load_valid_user_keys() -> set:
             result = cognito_client.list_users(**params)
             for u in result.get("Users", []):
                 if u.get("Username"):
-                    keys.add(u["Username"])
+                    keys.add(u["Username"].strip().lower())
                 for attr in u.get("Attributes", []):
+                    # ADR-029: canonical key is email; lowercase all keys so a
+                    # mixed-case email row (USER#{email.lower()}) still matches.
                     if attr["Name"] in ("sub", "custom:subdomain", "email") and attr.get("Value"):
-                        keys.add(attr["Value"])
+                        keys.add(attr["Value"].strip().lower())
             pagination_token = result.get("PaginationToken")
             pages += 1
             if not pagination_token or pages >= MAX_SCAN_PAGES:
@@ -320,24 +323,27 @@ def _is_valid_user(key: str) -> bool:
     could not be loaded (empty), so a Cognito hiccup never drops real spend."""
     if not _valid_user_keys:
         return True
-    return key in _valid_user_keys
+    return (key or "").strip().lower() in _valid_user_keys
 
 
-def _candidate_role_names(sub: str) -> list:
+def _candidate_role_names(user: str) -> list:
     """Return all IAM role candidates for a user (Local Governance + EC2 task).
 
-    ADR-025: usage/limits rows are keyed by the Cognito sub, so the Local role
-    is constructed directly (cc-on-bedrock-local-user-{sub}) and the EC2 task
-    role (cc-on-bedrock-task-{subdomain}) is added when we know the subdomain —
-    captured from the row's `subdomain` attribute during the usage scans. This
-    replaces the old `username`-tag reverse index (only needed when rows were
-    keyed by subdomain).
+    ADR-029 (B′): usage/limits rows are keyed by email, and ALL IAM role names use
+    the subdomain. Both `cc-on-bedrock-local-user-{subdomain}` and
+    `cc-on-bedrock-task-{subdomain}` are built from the row's `subdomain` attribute
+    (captured during the usage scans). The email is NEVER used as a role name
+    suffix (`local-user-{email}` would be a wrong/non-existent role → fail-safe).
     """
-    names = [f"{LOCAL_ROLE_PREFIX}{sub}"]
-    subdomain = _subdomain_by_sub.get(sub)
-    if subdomain:
-        names.append(f"{TASK_ROLE_PREFIX}-{subdomain}")
-    return names
+    subdomain = _subdomain_by_user.get(user)
+    if not subdomain:
+        # No subdomain known → cannot construct a valid role name. Fail-safe: emit
+        # nothing rather than local-user-{email}.
+        return []
+    return [
+        f"{LOCAL_ROLE_PREFIX}{subdomain}",
+        f"{TASK_ROLE_PREFIX}-{subdomain}",
+    ]
 
 
 def attach_dept_deny_policy(subdomain: str):
@@ -703,18 +709,20 @@ def check_token_limits_backup():
     return {"attached": attached, "skipped": skipped, "checked": checked}
 
 
-def set_cognito_budget_flag(sub: str, exceeded: bool):
+def set_cognito_budget_flag(user: str, exceeded: bool):
     """Set budget_exceeded flag in Cognito user attributes.
 
-    ADR-025: callers pass the Cognito sub (UUID). `sub` is a supported ListUsers
-    filter attribute (custom attributes are not), so we filter by it directly.
+    ADR-029 (B′): callers pass the canonical key = email. `email` is a supported
+    ListUsers filter attribute, so we filter by it directly (the old `sub` filter
+    would match nothing now that PKs are emails).
     """
     if not USER_POOL_ID:
         return
+    email = (user or "").strip().lower()
     try:
         result = cognito_client.list_users(
             UserPoolId=USER_POOL_ID,
-            Filter=f'sub = "{sub}"',
+            Filter=f'email = "{email}"',
             Limit=1,
         )
         users = result.get("Users", [])
@@ -727,7 +735,7 @@ def set_cognito_budget_flag(sub: str, exceeded: bool):
                 ],
             )
     except Exception as e:
-        print(f"Cognito update failed for {sub}: {e}")
+        print(f"Cognito update failed for {email}: {e}")
 
 
 def check_department_budgets(user_spend):
@@ -764,8 +772,8 @@ def check_department_budgets(user_spend):
 def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
     # ADR-025: reset the per-invocation sub→subdomain map (repopulated by the scans).
-    global _subdomain_by_sub, _valid_user_keys
-    _subdomain_by_sub = {}
+    global _subdomain_by_user, _valid_user_keys
+    _subdomain_by_user = {}
     # Load the authoritative Cognito identity set so the scans below skip stale
     # non-user rows (e.g. raw IAM principals). Empty set = fail-open (no filtering).
     _valid_user_keys = _load_valid_user_keys()
