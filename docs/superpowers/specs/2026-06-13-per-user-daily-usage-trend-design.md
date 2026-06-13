@@ -179,7 +179,7 @@ Date range uses the existing `FilterBar`.
 
 ```
 DynamoDB cc-on-bedrock-usage (PK=USER#{subdomain}, SK={date}#{model})
-   │  getUsageRecords({startDate,endDate,department?})   ← existing
+   │  getUsageRecords({startDate,endDate,department?,userId?})   ← existing
    ▼
 getUserDailyTrend()  → pivot (user×date) → Top-N + others → {cost[],tokens[],series[]}
    │  /api/usage?action=user_daily_trend  (server-side RBAC scope)
@@ -196,8 +196,10 @@ UserDailyTrendChart  → MultiLineChart + cost/token toggle + others caption
   **never** reads a department/user scope from the request body or query for
   authorization. A dept-manager cannot widen to other departments by tampering
   with params; a regular user is always pinned to their own `subdomain`.
-- Mirrors the existing pattern in `/api/usage` where
-  `effectiveUserId = session.user.isAdmin ? userId : session.user.subdomain`.
+- **Deliberately diverges** from the existing `/api/usage` pattern
+  `effectiveUserId = session.user.isAdmin ? userId : session.user.subdomain`,
+  which fails *open* (undefined scope → unfiltered). This branch fails *closed*:
+  a non-admin missing the required scope attribute gets `403`, never all-users.
 
 ## Testing
 
