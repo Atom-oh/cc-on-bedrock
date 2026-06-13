@@ -11,8 +11,8 @@
 
 | Tier | Actions | Resource scope | Gate |
 |---|---|---|---|
-| **1. Metadata** | `Describe*`, `List*`, non-data `Get*` (GetFunctionConfiguration, GetBucketLocation, …) | `Resource:*` allowed, **all services** | auto (low risk) |
-| **2. Data read** | `GetObject`, `GetItem`/`Query`/`Scan`/`BatchGetItem` (content reads) | **concrete ARN required** (`bucket/*`, table ARN — suffix wildcard OK) | request + approve |
+| **1. Metadata** | `Describe*`, `List*` ONLY (reliably non-bulk-data; **NOT `Get*`** — too many `Get*` read data: kinesis:GetRecords, logs:GetLogEvents, dynamodb:GetItem, s3:GetObject, …) | `Resource:*` allowed, **all services** | auto (low risk) |
+| **2. Data read** | ALL other reads — `Get*`, `Query`/`Scan`/`BatchGet*`, `ReceiveMessage`, … (content reads) | **concrete ARN required** (`bucket/*`, table ARN — suffix wildcard OK); Resource:* rejected | request + approve |
 | **3. Secret/decrypt** | `secretsmanager:GetSecretValue`, `ssm:GetParameter*` (SecureString), `kms:Decrypt` | **concrete ARN, NO path wildcard** (single secret/param/key; the secret's full contents come with GetSecretValue) | request + approve |
 | **4. Write/mutate** | `Put*`/`Update*`/`Delete*`/`Create*`/… | concrete ARN | request + approve, **narrow write-allowlist** |
 | **Always deny** | iam·org·account·`*:*ResourcePolicy`·`*:*Permission`·kms key delete/schedule-deletion·cross-account | — | rejected (both layers) |

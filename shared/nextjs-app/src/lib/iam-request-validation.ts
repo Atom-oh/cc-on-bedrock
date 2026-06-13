@@ -80,6 +80,25 @@ function isReadWildcardOp(op: string): boolean {
   return READ_WILDCARD_PREFIXES.some((p) => s === p);
 }
 
+// ADR-030 Tier-1: List*/Describe* are pure metadata (no bulk data/secrets) — `Resource:*`
+// is acceptable on ANY service. NOTE: Get* is deliberately NOT here (kinesis:GetRecords,
+// dynamodb:GetItem, s3:GetObject, secretsmanager:GetSecretValue, … read data/secrets).
+function isMetadataAction(action: string): boolean {
+  const op = (action.split(":")[1] ?? "").toLowerCase();
+  const verb = op.endsWith("*") ? op.slice(0, -1) : op;
+  return verb.startsWith("list") || verb.startsWith("describe");
+}
+
+// ADR-030: read-tier actions bypass the WRITE service allowlist (reads are allowed on any
+// service — still concrete-ARN-scoped by the resource rules below, except metadata). Write
+// actions (Put/Update/Delete/Create/…) stay confined to the allowlist. Unknown verbs default
+// to write-tier (allowlist-gated) — the safe direction.
+function isReadTierAction(action: string, wildcardOk: string[]): boolean {
+  if (actionMatchesAny(action, wildcardOk)) return true;
+  const op = (action.split(":")[1] ?? "").toLowerCase();
+  return READ_WILDCARD_PREFIXES.some((p) => op.startsWith(p));
+}
+
 export function validateIamRequest(statements: IamStatement[], opts: ValidateOpts): ValidationResult {
   const errors: string[] = [];
   const dangerous = opts.dangerousActionDenylist ?? DEFAULT_DANGEROUS;
@@ -119,8 +138,11 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
         }
       }
       actionServices.add(svc.toLowerCase());
-      if (!allowlist.includes(svc.toLowerCase())) {
-        errors.push(`service not in allowlist: ${svc}`);
+      // ADR-030 tiered: the service allowlist gates WRITE/mutate actions only. Reads
+      // (Get*/List*/Describe*/Query/Scan/BatchGet* + wildcard-ok set) are allowed on ANY
+      // service — they stay concrete-ARN-scoped below (except List*/Describe* metadata).
+      if (!isReadTierAction(action, opts.wildcardOkActions) && !allowlist.includes(svc.toLowerCase())) {
+        errors.push(`service not in write-allowlist: ${svc}`);
       }
       if (dangerous.some((re) => re.test(action))) {
         errors.push(`dangerous action not allowed: ${action}`);
@@ -131,7 +153,10 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
     // s3:listallmybuckets) — actions that genuinely lack resource-level scoping. Read-only wildcard
     // ops (s3:Get*/List*) are NOT auto-granted Resource:* — they must be scoped to a concrete ARN,
     // else `s3:Get*`+Resource:* = account-wide reads (gate consensus: codex/kiro HIGH).
-    const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions));
+    // ADR-030 Tier-1: Resource:'*' allowed for the resource-level-unsupported wildcard-ok set
+    // OR for pure metadata (List*/Describe*) on any service. Data reads (Get*/Query/Scan) are
+    // NOT eligible — they must be scoped to a concrete ARN.
+    const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions) || isMetadataAction(a));
     for (const res of resources) {
       if (res === "*") {
         if (!allActionsWildcardOk) {
