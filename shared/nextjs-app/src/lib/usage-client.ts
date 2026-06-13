@@ -72,6 +72,112 @@ export interface DailyUsage {
   estimatedCost: number;
 }
 
+export interface UserDailyTrendPoint {
+  date: string;
+  [seriesKey: string]: number | string;
+}
+
+export interface UserDailyTrendSeries {
+  key: string;       // userId (subdomain) or "others"
+  name: string;
+  totalCost: number; // window total — Top-N ranking + legend
+}
+
+export interface UserDailyTrend {
+  cost: UserDailyTrendPoint[];
+  tokens: UserDailyTrendPoint[];
+  series: UserDailyTrendSeries[];
+  othersCount: number;
+}
+
+/** Inclusive list of YYYY-MM-DD dates from start..end (UTC). */
+function eachDate(startDate: string, endDate: string): string[] {
+  const out: string[] = [];
+  const d = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  while (d <= end) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+const OTHERS_KEY = "others";
+
+/**
+ * Pure pivot of usage records into a (user x date) trend, Top-N by window cost
+ * with the rest folded into a single "others" series. Cost and tokens share the
+ * SAME full-calendar date axis (zero-filled) so the UI can toggle without refetch.
+ * The series set is fixed by cost ranking (stable legend across toggle).
+ */
+export function buildUserDailyTrend(
+  records: UsageRecord[],
+  params: { startDate: string; endDate: string; topN?: number },
+): UserDailyTrend {
+  const topN = params.topN ?? 8;
+  const dates = eachDate(params.startDate, params.endDate);
+
+  const costByUser = new Map<string, Map<string, number>>();
+  const tokByUser = new Map<string, Map<string, number>>();
+  const totalCost = new Map<string, number>();
+  for (const r of records) {
+    if (!costByUser.has(r.userId)) { costByUser.set(r.userId, new Map()); tokByUser.set(r.userId, new Map()); }
+    const c = costByUser.get(r.userId)!;
+    const tk = tokByUser.get(r.userId)!;
+    c.set(r.date, (c.get(r.date) ?? 0) + r.estimatedCost);
+    tk.set(r.date, (tk.get(r.date) ?? 0) + r.totalTokens);
+    totalCost.set(r.userId, (totalCost.get(r.userId) ?? 0) + r.estimatedCost);
+  }
+
+  const ranked = [...totalCost.entries()].sort((a, b) => b[1] - a[1]).map(([u]) => u);
+  const top = ranked.slice(0, topN);
+  const rest = ranked.slice(topN);
+  const othersCount = rest.length;
+
+  const series: UserDailyTrendSeries[] = top.map((u) => ({ key: u, name: u, totalCost: totalCost.get(u) ?? 0 }));
+  if (othersCount > 0) {
+    series.push({
+      key: OTHERS_KEY,
+      name: `others (${othersCount})`,
+      totalCost: rest.reduce((s, u) => s + (totalCost.get(u) ?? 0), 0),
+    });
+  }
+
+  const build = (src: Map<string, Map<string, number>>): UserDailyTrendPoint[] =>
+    dates.map((date) => {
+      const point: UserDailyTrendPoint = { date };
+      for (const u of top) point[u] = src.get(u)?.get(date) ?? 0;
+      if (othersCount > 0) point[OTHERS_KEY] = rest.reduce((s, u) => s + (src.get(u)?.get(date) ?? 0), 0);
+      return point;
+    });
+
+  return { cost: build(costByUser), tokens: build(tokByUser), series, othersCount };
+}
+
+/**
+ * Fetch usage records (scoped by department or single userId) and pivot into a
+ * per-user daily trend. department -> Scan+filter; userId -> single-partition Query.
+ */
+export async function getUserDailyTrend(params: {
+  startDate: string;
+  endDate: string;
+  department?: string;
+  userId?: string;
+  topN?: number;
+}): Promise<UserDailyTrend> {
+  const records = await getUsageRecords({
+    startDate: params.startDate,
+    endDate: params.endDate,
+    department: params.department,
+    userId: params.userId,
+  });
+  return buildUserDailyTrend(records, {
+    startDate: params.startDate,
+    endDate: params.endDate,
+    topN: params.topN,
+  });
+}
+
 // ─── Query Functions ───
 
 function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
