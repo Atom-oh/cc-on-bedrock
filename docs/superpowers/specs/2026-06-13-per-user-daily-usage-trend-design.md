@@ -176,7 +176,7 @@ DynamoDB cc-on-bedrock-usage (PK=USER#{subdomain}, SK={date}#{model})
    │  getUsageRecords({startDate,endDate,department?})   ← existing
    ▼
 getUserDailyTrend()  → pivot (user×date) → Top-N + others → {cost[],tokens[],series[]}
-   │  /api/usage?type=user_daily_trend  (server-side RBAC scope)
+   │  /api/usage?action=user_daily_trend  (server-side RBAC scope)
    ▼
 UserDailyTrendChart  → MultiLineChart + cost/token toggle + others caption
    ├── /monitoring   (admin only: all users — page guard unchanged)
@@ -216,7 +216,7 @@ UserDailyTrendChart  → MultiLineChart + cost/token toggle + others caption
 ## Affected Files
 
 - `shared/nextjs-app/src/lib/usage-client.ts` — `getUserDailyTrend` + interfaces
-- `shared/nextjs-app/src/app/api/usage/route.ts` — `type=user_daily_trend` branch
+- `shared/nextjs-app/src/app/api/usage/route.ts` — `action=user_daily_trend` branch
 - `shared/nextjs-app/src/lib/auth.ts` — session `department` + `isDeptManager`
 - `shared/nextjs-app/src/lib/types.ts` — `UserSession` fields
 - `shared/nextjs-app/src/components/charts/user-daily-trend-chart.tsx` — new
