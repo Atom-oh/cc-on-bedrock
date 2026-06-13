@@ -23,6 +23,7 @@ def _reset_caches():
     tracker._dept_cache.clear()
     if hasattr(tracker, "_email_cache"):
         tracker._email_cache.clear()
+    tracker._sd_email_map = None
 
 
 def test_sub_resolution_removed():

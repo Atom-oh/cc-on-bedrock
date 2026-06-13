@@ -79,3 +79,55 @@ def test_merge_counters_sums():
     assert out["inputTokens"] == Decimal("150")
     assert out["requests"] == Decimal("3")
     assert out["PK"] == "x"
+
+
+class _FakeTable:
+    """Minimal in-memory DynamoDB table for idempotency tests."""
+    def __init__(self, items):
+        self.store = {(i["PK"], i["SK"]): dict(i) for i in items}
+
+    def scan(self, **kw):
+        return {"Items": [dict(v) for v in self.store.values()]}
+
+    def get_item(self, Key):
+        v = self.store.get((Key["PK"], Key["SK"]))
+        return {"Item": dict(v)} if v else {}
+
+    def put_item(self, Item):
+        self.store[(Item["PK"], Item["SK"])] = dict(Item)
+
+    def delete_item(self, Key):
+        self.store.pop((Key["PK"], Key["SK"]), None)
+
+
+class _Args:
+    apply = True
+    delete_old = False
+
+
+def test_backfill_idempotent_no_double_count():
+    maps = mig.build_identity_maps([_user("84c82d0c-sub", "psungbum@example.com", "psungbum")])
+    # one usage row keyed by sub
+    t = _FakeTable([{"PK": "USER#84c82d0c-sub", "SK": "2026-06-12#m",
+                     "inputTokens": Decimal("100"), "requests": Decimal("2")}])
+    mig._migrate_table(t, maps, _Args(), "usage")
+    after1 = t.store[("USER#psungbum@example.com", "2026-06-12#m")]
+    assert after1["inputTokens"] == Decimal("100")
+    # source must be gone (summed row deleted same-pass)
+    assert ("USER#84c82d0c-sub", "2026-06-12#m") not in t.store
+    # re-run must NOT double
+    mig._migrate_table(t, maps, _Args(), "usage")
+    after2 = t.store[("USER#psungbum@example.com", "2026-06-12#m")]
+    assert after2["inputTokens"] == Decimal("100"), f"doubled: {after2['inputTokens']}"
+
+
+def test_backfill_merges_two_sources_into_one_email():
+    # atomoh split: USER#atomoh (subdomain) + USER#b4489d9c (sub) → one email
+    maps = mig.build_identity_maps([_user("b4489d9c-sub", "atomoh@example.com", "atomoh")])
+    t = _FakeTable([
+        {"PK": "USER#atomoh", "SK": "2026-06-10#m", "inputTokens": Decimal("400")},
+        {"PK": "USER#b4489d9c-sub", "SK": "2026-06-10#m", "inputTokens": Decimal("300")},
+    ])
+    mig._migrate_table(t, maps, _Args(), "usage")
+    merged = t.store[("USER#atomoh@example.com", "2026-06-10#m")]
+    assert merged["inputTokens"] == Decimal("700")  # 400 + 300 sum-preserved

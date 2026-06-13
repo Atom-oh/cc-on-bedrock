@@ -185,11 +185,17 @@ def _migrate_table(table, maps, args, label):
             if existing and not is_limit:
                 new_item = merge_counters(existing, new_item)
                 merged += 1
+            # Idempotency (P4 CRITICAL): summed rows (usage + COUNTER#) MUST delete
+            # their source in the same pass, else a re-run re-adds the source into
+            # the already-merged target → doubled counters/spend. prefer-new rows
+            # (LIMIT/DENY/WARN) overwrite, so re-runs are naturally idempotent;
+            # their source is removed only with --delete-old.
+            delete_src = args.apply and (not is_limit or args.delete_old)
             print(f"  [{label}] {old_key['PK']} | SK={old_key['SK']} → {new_item['PK']}"
-                  f"{' (merge)' if existing and not is_limit else ''}")
+                  f"{' (merge)' if existing and not is_limit else ''}{' +del-src' if delete_src else ''}")
             if args.apply:
                 table.put_item(Item=new_item)
-                if args.delete_old:
+                if delete_src:
                     table.delete_item(Key=old_key)
                     deleted += 1
             rekeyed += 1

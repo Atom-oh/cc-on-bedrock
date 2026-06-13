@@ -178,6 +178,11 @@ export async function PUT(req: NextRequest) {
         ExpressionAttributeValues: exprVals,
       }));
     } else if (type === "user") {
+      // ADR-029 (B′): the per-user canonical key is the lowercased email. Normalize
+      // once so BOTH the cc-user-budgets row AND the mirrored LIMIT#monthly land
+      // under USER#{email.lower()} — matching the tracker/enforcer key (else the
+      // enforcer can't read the mirrored cap → token-limit bypass).
+      const userId = id.trim().toLowerCase();
       const updateParts: string[] = ["updatedAt = :now"];
       const exprValues: Record<string, AttributeValue> = {
         ":now": { S: now },
@@ -198,7 +203,7 @@ export async function PUT(req: NextRequest) {
 
       await dynamodb.send(new UpdateItemCommand({
         TableName: USER_BUDGETS_TABLE,
-        Key: { user_id: { S: id } },
+        Key: { user_id: { S: userId } },
         UpdateExpression: `SET ${updateParts.join(", ")}`,
         ExpressionAttributeValues: exprValues,
       }));
@@ -215,7 +220,7 @@ export async function PUT(req: NextRequest) {
           await dynamodb.send(new UpdateItemCommand({
             TableName: LIMITS_TABLE,
             Key: {
-              PK: { S: `USER#${id}` },
+              PK: { S: `USER#${userId}` },
               SK: { S: "LIMIT#monthly" },
             },
             UpdateExpression: "SET max_normalized = :mx, source_usd = :usd, normalized_per_usd = :rate, updatedAt = :now",
@@ -237,7 +242,7 @@ export async function PUT(req: NextRequest) {
           await dynamodb.send(new DeleteItemCommand({
             TableName: LIMITS_TABLE,
             Key: {
-              PK: { S: `USER#${id}` },
+              PK: { S: `USER#${userId}` },
               SK: { S: "LIMIT#monthly" },
             },
           }));

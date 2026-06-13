@@ -160,25 +160,43 @@ def _resolve_email_from_subdomain(subdomain: str) -> str | None:
     except Exception as e:
         print(f"EC2 email tag lookup failed for {subdomain}: {e}")
 
-    # Fallback: Cognito email attribute (username == subdomain)
+    # Fallback: Cognito custom:subdomain → email map. The ListUsers *Filter* does
+    # NOT support custom:subdomain (that was the original ADR-025 bug), and the
+    # Username may be a UUID, so we cannot filter by username==subdomain either —
+    # especially for provisioner-disambiguated subdomains (e.g. john-doe-2). Build
+    # a full subdomain→email map once (reading the attribute in-memory) and cache.
+    email = _subdomain_email_map().get(subdomain)
+    if email:
+        _email_cache[subdomain] = email
+        return email
+    return None
+
+
+# subdomain → email, built lazily from a full Cognito ListUsers scan (custom:subdomain
+# attribute read in-memory, since the API Filter does not support custom attributes).
+_sd_email_map: dict | None = None
+
+
+def _subdomain_email_map() -> dict:
+    global _sd_email_map
+    if _sd_email_map is not None:
+        return _sd_email_map
+    mapping: dict = {}
     if USER_POOL_ID:
         try:
-            resp = cognito_client.list_users(
-                UserPoolId=USER_POOL_ID,
-                Filter=f'username = "{subdomain}"',
-                Limit=1,
-            )
-            for user in resp.get("Users", []):
-                attrs = {a["Name"]: a["Value"] for a in user.get("Attributes", [])}
-                email = attrs.get("email")
-                if email and "@" in email:
-                    email = email.strip().lower()
-                    _email_cache[subdomain] = email
-                    return email
+            paginator = cognito_client.get_paginator("list_users")
+            for page in paginator.paginate(UserPoolId=USER_POOL_ID):
+                for user in page.get("Users", []):
+                    attrs = {a["Name"]: a["Value"] for a in user.get("Attributes", [])}
+                    sd = attrs.get("custom:subdomain")
+                    email = (attrs.get("email") or "").strip().lower()
+                    if sd and email and "@" in email:
+                        mapping[sd] = email
         except Exception as e:
-            print(f"Cognito email lookup failed for {subdomain}: {e}")
-
-    return None
+            print(f"Cognito subdomain→email map build failed: {e}")
+            return {}  # transient: don't cache an empty map
+    _sd_email_map = mapping
+    return mapping
 
 
 def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
