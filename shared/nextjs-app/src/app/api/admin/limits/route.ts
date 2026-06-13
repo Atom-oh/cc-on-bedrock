@@ -11,8 +11,8 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
 // ADR-014/015: admin CRUD for normalized-token limits in cc-on-bedrock-limits.
 //
-// Schema:
-//   PK = "USER#{sub}" | "DEPT#{dept}"
+// Schema (ADR-029 B′):
+//   PK = "USER#{email}" | "DEPT#{dept}"   (canonical user key = lowercased email)
 //   SK = "LIMIT#{daily|weekly|monthly}"
 //   attrs: max_normalized (number), updatedAt (string)
 

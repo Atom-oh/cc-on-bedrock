@@ -74,8 +74,12 @@ export async function GET(_req: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
-  const sub = session.user.id;
+  // ADR-029 (B′): usage/limits canonical key = email (lowercased), not Cognito sub.
+  const userKey = (session.user.email ?? "").trim().toLowerCase();
   const dept = (session.user as { department?: string }).department ?? "default";
+  if (!userKey) {
+    return NextResponse.json({ error: "email missing from session" }, { status: 400 });
+  }
 
   try {
     // Single scan; the table is small (per-user/per-dept rows).
@@ -90,8 +94,8 @@ export async function GET(_req: NextRequest) {
     for (const p of periods) {
       const bucket = bucketFor(now, p);
       const userCounterSk = `COUNTER#${p}#${bucket}`;
-      const userCounter = items.find((i) => i.PK === `USER#${sub}` && i.SK === userCounterSk);
-      const userLimit = items.find((i) => i.PK === `USER#${sub}` && i.SK === `LIMIT#${p}`);
+      const userCounter = items.find((i) => i.PK === `USER#${userKey}` && i.SK === userCounterSk);
+      const userLimit = items.find((i) => i.PK === `USER#${userKey}` && i.SK === `LIMIT#${p}`);
       const deptCounter = items.find((i) => i.PK === `DEPT#${dept}` && i.SK === userCounterSk);
       const deptLimit = items.find((i) => i.PK === `DEPT#${dept}` && i.SK === `LIMIT#${p}`);
 
@@ -105,7 +109,7 @@ export async function GET(_req: NextRequest) {
       });
     }
 
-    const denyItem = items.find((i) => i.PK === `USER#${sub}` && i.SK === "DENY#active");
+    const denyItem = items.find((i) => i.PK === `USER#${userKey}` && i.SK === "DENY#active");
     if (denyItem) {
       denyActive = {
         reason: String(denyItem.reason ?? ""),
@@ -116,11 +120,11 @@ export async function GET(_req: NextRequest) {
 
     // USD budget deny (cc-bedrock-user-daily-deny, ADR-015) — not in the limits
     // table, so read the budget row and surface a release estimate to the user.
-    // ADR-025: budget-check keys cc-user-budgets by the Cognito sub; legacy rows
-    // may still be keyed by subdomain, so fall back to it.
+    // ADR-029 (B′): cc-user-budgets is keyed by email; legacy rows may still be
+    // keyed by subdomain, so fall back to it.
     let budgetDeny: { active: boolean; currentSpend: number; budget: number; releaseAt: string } | null = null;
     const subdomain = (session.user as { subdomain?: string }).subdomain;
-    const budgetKeys = [sub, ...(subdomain && subdomain !== sub ? [subdomain] : [])];
+    const budgetKeys = [userKey, ...(subdomain && subdomain !== userKey ? [subdomain] : [])];
     try {
       for (const budgetKey of budgetKeys) {
         const r = await dynamo.send(new GetItemCommand({
@@ -134,13 +138,13 @@ export async function GET(_req: NextRequest) {
         if (budget > 0 && spend >= budget) {
           budgetDeny = { active: true, currentSpend: spend, budget, releaseAt: nextUtcMidnightIso() };
         }
-        break; // first existing row wins (canonical sub key preferred)
+        break; // first existing row wins (canonical email key preferred)
       }
     } catch {
       /* budget table optional — ignore */
     }
 
-    return NextResponse.json({ sub, department: dept, summary, denyActive, budgetDeny });
+    return NextResponse.json({ user: userKey, department: dept, summary, denyActive, budgetDeny });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "lookup failed";
     return NextResponse.json({ error: msg }, { status: 500 });

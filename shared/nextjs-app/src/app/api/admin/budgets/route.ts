@@ -87,12 +87,15 @@ export async function GET(req: NextRequest) {
       // than a Cognito identity. Accept a row whose user_id matches any authoritative
       // Cognito identifier — sub (ADR-025), legacy subdomain, email, or username —
       // and drop everything else (stale non-user rows).
+      // ADR-029 (B′): canonical key is email (lowercased). Keep sub/subdomain for
+      // back-compat matching of not-yet-migrated rows; lowercase every key so a
+      // mixed-case email row still matches.
       const validUserKeys = new Set<string>();
       for (const cu of cognitoUsers) {
-        if (cu.sub) validUserKeys.add(cu.sub);
-        if (cu.subdomain) validUserKeys.add(cu.subdomain);
-        if (cu.email) validUserKeys.add(cu.email);
-        if (cu.username) validUserKeys.add(cu.username);
+        if (cu.sub) validUserKeys.add(cu.sub.toLowerCase());
+        if (cu.subdomain) validUserKeys.add(cu.subdomain.toLowerCase());
+        if (cu.email) validUserKeys.add(cu.email.toLowerCase());
+        if (cu.username) validUserKeys.add(cu.username.toLowerCase());
       }
 
       results.users = (userResult.Items ?? [])
@@ -107,7 +110,7 @@ export async function GET(req: NextRequest) {
             updatedAt: u.updatedAt ?? "",
           };
         })
-        .filter((u) => validUserKeys.has(u.userId));
+        .filter((u) => validUserKeys.has(String(u.userId).toLowerCase()));
     }
 
     return NextResponse.json({
