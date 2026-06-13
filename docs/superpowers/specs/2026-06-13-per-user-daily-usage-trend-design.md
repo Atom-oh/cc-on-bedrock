@@ -126,6 +126,12 @@ Only `isAdmin` may run with no scope filter.
 Date range comes from existing `start_date` / `end_date` query params (same as
 other `/api/usage` types). `topN` accepts an optional clamp (default 8, max ~15).
 
+**Date-range validation up front (kiro finding — medium).** Validate the window
+*before* querying, independent of the MAX_PAGES truncation notice: require
+`start_date <= end_date`, reject future-dated ranges, and cap the span (e.g. ≤ 92
+days) → `400` on violation. This bounds Scan cost and gives a clear error instead
+of a silently truncated chart.
+
 ### 3. Auth — `auth.ts` + `types.ts`
 
 Session currently exposes `groups`, `isAdmin`, `subdomain` but **not**
