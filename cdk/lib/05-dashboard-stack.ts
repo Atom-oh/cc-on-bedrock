@@ -42,6 +42,9 @@ export interface DashboardStackProps extends cdk.StackProps {
   ecsInfrastructureRoleArn?: string;
   webAclArn?: string;
   dnsFirewallRuleGroupId?: string;
+  /** Internal OTLP/gRPC collector endpoint (UsageTrackingStack); injected into devenv
+   *  user-data so Claude Code pushes productivity metrics. Telemetry is off when unset. */
+  otelCollectorEndpoint?: string;
   /** @deprecated ADR-016: DevEnv CloudFront now owns its own NLB origin in Stack 04. */
   nlbDnsName?: string;
 }
@@ -303,6 +306,8 @@ export class DashboardStack extends cdk.Stack {
         ECS_CLUSTER_NAME: config.ecsClusterName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         DOMAIN_NAME: config.domainName,
+        // Phase 1: devenv launcher reads this to enable Claude Code OTel push (empty = off).
+        OTEL_COLLECTOR_ENDPOINT: props.otelCollectorEndpoint ?? '',
         DEV_SUBDOMAIN: config.devSubdomain,
         VPC_ID: vpc.vpcId,
         AWS_ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,

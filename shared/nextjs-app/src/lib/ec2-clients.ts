@@ -364,6 +364,10 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // to "unattributed" and per-user productivity rollups can't be keyed.
       `echo "USER_EMAIL=${input.username}" >> /etc/environment`,
       `echo "USER_DEPARTMENT=${input.department}" >> /etc/environment`,
+      // Phase 1: collector endpoint enables OTel push (entrypoint gates on it; absent = telemetry off).
+      ...(process.env.OTEL_COLLECTOR_ENDPOINT
+        ? [`echo "OTEL_COLLECTOR_ENDPOINT=${process.env.OTEL_COLLECTOR_ENDPOINT}" >> /etc/environment`]
+        : []),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
@@ -790,6 +794,10 @@ export async function restoreFromSnapshot(
       // ADR-029 key). Without these, metrics fall back to "unattributed".
       `echo "USER_EMAIL=${record?.username ?? ""}" >> /etc/environment`,
       `echo "USER_DEPARTMENT=${record?.department ?? "default"}" >> /etc/environment`,
+      // Phase 1: collector endpoint enables OTel push (entrypoint gates on it; absent = telemetry off).
+      ...(process.env.OTEL_COLLECTOR_ENDPOINT
+        ? [`echo "OTEL_COLLECTOR_ENDPOINT=${process.env.OTEL_COLLECTOR_ENDPOINT}" >> /etc/environment`]
+        : []),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,

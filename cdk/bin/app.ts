@@ -134,10 +134,12 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   ecsInfrastructureRoleArn: securityStack.ecsInfrastructureRole.roleArn,
   webAclArn: wafStack.webAclArn,
   dnsFirewallRuleGroupId: networkStack.dnsFirewallRuleGroupId,
+  otelCollectorEndpoint: usageTrackingStack.otelCollectorEndpoint,
   description: 'CC-on-Bedrock: Dashboard CloudFront (ADR-016 split)',
 });
 if (ecsDevenvStack) dashboardStack.addDependency(ecsDevenvStack);
 dashboardStack.addDependency(wafStack);
+dashboardStack.addDependency(usageTrackingStack);
 
 // Stack 07: EC2-per-user Dev Environment
 // Skipped when governanceOnly=true (ADR-014)

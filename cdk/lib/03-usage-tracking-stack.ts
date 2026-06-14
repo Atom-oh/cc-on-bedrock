@@ -32,6 +32,8 @@ export interface UsageTrackingStackProps extends cdk.StackProps {
 
 export class UsageTrackingStack extends cdk.Stack {
   public readonly usageTable: dynamodb.Table;
+  /** Internal OTLP/gRPC endpoint (NLB DNS:4317) for devenvs to push Claude Code metrics. */
+  public readonly otelCollectorEndpoint: string;
 
   constructor(scope: Construct, id: string, props: UsageTrackingStackProps) {
     super(scope, id, props);
@@ -156,8 +158,9 @@ export class UsageTrackingStack extends cdk.Stack {
     });
     collectorScaling.scaleOnCpuUtilization('CollectorCpuScaling', { targetUtilizationPercent: 60 });
 
+    this.otelCollectorEndpoint = `${otelCollector.loadBalancer.loadBalancerDnsName}:4317`;
     new cdk.CfnOutput(this, 'OtelCollectorEndpoint', {
-      value: `${otelCollector.loadBalancer.loadBalancerDnsName}:4317`,
+      value: this.otelCollectorEndpoint,
       description: 'Internal OTLP/gRPC endpoint — set as OTEL_EXPORTER_OTLP_ENDPOINT in devenvs',
     });
 
