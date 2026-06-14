@@ -126,12 +126,13 @@ def _decimal(n) -> Decimal:
 # Limit lookup
 # ──────────────────────────────────────────────────────────
 
-def _get_user_limit(sub: str, period: str, cache: dict | None = None) -> dict:
-    """Look up USER#{sub}/LIMIT#{period} — cache hit avoids GetItem (review #4)."""
+def _get_user_limit(user_key: str, period: str, cache: dict | None = None) -> dict:
+    """Look up USER#{email}/LIMIT#{period} — `user_key` is the canonical email
+    PK suffix (ADR-031). Cache hit avoids GetItem (review #4)."""
     if cache is not None:
-        return cache.get((f"USER#{sub}", f"LIMIT#{period}"), {})
+        return cache.get((f"USER#{user_key}", f"LIMIT#{period}"), {})
     try:
-        r = limits.get_item(Key={"PK": f"USER#{sub}", "SK": f"LIMIT#{period}"})
+        r = limits.get_item(Key={"PK": f"USER#{user_key}", "SK": f"LIMIT#{period}"})
         return r.get("Item") or {}
     except Exception as e:
         print(f"user_limit fetch failed: {e}")
@@ -162,10 +163,10 @@ def _prefetch_limits(records: list) -> dict:
         pk = new.get("PK", "")
         if not pk.startswith("USER#"):
             continue
-        sub = pk[len("USER#"):]
+        user_key = pk[len("USER#"):]  # canonical email (ADR-031)
         dept = new.get("department", "")
         for period in PERIODS:
-            keys.add((f"USER#{sub}", f"LIMIT#{period}"))
+            keys.add((f"USER#{user_key}", f"LIMIT#{period}"))
             if dept:
                 keys.add((f"DEPT#{dept}", f"LIMIT#{period}"))
     if not keys:
@@ -307,7 +308,7 @@ def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: s
     return True
 
 
-def _maybe_warn(sub: str, period: str, used: Decimal, limit: Decimal, who: str):
+def _maybe_warn(user_key: str, period: str, used: Decimal, limit: Decimal, who: str):
     if limit <= 0:
         return
     ratio = float(used / limit) if limit else 0.0
@@ -317,7 +318,7 @@ def _maybe_warn(sub: str, period: str, used: Decimal, limit: Decimal, who: str):
             try:
                 limits.put_item(
                     Item={
-                        "PK": f"USER#{sub}",
+                        "PK": f"USER#{user_key}",
                         "SK": f"WARN#{period}#{int(threshold*100)}",
                         "ratio": Decimal(str(round(ratio, 4))),
                         "ts": datetime.utcnow().isoformat(),

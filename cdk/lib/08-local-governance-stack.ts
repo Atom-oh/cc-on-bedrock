@@ -80,7 +80,7 @@ export class LocalGovernanceStack extends cdk.Stack {
     });
 
     // ──────────────────────────────────────────────────────────
-    // Limits table — keyed by USER#{sub} / DEPT#{dept} × LIMIT|COUNTER|DENY|WARN
+    // Limits table — keyed by USER#{email} / DEPT#{dept} × LIMIT|COUNTER|DENY|WARN (ADR-031)
     // ──────────────────────────────────────────────────────────
     this.limitsTable = new dynamodb.Table(this, 'LimitsTable', {
       tableName: 'cc-on-bedrock-limits',

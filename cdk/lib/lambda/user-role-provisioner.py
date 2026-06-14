@@ -171,6 +171,10 @@ def _extract_sub_from_event(detail: dict) -> str | None:
 
 
 def _write_subdomain(internal_username: str, subdomain: str) -> None:
+    # NOTE: custom:subdomain is NOT a third identity axis. It is the DNS/IAM-safe
+    # derivative of the canonical key (email) — derive_subdomain(email) — persisted
+    # only so a disambiguated value (e.g. john-doe-2 when two emails collide on the
+    # local-part) is reused deterministically. email stays the single source of truth.
     cognito.admin_update_user_attributes(
         UserPoolId=USER_POOL_ID,
         Username=internal_username,
