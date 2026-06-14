@@ -216,6 +216,33 @@ ECS_CREDS_URI="${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}"
 ECS_CREDS_FULL_URI="${AWS_CONTAINER_CREDENTIALS_FULL_URI:-}"
 ECS_CREDS_TOKEN="${AWS_CONTAINER_AUTHORIZATION_TOKEN:-}"
 
+# --- OTel productivity telemetry (Phase 1): push Claude Code metrics to the central
+# collector. Gated on OTEL_COLLECTOR_ENDPOINT (the collector NLB DNS, injected at task
+# launch); telemetry stays OFF if it is unset. Identity for per-user attribution uses the
+# ADR-029 email key when USER_EMAIL is injected, else the rollup buckets it as
+# "unattributed". deploy_mode=ec2 enables the EC2-vs-Local usage comparison. ---
+OTEL_ENV_BLOCK=""
+if [ -n "${OTEL_COLLECTOR_ENDPOINT:-}" ]; then
+  _otel_dept="${USER_DEPARTMENT:-default}"
+  if [ -n "${USER_EMAIL:-}" ]; then
+    _otel_attrs="enduser.id=${USER_EMAIL},department=${_otel_dept},deploy_mode=ec2"
+  else
+    _otel_attrs="department=${_otel_dept},deploy_mode=ec2"
+  fi
+  OTEL_ENV_BLOCK=$(cat <<OTELEOF
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}"
+export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
+export OTEL_RESOURCE_ATTRIBUTES="${_otel_attrs}"
+OTELEOF
+)
+  echo "OTel telemetry enabled -> ${OTEL_COLLECTOR_ENDPOINT} (attrs: ${_otel_attrs})"
+else
+  echo "OTel telemetry disabled (OTEL_COLLECTOR_ENDPOINT not set)"
+fi
+
 cat > /etc/profile.d/claude-env.sh << ENVEOF
 export CLAUDE_CODE_USE_BEDROCK=1
 # ANTHROPIC_MODEL intentionally unset — leaving it empty makes /model show "Default"
@@ -231,6 +258,7 @@ export HOME="$USER_HOME"
 export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="${ECS_CREDS_URI}"
 export AWS_CONTAINER_CREDENTIALS_FULL_URI="${ECS_CREDS_FULL_URI}"
 export AWS_CONTAINER_AUTHORIZATION_TOKEN="${ECS_CREDS_TOKEN}"
+${OTEL_ENV_BLOCK}
 ENVEOF
 chmod 644 /etc/profile.d/claude-env.sh
 if ! grep -q "profile.d/claude-env" "$USER_BASHRC" 2>/dev/null; then
