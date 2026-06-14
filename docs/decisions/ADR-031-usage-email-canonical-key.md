@@ -27,6 +27,7 @@ ADR-025는 canonical 사용자 키를 Cognito sub(UUID)로 정했다. 운영 중
 - 이메일·subdomain은 writer가 **인프라 태그에서 직접 획득**(EC2 인스턴스 태그 `username`/`cc:user`=email + `subdomain` 태그, Local 롤 `email`·`subdomain` 태그) — 쓰기 시점 Cognito 조회 불필요. 깨진 custom-filter 해석 제거.
 - **전체 email을 롤명에 쓰지 않는다**: 64자 한도(prefix 25자 + 39자 초과 email은 깨짐)·롤↔DNS 이름 불일치 재발·`@`/`.` 파싱 위험 때문. 정규화 local-part(=subdomain, ≤30자)만 사용.
 - **subdomain 충돌가드**(이미 EC2 task 롤에 존재: 같은 이름 롤이 다른 소유자로 태깅돼 있으면 raise)를 **Local 롤 provisioning에도 적용** — `john.doe@a`·`john_doe@b`가 둘 다 `john-doe`로 정규화될 때 **공유 대신 거부**(fail-safe). 충돌 사용자는 수동 subdomain 배정.
+- **충돌가드의 소유권(ownership) 식별자 = email 로 통일** — 세 롤 생성기(`role_factory.ensure_role`, `ec2-clients.ts:ensureUserInstanceProfile`, `user-role-provisioner._ensure_ec2_task_role`) 모두 **`email`/`username` 태그**로 소유권을 판정한다. EC2 provisioner 가 남겨두던 **`cognito_sub` 태그·sub 기반 가드는 제거**(어디서도 읽지 않던 잔재) — sub 완전 제거 원칙과 정합.
 
 ### 마이그레이션 (재생성 승인됨)
 - 기존 `USER#{sub}`·`USER#{subdomain}` 행 → 1회 backfill로 `USER#{email}` 병합(토큰 합계 보존 검증, dry-run 기본).

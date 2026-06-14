@@ -253,58 +253,51 @@ def _ec2_task_inline_policy() -> dict:
     }
 
 
-def _ensure_ec2_task_role(subdomain: str, email: str, department: str, sub: str) -> dict:
+def _ensure_ec2_task_role(subdomain: str, email: str, department: str) -> dict:
     """Create or refresh the EC2 mode per-user IAM role + instance profile.
     Mirrors ec2-clients.ts:ensureUserInstanceProfile but runs ahead of first start.
 
-    Subdomain collision guard: if a role with the same name already exists tagged
-    to a different Cognito sub, raise instead of silently re-tagging. Subdomains
-    derive from email local-part, so `user01@a.com` and `user01@b.com` would
-    naturally collide; rather than silently hand the second user the first
-    user's EC2 permissions, we fail and require the admin to disambiguate.
+    Subdomain collision guard (ADR-031: email is THE canonical ownership identity —
+    unified with role_factory.ensure_role and ec2-clients.ts; cognito_sub eliminated).
+    If a role with the same name already exists owned by a DIFFERENT email, raise
+    instead of silently re-tagging. Subdomains derive from the email local-part, so
+    `user01@a.com` and `user01@b.com` would naturally collide; rather than silently
+    hand the second user the first user's EC2 permissions, we fail and require the
+    admin to disambiguate. (An existing role with no email/username tag is treated as
+    ours to (re)tag — same takeover stance as role_factory; the role name is platform-
+    namespaced `cc-on-bedrock-task-*`.)
     """
     role_name = f"{EC2_ROLE_PREFIX}{subdomain}"
+    email_l = (email or "").strip().lower()
     tags = [
         {"Key": "cc-on-bedrock", "Value": "user-instance-role"},
-        {"Key": "username", "Value": email},
+        {"Key": "username", "Value": email_l},
         {"Key": "department", "Value": department or "default"},
         {"Key": "project", "Value": "cc-on-bedrock"},
         {"Key": "subdomain", "Value": subdomain},
         {"Key": "cost-center", "Value": department or "default"},
-        {"Key": "cognito_sub", "Value": sub},
+        {"Key": "email", "Value": email_l},
     ]
     created = False
     try:
         iam.get_role(RoleName=role_name)
+        # Ownership/collision guard keyed on email (ADR-031), mirroring
+        # role_factory.ensure_role. A pre-existing role owned by a different email
+        # means two users derived the same subdomain — refuse takeover rather than
+        # leak one user's EC2 identity to another (cross-tenant privilege leak).
         existing = iam.list_role_tags(RoleName=role_name).get("Tags", [])
-        existing_sub = next((t["Value"] for t in existing if t["Key"] == "cognito_sub"), "")
-        if existing_sub and existing_sub != sub:
+        existing_email = next(
+            (t["Value"].strip().lower() for t in existing if t["Key"] in ("email", "username")),
+            "",
+        )
+        if existing_email and email_l and existing_email != email_l:
             raise RuntimeError(
                 f"subdomain collision on {role_name}: existing role owned by "
-                f"cognito_sub={existing_sub!r} but provisioner invoked for sub={sub!r}. "
+                f"email={existing_email!r} but provisioner invoked for {email_l!r}. "
                 f"Two users derived the same subdomain — likely same email local-part "
                 f"across different domains. Resolve by changing one email or extending "
                 f"derive_subdomain() to disambiguate."
             )
-        if not existing_sub:
-            # Pre-ADR-022 role created by ec2-clients.ts:ensureUserInstanceProfile
-            # (it tagged username + subdomain but not cognito_sub). Use the legacy
-            # `username` tag to decide whether this is the same user being
-            # backfilled (safe to take over) or a different user colliding on
-            # the subdomain (must reject; otherwise two Cognito users share one
-            # IAM identity — cross-tenant privilege leak).
-            existing_username = next(
-                (t["Value"] for t in existing if t["Key"] == "username"), ""
-            )
-            if not existing_username or existing_username != email:
-                raise RuntimeError(
-                    f"legacy role {role_name} has no cognito_sub tag and its "
-                    f"username tag ({existing_username!r}) does not match the "
-                    f"current user email ({email!r}). Refusing takeover for "
-                    f"sub={sub!r} — delete the legacy role manually after "
-                    f"confirming ownership, or invoke the deprovisioner."
-                )
-            # Same-user backfill: fall through and tag_role adds cognito_sub.
         iam.tag_role(RoleName=role_name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
@@ -375,7 +368,7 @@ def _provision_user(info: dict) -> dict:
     local_result = ensure_role(
         subdomain=subdomain, email=email, department=department, project=project,
     )
-    ec2_result = _ensure_ec2_task_role(subdomain, email, department, sub)
+    ec2_result = _ensure_ec2_task_role(subdomain, email, department)
 
     return {
         "sub": sub,
