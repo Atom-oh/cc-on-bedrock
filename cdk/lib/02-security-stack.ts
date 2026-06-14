@@ -259,69 +259,43 @@ export class SecurityStack extends cdk.Stack {
             `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dept-mcp-config`,
           ],
         }),
-        // ADR-026 T4 — grantable-service CEILING. The boundary permits the SAFE
-        // actions of services a developer may request, scoped to this account/region.
-        // It is a ceiling only: actual access requires an admin-approved inline grant
-        // (request validation T1 bans Resource:* and dangerous actions; those are also
-        // omitted here as defense-in-depth). The T6 CI check asserts boundary ⊇ the
-        // request service allowlist.
+        // ADR-030 — boundary X (supersedes the ADR-026 per-service GrantCeiling* ceiling).
+        // The admin approval flow is the PRIMARY control on a grant's read/write scope; this
+        // boundary is the hard floor beneath it. Rather than enumerate a per-service safe-action
+        // allowlist (which IAM cannot express — service-partial wildcards like `*:Describe*` are
+        // invalid, so "read-broad + write-narrow" is unrepresentable), the boundary permits any
+        // action on resources IN THIS ACCOUNT, then hard-denies privilege escalation, resource-
+        // policy / public exposure, and account/org control-plane actions — regardless of what an
+        // admin grants. Cross-account access is blocked by aws:ResourceAccount; services that do
+        // not populate that key fail closed (deny). See ADR-030 + scripts/check-policyset-boundary.py.
         new iam.PolicyStatement({
-          sid: 'GrantCeilingSqs',
+          sid: 'AllowInAccount',
+          actions: ['*'],
+          resources: ['*'],
+          conditions: {
+            StringEquals: { 'aws:ResourceAccount': cdk.Aws.ACCOUNT_ID },
+          },
+        }),
+        new iam.PolicyStatement({
+          // DenyEscalation — Deny always wins over any Allow (an admin-approved inline grant OR
+          // AllowInAccount above). These actions must NEVER be reachable by a per-user task role,
+          // no matter what is granted: privilege escalation (iam/sts/org/account), KMS key
+          // destruction/policy, resource-policy mutation that opens cross-account/public access,
+          // and security-group ingress/egress changes. MUST stay a superset of the request
+          // validator's DEFAULT_DANGEROUS intent for IAM-expressible actions — enforced by the
+          // T6 CI check (scripts/check-policyset-boundary.py). Completeness reviewed in ADR-030 T4.
+          sid: 'DenyEscalation',
+          effect: iam.Effect.DENY,
           actions: [
-            'sqs:SendMessage', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes',
-            'sqs:GetQueueUrl', 'sqs:ChangeMessageVisibility',
-          ],
-          resources: [`arn:aws:sqs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
-        }),
-        new iam.PolicyStatement({
-          sid: 'GrantCeilingSns',
-          actions: ['sns:Publish', 'sns:Subscribe', 'sns:Unsubscribe', 'sns:GetTopicAttributes'],
-          resources: [`arn:aws:sns:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
-        }),
-        new iam.PolicyStatement({
-          sid: 'GrantCeilingDynamoDb',
-          actions: [
-            'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
-            'dynamodb:Query', 'dynamodb:Scan', 'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem', 'dynamodb:DescribeTable',
-          ],
-          resources: [
-            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/*`,
-            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/*/index/*`,
-          ],
-        }),
-        new iam.PolicyStatement({
-          sid: 'GrantCeilingLambda',
-          actions: ['lambda:InvokeFunction', 'lambda:GetFunction'],
-          resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:*`],
-        }),
-        new iam.PolicyStatement({
-          sid: 'GrantCeilingStepFunctions',
-          actions: ['states:StartExecution', 'states:StopExecution', 'states:DescribeExecution', 'states:ListExecutions'],
-          resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
-        }),
-        new iam.PolicyStatement({
-          // eks Describe/List-nodegroups support resource-level scoping → scope to account/region.
-          sid: 'GrantCeilingEks',
-          actions: ['eks:DescribeCluster', 'eks:ListNodegroups', 'eks:DescribeNodegroup'],
-          resources: [
-            `arn:aws:eks:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/*`,
-            `arn:aws:eks:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:nodegroup/*`,
-          ],
-        }),
-        new iam.PolicyStatement({
-          // List/Describe APIs that do NOT support resource-level scoping → Resource:* (gate round-1 Codex MAJOR).
-          // MUST be a superset of validator DEFAULT_WILDCARD_OK_ACTIONS (those are the
-          // resource-level-unsupported actions a user may request with Resource:*).
-          // Boundary may use action wildcards (it's a ceiling); the T6 CI check now
-          // verifies this action-level coverage so the two never drift (review MAJOR).
-          sid: 'GrantCeilingReadOnly',
-          actions: [
-            'eks:ListClusters',
-            'sqs:ListQueues', 'sns:ListTopics', 'sns:ListSubscriptions',
-            'ec2:Describe*',
-            's3:ListAllMyBuckets',
-            'states:ListStateMachines',
-            'cloudwatch:GetMetricData', 'cloudwatch:GetMetricStatistics', 'cloudwatch:ListMetrics',
+            'iam:*', 'organizations:*', 'account:*',
+            'sts:AssumeRole', 'sts:AssumeRoleWithSAML', 'sts:AssumeRoleWithWebIdentity',
+            'kms:ScheduleKeyDeletion', 'kms:DisableKey', 'kms:PutKeyPolicy', 'kms:CreateGrant',
+            'lambda:AddPermission', 'lambda:RemovePermission', 'lambda:AddLayerVersionPermission', 'lambda:PutFunctionConcurrency',
+            'sns:AddPermission', 'sns:RemovePermission', 'sqs:AddPermission', 'sqs:RemovePermission',
+            's3:PutBucketPolicy', 's3:PutBucketAcl', 's3:PutAccountPublicAccessBlock', 's3:DeleteBucketPolicy',
+            'secretsmanager:PutResourcePolicy', 'secretsmanager:DeleteResourcePolicy',
+            'ecr:SetRepositoryPolicy', 'events:PutPermission', 'glue:PutResourcePolicy', 'ssm:ModifyDocumentPermission',
+            'ec2:ModifySecurityGroupRules', 'ec2:AuthorizeSecurityGroupIngress', 'ec2:AuthorizeSecurityGroupEgress',
           ],
           resources: ['*'],
         }),
