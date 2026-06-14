@@ -108,3 +108,28 @@ def test_duplicate_delivery_is_idempotent_skip():
     ddb = _FakeDDB(raise_cancel=True)  # marker already exists -> transaction cancelled
     res = _run(ddb)
     assert res["processed"] == 0  # skipped, no exception raised
+
+
+def _otlp_two_users():
+    def attr(k, v):
+        return {"key": k, "value": {"stringValue": v}}
+
+    def dp(n):
+        return {"asInt": str(n), "timeUnixNano": "1780392600000000000", "attributes": []}
+
+    def block(email):
+        return {"resource": {"attributes": [attr("enduser.id", email)]},
+                "scopeMetrics": [{"metrics": [
+                    {"name": "claude_code.commit.count", "sum": {"dataPoints": [dp(1)]}}]}]}
+    return {"resourceMetrics": [block("alice@example.com"), block("bob@example.com")]}
+
+
+def test_multi_user_object_writes_one_transaction_per_user():
+    # A central collector batches many users into one S3 object; each user must be its
+    # own transaction (no 100-item ceiling, per-user idempotency).
+    ddb = _FakeDDB()
+    res = _run(ddb, payload=_otlp_two_users())
+    assert res["processed"] == 1          # one S3 object
+    assert len(ddb.calls) == 2            # one transaction per user
+    blob = json.dumps(ddb.calls)
+    assert "USER#alice@example.com" in blob and "USER#bob@example.com" in blob

@@ -223,6 +223,11 @@ ECS_CREDS_TOKEN="${AWS_CONTAINER_AUTHORIZATION_TOKEN:-}"
 # "unattributed". deploy_mode=ec2 enables the EC2-vs-Local usage comparison. ---
 OTEL_ENV_BLOCK=""
 if [ -n "${OTEL_COLLECTOR_ENDPOINT:-}" ]; then
+  # The OTel SDK expects a scheme on the OTLP endpoint; default to http:// (internal NLB).
+  case "${OTEL_COLLECTOR_ENDPOINT}" in
+    http://*|https://*) _otel_endpoint="${OTEL_COLLECTOR_ENDPOINT}" ;;
+    *) _otel_endpoint="http://${OTEL_COLLECTOR_ENDPOINT}" ;;
+  esac
   _otel_dept="${USER_DEPARTMENT:-default}"
   if [ -n "${USER_EMAIL:-}" ]; then
     _otel_attrs="enduser.id=${USER_EMAIL},department=${_otel_dept},deploy_mode=ec2"
@@ -233,7 +238,7 @@ if [ -n "${OTEL_COLLECTOR_ENDPOINT:-}" ]; then
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}"
+export OTEL_EXPORTER_OTLP_ENDPOINT="${_otel_endpoint}"
 export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
 export OTEL_RESOURCE_ATTRIBUTES="${_otel_attrs}"
 OTELEOF

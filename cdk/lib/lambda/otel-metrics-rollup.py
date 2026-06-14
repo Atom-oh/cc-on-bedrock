@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import defaultdict
 
 import boto3
 from botocore.exceptions import ClientError
@@ -53,22 +54,29 @@ def _add_expr(fields: dict):
     return "ADD " + ", ".join(parts), vals
 
 
-def _build_transact_items(s3key: str, agg: dict, presence: set, cost: dict) -> list:
+def _user_transact_items(email: str, s3key: str, prod: dict, presence: set, cost: dict) -> list:
+    """Build ONE TransactWriteItems list for a single user's rows in this S3 object,
+    plus a per-(user, object) dedup marker. Keeping each user in their own transaction
+    means we never approach the 100-item TransactWriteItems limit (a central collector
+    object can mix many users), the marker lives under the user's own PK (no hot
+    partition), and a mid-object crash leaves committed users intact while uncommitted
+    ones are safely retried.
+    """
     items = []
-    for (email, date, model), row in agg.items():
+    for (date, model), row in prod.items():
         expr, vals = _add_expr({f: row[f] for f in _PROD_FIELDS})
         items.append({"Update": {
             "TableName": TABLE_NAME,
             "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"PROD#{date}#{model}")},
             "UpdateExpression": expr, "ExpressionAttributeValues": vals,
         }})
-    for (email, date) in presence:
+    for date in presence:
         items.append({"Put": {
             "TableName": TABLE_NAME,
             "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"ACTIVE#{date}"),
                      "gsi_day_pk": _s(f"DAY#{date}"), "gsi_day_sk": _s(f"USER#{email}")},
         }})
-    for (email, date, dim), c in cost.items():
+    for (date, dim), c in cost.items():
         expr, vals = _add_expr({"cost_usd_est": c["cost_usd"],
                                 "tokens_in": c["tokens_in"], "tokens_out": c["tokens_out"]})
         items.append({"Update": {
@@ -76,10 +84,10 @@ def _build_transact_items(s3key: str, agg: dict, presence: set, cost: dict) -> l
             "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"ATTR#{date}#{dim}")},
             "UpdateExpression": expr, "ExpressionAttributeValues": vals,
         }})
-    # Dedup marker — same transaction, only applied once.
+    # Dedup marker under the user's own partition — only applied once per (user, object).
     items.append({"Put": {
         "TableName": TABLE_NAME,
-        "Item": {"PK": _s("OTELOBJ"), "SK": _s(f"OTELOBJ#{s3key}")},
+        "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"OTELOBJ#{s3key}")},
         "ConditionExpression": "attribute_not_exists(PK)",
     }})
     return items
@@ -94,21 +102,31 @@ def _process_object(bucket: str, key: str) -> bool:
     agg = otel_rollup.aggregate_daily(records)
     presence = otel_rollup.extract_presence(records)
     cost = otel_rollup.extract_cost_attribution(records)
-    items = _build_transact_items(key, agg, presence, cost)
-    if not items:
-        return False
-    if len(items) > 100:
-        # TransactWriteItems hard limit; a single per-instance export should never hit
-        # this. Surface loudly rather than silently dropping atomicity.
-        raise RuntimeError(f"transaction too large ({len(items)} items) for {key}")
-    try:
-        ddb.transact_write_items(TransactItems=items)
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code in ("TransactionCanceledException", "ConditionalCheckFailedException"):
-            return False  # already processed -> idempotent skip
-        raise
-    return True
+
+    # Group everything by user so each user is written in an independent transaction.
+    by_user: dict = defaultdict(lambda: {"prod": {}, "presence": set(), "cost": {}})
+    for (email, date, model), row in agg.items():
+        by_user[email]["prod"][(date, model)] = row
+    for (email, date) in presence:
+        by_user[email]["presence"].add(date)
+    for (email, date, dim), c in cost.items():
+        by_user[email]["cost"][(date, dim)] = c
+
+    wrote_any = False
+    for email, d in by_user.items():
+        items = _user_transact_items(email, key, d["prod"], d["presence"], d["cost"])
+        if len(items) > 100:
+            # A single user in one export window cannot realistically exceed this.
+            raise RuntimeError(f"per-user transaction too large ({len(items)}) for {email}/{key}")
+        try:
+            ddb.transact_write_items(TransactItems=items)
+            wrote_any = True
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in ("TransactionCanceledException", "ConditionalCheckFailedException"):
+                continue  # this user already processed for this object -> idempotent skip
+            raise
+    return wrote_any
 
 
 def handler(event, context):
