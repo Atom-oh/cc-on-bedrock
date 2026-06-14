@@ -133,6 +133,23 @@ def test_backfill_merges_two_sources_into_one_email():
     assert merged["inputTokens"] == Decimal("700")  # 400 + 300 sum-preserved
 
 
+def test_merge_preserves_limits_normalized_counter():
+    """The cc-on-bedrock-limits COUNTER#{period}#{bucket} rows store their cumulative
+    count in `normalized` (token-limit-enforcer._add_counter: `ADD normalized`). A
+    split-identity user with a counter under BOTH USER#{sub} and USER#{subdomain} for
+    the same bucket must SUM `normalized` on merge — otherwise the migration that exists
+    to FIX split-identity loss would itself drop the counter, under-counting enforcement
+    and handing the user extra quota."""
+    maps = mig.build_identity_maps([_user("b4489d9c-sub", "atomoh@example.com", "atomoh")])
+    t = _FakeTable([
+        {"PK": "USER#atomoh", "SK": "COUNTER#monthly#2026-06", "normalized": Decimal("400")},
+        {"PK": "USER#b4489d9c-sub", "SK": "COUNTER#monthly#2026-06", "normalized": Decimal("300")},
+    ])
+    mig._migrate_table(t, maps, _Args(), "limits")
+    merged = t.store[("USER#atomoh@example.com", "COUNTER#monthly#2026-06")]
+    assert merged["normalized"] == Decimal("700"), f"normalized counter lost on merge: {merged.get('normalized')}"
+
+
 class _FakeBudgetTable:
     def __init__(self, items):
         self.store = {i["user_id"]: dict(i) for i in items}

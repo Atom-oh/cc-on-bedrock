@@ -40,9 +40,16 @@ REGION_DEFAULT = "ap-northeast-2"
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
 
 # Numeric usage/counter fields summed on SK conflict (sum-preserving merge).
+# - usage table ({date}#{model} rows): the 8 token/cost/latency fields.
+# - limits table (COUNTER#{period}#{bucket} rows): `normalized` — the cumulative
+#   normalized-token count the enforcer ADDs (token-limit-enforcer._add_counter).
+#   It MUST be summed too; a split-identity user can have a counter under both
+#   USER#{sub} and USER#{subdomain} for the same bucket, and dropping it here would
+#   under-count enforcement (the exact loss this migration exists to fix).
 COUNTER_FIELDS = (
     "inputTokens", "outputTokens", "totalTokens", "cacheReadTokens",
     "cacheWriteTokens", "requests", "estimatedCost", "latencySumMs",
+    "normalized",
 )
 
 
