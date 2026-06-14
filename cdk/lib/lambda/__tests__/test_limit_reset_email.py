@@ -39,5 +39,41 @@ def test_detach_targets_role():
     iam.delete_role_policy.side_effect = lambda **kw: captured.update(kw)
     with mock.patch.object(lr, "iam", iam):
         ok = lr._detach("cc-on-bedrock-local-user-alice")
-    assert ok is True
+    assert ok == "ok"
     assert captured["RoleName"] == "cc-on-bedrock-local-user-alice"
+
+
+def test_handler_preserves_deny_row_when_role_unresolved():
+    # PR #68 review: an email-keyed DENY#active row with no `subdomain` → role unresolved → the
+    # IAM deny can't be detached → the row MUST be preserved (not silently deleted) to avoid a
+    # permanent lockout where the deny is orphaned with no tracking record.
+    iam = mock.Mock()
+    iam.exceptions.NoSuchEntityException = lr.iam.exceptions.NoSuchEntityException
+    limits = mock.Mock()
+    bad = {"PK": "USER#ghost@example.com", "SK": "DENY#active"}  # no subdomain attr → _role_for_item None
+    with mock.patch.object(lr, "iam", iam), \
+         mock.patch.object(lr, "limits", limits), \
+         mock.patch.object(lr, "_scan_deny_active", lambda period: [bad]), \
+         mock.patch.object(lr, "_delete_counters", lambda *a, **k: 0), \
+         mock.patch.object(lr, "_scan_warn", lambda period: []), \
+         mock.patch.object(lr, "_notify", lambda *a, **k: None):
+        lr.handler({"period": "daily"}, None)
+    limits.delete_item.assert_not_called()  # row preserved — no silent lockout
+    iam.delete_role_policy.assert_not_called()
+
+
+def test_handler_preserves_deny_row_on_transient_detach_error():
+    # Transient IAM error during detach → deny may still be attached → preserve the row for retry.
+    iam = mock.Mock()
+    iam.exceptions.NoSuchEntityException = lr.iam.exceptions.NoSuchEntityException
+    iam.delete_role_policy.side_effect = RuntimeError("throttled")
+    limits = mock.Mock()
+    item = {"PK": "USER#alice@example.com", "SK": "DENY#active", "subdomain": "alice"}
+    with mock.patch.object(lr, "iam", iam), \
+         mock.patch.object(lr, "limits", limits), \
+         mock.patch.object(lr, "_scan_deny_active", lambda period: [item]), \
+         mock.patch.object(lr, "_delete_counters", lambda *a, **k: 0), \
+         mock.patch.object(lr, "_scan_warn", lambda period: []), \
+         mock.patch.object(lr, "_notify", lambda *a, **k: None):
+        lr.handler({"period": "daily"}, None)
+    limits.delete_item.assert_not_called()  # preserved for next-run retry
