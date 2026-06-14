@@ -90,6 +90,13 @@ def _assign_unique_subdomain(base: str, email: str) -> str:
     append a numeric suffix (john-doe → john-doe-2 → …) until free, staying within
     the 30-char limit. Idempotent for the same user (returns base when the role is
     unowned or owned by this email).
+
+    Concurrency: this is a best-effort check-then-act (a TOCTOU window exists if two
+    same-local-part users onboard simultaneously). It is NOT the uniqueness guarantee —
+    the authoritative lock is role_factory.ensure_role()'s create-guard, which raises on
+    a name already owned by a different email (and IAM CreateRole is itself atomic on the
+    name). So a lost race fails SAFE: the second provisioning errors out (retryable),
+    never a silently shared cross-tenant role.
     """
     email_l = (email or "").strip().lower()
     owner = _subdomain_owner_email(base)
