@@ -38,4 +38,28 @@ describe("tiered IAM validation (ADR-030)", () => {
   it("dangerous actions still rejected regardless of tier", () => {
     expect(validateIamRequest([{ Action: ["iam:PassRole"], Resource: [arn("iam", "role/x")] }], opts).ok).toBe(false);
   });
+
+  // ADR-030 T2 anti-silent-deny: escalation actions on REQUESTABLE (allowlisted) services that
+  // boundary X denies at runtime must be rejected at request time too (else "approved but
+  // silently dead"). These are write verbs on allowlisted services that would otherwise pass.
+  it("boundary-denied escalation on allowlisted services is rejected at request time", () => {
+    const denied = [
+      ["s3:PutBucketPolicy", arn("s3", "bucket-x")],
+      ["s3:DeleteBucketPolicy", arn("s3", "bucket-x")],
+      ["s3:PutAccountPublicAccessBlock", "*"],
+      ["lambda:AddPermission", arn("lambda", "function:f")],
+      ["lambda:AddLayerVersionPermission", arn("lambda", "layer:l")],
+      ["sns:AddPermission", arn("sns", "topic-x")],
+      ["sqs:AddPermission", arn("sqs", "queue-x")],
+      ["ec2:AuthorizeSecurityGroupIngress", arn("ec2", "security-group/sg-1")],
+      ["ec2:AuthorizeSecurityGroupEgress", arn("ec2", "security-group/sg-1")],
+      ["ec2:ModifySecurityGroupRules", arn("ec2", "security-group/sg-1")],
+    ];
+    for (const [action, resource] of denied) {
+      expect(
+        validateIamRequest([{ Action: [action], Resource: [resource] }], opts).ok,
+        `${action} should be rejected (boundary X denies it at runtime)`,
+      ).toBe(false);
+    }
+  });
 });

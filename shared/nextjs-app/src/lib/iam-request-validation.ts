@@ -45,13 +45,20 @@ export interface ValidationResult {
 // Resource-policy mutation, public-making, and privilege-delegation actions.
 // These can escalate beyond the granted resource even when scoped to "own" ARNs.
 const DEFAULT_DANGEROUS: RegExp[] = [
-  /:put[a-z]*policy$/i, // s3:PutBucketPolicy, sns:PutResourcePolicy, ...
+  /:(put|delete)[a-z]*policy$/i, // s3:PutBucketPolicy/DeleteBucketPolicy, *Put/DeleteResourcePolicy, ...
   /:set[a-z]*attributes$/i, // sns:SetTopicAttributes, sqs:SetQueueAttributes
-  /:(add|remove)permission$/i, // lambda/sqs/sns AddPermission/RemovePermission — opens resource policy cross-account/public
+  /:(add|remove|put)[a-z]*permission$/i, // *AddPermission/RemovePermission/PutPermission, lambda:AddLayerVersionPermission — opens resource policy cross-account/public
+  /:put[a-z]*publicaccessblock$/i, // s3:PutAccountPublicAccessBlock / PutPublicAccessBlock — disables public-access protection
+  /^ec2:(authorize|revoke|modify)securitygroup/i, // SG ingress/egress mutation — network exposure / lateral movement
   /^iam:/i, // any iam:* (PassRole, CreateRole, ...)
   /^sts:assumerole/i,
   /:[a-z]*resourcepolicy$/i, // *PutResourcePolicy / *DeleteResourcePolicy
 ];
+// ADR-030 T2 coherence: every boundary-X DenyEscalation action on a *requestable*
+// (write-allowlisted) service MUST also match a pattern above — otherwise an admin could
+// approve a request that the runtime boundary then silently denies. Enforced by
+// scripts/check-policyset-boundary.py invariant (b). Adding to the boundary Deny floor on a
+// requestable service therefore requires adding the matching dangerous pattern here.
 
 function actionMatchesAny(action: string, patterns: string[]): boolean {
   const a = action.toLowerCase();

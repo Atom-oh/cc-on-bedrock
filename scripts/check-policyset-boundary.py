@@ -1,17 +1,31 @@
 #!/usr/bin/env python3
 """
-ADR-026 T6 — CI invariant: the task permission boundary MUST be a superset of the
-services a developer may request (DEFAULT_SERVICE_ALLOWLIST). If a service is added
-to the request allowlist but not permitted by the boundary, approved grants for it
-would be silently nullified ("approved but doesn't work"). This check fails the build.
+ADR-030 T6 — CI invariant for the per-user task permission boundary (boundary X).
 
-It compares at SERVICE-prefix granularity:
-  - boundary services  := every Action's service prefix in the cc-on-bedrock-task-boundary
-                          managed policy of the synthesized CloudFormation template.
-  - allowlist services := DEFAULT_SERVICE_ALLOWLIST in iam-request-validation.ts.
-NOTE: source regex is used ONLY to read the TS allowlist literal (a plain array).
-The boundary side is read from the SYNTHESIZED template JSON (not TS source) so CDK
-constructs/spreads are accounted for.
+Boundary X (ADR-030) replaced the ADR-026 per-service `GrantCeiling*` allowlist ceiling
+with: AllowInAccount (Action:"*" + Condition aws:ResourceAccount=<account>) + a DenyEscalation
+floor. Because the boundary now allows every action *in account*, the old "boundary ⊇ request
+service allowlist" superset check is trivially true and no longer meaningful. The thing that now
+matters — and that this check enforces — is the **Deny floor**: the escalation / resource-policy /
+control-plane actions that must NEVER be reachable by a task role, no matter what an admin grants.
+
+Invariants enforced against the SYNTHESIZED CloudFormation template (so CDK constructs/spreads
+are accounted for):
+  (a) Deny-floor coverage   — every action in CANONICAL_DENY_FLOOR is denied by the boundary's
+                              Deny statements (wildcard-aware: boundary `iam:*` covers `iam:PassRole`).
+  (b) validator coherence   — every CANONICAL_DENY_FLOOR action is ALSO flagged dangerous by the
+                              request validator's DEFAULT_DANGEROUS patterns. This keeps request-time
+                              rejection and runtime Deny aligned (defense-in-depth) for the
+                              IAM-expressible escalation actions.
+  (c) account confinement   — an Allow statement with Action "*" exists AND carries a
+                              StringEquals aws:ResourceAccount condition (cross-account fail-closed).
+
+NOTE on scope of (b): the validator's DEFAULT_DANGEROUS is regex / cross-service (e.g.
+`/:put[a-z]*policy$/` matches put*policy on ANY service). IAM Deny cannot express a service-partial
+wildcard across all services (`*:Put*Policy` is invalid) — that is the same ADR-030 finding that
+motivated boundary X. So literal "validator-dangerous ⊆ boundary-Deny" is INFEASIBLE. We instead
+pin a CANONICAL_DENY_FLOOR (the IAM-expressible escalation actions that matter) and assert it is a
+subset of BOTH the boundary Deny and the validator-dangerous set. ADR-030 T4 reviews completeness.
 
 Usage:
   python3 scripts/check-policyset-boundary.py --self-test           # logic fixtures
@@ -28,107 +42,171 @@ from pathlib import Path
 BOUNDARY_NAME = "cc-on-bedrock-task-boundary"
 ALLOWLIST_TS = "shared/nextjs-app/src/lib/iam-request-validation.ts"
 
-
-def _services_from_actions(actions) -> set:
-    if isinstance(actions, str):
-        actions = [actions]
-    out = set()
-    for a in actions or []:
-        if isinstance(a, str) and ":" in a:
-            out.add(a.split(":")[0].lower())
-    return out
-
-
-def boundary_services(template: dict) -> set:
-    """Collect Action service prefixes from the boundary managed policy."""
-    svcs: set = set()
-    for res in (template.get("Resources") or {}).values():
-        if res.get("Type") != "AWS::IAM::ManagedPolicy":
-            continue
-        props = res.get("Properties", {})
-        if props.get("ManagedPolicyName") != BOUNDARY_NAME:
-            continue
-        statements = (props.get("PolicyDocument") or {}).get("Statement") or []
-        for st in statements:
-            if st.get("Effect", "Allow") == "Allow":
-                svcs |= _services_from_actions(st.get("Action"))
-    return svcs
+# The hard floor: escalation / resource-policy-exposure / control-plane actions that the boundary
+# MUST deny for a per-user task role regardless of any admin-approved grant. Each entry is a
+# concrete action; the boundary may cover it via an exact match OR a wildcard (e.g. `iam:*`).
+# This is intentionally the IAM-EXPRESSIBLE representative set (see module docstring (b) note);
+# ADR-030 T4 is the place to grow it. Keep entries lowercase.
+CANONICAL_DENY_FLOOR = [
+    # privilege delegation / role escalation
+    "iam:passrole", "iam:createrole", "iam:attachrolepolicy", "iam:putrolepolicy",
+    "iam:createpolicyversion", "iam:updateassumerolepolicy",
+    "sts:assumerole",
+    # KMS key destruction / policy
+    "kms:putkeypolicy", "kms:schedulekeydeletion", "kms:disablekey", "kms:creategrant",
+    # resource-policy / public exposure (cross-account)
+    "s3:putbucketpolicy", "s3:putaccountpublicaccessblock", "s3:deletebucketpolicy",
+    "lambda:addpermission", "lambda:addlayerversionpermission",
+    "sns:addpermission", "sqs:addpermission",
+    "secretsmanager:putresourcepolicy", "secretsmanager:deleteresourcepolicy",
+    "ecr:setrepositorypolicy", "events:putpermission", "glue:putresourcepolicy",
+    # network exposure
+    "ec2:authorizesecuritygroupingress", "ec2:authorizesecuritygroupegress",
+    "ec2:modifysecuritygrouprules",
+]
 
 
-def allowlist_services(ts_path: Path) -> set:
-    text = ts_path.read_text(encoding="utf-8")
-    m = re.search(r"DEFAULT_SERVICE_ALLOWLIST\s*=\s*\[(.*?)\]", text, re.S)
-    if not m:
-        raise SystemExit(f"[ERROR] DEFAULT_SERVICE_ALLOWLIST not found in {ts_path}")
-    return {s.lower() for s in re.findall(r'"([^"]+)"|\'([^\']+)\'', m.group(1)) for s in s if s}
-
-
-def check(allowlist: set, boundary: set) -> set:
-    """Return services in allowlist NOT covered by boundary (empty = OK)."""
-    return allowlist - boundary
-
-
-def boundary_actions(template: dict) -> set:
-    """Collect ALL Allow action strings (lowercased) from the boundary policy."""
-    acts: set = set()
+# ----------------------------------------------------------------------------- template parsing
+def _boundary_policy(template: dict) -> dict:
     for res in (template.get("Resources") or {}).values():
         if res.get("Type") != "AWS::IAM::ManagedPolicy":
             continue
         if res.get("Properties", {}).get("ManagedPolicyName") != BOUNDARY_NAME:
             continue
-        for st in (res["Properties"].get("PolicyDocument") or {}).get("Statement") or []:
-            if st.get("Effect", "Allow") == "Allow":
-                a = st.get("Action")
-                for x in ([a] if isinstance(a, str) else (a or [])):
-                    if isinstance(x, str):
-                        acts.add(x.lower())
+        return (res["Properties"].get("PolicyDocument") or {})
+    raise SystemExit(f"[ERROR] boundary managed policy '{BOUNDARY_NAME}' not found in template")
+
+
+def _as_list(x) -> list:
+    if x is None:
+        return []
+    return x if isinstance(x, list) else [x]
+
+
+def deny_actions(doc: dict) -> set:
+    """All actions (lowercased) carried by Deny statements in the boundary."""
+    acts: set = set()
+    for st in _as_list(doc.get("Statement")):
+        if st.get("Effect") == "Deny":
+            acts |= {a.lower() for a in _as_list(st.get("Action")) if isinstance(a, str)}
     return acts
 
 
-def wildcard_ok_actions(ts_path: Path) -> set:
-    text = ts_path.read_text(encoding="utf-8")
-    m = re.search(r"DEFAULT_WILDCARD_OK_ACTIONS\s*=\s*\[(.*?)\]", text, re.S)
-    if not m:
-        raise SystemExit(f"[ERROR] DEFAULT_WILDCARD_OK_ACTIONS not found in {ts_path}")
-    return {s.lower() for g in re.findall(r'"([^"]+)"|\'([^\']+)\'', m.group(1)) for s in g if s}
-
-
-def _action_covered(boundary: set, pattern: str) -> bool:
-    """Does some boundary action cover `pattern` (a possibly-wildcard request action)?
-    A boundary wildcard 'svc:Pre*' covers pattern p iff p's prefix starts with 'svc:pre'."""
-    p = pattern.lower()
-    p_prefix = p[:-1] if p.endswith("*") else p
-    for b in boundary:
-        if b == p:
-            return True
-        if b.endswith("*") and p_prefix.startswith(b[:-1]):
+def account_confinement(doc: dict) -> bool:
+    """True iff some Allow Action:'*' statement carries a StringEquals aws:ResourceAccount cond."""
+    for st in _as_list(doc.get("Statement")):
+        if st.get("Effect", "Allow") != "Allow":
+            continue
+        if "*" not in _as_list(st.get("Action")):
+            continue
+        se = (st.get("Condition") or {}).get("StringEquals") or {}
+        if any(k.lower() == "aws:resourceaccount" for k in se):
             return True
     return False
 
 
-def uncovered_wildcard_ok(boundary: set, wildcardok: set) -> set:
-    """wildcard-ok request actions NOT covered by any boundary action (empty = OK)."""
-    return {p for p in wildcardok if not _action_covered(boundary, p)}
+# ----------------------------------------------------------------------------- coverage logic
+def action_denied(deny: set, action: str) -> bool:
+    """Does some boundary Deny action cover `action`? Wildcard-aware: a deny entry
+    `svc:*` (or any `prefix*`) covers `action` iff action starts with the prefix."""
+    a = action.lower()
+    for d in deny:
+        if d == a:
+            return True
+        if d.endswith("*") and a.startswith(d[:-1]):
+            return True
+    return False
 
 
+def uncovered_floor(deny: set) -> list:
+    """Floor actions NOT denied by the boundary (empty = OK)."""
+    return [a for a in CANONICAL_DENY_FLOOR if not action_denied(deny, a)]
+
+
+# ----------------------------------------------------------------------------- validator coherence
+def validator_dangerous_patterns(ts_path: Path) -> list:
+    """Extract DEFAULT_DANGEROUS regex SOURCES from the TS validator and compile them.
+    The literals are simple, POSIX-compatible bodies between `/.../i` — usable as-is in Python."""
+    text = ts_path.read_text(encoding="utf-8")
+    m = re.search(r"DEFAULT_DANGEROUS\s*:\s*RegExp\[\]\s*=\s*\[(.*?)\];", text, re.S)
+    if not m:
+        raise SystemExit(f"[ERROR] DEFAULT_DANGEROUS not found in {ts_path}")
+    # Strip `//` line comments first — they contain '/' chars (e.g. "PutBucketPolicy/Delete...")
+    # that would otherwise pollute regex-literal extraction. The regex bodies here contain no '/'.
+    block = re.sub(r"//.*", "", m.group(1))
+    bodies = re.findall(r"/([^/\n]+)/[a-z]*", block)
+    if not bodies:
+        raise SystemExit(f"[ERROR] no regex literals parsed from DEFAULT_DANGEROUS in {ts_path}")
+    return [re.compile(b, re.I) for b in bodies]
+
+
+def allowlist_services(ts_path: Path) -> set:
+    """The write-allowlist (DEFAULT_SERVICE_ALLOWLIST): services a developer may REQUEST."""
+    text = ts_path.read_text(encoding="utf-8")
+    m = re.search(r"DEFAULT_SERVICE_ALLOWLIST\s*=\s*\[(.*?)\]", text, re.S)
+    if not m:
+        raise SystemExit(f"[ERROR] DEFAULT_SERVICE_ALLOWLIST not found in {ts_path}")
+    return {s.lower() for g in re.findall(r'"([^"]+)"|\'([^\']+)\'', m.group(1)) for s in g if s}
+
+
+def floor_not_flagged_by_validator(patterns: list, allowlist: set) -> list:
+    """Floor actions on a REQUESTABLE service that the validator would NOT reject (empty = OK).
+
+    Only requestable-service floor actions matter here: if a developer can request action A on an
+    allowlisted service and an admin approves it, but the runtime boundary denies A, the grant is
+    silently dead. So every boundary-denied escalation action on an allowlisted service MUST also be
+    request-rejected (flagged by DEFAULT_DANGEROUS). Floor actions on non-requestable services
+    (iam/sts/kms/ecr/events/glue/...) carry no silent-deny risk and need no validator coherence."""
+    return [a for a in CANONICAL_DENY_FLOOR
+            if a.split(":")[0] in allowlist and not any(p.search(a) for p in patterns)]
+
+
+# ----------------------------------------------------------------------------- self-test
 def _self_test() -> int:
-    ok_missing = check({"s3", "sqs"}, {"s3", "sqs", "sns", "bedrock"})
-    bad_missing = check({"s3", "sqs", "kms"}, {"s3", "sqs"})
-    assert ok_missing == set(), f"positive fixture should have no missing, got {ok_missing}"
-    assert bad_missing == {"kms"}, f"negative fixture should flag kms, got {bad_missing}"
-    # action-level (review MAJOR): boundary 'ec2:describe*' covers wildcard-ok 'ec2:describe*';
-    # an enumerated-only boundary does NOT cover the wildcard pattern.
-    assert uncovered_wildcard_ok({"ec2:describe*", "s3:listallmybuckets"}, {"ec2:describe*", "s3:listallmybuckets"}) == set()
-    assert uncovered_wildcard_ok({"ec2:describeinstances"}, {"ec2:describe*"}) == {"ec2:describe*"}
-    assert uncovered_wildcard_ok({"states:listexecutions"}, {"states:liststatemachines"}) == {"states:liststatemachines"}
-    print("[self-test] OK — service-level + action-level coverage logic verified")
+    # (a) coverage: `iam:*` covers iam:passrole; an enumerated-only deny does not cover a sibling.
+    assert action_denied({"iam:*"}, "iam:passrole")
+    assert action_denied({"sts:assumerole"}, "sts:assumerole")
+    assert not action_denied({"s3:putbucketpolicy"}, "s3:putbucketacl")
+    assert uncovered_floor({"iam:*"}) != []  # iam covered, rest missing → non-empty
+
+    # a Deny set that mirrors the real boundary X should fully cover the floor.
+    real_like = {
+        "iam:*", "organizations:*", "account:*",
+        "sts:assumerole", "sts:assumerolewithsaml", "sts:assumerolewithwebidentity",
+        "kms:schedulekeydeletion", "kms:disablekey", "kms:putkeypolicy", "kms:creategrant",
+        "lambda:addpermission", "lambda:removepermission", "lambda:addlayerversionpermission",
+        "lambda:putfunctionconcurrency",
+        "sns:addpermission", "sns:removepermission", "sqs:addpermission", "sqs:removepermission",
+        "s3:putbucketpolicy", "s3:putbucketacl", "s3:putaccountpublicaccessblock", "s3:deletebucketpolicy",
+        "secretsmanager:putresourcepolicy", "secretsmanager:deleteresourcepolicy",
+        "ecr:setrepositorypolicy", "events:putpermission", "glue:putresourcepolicy",
+        "ssm:modifydocumentpermission",
+        "ec2:modifysecuritygrouprules", "ec2:authorizesecuritygroupingress", "ec2:authorizesecuritygroupegress",
+    }
+    miss = uncovered_floor(real_like)
+    assert miss == [], f"real-like deny set should cover the floor, missing: {miss}"
+
+    # (b) validator coherence: the real DEFAULT_DANGEROUS patterns must flag every floor action
+    # that sits on a REQUESTABLE (write-allowlisted) service — else silent-deny.
+    pats = validator_dangerous_patterns(Path(ALLOWLIST_TS))
+    alw = allowlist_services(Path(ALLOWLIST_TS))
+    notflagged = floor_not_flagged_by_validator(pats, alw)
+    assert notflagged == [], f"requestable floor actions not flagged dangerous by validator: {notflagged}"
+
+    # (c) account confinement detection.
+    good = {"Statement": [{"Effect": "Allow", "Action": "*",
+                           "Condition": {"StringEquals": {"aws:ResourceAccount": "123"}}}]}
+    bad = {"Statement": [{"Effect": "Allow", "Action": "*"}]}
+    assert account_confinement(good) and not account_confinement(bad)
+
+    print("[self-test] OK — deny-floor coverage + validator coherence + account confinement verified")
     return 0
 
 
+# ----------------------------------------------------------------------------- driver
 def _load_template(args) -> dict:
     if args.template:
         return json.loads(Path(args.template).read_text(encoding="utf-8"))
-    # CDK writes the JSON template to cdk.out/<Stack>.template.json (stdout is YAML).
     out = subprocess.run(
         ["npx", "cdk", "synth", "CcOnBedrock-Security"],
         cwd="cdk", capture_output=True, text=True,
@@ -151,29 +229,33 @@ def main() -> int:
     if args.self_test:
         return _self_test()
 
-    template = _load_template(args)
+    doc = _boundary_policy(_load_template(args))
+    deny = deny_actions(doc)
     src = Path(args.allowlist_source)
-    bsvcs = boundary_services(template)
-    asvcs = allowlist_services(src)
-    missing_svc = check(asvcs, bsvcs)
-    print(f"allowlist services: {sorted(asvcs)}")
-    print(f"boundary services : {sorted(bsvcs)}")
+    patterns = validator_dangerous_patterns(src)
+    alw = allowlist_services(src)
 
-    # action-level: every wildcard-ok request action must be covered by a boundary action
-    bacts = boundary_actions(template)
-    wok = wildcard_ok_actions(src)
-    missing_act = uncovered_wildcard_ok(bacts, wok)
+    missing = uncovered_floor(deny)
+    notflagged = floor_not_flagged_by_validator(patterns, alw)
+    confined = account_confinement(doc)
+
+    print(f"boundary Deny actions: {len(deny)}")
+    print(f"canonical deny-floor : {len(CANONICAL_DENY_FLOOR)}")
+    print(f"account confinement  : {'present (aws:ResourceAccount)' if confined else 'MISSING'}")
 
     failed = False
-    if missing_svc:
-        print(f"[FAIL] services requestable but NOT in boundary (grants silently nullified): {sorted(missing_svc)}", file=sys.stderr)
+    if missing:
+        print(f"[FAIL] (a) escalation floor NOT denied by boundary (reachable despite grant): {sorted(missing)}", file=sys.stderr)
         failed = True
-    if missing_act:
-        print(f"[FAIL] wildcard-ok actions NOT covered by boundary (Resource:* grants silently nullified): {sorted(missing_act)}", file=sys.stderr)
+    if notflagged:
+        print(f"[FAIL] (b) deny-floor action NOT flagged dangerous by request validator (drift): {sorted(notflagged)}", file=sys.stderr)
+        failed = True
+    if not confined:
+        print("[FAIL] (c) no Allow Action:'*' statement with StringEquals aws:ResourceAccount (cross-account not fail-closed)", file=sys.stderr)
         failed = True
     if failed:
         return 1
-    print("[OK] boundary ⊇ request service allowlist AND covers all wildcard-ok actions")
+    print("[OK] boundary denies the escalation floor, floor is validator-coherent, account-confined")
     return 0
 
 
