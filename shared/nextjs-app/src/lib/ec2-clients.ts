@@ -359,6 +359,11 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     UserData: Buffer.from([
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${input.subdomain}" >> /etc/environment`,
+      // Phase 1 (OTel productivity monitoring): per-user identity for OTEL_RESOURCE_ATTRIBUTES.
+      // username IS the email (ADR-029 canonical key); without these the entrypoint falls back
+      // to "unattributed" and per-user productivity rollups can't be keyed.
+      `echo "USER_EMAIL=${input.username}" >> /etc/environment`,
+      `echo "USER_DEPARTMENT=${input.department}" >> /etc/environment`,
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
@@ -781,6 +786,10 @@ export async function restoreFromSnapshot(
     UserData: Buffer.from([
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${subdomain}" >> /etc/environment`,
+      // Phase 1 (OTel productivity monitoring): per-user identity (username IS the email,
+      // ADR-029 key). Without these, metrics fall back to "unattributed".
+      `echo "USER_EMAIL=${record?.username ?? ""}" >> /etc/environment`,
+      `echo "USER_DEPARTMENT=${record?.department ?? "default"}" >> /etc/environment`,
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
