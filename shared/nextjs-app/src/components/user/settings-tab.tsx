@@ -538,16 +538,40 @@ function buildStatements(rows: StmtRow[]) {
 }
 
 function IamRequestSection({ onSuccess, onError }: { onSuccess: () => void; onError: (msg: string) => void }) {
+  const [mode, setMode] = useState<"form" | "json">("form");
   const [rows, setRows] = useState<StmtRow[]>([{ service: "s3", actions: "", resources: "" }]);
+  const [jsonText, setJsonText] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const built = buildStatements(rows);
+  // JSON mode: paste a statement array `[{Action,Resource}]` OR a full policy `{Statement:[...]}`.
+  let built: unknown[] = [];
+  let parseError = "";
+  if (mode === "json") {
+    const t = jsonText.trim();
+    if (t) {
+      try {
+        const parsed: unknown = JSON.parse(t);
+        const arr = Array.isArray(parsed)
+          ? parsed
+          : parsed && Array.isArray((parsed as { Statement?: unknown }).Statement)
+            ? (parsed as { Statement: unknown[] }).Statement
+            : null;
+        if (!arr || arr.length === 0) parseError = "JSON must be a statement array or a policy with a non-empty Statement[]";
+        else built = arr;
+      } catch (e) {
+        parseError = "Invalid JSON: " + (e instanceof Error ? e.message : String(e));
+      }
+    }
+  } else {
+    built = buildStatements(rows);
+  }
   // Client-side pre-validation mirrors the server validator (single source of truth).
   // accountId/region omitted → cross-account/region is enforced server-side (fail-closed).
-  const clientErrors =
-    built.length > 0
+  const clientErrors = parseError
+    ? [parseError]
+    : built.length > 0
       ? validateIamRequest(built as IamStatement[], {
           serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
           wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
@@ -574,6 +598,7 @@ function IamRequestSection({ onSuccess, onError }: { onSuccess: () => void; onEr
         onSuccess();
         setReason("");
         setRows([{ service: "s3", actions: "", resources: "" }]);
+        setJsonText("");
         setExpanded(false);
       } else {
         onError(Array.isArray(data.details) ? data.details.join("; ") : (data.error ?? "Request failed"));
@@ -596,7 +621,21 @@ function IamRequestSection({ onSuccess, onError }: { onSuccess: () => void; onEr
             서비스·액션·리소스 ARN을 직접 지정해 신청합니다. 읽기 와일드카드(Get*/List*/Describe*)만 허용,
             `*`·`s3:*`·쓰기 와일드카드·교차계정은 거부됩니다. 관리자 승인 후 부여됩니다.
           </p>
-          {rows.map((r, i) => (
+          {/* Form ↔ raw-JSON input toggle */}
+          <div className="flex gap-1 text-[10px]">
+            <button onClick={() => setMode("form")} className={`px-2 py-0.5 rounded ${mode === "form" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}>Form</button>
+            <button onClick={() => setMode("json")} className={`px-2 py-0.5 rounded ${mode === "json" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}>JSON</button>
+          </div>
+          {mode === "json" && (
+            <textarea
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              placeholder={'[\n  {"Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::my-bucket/*"]}\n]'}
+              rows={8}
+              className="w-full bg-[#161b22] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600 font-mono"
+            />
+          )}
+          {mode === "form" && rows.map((r, i) => (
             <div key={i} className="border border-gray-700 rounded-lg p-2 space-y-2">
               <div className="flex items-center gap-2">
                 <select
@@ -626,7 +665,7 @@ function IamRequestSection({ onSuccess, onError }: { onSuccess: () => void; onEr
               />
             </div>
           ))}
-          <button onClick={addRow} className="text-xs px-2 py-1 rounded bg-gray-800 text-gray-200">+ Statement 추가</button>
+          {mode === "form" && <button onClick={addRow} className="text-xs px-2 py-1 rounded bg-gray-800 text-gray-200">+ Statement 추가</button>}
 
           {clientErrors.length > 0 && (
             <ul className="text-[10px] text-red-400 list-disc pl-4">
