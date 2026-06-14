@@ -10,6 +10,9 @@ echo "== Next.js dashboard: typecheck + vitest =="
 echo "== nginx config generator: code-server boot 502 interception (unit) =="
 python3 -m pytest tests/unit/test_nginx_config_gen.py -q
 
+echo "== Lambda unit tests (usage/limits/rollup, incl. OTel productivity rollup) =="
+python3 -m pytest cdk/lib/lambda/__tests__ -q
+
 echo "== ADR-026: boundary ⊇ service-allowlist invariant (self-test) =="
 python3 scripts/check-policyset-boundary.py --self-test
 
