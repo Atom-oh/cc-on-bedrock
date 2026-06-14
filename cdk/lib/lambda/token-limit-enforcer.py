@@ -235,14 +235,15 @@ def _role_owner_email(role_name: str):
     # would skip for EVERY user → token-limit Deny never attached (enforcement bypass). (PR #68 review)
     try:
         resp = iam.list_role_tags(RoleName=role_name)
-        for t in resp.get("Tags", []):
-            if t.get("Key") == "email":
-                return (t.get("Value") or "").strip().lower()
     except iam.exceptions.NoSuchEntityException:
-        return None
-    except Exception as e:
-        print(f"[DENY] list_role_tags failed for {role_name}: {e}")
-    return None
+        return None  # role genuinely doesn't exist → legit skip (not an error)
+    # Transient/unknown errors (throttling, InternalFailure) are deliberately NOT caught: they
+    # propagate → handler records a batchItemFailure → the DynamoDB stream RETRIES, rather than
+    # returning None and silently skipping enforcement for this user (PR #68 review).
+    for t in resp.get("Tags", []):
+        if t.get("Key") == "email":
+            return (t.get("Value") or "").strip().lower()
+    return None  # role exists but has no email tag → caller treats as not-owned (skip)
 
 
 def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str):

@@ -70,38 +70,37 @@ export async function POST(req: NextRequest) {
   const subdomain = (item.subdomain ?? "").toString().trim();
   const roleName = roleForRow(key, subdomain);
 
-  let detached = false;
-  if (roleName) {
-    try {
-      await iam.send(new DeleteRolePolicyCommand({ RoleName: roleName, PolicyName: POLICY_NAME }));
-      detached = true;
-    } catch (e) {
-      if (!(e instanceof NoSuchEntityException)) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return NextResponse.json({ error: `detach failed for ${roleName}: ${msg}` }, { status: 500 });
-      }
-      // NoSuchEntity: role or policy already gone — treat as already-detached.
-    }
-  }
-
-  // Clear the DENY#active row so the enforcer/limit-reset see the user as un-blocked.
-  await dynamo.send(new DeleteItemCommand({
-    TableName: LIMITS_TABLE,
-    Key: marshall({ PK: pk, SK: "DENY#active" }),
-  }));
-
-  // If the role couldn't be resolved (email-keyed row missing subdomain), the IAM deny policy
-  // may still be attached — surface that instead of falsely reporting full success.
+  // If the role can't be resolved (email-keyed row missing `subdomain`) the IAM deny cannot be
+  // detached — DO NOT clear the only tracking record, or the deny is orphaned (user stays blocked
+  // with no record). Preserve DENY#active + 207, same fail-safe as the limit-reset cron.
   if (!roleName) {
     return NextResponse.json({
       ok: false,
       key,
       role: null,
       detached: false,
-      denyCleared: true,
-      warning: "DENY#active cleared but role name unresolved (row missing `subdomain`); verify IAM deny policy is detached manually",
+      denyCleared: false,
+      warning: "DENY#active preserved — role unresolved (row missing `subdomain`); IAM deny may still be attached, investigate manually",
     }, { status: 207 });
   }
+
+  let detached = false;
+  try {
+    await iam.send(new DeleteRolePolicyCommand({ RoleName: roleName, PolicyName: POLICY_NAME }));
+    detached = true;
+  } catch (e) {
+    if (!(e instanceof NoSuchEntityException)) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return NextResponse.json({ error: `detach failed for ${roleName}: ${msg}` }, { status: 500 });
+    }
+    // NoSuchEntity: role or policy already gone — treat as already-detached.
+  }
+
+  // Role resolved + detach attempted (or already absent) → safe to clear the DENY#active row.
+  await dynamo.send(new DeleteItemCommand({
+    TableName: LIMITS_TABLE,
+    Key: marshall({ PK: pk, SK: "DENY#active" }),
+  }));
 
   return NextResponse.json({ ok: true, key, role: roleName, detached, denyCleared: true });
 }

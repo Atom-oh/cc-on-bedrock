@@ -198,10 +198,16 @@ def _migrate_table(table, maps, args, label):
             # up twice in the UI. --delete-old gates only IAM ROLE deletion (active
             # sessions), never DynamoDB rows.
             delete_src = args.apply
+            # prefer-new: for LIMIT#/DENY#/WARN# (is_limit) rows, an existing USER#{email} target is
+            # authoritative (e.g. an admin set it post-migration) — do NOT clobber it with the legacy
+            # source value; just drop the source. Counter rows (not is_limit) are summed via merge above.
+            prefer_existing = bool(is_limit and existing)
             print(f"  [{label}] {old_key['PK']} | SK={old_key['SK']} → {new_item['PK']}"
-                  f"{' (merge)' if existing and not is_limit else ''}{' +del-src' if delete_src else ''}")
+                  f"{' (merge)' if existing and not is_limit else ''}"
+                  f"{' (prefer-existing)' if prefer_existing else ''}{' +del-src' if delete_src else ''}")
             if args.apply:
-                table.put_item(Item=new_item)
+                if not prefer_existing:
+                    table.put_item(Item=new_item)
                 if delete_src:
                     table.delete_item(Key=old_key)
                     deleted += 1

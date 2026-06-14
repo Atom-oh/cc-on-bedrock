@@ -178,7 +178,8 @@ def handler(event, context):
             # Email-keyed row without a `subdomain` attr → can't resolve the Local role, so the
             # IAM Deny may still be attached. Preserve DENY#active + warn rather than silently
             # clearing the only tracking record → avoids permanent lockout (PR #68 review).
-            # Mirrors admin/limits/reset/route.ts (207 + warning) — both paths now fail safe.
+            # Same fail-safe as admin/limits/reset/route.ts: it also PRESERVES DENY#active
+            # (returns 207 + warning, no delete) when the role can't be resolved.
             print(f"[RESET] role unresolved for {item.get('PK')} — preserving DENY#active (deny may remain attached)")
             continue
         status = _detach(role)

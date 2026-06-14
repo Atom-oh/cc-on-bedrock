@@ -425,8 +425,10 @@ export class LocalGovernanceStack extends cdk.Stack {
     // row's subdomain attribute (see _role_name_from_row) — no iam:ListRoles scan.
     // The old iam:ListRoles:* grant for the removed reverse-index is dropped.
     reset.addToRolePolicy(new iam.PolicyStatement({
+      // least-privilege: limit-reset only calls delete_role_policy (the role's subdomain is read
+      // from the DENY#active DDB row, not IAM) — GetRolePolicy/ListRoleTags were unused (PR #68 review).
       sid: 'IamDenyDetach',
-      actions: ['iam:DeleteRolePolicy', 'iam:GetRolePolicy', 'iam:ListRoleTags'],
+      actions: ['iam:DeleteRolePolicy'],
       resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
     }));
 
