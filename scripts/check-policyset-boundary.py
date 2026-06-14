@@ -188,12 +188,15 @@ def boundary_validator_incoherent(deny: set, patterns: list, allowlist: set) -> 
     bad = []
     for d in deny:
         if d.endswith("*"):
-            # whole-service `svc:*` deny → reads are any-service requestable; probe must be rejected.
+            # whole-service `svc:*` deny → any request on that svc the validator could accept must
+            # be rejected. Reads are any-service (probe a read verb); if svc is ALSO write-allowlisted,
+            # writes are requestable too (probe a write verb) — defends a future allowlist∩deny overlap.
             if d.endswith(":*"):
                 svc = d.split(":")[0]
-                probe = f"{svc}:listprobe"
-                if not any(p.search(probe) for p in patterns):
-                    bad.append(f"{d} (read requests not rejected, e.g. {probe})")
+                probes = [f"{svc}:listprobe"] + ([f"{svc}:putprobe"] if svc in allowlist else [])
+                for probe in probes:
+                    if not any(p.search(probe) for p in patterns):
+                        bad.append(f"{d} (requests not rejected, e.g. {probe})")
             continue  # action-prefix wildcards (svc:Pre*) are invalid IAM — boundary never uses them
         if _requestable(d, allowlist) and not any(p.search(d) for p in patterns):
             bad.append(d)

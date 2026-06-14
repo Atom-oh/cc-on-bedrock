@@ -25,7 +25,7 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
   - **task permission boundary `cc-on-bedrock-task-boundary` (boundary X, ADR-030)** — the
     security floor for all ~4000 per-user task roles. Authored ONCE in CDK Stack 02
     (`02-security-stack.ts`) so there is a single source of truth; a hand-maintained TF copy of
-    the 36-action DenyEscalation floor would drift silently (the CI invariant
+    the 63-action DenyEscalation floor would drift silently (the CI invariant
     `scripts/check-policyset-boundary.py` validates the CDK synth only). TF/CFN roles consume the
     boundary by ARN via `task_permission_boundary_arn` (tfvars). See ADR-030 §T3.
 - ※ **Still missing (no module yet)**:

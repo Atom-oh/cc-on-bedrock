@@ -62,7 +62,7 @@ per-service 천장 대신:
   boundary Deny, (b) 신청가능-서비스 플로어 액션 ⊆ 검증기 dangerous, (c) `aws:ResourceAccount` 조건 존재.
 
 ### 4. IaC 소유 (T3)
-boundary X 는 **CDK Stack 02 단일 정본**. 36+ 액션 deny 플로어를 TF/CFN 에 손으로 복제하면
+boundary X 는 **CDK Stack 02 단일 정본**. 63-액션 deny 플로어를 TF/CFN 에 손으로 복제하면
 silent drift 위험(CI 불변식은 CDK synth 만 검증). TF/CFN 역할은 `task_permission_boundary_arn`
 (tfvars)로 ARN 만 소비. → `terraform/CLAUDE.md` 에 "의도적 CDK-only" 명시.
 
