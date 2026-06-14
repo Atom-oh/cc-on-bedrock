@@ -12,6 +12,7 @@ import {
   getModelSummaries,
   getDailyUsage,
   getTotalUsage,
+  getUserDailyTrend,
 } from "@/lib/usage-client";
 
 export async function GET(req: NextRequest) {
@@ -116,6 +117,47 @@ export async function GET(req: NextRequest) {
             architecture: "Direct Bedrock",
           },
         });
+      }
+
+      case "user_daily_trend": {
+        // Date-range validation (bound the scan window up front).
+        if (!startDate || !endDate) {
+          return NextResponse.json({ error: "start_date and end_date are required" }, { status: 400 });
+        }
+        if (startDate > endDate) {
+          return NextResponse.json({ error: "start_date must be <= end_date" }, { status: 400 });
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        if (startDate > today || endDate > today) {
+          return NextResponse.json({ error: "date range cannot be in the future" }, { status: 400 });
+        }
+        const spanDays = Math.round(
+          (Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86_400_000,
+        );
+        if (spanDays > 92) {
+          return NextResponse.json({ error: "date range too large (max 92 days)" }, { status: 400 });
+        }
+
+        // Fail-CLOSED RBAC scope from the session (never from client params).
+        const rawTopN = Number(searchParams.get("top_n"));
+        const topN = Number.isFinite(rawTopN) && rawTopN > 0 ? Math.min(Math.trunc(rawTopN), 15) : 8;
+        let scope: { department?: string; userId?: string };
+        if (session.user.isAdmin) {
+          scope = {};
+        } else if (session.user.isDeptManager) {
+          if (!session.user.department) {
+            return NextResponse.json({ error: "no department on account" }, { status: 403 });
+          }
+          scope = { department: session.user.department };
+        } else {
+          if (!session.user.subdomain) {
+            return NextResponse.json({ error: "no subdomain on account" }, { status: 403 });
+          }
+          scope = { userId: session.user.subdomain };
+        }
+
+        const trend = await getUserDailyTrend({ startDate, endDate, topN, ...scope });
+        return NextResponse.json({ success: true, data: trend });
       }
 
       // Legacy compatibility: key_spend_list returns empty (no API keys in direct mode)
