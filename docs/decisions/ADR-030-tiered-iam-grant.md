@@ -136,6 +136,51 @@ boundary 의 whole-service deny + read-verb 형 deny 액션은 모두 검증기�
   allowlist 밖 서비스 신청이 검증 통과 후 런타임 silent-deny. **전체 묶음을 함께 머지/배포.**
 
 ## Verification
+
+```yaml
+# Tier 1: Static — boundary X 의 core 구조 + 검증기 ⇄ boundary 일관성 + CI 불변식 스크립트 존재.
+files:
+  # boundary X (CDK 단일 정본): AllowInAccount + aws:ResourceAccount + DenyEscalation 3-statement 구조.
+  - path: cdk/lib/02-security-stack.ts
+    must_contain:
+      - "cc-on-bedrock-task-boundary"
+      - "AllowInAccount"
+      - "DenyEscalation"
+      - "aws:ResourceAccount"
+
+  # 검증기: ADR-030 tier 모델 + read-tier 전 서비스 + boundary whole-service deny 의 read-tier 차단.
+  - path: shared/nextjs-app/src/lib/iam-request-validation.ts
+    must_contain:
+      - "ADR-030"
+      - "DEFAULT_DANGEROUS"
+      - "/^(iam|organizations|account|sso|sso-directory|identitystore|ram):/i"
+      - "/^sts:(assumerole|getfederationtoken|getsessiontoken)/i"
+
+  # CI 불변식 게이트: 검증기 ⇄ boundary 일관성 (a~d) 강제.
+  - path: scripts/check-policyset-boundary.py
+    must_exist: true
+
+  # ADR-026 (per-service 천장) 폐기 — TF/CFN 은 boundary ARN 만 소비한다는 의도 기록.
+  - path: terraform/CLAUDE.md
+    must_contain:
+      - "task_permission_boundary_arn"
+
+# Tier 2: Semantic — 결정의 핵심 invariant.
+semantic:
+  - claim: "per-user task 역할의 permission boundary 는 AllowInAccount(aws:ResourceAccount=<account> 조건) + DenyEscalation(escalation/리소스정책 노출/교차계정 공유 deny 플로어) 구조이며, ADR-026 의 per-service GrantCeiling* 천장은 폐기되었다"
+    context_files:
+      - cdk/lib/02-security-stack.ts
+  - claim: "request-time 검증기는 ADR-030 tier 모델(Tier-1 메타데이터 List*/Describe* 전 서비스 Resource:*, Tier-2 데이터 읽기 concrete ARN, Tier-4 쓰기 write-allowlist 한정)을 적용하고, boundary 가 whole-service deny 하는 서비스(iam/organizations/account/sso/sso-directory/identitystore/ram, sts:AssumeRole*/GetFederationToken/GetSessionToken)는 read-tier 를 포함한 모든 tier 에서 거부해 silent runtime-deny 를 막는다"
+    context_files:
+      - shared/nextjs-app/src/lib/iam-request-validation.ts
+  - claim: "boundary X 와 검증기 사이의 일관성(escalation 플로어 ⊆ boundary Deny, 신청가능-서비스 플로어 액션 ⊆ 검증기 dangerous, AllowInAccount 의 aws:ResourceAccount 조건 존재, boundary whole-service/read-verb deny ⊆ 검증기 dangerous)은 CI 불변식 스크립트가 강제한다"
+    context_files:
+      - scripts/check-policyset-boundary.py
+      - cdk/lib/02-security-stack.ts
+      - shared/nextjs-app/src/lib/iam-request-validation.ts
+```
+
+### Manual / 운영 검증 체크리스트
 - `bash tests/run-all.sh` GREEN (vitest 127, pytest 4, boundary 불변식 self-test + synth 템플릿).
 - `cd cdk && npx cdk synth CcOnBedrock-Security` OK.
 - `aws accessanalyzer validate-policy`(IDENTITY_POLICY)로 최종 boundary X core clean
