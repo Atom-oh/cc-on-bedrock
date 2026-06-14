@@ -21,6 +21,13 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
   - `waf/` — CDK Stack 06 (CLOUDFRONT-scope WebACL, us-east-1)
 - ※ **Wired (parity restored)**:
   - `ec2-devenv/` — CDK Stack 07 (ADR-004 Launch Template + DLP SGs) — root 연결 완료 (2026-06-11). `task_permission_boundary_arn`은 tfvars로 전달 (CDK Stack 02 생성분)
+- ※ **Intentionally CDK-only (NOT a gap — do not duplicate in TF)**:
+  - **task permission boundary `cc-on-bedrock-task-boundary` (boundary X, ADR-030)** — the
+    security floor for all ~4000 per-user task roles. Authored ONCE in CDK Stack 02
+    (`02-security-stack.ts`) so there is a single source of truth; a hand-maintained TF copy of
+    the 36-action DenyEscalation floor would drift silently (the CI invariant
+    `scripts/check-policyset-boundary.py` validates the CDK synth only). TF/CFN roles consume the
+    boundary by ARN via `task_permission_boundary_arn` (tfvars). See ADR-030 §T3.
 - ※ **Still missing (no module yet)**:
   - Route 53 Resolver **DNS Firewall** (CDK 01-network-stack) — TF 미구현, DLP DNS 계층은 CDK 전용
   - `modules/ecs-devenv/`의 중복 DLP SG 세트 — deprecated ECS 경로용, `SECURITY_POLICY="open"` 하드코딩. ec2-devenv 모듈이 정본; ECS 경로 제거 시 함께 정리
