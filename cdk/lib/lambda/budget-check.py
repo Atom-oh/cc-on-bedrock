@@ -771,7 +771,7 @@ def check_department_budgets(user_spend):
 
 def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
-    # ADR-025: reset the per-invocation sub→subdomain map (repopulated by the scans).
+    # ADR-031: reset the per-invocation email→subdomain map (repopulated by the scans).
     global _subdomain_by_user, _valid_user_keys
     _subdomain_by_user = {}
     # Load the authoritative Cognito identity set so the scans below skip stale

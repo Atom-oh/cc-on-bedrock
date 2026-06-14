@@ -182,7 +182,11 @@ def _migrate_table(table, maps, args, label):
                 continue
             new_item, old_key, is_limit = planned
             tgt_key = {"PK": new_item["PK"], "SK": new_item["SK"]}
-            existing = table.get_item(Key=tgt_key).get("Item") if args.apply else None
+            # ConsistentRead: two source rows (USER#{sub} + USER#{subdomain}) for the same person
+            # merge into ONE target SK. The eventually-consistent default could let the 2nd merge's
+            # read miss the 1st merge's just-written put → overwrite instead of sum → counter loss
+            # (the exact split-identity case this migration fixes). Strong read closes that window.
+            existing = table.get_item(Key=tgt_key, ConsistentRead=True).get("Item") if args.apply else None
             if existing and not is_limit:
                 new_item = merge_counters(existing, new_item)
                 merged += 1

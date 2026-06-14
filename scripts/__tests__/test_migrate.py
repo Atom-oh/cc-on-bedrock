@@ -89,7 +89,7 @@ class _FakeTable:
     def scan(self, **kw):
         return {"Items": [dict(v) for v in self.store.values()]}
 
-    def get_item(self, Key):
+    def get_item(self, Key, **kw):  # **kw absorbs ConsistentRead=True (fake is always consistent)
         v = self.store.get((Key["PK"], Key["SK"]))
         return {"Item": dict(v)} if v else {}
 
