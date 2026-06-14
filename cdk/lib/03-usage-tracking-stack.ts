@@ -13,6 +13,8 @@ import * as cr from 'aws-cdk-lib/custom-resources';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 import * as path from 'path';
@@ -58,6 +60,55 @@ export class UsageTrackingStack extends cdk.Stack {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'date', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Phase 1 (OTel productivity monitoring): GSI for DAU/WAU/MAU unique-user-over-window
+    // counting. ACTIVE#{date} presence rows carry gsi_day_pk=DAY#{date}, gsi_day_sk=USER#{email}.
+    this.usageTable.addGlobalSecondaryIndex({
+      indexName: 'day-user-index',
+      partitionKey: { name: 'gsi_day_pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'gsi_day_sk', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    });
+
+    // Phase 1: S3 buffer for raw OTLP metric batches written by the ADOT collector's
+    // awss3 exporter. Cheap, durable, doubles as the future audit archive. Raw objects
+    // lifecycle-expire after 30 days; the daily rollups live in DynamoDB.
+    const otelRawBucket = new s3.Bucket(this, 'OtelMetricsRawBucket', {
+      bucketName: `cc-on-bedrock-otel-metrics-raw-${cdk.Aws.ACCOUNT_ID}`,
+      encryption: s3.BucketEncryption.KMS,
+      encryptionKey,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
+    });
+
+    // Phase 1: S3-event rollup Lambda — parses OTLP batches and upserts daily,
+    // email-keyed productivity rollups (PROD#/ACTIVE#/ATTR#) into the usage table.
+    const otelRollupLambda = new lambda.Function(this, 'OtelMetricsRollup', {
+      functionName: 'cc-on-bedrock-otel-metrics-rollup',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'otel-metrics-rollup.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 256,
+      environment: {
+        USAGE_TABLE_NAME: this.usageTable.tableName,
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+    this.usageTable.grantReadWriteData(otelRollupLambda);
+    otelRawBucket.grantRead(otelRollupLambda);
+    otelRawBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(otelRollupLambda),
+      { suffix: '.json' },
+    );
+
+    new cdk.CfnOutput(this, 'OtelMetricsRawBucketName', {
+      value: otelRawBucket.bucketName,
+      exportName: 'cc-otel-metrics-raw-bucket',
     });
 
     // DLP Domain Lists table (DNS Firewall domain management)
