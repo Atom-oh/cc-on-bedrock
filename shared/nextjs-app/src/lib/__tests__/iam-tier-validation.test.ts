@@ -54,6 +54,13 @@ describe("tiered IAM validation (ADR-030)", () => {
       ["ec2:AuthorizeSecurityGroupIngress", arn("ec2", "security-group/sg-1")],
       ["ec2:AuthorizeSecurityGroupEgress", arn("ec2", "security-group/sg-1")],
       ["ec2:ModifySecurityGroupRules", arn("ec2", "security-group/sg-1")],
+      // ADR-030 T4 additions on requestable services
+      ["ec2:ModifySnapshotAttribute", arn("ec2", "snapshot/snap-1")],
+      ["ec2:ModifyImageAttribute", arn("ec2", "image/ami-1")],
+      ["eks:CreateAccessEntry", arn("eks", "cluster/c1")],
+      ["eks:AssociateAccessPolicy", arn("eks", "cluster/c1")],
+      ["dynamodb:PutResourcePolicy", arn("dynamodb", "table/t")],
+      ["dynamodb:DeleteResourcePolicy", arn("dynamodb", "table/t")],
     ];
     for (const [action, resource] of denied) {
       expect(

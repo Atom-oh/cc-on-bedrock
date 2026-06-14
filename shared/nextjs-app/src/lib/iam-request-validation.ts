@@ -50,6 +50,9 @@ const DEFAULT_DANGEROUS: RegExp[] = [
   /:(add|remove|put)[a-z]*permission$/i, // *AddPermission/RemovePermission/PutPermission, lambda:AddLayerVersionPermission — opens resource policy cross-account/public
   /:put[a-z]*publicaccessblock$/i, // s3:PutAccountPublicAccessBlock / PutPublicAccessBlock — disables public-access protection
   /^ec2:(authorize|revoke|modify)securitygroup/i, // SG ingress/egress mutation — network exposure / lateral movement
+  /^ec2:modify(snapshot|image)attribute$/i, // make an EBS snapshot / AMI public or cross-account (data exposure)
+  /^eks:(create|update|delete)accessentry$/i, // grant self a Kubernetes access entry (cluster admin)
+  /^eks:(associate|disassociate)accesspolicy$/i, // attach a cluster access policy to an entry (cluster admin)
   /^iam:/i, // any iam:* (PassRole, CreateRole, ...)
   /^sts:assumerole/i,
   /:[a-z]*resourcepolicy$/i, // *PutResourcePolicy / *DeleteResourcePolicy

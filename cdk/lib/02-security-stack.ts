@@ -287,14 +287,40 @@ export class SecurityStack extends cdk.Stack {
           sid: 'DenyEscalation',
           effect: iam.Effect.DENY,
           actions: [
+            // whole-service control planes with no legitimate per-user task-role use:
+            // IAM, Organizations/Account, and IAM Identity Center (account-access grants outside iam:*).
             'iam:*', 'organizations:*', 'account:*',
+            'sso:*', 'sso-directory:*', 'identitystore:*',
+            // RAM: sharing an in-account resource to an external account/org authorizes that
+            // external principal on it — the one clean way to defeat aws:ResourceAccount (ADR-030 T4).
+            'ram:*',
+            // Lake Formation: IAM-like data-plane permission grants outside iam:* (T4).
+            'lakeformation:GrantPermissions', 'lakeformation:BatchGrantPermissions', 'lakeformation:PutDataLakeSettings',
+            // role assumption / credential pivoting
             'sts:AssumeRole', 'sts:AssumeRoleWithSAML', 'sts:AssumeRoleWithWebIdentity',
+            'sts:GetFederationToken', 'sts:GetSessionToken',
             'kms:ScheduleKeyDeletion', 'kms:DisableKey', 'kms:PutKeyPolicy', 'kms:CreateGrant',
             'lambda:AddPermission', 'lambda:RemovePermission', 'lambda:AddLayerVersionPermission', 'lambda:PutFunctionConcurrency',
             'sns:AddPermission', 'sns:RemovePermission', 'sqs:AddPermission', 'sqs:RemovePermission',
             's3:PutBucketPolicy', 's3:PutBucketAcl', 's3:PutAccountPublicAccessBlock', 's3:DeleteBucketPolicy',
+            'dynamodb:PutResourcePolicy', 'dynamodb:DeleteResourcePolicy',
             'secretsmanager:PutResourcePolicy', 'secretsmanager:DeleteResourcePolicy',
-            'ecr:SetRepositoryPolicy', 'events:PutPermission', 'glue:PutResourcePolicy', 'ssm:ModifyDocumentPermission',
+            'ecr:SetRepositoryPolicy', 'ecr:PutRegistryPolicy', 'ecr:DeleteRegistryPolicy',
+            'events:PutPermission', 'glue:PutResourcePolicy', 'ssm:ModifyDocumentPermission',
+            // cross-service resource-policy / public-exposure (T4 review). These services are NOT
+            // in the self-service write-allowlist, so the deny defends against an out-of-band grant.
+            'backup:PutBackupVaultAccessPolicy', 'backup:DeleteBackupVaultAccessPolicy',
+            'codebuild:UpdateProjectVisibility',
+            'logs:PutResourcePolicy', 'logs:PutDestinationPolicy', 'logs:DeleteResourcePolicy',
+            'elasticfilesystem:PutFileSystemPolicy', 'elasticfilesystem:DeleteFileSystemPolicy',
+            'kinesis:PutResourcePolicy', 'kinesis:DeleteResourcePolicy',
+            'codeartifact:PutDomainPermissionsPolicy', 'codeartifact:PutRepositoryPermissionsPolicy',
+            'acm-pca:PutPolicy', 'acm-pca:DeletePolicy',
+            // EKS self-granted cluster admin (access entries) + public EBS-snapshot / AMI exposure.
+            // eks/ec2 ARE in the write-allowlist, so the request validator must also reject these
+            // (DEFAULT_DANGEROUS) — else silent-deny. Enforced by check-policyset-boundary.py (b).
+            'eks:CreateAccessEntry', 'eks:AssociateAccessPolicy', 'eks:UpdateAccessEntry',
+            'ec2:ModifySnapshotAttribute', 'ec2:ModifyImageAttribute',
             'ec2:ModifySecurityGroupRules', 'ec2:AuthorizeSecurityGroupIngress', 'ec2:AuthorizeSecurityGroupEgress',
           ],
           resources: ['*'],

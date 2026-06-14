@@ -51,7 +51,19 @@ CANONICAL_DENY_FLOOR = [
     # privilege delegation / role escalation
     "iam:passrole", "iam:createrole", "iam:attachrolepolicy", "iam:putrolepolicy",
     "iam:createpolicyversion", "iam:updateassumerolepolicy",
-    "sts:assumerole",
+    "sts:assumerole", "sts:getfederationtoken", "sts:getsessiontoken",
+    # account-access control planes outside iam:* — ADR-030 T4
+    "sso:createaccountassignment", "identitystore:creategroupmembership",
+    "lakeformation:grantpermissions",
+    # cross-account resource sharing (defeats aws:ResourceAccount) — ADR-030 T4
+    "ram:createresourceshare", "ram:associateresourceshare",
+    # cross-account resource-policy / public exposure on non-requestable services — ADR-030 T4
+    "backup:putbackupvaultaccesspolicy", "codebuild:updateprojectvisibility",
+    "ecr:putregistrypolicy", "logs:putresourcepolicy", "kinesis:putresourcepolicy",
+    # escalation/exposure on REQUESTABLE services (validator MUST also flag — invariant b) — ADR-030 T4
+    "eks:createaccessentry", "eks:associateaccesspolicy",
+    "ec2:modifysnapshotattribute", "ec2:modifyimageattribute",
+    "dynamodb:putresourcepolicy", "dynamodb:deleteresourcepolicy",
     # KMS key destruction / policy
     "kms:putkeypolicy", "kms:schedulekeydeletion", "kms:disablekey", "kms:creategrant",
     # resource-policy / public exposure (cross-account)
@@ -171,16 +183,28 @@ def _self_test() -> int:
 
     # a Deny set that mirrors the real boundary X should fully cover the floor.
     real_like = {
-        "iam:*", "organizations:*", "account:*",
+        "iam:*", "organizations:*", "account:*", "ram:*",
+        "sso:*", "sso-directory:*", "identitystore:*",
+        "lakeformation:grantpermissions", "lakeformation:batchgrantpermissions", "lakeformation:putdatalakesettings",
         "sts:assumerole", "sts:assumerolewithsaml", "sts:assumerolewithwebidentity",
+        "sts:getfederationtoken", "sts:getsessiontoken",
+        "backup:putbackupvaultaccesspolicy", "backup:deletebackupvaultaccesspolicy", "codebuild:updateprojectvisibility",
+        "logs:putresourcepolicy", "logs:putdestinationpolicy", "logs:deleteresourcepolicy",
+        "kinesis:putresourcepolicy", "kinesis:deleteresourcepolicy",
+        "elasticfilesystem:putfilesystempolicy", "elasticfilesystem:deletefilesystempolicy",
+        "codeartifact:putdomainpermissionspolicy", "codeartifact:putrepositorypermissionspolicy",
+        "acm-pca:putpolicy", "acm-pca:deletepolicy",
         "kms:schedulekeydeletion", "kms:disablekey", "kms:putkeypolicy", "kms:creategrant",
         "lambda:addpermission", "lambda:removepermission", "lambda:addlayerversionpermission",
         "lambda:putfunctionconcurrency",
         "sns:addpermission", "sns:removepermission", "sqs:addpermission", "sqs:removepermission",
         "s3:putbucketpolicy", "s3:putbucketacl", "s3:putaccountpublicaccessblock", "s3:deletebucketpolicy",
+        "dynamodb:putresourcepolicy", "dynamodb:deleteresourcepolicy",
         "secretsmanager:putresourcepolicy", "secretsmanager:deleteresourcepolicy",
-        "ecr:setrepositorypolicy", "events:putpermission", "glue:putresourcepolicy",
-        "ssm:modifydocumentpermission",
+        "ecr:setrepositorypolicy", "ecr:putregistrypolicy", "ecr:deleteregistrypolicy",
+        "events:putpermission", "glue:putresourcepolicy", "ssm:modifydocumentpermission",
+        "eks:createaccessentry", "eks:associateaccesspolicy", "eks:updateaccessentry",
+        "ec2:modifysnapshotattribute", "ec2:modifyimageattribute",
         "ec2:modifysecuritygrouprules", "ec2:authorizesecuritygroupingress", "ec2:authorizesecuritygroupegress",
     }
     miss = uncovered_floor(real_like)
