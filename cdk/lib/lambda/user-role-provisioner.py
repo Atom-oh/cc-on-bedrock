@@ -12,8 +12,8 @@ Single source of truth for everything that must exist when a Cognito user is bor
     2. Writes `custom:subdomain` back to Cognito (so dashboard / DNS / IAM names all
        converge on the same value regardless of how the user was created — sh seed,
        dashboard /api/users POST, AWS Console, or SDK).
-    3. Creates the Local Governance per-user role `cc-on-bedrock-local-user-{sub}`
-       (covers the IAM propagation race for `cc` login).
+    3. Creates the Local Governance per-user role `cc-on-bedrock-local-user-{subdomain}`
+       (ADR-031; covers the IAM propagation race for `cc` login).
     4. Creates the EC2 mode per-user role + instance profile
        `cc-on-bedrock-task-{subdomain}` (covers the IAM propagation race for first
        EC2 instance start — see ec2-clients.ts:ensureUserInstanceProfile).

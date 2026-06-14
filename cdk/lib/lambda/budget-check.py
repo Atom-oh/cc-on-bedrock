@@ -439,9 +439,10 @@ def attach_deny_policy(subdomain: str):
     of the user's roles (EC2 task + Local Governance).
 
     Previously this only tried the EC2 `cc-on-bedrock-task-{subdomain}` role, so Local-only
-    users (whose role is `cc-on-bedrock-local-user-{cognito_sub}`) silently bypassed the
-    daily/monthly $ budget enforcement. The Local role is looked up via the same
-    `username`-tag index that `attach_dept_deny_policy` already uses.
+    users (whose role is `cc-on-bedrock-local-user-{subdomain}`) silently bypassed the
+    daily/monthly $ budget enforcement. Both role names are now built from the usage row's
+    `subdomain` attribute via `_candidate_role_names` (ADR-031). NOTE: the `subdomain` param
+    is actually the email user-key (the map is email-keyed) — misnamed, not a bug.
     """
     deny_policy = json.dumps({
         "Version": "2012-10-17",
@@ -678,8 +679,9 @@ def check_token_limits_backup():
     for (etype, key), (period, used, mx) in tripped.items():
         if etype != "USER":
             continue
-        # ADR-025: `key` is the Cognito sub → Local role name is direct; the EC2
-        # task role is added when the subdomain is known from today's usage scan.
+        # ADR-031: `key` is the canonical email; `_candidate_role_names` resolves the
+        # row's `subdomain` (captured during the usage scan) to build both the Local
+        # and EC2 task role names.
         candidate_roles = _candidate_role_names(key)
         for role in candidate_roles:
             checked += 1
