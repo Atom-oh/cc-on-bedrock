@@ -51,6 +51,8 @@ const DEFAULT_DANGEROUS: RegExp[] = [
   /:put[a-z]*publicaccessblock$/i, // s3:PutAccountPublicAccessBlock / PutPublicAccessBlock — disables public-access protection
   /^ec2:(authorize|revoke|modify)securitygroup/i, // SG ingress/egress mutation — network exposure / lateral movement
   /^ec2:modify(snapshot|image)attribute$/i, // make an EBS snapshot / AMI public or cross-account (data exposure)
+  /^s3:put[a-z]*acl$/i, // s3:PutBucketAcl / PutObjectAcl — ACL-based public/cross-account exposure
+  /^lambda:put[a-z]*concurrency$/i, // lambda:PutFunctionConcurrency — concurrency starvation (boundary-denied)
   /^eks:(create|update|delete)accessentry$/i, // grant self a Kubernetes access entry (cluster admin)
   /^eks:(associate|disassociate)accesspolicy$/i, // attach a cluster access policy to an entry (cluster admin)
   // Whole-service control planes the runtime boundary X denies ENTIRELY (`service:*`). Reject ALL

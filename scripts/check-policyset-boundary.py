@@ -67,8 +67,8 @@ CANONICAL_DENY_FLOOR = [
     # KMS key destruction / policy
     "kms:putkeypolicy", "kms:schedulekeydeletion", "kms:disablekey", "kms:creategrant",
     # resource-policy / public exposure (cross-account)
-    "s3:putbucketpolicy", "s3:putaccountpublicaccessblock", "s3:deletebucketpolicy",
-    "lambda:addpermission", "lambda:addlayerversionpermission",
+    "s3:putbucketpolicy", "s3:putbucketacl", "s3:putaccountpublicaccessblock", "s3:deletebucketpolicy",
+    "lambda:addpermission", "lambda:addlayerversionpermission", "lambda:putfunctionconcurrency",
     "sns:addpermission", "sqs:addpermission",
     "secretsmanager:putresourcepolicy", "secretsmanager:deleteresourcepolicy",
     "ecr:setrepositorypolicy", "events:putpermission", "glue:putresourcepolicy",
@@ -161,10 +161,6 @@ def allowlist_services(ts_path: Path) -> set:
     return {s.lower() for g in re.findall(r'"([^"]+)"|\'([^\']+)\'', m.group(1)) for s in g if s}
 
 
-# ADR-030 review: the read tier accepts List*/Describe* (any service, Resource:*) and Get*/Query*/
-# Scan* (any service, concrete ARN). So a boundary-denied action that the read tier would accept is
-# a silent-deny unless the validator also rejects it. This is NOT limited to write-allowlist
-# services (reads are any-service) — invariant (b) alone structurally misses it.
 READ_PREFIXES = ("get", "list", "describe", "batchget", "query", "scan")
 
 
@@ -173,34 +169,35 @@ def whole_service_denies(deny: set) -> set:
     return {d.split(":")[0] for d in deny if d.endswith(":*")}
 
 
-def read_tier_silent_deny(deny: set, patterns: list) -> list:
-    """Boundary-denied actions a read-tier request would PASS but the validator does NOT reject
-    (empty = OK). (d1) whole-service denies — probe read verbs on the service; (d2) specific
-    read-verb-shaped deny actions (e.g. sts:GetFederationToken)."""
+def _requestable(action: str, allowlist: set) -> bool:
+    """Could a well-formed self-service request for `action` be ACCEPTED by the tiered validator?
+    Write tier: any verb on a write-allowlist service. Read tier: List*/Describe*/Get*/Query*/
+    Scan*/BatchGet* on ANY service. (ARN rules still apply, but the action *kind* is acceptable.)"""
+    svc, _, op = action.partition(":")
+    return svc in allowlist or op.startswith(READ_PREFIXES)
+
+
+def boundary_validator_incoherent(deny: set, patterns: list, allowlist: set) -> list:
+    """Boundary-denied actions a self-service request could still be ACCEPTED for, yet the validator
+    does NOT reject → "approved then silently runtime-denied" (empty = OK).
+
+    Derived ENTIRELY from the boundary Deny set — NOT from a hand-maintained floor list — so a
+    forgotten floor entry can never hide a drift (PR #71 review: the single-point-of-omission fix).
+    Covers both the write-allowlist case (e.g. s3:PutBucketAcl) and the read-tier case (whole-service
+    `svc:*` denies + read-verb-shaped specific denies like sts:GetFederationToken)."""
     bad = []
-    for svc in sorted(whole_service_denies(deny)):
-        probe = f"{svc}:listprobe"
-        if not any(p.search(probe) for p in patterns):
-            bad.append(f"{svc}:* (read requests not rejected by validator, e.g. {probe})")
     for d in deny:
-        if d.endswith("*") or ":" not in d:
-            continue
-        verb = d.split(":", 1)[1]
-        if verb.startswith(READ_PREFIXES) and not any(p.search(d) for p in patterns):
+        if d.endswith("*"):
+            # whole-service `svc:*` deny → reads are any-service requestable; probe must be rejected.
+            if d.endswith(":*"):
+                svc = d.split(":")[0]
+                probe = f"{svc}:listprobe"
+                if not any(p.search(probe) for p in patterns):
+                    bad.append(f"{d} (read requests not rejected, e.g. {probe})")
+            continue  # action-prefix wildcards (svc:Pre*) are invalid IAM — boundary never uses them
+        if _requestable(d, allowlist) and not any(p.search(d) for p in patterns):
             bad.append(d)
-    return bad
-
-
-def floor_not_flagged_by_validator(patterns: list, allowlist: set) -> list:
-    """Floor actions on a REQUESTABLE service that the validator would NOT reject (empty = OK).
-
-    Only requestable-service floor actions matter here: if a developer can request action A on an
-    allowlisted service and an admin approves it, but the runtime boundary denies A, the grant is
-    silently dead. So every boundary-denied escalation action on an allowlisted service MUST also be
-    request-rejected (flagged by DEFAULT_DANGEROUS). Floor actions on non-requestable services
-    (iam/sts/kms/ecr/events/glue/...) carry no silent-deny risk and need no validator coherence."""
-    return [a for a in CANONICAL_DENY_FLOOR
-            if a.split(":")[0] in allowlist and not any(p.search(a) for p in patterns)]
+    return sorted(bad)
 
 
 # ----------------------------------------------------------------------------- self-test
@@ -240,17 +237,17 @@ def _self_test() -> int:
     miss = uncovered_floor(real_like)
     assert miss == [], f"real-like deny set should cover the floor, missing: {miss}"
 
-    # (b) validator coherence: the real DEFAULT_DANGEROUS patterns must flag every floor action
-    # that sits on a REQUESTABLE (write-allowlisted) service — else silent-deny.
+    # (b/d) boundary⇄validator coherence, derived from the boundary (no manual-floor dependency):
+    # every boundary-denied action a request could be accepted for must be validator-rejected.
     pats = validator_dangerous_patterns(Path(ALLOWLIST_TS))
     alw = allowlist_services(Path(ALLOWLIST_TS))
-    notflagged = floor_not_flagged_by_validator(pats, alw)
-    assert notflagged == [], f"requestable floor actions not flagged dangerous by validator: {notflagged}"
-
-    # (d) read-tier silent-deny: whole-service denies + read-verb specific denies must be rejected.
-    assert read_tier_silent_deny({"organizations:*"}, pats) == []  # validator has ^organizations:
-    assert read_tier_silent_deny({"sts:getfederationtoken"}, pats) == []  # ^sts:...getfederationtoken
-    assert read_tier_silent_deny({"foobar:*"}, [re.compile(r"^iam:", re.I)]) != []  # unguarded whole-svc
+    assert boundary_validator_incoherent(real_like, pats, alw) == [], \
+        f"real boundary should be validator-coherent: {boundary_validator_incoherent(real_like, pats, alw)}"
+    # positive fixtures: each silent-deny shape is caught when the validator does NOT reject it.
+    assert boundary_validator_incoherent({"s3:putbucketacl"}, [], {"s3"}) == ["s3:putbucketacl"]  # write-allowlist
+    assert boundary_validator_incoherent({"organizations:*"}, [], set()) != []                     # whole-service read
+    assert boundary_validator_incoherent({"sts:getfederationtoken"}, [], set()) != []              # read-verb specific
+    assert boundary_validator_incoherent({"backup:putbackupvaultaccesspolicy"}, [], set()) == []   # not requestable → OK
 
     # (c) account confinement detection.
     good = {"Statement": [{"Effect": "Allow", "Action": "*",
@@ -295,8 +292,7 @@ def main() -> int:
     alw = allowlist_services(src)
 
     missing = uncovered_floor(deny)
-    notflagged = floor_not_flagged_by_validator(patterns, alw)
-    silent_read = read_tier_silent_deny(deny, patterns)
+    incoherent = boundary_validator_incoherent(deny, patterns, alw)
     confined = account_confinement(doc)
 
     print(f"boundary Deny actions: {len(deny)}")
@@ -307,11 +303,8 @@ def main() -> int:
     if missing:
         print(f"[FAIL] (a) escalation floor NOT denied by boundary (reachable despite grant): {sorted(missing)}", file=sys.stderr)
         failed = True
-    if notflagged:
-        print(f"[FAIL] (b) deny-floor action NOT flagged dangerous by request validator (drift): {sorted(notflagged)}", file=sys.stderr)
-        failed = True
-    if silent_read:
-        print(f"[FAIL] (d) boundary-denied action a READ-tier request would pass but validator allows (silent-deny): {sorted(silent_read)}", file=sys.stderr)
+    if incoherent:
+        print(f"[FAIL] (b/d) boundary-denied action a self-service request could be ACCEPTED for, but validator does NOT reject (silent-deny): {incoherent}", file=sys.stderr)
         failed = True
     if not confined:
         print("[FAIL] (c) no Allow Action:'*' statement with StringEquals aws:ResourceAccount (cross-account not fail-closed)", file=sys.stderr)
