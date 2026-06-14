@@ -7,6 +7,11 @@ builds_on: ADR-022
 
 # ADR-024: Cognito user deletion → downstream cleanup
 
+> **📌 부분 업데이트 — [ADR-031](ADR-031-usage-email-canonical-key.md) (2026-06-14):** 본 ADR 본문의
+> `cc-on-bedrock-local-user-{sub}` (삭제 대상 IAM 롤) 과 `USER#{sub}` (삭제 대상 limits 행) 표기는
+> ADR-031 이후 각각 `cc-on-bedrock-local-user-{subdomain}` · `USER#{email}` 이다. cleanup 로직은
+> 롤 태그(`email`/`subdomain`)에서 식별자를 복구하므로 절차 자체는 유효하나, 키 표기는 ADR-031 기준.
+
 **Status:** Accepted
 **Date:** 2026-05-15
 **Builds on:** [ADR-022 EventBridge pre-provisioning of per-user identity](ADR-022-eventbridge-role-preprovisioning.md)

@@ -1,5 +1,10 @@
 # Runbook: ADR-025 식별자 cutover (subdomain → Cognito sub)
 
+> **⛔ SUPERSEDED — [ADR-031](../decisions/ADR-031-usage-email-canonical-key.md) (2026-06-14):**
+> 이 런북이 기술한 `subdomain → Cognito sub` cutover 는 ADR-031 이 **되돌렸다**(canonical 키 =
+> `email`, IAM 롤명 = `{subdomain}`, sub 완전 제거). 이 절차와 `migrate-adr025-usage-to-sub.py` 는
+> **실행하지 말 것** — 현재 backfill/네이밍은 ADR-031 을 따른다. 아래 내용은 역사적 기록으로만 보존.
+
 > ⚠️ **이 브랜치는 정적 검증(py_compile/tsc)만 거쳤고 실데이터로 테스트되지 않았습니다.**
 > billing/governance 핵심 코드이므로 **반드시 리뷰 + 비프로덕션 테이블 backfill 리허설 + 스테이징**
 > 후 배포하세요. **자동 배포 금지.**

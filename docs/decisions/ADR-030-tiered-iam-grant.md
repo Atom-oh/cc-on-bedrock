@@ -61,6 +61,15 @@ per-service 천장 대신:
   `scripts/check-policyset-boundary.py` (CI, `tests/run-all.sh`)가 강제: (a) escalation 플로어 ⊆
   boundary Deny, (b) 신청가능-서비스 플로어 액션 ⊆ 검증기 dangerous, (c) `aws:ResourceAccount` 조건 존재.
 
+> **ADR-021 와의 관계 (자주 제기되는 오해, 멀티모델 재검증 2026-06-14):** `AllowInAccount`(`Action:*`)는
+> ADR-021 의 "Anthropic-only Bedrock" ceiling 을 **완화하지 않는다**. boundary 는 최대치 **cap** 일 뿐
+> **grant 가 아니다** — 유효 권한 = identity policy ∩ boundary. Bedrock 기본 grant 는 identity policy 에서
+> `*anthropic.claude-*`/`*embed*` 로 한정(02-security-stack `bedrockPolicy`)되고, `bedrock` 은 검증기
+> allowlist 밖이라 셀프서비스로 추가 불가. 따라서 non-Anthropic 모델 호출 경로는 admin 의 out-of-band
+> 수동 부여(이미 문서화된 수용 잔여 위험)뿐. *주의: ADR-021 addendum 이 추가한 `*embed*`·
+> `application-inference-profile/*` 자체가 vendor-neutral 이라 "Anthropic-only" 표현은 ADR-021 기준에서
+> 이미 embeddings/app-profile 에 한해 완화돼 있음 — 이는 ADR-030 boundary 가 아니라 ADR-021 grant 의 범위.*
+
 ### 4. IaC 소유 (T3)
 boundary X 는 **CDK Stack 02 단일 정본**. 63-액션 deny 플로어를 TF/CFN 에 손으로 복제하면
 silent drift 위험(CI 불변식은 CDK synth 만 검증). TF/CFN 역할은 `task_permission_boundary_arn`

@@ -6,6 +6,12 @@ verification_required: true
 
 # ADR-014: Local Governance Mode (EC2-less, IAM + Inference Profile)
 
+> **📌 부분 업데이트 — [ADR-031](ADR-031-usage-email-canonical-key.md) (2026-06-14):** Local 롤 네이밍이
+> `cc-on-bedrock-local-user-{cognito_sub}` → `cc-on-bedrock-local-user-{subdomain}`으로 변경됐고,
+> 사용량/한도 PK 는 `USER#{sub}` → `USER#{email}` 로 바뀌었다. 본 ADR 본문의 `{cognito_sub}`/`{sub}`
+> 표기(role name·PK·trust principal claim 포함)는 **역사적 기록**이며, 현재 정본은 ADR-031 이다.
+> Local Governance Mode 의 나머지 설계는 그대로 유효.
+
 ## Status
 Accepted (2026-05-12) — implemented in Stack 08 (`cdk/lib/08-local-governance-stack.ts`), referenced as binding dependency by ADR-015 and ADR-016
 

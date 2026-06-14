@@ -40,8 +40,8 @@
 - `src/app/api/admin/mcp/gateways/route.ts` - MCP 게이트웨이 관리 (Admin)
 - `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 동기화 트리거 (Admin)
 - `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-부서 할당 (Admin, ADR-007)
-- `src/app/api/admin/limits/route.ts` - Local Governance normalized token 한도 CRUD (Admin, ADR-014)
-- `src/app/api/admin/limits/reset/route.ts` - 사용자 한도 강제 reset + Deny policy detach (Admin, ADR-014)
+- `src/app/api/admin/limits/route.ts` - Local Governance normalized token 한도 CRUD (Admin, ADR-014). **USER 키 = 소문자 email** (ADR-031, 과거 Cognito sub)
+- `src/app/api/admin/limits/reset/route.ts` - 사용자 한도 강제 reset + Deny policy detach (Admin, ADR-014). body `{email}`로 `USER#{email}/DENY#active` 조회 → 행의 `subdomain`으로 Local 롤명(`local-user-{subdomain}`) 해석·detach·삭제 (ADR-031; 키=email, 롤명=subdomain 분리). 활성 deny 없으면 404
 
 ### User Self-Service
 - `src/app/api/user/container/route.ts` - EC2 인스턴스 시작/중지

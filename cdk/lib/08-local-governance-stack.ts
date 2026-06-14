@@ -80,7 +80,7 @@ export class LocalGovernanceStack extends cdk.Stack {
     });
 
     // ──────────────────────────────────────────────────────────
-    // Limits table — keyed by USER#{sub} / DEPT#{dept} × LIMIT|COUNTER|DENY|WARN
+    // Limits table — keyed by USER#{email} / DEPT#{dept} × LIMIT|COUNTER|DENY|WARN (ADR-031)
     // ──────────────────────────────────────────────────────────
     this.limitsTable = new dynamodb.Table(this, 'LimitsTable', {
       tableName: 'cc-on-bedrock-limits',
@@ -380,19 +380,15 @@ export class LocalGovernanceStack extends cdk.Stack {
 
     this.limitsTable.grantReadWriteData(enforcer);
     this.alertTopic.grantPublish(enforcer);
+    // ADR-031: the role name is built directly from the usage row's `subdomain`
+    // (cc-on-bedrock-local-user-{subdomain}); no account-wide role scan is needed.
+    // The owner-tag check before attaching a Deny uses iam:ListRoleTags on the
+    // user-role ARN pattern only. (The old iam:ListRoles:* grant for the removed
+    // iam_role_lookup reverse-index has been dropped — least privilege.)
     enforcer.addToRolePolicy(new iam.PolicyStatement({
       sid: 'IamDenyAttach',
       actions: ['iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:GetRolePolicy', 'iam:ListRoleTags'],
       resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
-    }));
-    // iam_role_lookup.local_role_names_for() scans the account once per Lambda
-    // container lifetime to map Cognito username → real role name. The
-    // reverse index is needed because usage-table PKs are keyed by username,
-    // not the sub UUID embedded in the role name.
-    enforcer.addToRolePolicy(new iam.PolicyStatement({
-      sid: 'IamListRolesForUsernameLookup',
-      actions: ['iam:ListRoles'],
-      resources: ['*'],
     }));
 
     // Subscribe to usage table Stream (consumes USER# row updates)
@@ -425,16 +421,15 @@ export class LocalGovernanceStack extends cdk.Stack {
 
     this.limitsTable.grantReadWriteData(reset);
     this.alertTopic.grantPublish(reset);
+    // ADR-031: limit-reset builds cc-on-bedrock-local-user-{subdomain} from the
+    // row's subdomain attribute (see _role_name_from_row) — no iam:ListRoles scan.
+    // The old iam:ListRoles:* grant for the removed reverse-index is dropped.
     reset.addToRolePolicy(new iam.PolicyStatement({
+      // least-privilege: limit-reset only calls delete_role_policy (the role's subdomain is read
+      // from the DENY#active DDB row, not IAM) — GetRolePolicy/ListRoleTags were unused (PR #68 review).
       sid: 'IamDenyDetach',
-      actions: ['iam:DeleteRolePolicy', 'iam:GetRolePolicy', 'iam:ListRoleTags'],
+      actions: ['iam:DeleteRolePolicy'],
       resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
-    }));
-    // Same reverse-index need as enforcer — see comment above.
-    reset.addToRolePolicy(new iam.PolicyStatement({
-      sid: 'IamListRolesForUsernameLookup',
-      actions: ['iam:ListRoles'],
-      resources: ['*'],
     }));
 
     // KST 00:00 = UTC 15:00 (KST = UTC+9)

@@ -11,8 +11,8 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
 // ADR-014/015: admin CRUD for normalized-token limits in cc-on-bedrock-limits.
 //
-// Schema:
-//   PK = "USER#{sub}" | "DEPT#{dept}"
+// Schema (ADR-031 B′):
+//   PK = "USER#{email}" | "DEPT#{dept}"   (canonical user key = lowercased email)
 //   SK = "LIMIT#{daily|weekly|monthly}"
 //   attrs: max_normalized (number), updatedAt (string)
 
@@ -90,11 +90,15 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(max) || max < 0) {
     return NextResponse.json({ error: "maxNormalized must be >= 0" }, { status: 400 });
   }
+  // ADR-031 (B′): USER key is the email — lowercase it so the written LIMIT# PK
+  // matches USER#{email.lower()} that the tracker/enforcer key by (else the cap
+  // is invisible to the enforcer → token-limit bypass). DEPT keys are unaffected.
+  const pkKey = entity === "USER" ? key.trim().toLowerCase() : key;
 
   await dynamo.send(new PutItemCommand({
     TableName: LIMITS_TABLE,
     Item: marshall({
-      PK: `${entity}#${key}`,
+      PK: `${entity}#${pkKey}`,
       SK: `LIMIT#${period}`,
       max_normalized: max,
       updatedAt: new Date().toISOString(),
@@ -115,9 +119,10 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "entity/key/period required" }, { status: 400 });
   }
 
+  const delKey = entity === "USER" ? key.trim().toLowerCase() : key;
   await dynamo.send(new DeleteItemCommand({
     TableName: LIMITS_TABLE,
-    Key: marshall({ PK: `${entity}#${key}`, SK: `LIMIT#${period}` }),
+    Key: marshall({ PK: `${entity}#${delKey}`, SK: `LIMIT#${period}` }),
   }));
   return NextResponse.json({ ok: true });
 }

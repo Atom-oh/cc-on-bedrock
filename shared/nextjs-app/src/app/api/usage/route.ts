@@ -30,8 +30,12 @@ export async function GET(req: NextRequest) {
   try {
     switch (action) {
       case "spend_logs": {
-        // DynamoDB PK is USER#{subdomain}, not Cognito sub UUID
-        const effectiveUserId = session.user.isAdmin ? userId : session.user.subdomain;
+        // ADR-031 (B′): DynamoDB usage PK is USER#{email.lower()}. Admins may query
+        // an explicit user_id (email); non-admins are scoped to their own email.
+        // Lowercase BOTH paths — a mixed-case admin-supplied email would miss the PK.
+        const effectiveUserId = session.user.isAdmin
+          ? userId?.trim().toLowerCase()
+          : (session.user.email ?? "").trim().toLowerCase();
         const records = await getUsageRecords({
           startDate,
           endDate,

@@ -15,6 +15,7 @@ Conditional/idempotent design:
   - DENY#active write uses conditional `attribute_not_exists` to avoid duplicate SNS
   - Counter items carry `ttl` set to end of period + 1 day for auto-cleanup
 """
+from __future__ import annotations
 import json
 import os
 import re
@@ -22,10 +23,11 @@ import boto3
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-# ADR-025: usage rows are keyed by Cognito sub, and the Local Governance role is
-# exactly cc-on-bedrock-local-user-{sub} — so the role name is constructed directly
-# (the old iam_role_lookup reverse-index existed only because rows were keyed by
-# subdomain while roles are keyed by sub; that mismatch is gone).
+# ADR-031 (B′): usage rows are keyed by email; the Local Governance role is named
+# cc-on-bedrock-local-user-{subdomain} (the subdomain is carried on each usage row,
+# derived from the email local-part). _attach_deny builds the role name from that
+# row subdomain — NOT from the email PK suffix. (The old iam_role_lookup reverse-index
+# is gone: ADR-025's sub-vs-subdomain mismatch no longer exists under ADR-031.)
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
 
 REGION = os.environ["AWS_REGION"]
@@ -43,6 +45,10 @@ DEFAULT_WEIGHTS = {
 
 ROLE_PREFIX = "cc-on-bedrock-local-user-"
 PERIODS = ("daily", "weekly", "monthly")
+
+# DNS/IAM-safe subdomain shape (same as provisioner derive_subdomain output).
+# Used to fail-safe the role-name construction (never build local-user-{email}).
+_SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$")
 
 ddb = boto3.resource("dynamodb")
 limits = ddb.Table(LIMITS_TABLE)
@@ -120,12 +126,13 @@ def _decimal(n) -> Decimal:
 # Limit lookup
 # ──────────────────────────────────────────────────────────
 
-def _get_user_limit(sub: str, period: str, cache: dict | None = None) -> dict:
-    """Look up USER#{sub}/LIMIT#{period} — cache hit avoids GetItem (review #4)."""
+def _get_user_limit(user_key: str, period: str, cache: dict | None = None) -> dict:
+    """Look up USER#{email}/LIMIT#{period} — `user_key` is the canonical email
+    PK suffix (ADR-031). Cache hit avoids GetItem (review #4)."""
     if cache is not None:
-        return cache.get((f"USER#{sub}", f"LIMIT#{period}"), {})
+        return cache.get((f"USER#{user_key}", f"LIMIT#{period}"), {})
     try:
-        r = limits.get_item(Key={"PK": f"USER#{sub}", "SK": f"LIMIT#{period}"})
+        r = limits.get_item(Key={"PK": f"USER#{user_key}", "SK": f"LIMIT#{period}"})
         return r.get("Item") or {}
     except Exception as e:
         print(f"user_limit fetch failed: {e}")
@@ -156,10 +163,10 @@ def _prefetch_limits(records: list) -> dict:
         pk = new.get("PK", "")
         if not pk.startswith("USER#"):
             continue
-        sub = pk[len("USER#"):]
+        user_key = pk[len("USER#"):]  # canonical email (ADR-031)
         dept = new.get("department", "")
         for period in PERIODS:
-            keys.add((f"USER#{sub}", f"LIMIT#{period}"))
+            keys.add((f"USER#{user_key}", f"LIMIT#{period}"))
             if dept:
                 keys.add((f"DEPT#{dept}", f"LIMIT#{period}"))
     if not keys:
@@ -220,38 +227,70 @@ def _deny_policy_doc() -> str:
     })
 
 
-def _attach_deny(sub: str, reason: str, period: str, reset_at: str):
-    # ADR-025: usage PK is the Cognito sub, so the Local Governance role name is
-    # deterministic — cc-on-bedrock-local-user-{sub}. NoSuchEntity (e.g. an EC2-only
-    # user with no Local role) is handled below as a normal skip.
-    role_names = [f"{LOCAL_ROLE_PREFIX}{sub}"]
+def _role_owner_email(role_name: str):
+    """Return the role's `email` tag (lowercased) or None. Used to verify a Local
+    role belongs to the user before attaching a Deny — defends against a subdomain
+    collision attaching a Deny to a different user's role (ADR-031 owner-tag check)."""
+    # Use list_role_tags, NOT get_role: the enforcer role is granted iam:ListRoleTags (not
+    # iam:GetRole) on the user-role ARN pattern. get_role would AccessDenied → None → _attach_deny
+    # would skip for EVERY user → token-limit Deny never attached (enforcement bypass). (PR #68 review)
+    try:
+        resp = iam.list_role_tags(RoleName=role_name)
+    except iam.exceptions.NoSuchEntityException:
+        return None  # role genuinely doesn't exist → legit skip (not an error)
+    # Transient/unknown errors (throttling, InternalFailure) are deliberately NOT caught: they
+    # propagate → handler records a batchItemFailure → the DynamoDB stream RETRIES, rather than
+    # returning None and silently skipping enforcement for this user (PR #68 review).
+    for t in resp.get("Tags", []):
+        if t.get("Key") == "email":
+            return (t.get("Value") or "").strip().lower()
+    return None  # role exists but has no email tag → caller treats as not-owned (skip)
 
-    any_attached = False
-    for role_name in role_names:
-        try:
-            iam.put_role_policy(
-                RoleName=role_name,
-                PolicyName=DENY_POLICY_NAME,
-                PolicyDocument=_deny_policy_doc(),
-            )
-            print(f"[DENY] attached {DENY_POLICY_NAME} → {role_name} ({reason})")
-            any_attached = True
-        except iam.exceptions.NoSuchEntityException:
-            print(f"[DENY] role {role_name} not found — skipping attach")
-            continue
-        except Exception as e:
-            print(f"[DENY] put_role_policy failed for {role_name}: {e}")
-            continue
-    if not any_attached:
+
+def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str):
+    """Attach the Deny policy to the user's Local Governance role.
+
+    ADR-031 (B′): the usage PK is the email; the Local role name is
+    `cc-on-bedrock-local-user-{subdomain}` (subdomain from the usage row, NOT the
+    email PK suffix). Fail-safe: if subdomain is missing/invalid we skip rather
+    than build a wrong role name. Owner-tag check guards against subdomain
+    collisions attaching a Deny to another user's role.
+    """
+    if not subdomain or not _SUBDOMAIN_RE.match(subdomain):
+        print(f"[DENY] subdomain missing/invalid for {user_key} — skipping attach (fail-safe)")
+        return False
+
+    role_name = f"{LOCAL_ROLE_PREFIX}{subdomain}"
+    owner = _role_owner_email(role_name)
+    if owner is None:
+        print(f"[DENY] role {role_name} not found — skipping attach")
+        return False
+    if owner != (user_key or "").strip().lower():
+        print(f"[DENY] role {role_name} owned by {owner!r}, not {user_key!r} — skipping (collision guard)")
+        return False
+
+    try:
+        iam.put_role_policy(
+            RoleName=role_name,
+            PolicyName=DENY_POLICY_NAME,
+            PolicyDocument=_deny_policy_doc(),
+        )
+        print(f"[DENY] attached {DENY_POLICY_NAME} → {role_name} ({reason})")
+    except iam.exceptions.NoSuchEntityException:
+        print(f"[DENY] role {role_name} not found — skipping attach")
+        return False
+    except Exception as e:
+        print(f"[DENY] put_role_policy failed for {role_name}: {e}")
         return False
 
     # Conditional write: only fire SNS once per active period
     try:
         limits.put_item(
             Item={
-                "PK": f"USER#{sub}",
+                "PK": f"USER#{user_key}",
                 "SK": "DENY#active",
                 "policy_name": DENY_POLICY_NAME,
+                "subdomain": subdomain,
                 "reason": reason,
                 "period": period,
                 "reset_at": reset_at,
@@ -261,7 +300,7 @@ def _attach_deny(sub: str, reason: str, period: str, reset_at: str):
         )
         _publish_sns(
             subject=f"[CC-on-Bedrock] Token limit exceeded ({period})",
-            message=f"User {sub} exceeded {period} normalized-token limit.\nReason: {reason}\nReset at: {reset_at}",
+            message=f"User {user_key} exceeded {period} normalized-token limit.\nReason: {reason}\nReset at: {reset_at}",
         )
     except limits.meta.client.exceptions.ConditionalCheckFailedException:
         # already attached — silent
@@ -269,7 +308,7 @@ def _attach_deny(sub: str, reason: str, period: str, reset_at: str):
     return True
 
 
-def _maybe_warn(sub: str, period: str, used: Decimal, limit: Decimal, who: str):
+def _maybe_warn(user_key: str, period: str, used: Decimal, limit: Decimal, who: str):
     if limit <= 0:
         return
     ratio = float(used / limit) if limit else 0.0
@@ -279,7 +318,7 @@ def _maybe_warn(sub: str, period: str, used: Decimal, limit: Decimal, who: str):
             try:
                 limits.put_item(
                     Item={
-                        "PK": f"USER#{sub}",
+                        "PK": f"USER#{user_key}",
                         "SK": f"WARN#{period}#{int(threshold*100)}",
                         "ratio": Decimal(str(round(ratio, 4))),
                         "ts": datetime.utcnow().isoformat(),
@@ -344,7 +383,8 @@ def process_record(rec: dict, limit_cache: dict | None = None):
     if "#" not in sk:
         return  # not a {date}#{model} row
 
-    sub = pk[len("USER#"):]
+    user_key = pk[len("USER#"):]  # ADR-031: this is the email
+    subdomain = (new or {}).get("subdomain")  # drives the Local role name
     model = (new or {}).get("model", "")
     dept = (new or {}).get("department", "default")
 
@@ -371,14 +411,14 @@ def process_record(rec: dict, limit_cache: dict | None = None):
         ttl = _ttl_for(reset_iso)
 
         # increment user counter
-        user_total = _add_counter(f"USER#{sub}", f"COUNTER#{period}#{bucket}", delta, ttl)
+        user_total = _add_counter(f"USER#{user_key}", f"COUNTER#{period}#{bucket}", delta, ttl)
         # increment dept counter
         if dept:
             dept_total = _add_counter(f"DEPT#{dept}", f"COUNTER#{period}#{bucket}", delta, ttl)
         else:
             dept_total = Decimal("0")
 
-        user_limit_item = _get_user_limit(sub, period, limit_cache)
+        user_limit_item = _get_user_limit(user_key, period, limit_cache)
         user_max = _decimal(user_limit_item.get("max_normalized", 0))
         dept_limit_item = _get_dept_limit(dept, period, limit_cache)
         dept_max = _decimal(dept_limit_item.get("max_normalized", 0))
@@ -386,7 +426,7 @@ def process_record(rec: dict, limit_cache: dict | None = None):
         # Evaluate
         if user_max > 0 and user_total >= user_max:
             _attach_deny(
-                sub,
+                user_key, subdomain,
                 f"user {period} normalized token limit reached ({user_total}/{user_max})",
                 period,
                 reset_iso,
@@ -394,16 +434,16 @@ def process_record(rec: dict, limit_cache: dict | None = None):
             return  # stop further period processing for this record once denied
         if dept_max > 0 and dept_total >= dept_max:
             _attach_deny(
-                sub,
+                user_key, subdomain,
                 f"dept '{dept}' {period} normalized token limit reached ({dept_total}/{dept_max})",
                 period,
                 reset_iso,
             )
             return
 
-        _maybe_warn(sub, period, user_total, user_max, f"User {sub}")
+        _maybe_warn(user_key, period, user_total, user_max, f"User {user_key}")
         if dept_max > 0:
-            _maybe_warn(sub, period, dept_total, dept_max, f"Dept {dept}")
+            _maybe_warn(user_key, period, dept_total, dept_max, f"Dept {dept}")
 
 
 def handler(event, context):
