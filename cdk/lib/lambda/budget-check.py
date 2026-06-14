@@ -738,6 +738,34 @@ def set_cognito_budget_flag(user: str, exceeded: bool):
         print(f"Cognito update failed for {email}: {e}")
 
 
+def _resolve_subdomain_via_cognito(email: str):
+    """Release-path fallback for the deny-deadlock (PR #68 review).
+
+    A denied/idle user can't invoke Bedrock → has no usage row this period → the usage scans
+    never capture its subdomain into `_subdomain_by_user`, so `_candidate_role_names` returns []
+    and `remove_deny_policy` is a no-op → the Deny stays attached forever even after the budget is
+    raised. The subdomain CANNOT be re-derived from the email (the provisioner disambiguates
+    collisions, e.g. `john-doe-2`), so read the authoritative `custom:subdomain` from Cognito.
+    Returns the subdomain, or None on miss/unconfigured.
+    """
+    if not USER_POOL_ID:
+        return None
+    e = (email or "").strip().lower()
+    if "@" not in e:
+        return None
+    try:
+        result = cognito_client.list_users(
+            UserPoolId=USER_POOL_ID, Filter=f'email = "{e}"', Limit=1,
+        )
+        for u in result.get("Users", []):
+            for attr in u.get("Attributes", []):
+                if attr.get("Name") == "custom:subdomain" and attr.get("Value"):
+                    return attr["Value"].strip()
+    except Exception as ex:
+        print(f"[RELEASE] Cognito subdomain lookup failed for {e}: {ex}")
+    return None
+
+
 def check_department_budgets(user_spend):
     """Check department monthly budgets and return lists of warnings and over-budget depts."""
     dept_monthly = get_monthly_usage_by_department()
@@ -853,6 +881,14 @@ def handler(event, context):
     release_candidates = all_known_users | set(user_budgets.keys())
     for user in release_candidates:
         if user not in over_budget_users:
+            # Deny-deadlock fix (PR #68 review): a denied/idle user isn't in the usage scans, so
+            # its subdomain may be absent from _subdomain_by_user → _candidate_role_names would
+            # no-op and the Deny would never detach. Backfill the subdomain from Cognito first so
+            # the release actually reaches the role.
+            if not _subdomain_by_user.get(user) and "@" in user:
+                sd = _resolve_subdomain_via_cognito(user)
+                if sd:
+                    _subdomain_by_user[user] = sd
             if remove_deny_policy(user):
                 released += 1
                 set_cognito_budget_flag(user, False)

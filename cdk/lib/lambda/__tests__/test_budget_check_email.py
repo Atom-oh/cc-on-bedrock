@@ -52,6 +52,28 @@ def test_is_valid_user_lowercase():
     assert not bc._is_valid_user("bob@example.com")
 
 
+def test_resolve_subdomain_via_cognito_reads_custom_attr():
+    # Deny-deadlock fix: release path resolves a denied/idle user's subdomain from Cognito
+    # (email filter → custom:subdomain), since usage scans never captured it.
+    captured = {}
+    cog = mock.Mock()
+
+    def list_users(**kw):
+        captured["Filter"] = kw.get("Filter", "")
+        return {"Users": [{"Username": "u1", "Attributes": [
+            {"Name": "email", "Value": "john@example.com"},
+            {"Name": "custom:subdomain", "Value": "john-doe-2"},
+        ]}]}
+    cog.list_users.side_effect = list_users
+    with mock.patch.object(bc, "cognito_client", cog):
+        sd = bc._resolve_subdomain_via_cognito("John@Example.com")
+    assert sd == "john-doe-2"  # collision-disambiguated subdomain, not derivable from email
+    assert 'email = "john@example.com"' in captured["Filter"]
+    # non-email / miss → None (fail-safe, no bad role)
+    with mock.patch.object(bc, "cognito_client", cog):
+        assert bc._resolve_subdomain_via_cognito("not-an-email") is None
+
+
 def test_is_valid_user_failopen_when_empty():
     bc._valid_user_keys = set()
     assert bc._is_valid_user("anything")  # fail-open
