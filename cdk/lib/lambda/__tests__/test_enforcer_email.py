@@ -32,7 +32,7 @@ def _rec(pk, sk, subdomain, in_new, out_new, dept="eng"):
 def test_attach_deny_builds_role_from_subdomain_not_email():
     calls = {}
     iam = mock.Mock()
-    iam.get_role.return_value = {"Role": {"Tags": [{"Key": "email", "Value": "alice@example.com"}]}}
+    iam.list_role_tags.return_value = {"Tags": [{"Key": "email", "Value": "alice@example.com"}]}
     iam.exceptions.NoSuchEntityException = enf.iam.exceptions.NoSuchEntityException
 
     def put_role_policy(**kw):
@@ -63,7 +63,7 @@ def test_attach_deny_skips_when_subdomain_missing():
 def test_attach_deny_owner_tag_mismatch_blocks_attach():
     # subdomain collision defense: role owned by a different email → do not attach
     iam = mock.Mock()
-    iam.get_role.return_value = {"Role": {"Tags": [{"Key": "email", "Value": "other@example.com"}]}}
+    iam.list_role_tags.return_value = {"Tags": [{"Key": "email", "Value": "other@example.com"}]}
     iam.exceptions.NoSuchEntityException = enf.iam.exceptions.NoSuchEntityException
     with mock.patch.object(enf, "iam", iam), \
          mock.patch.object(enf.limits, "put_item"):

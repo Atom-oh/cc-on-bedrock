@@ -230,15 +230,18 @@ def _role_owner_email(role_name: str):
     """Return the role's `email` tag (lowercased) or None. Used to verify a Local
     role belongs to the user before attaching a Deny — defends against a subdomain
     collision attaching a Deny to a different user's role (ADR-031 owner-tag check)."""
+    # Use list_role_tags, NOT get_role: the enforcer role is granted iam:ListRoleTags (not
+    # iam:GetRole) on the user-role ARN pattern. get_role would AccessDenied → None → _attach_deny
+    # would skip for EVERY user → token-limit Deny never attached (enforcement bypass). (PR #68 review)
     try:
-        resp = iam.get_role(RoleName=role_name)
-        for t in resp.get("Role", {}).get("Tags", []):
+        resp = iam.list_role_tags(RoleName=role_name)
+        for t in resp.get("Tags", []):
             if t.get("Key") == "email":
                 return (t.get("Value") or "").strip().lower()
     except iam.exceptions.NoSuchEntityException:
         return None
     except Exception as e:
-        print(f"[DENY] get_role tags failed for {role_name}: {e}")
+        print(f"[DENY] list_role_tags failed for {role_name}: {e}")
     return None
 
 
