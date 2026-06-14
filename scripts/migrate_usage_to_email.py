@@ -107,10 +107,6 @@ def merge_counters(existing: dict, incoming: dict) -> dict:
     return merged
 
 
-def _is_counter_sk(sk: str) -> bool:
-    return sk.startswith("COUNTER#") or "#" in sk and not sk.startswith(("LIMIT#", "DENY#", "WARN#"))
-
-
 def plan_row(item: dict, maps: dict):
     """Compute the migrated row for one DynamoDB item, or None to skip.
     Returns (new_item, old_key, is_limit_record) or None."""

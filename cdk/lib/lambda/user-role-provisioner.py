@@ -28,7 +28,7 @@ import re
 import boto3
 from botocore.exceptions import ClientError
 
-from role_factory import ensure_role
+from role_factory import ensure_role, derive_subdomain
 
 # Fail fast at cold-start if USER_POOL_ID is missing — every code path needs it,
 # and an empty string would let calls into cognito.list_users(UserPoolId="")
@@ -58,34 +58,9 @@ print("user-role-provisioner cold start")
 EC2_ROLE_PREFIX = "cc-on-bedrock-task-"
 
 
-def derive_subdomain(email_or_username: str) -> str:
-    """Email local-part -> canonical subdomain.
-
-    Rules (matches validation.ts regex /^[a-z0-9][a-z0-9-]*[a-z0-9]$/, 3-30 chars):
-      - take local-part before '@'
-      - lowercase
-      - non-[a-z0-9] -> '-'
-      - collapse repeating dashes, strip leading/trailing dashes
-      - truncate to 30
-
-    Raises ValueError if the resulting subdomain would be shorter than 3 chars.
-    Previously we padded with '000' which made every empty-local-part user collide
-    onto a shared `cc-on-bedrock-task-000` role — an obvious privilege-bridging
-    hole. Fail loudly so the caller surfaces a real error to the admin instead.
-    """
-    local = (email_or_username or "").split("@")[0].lower()
-    cleaned = re.sub(r"[^a-z0-9-]", "-", local)
-    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
-    # Truncate first, THEN re-strip — `cleaned[:30]` could land on a `-` and
-    # violate validation.ts regex /^[a-z0-9][a-z0-9-]*[a-z0-9]$/ if the 30th
-    # char is a sanitization-inserted dash.
-    truncated = cleaned[:30].rstrip("-")
-    if len(truncated) < 3:
-        raise ValueError(
-            f"cannot derive subdomain from email/username {email_or_username!r}: "
-            f"sanitized result {truncated!r} (must be >= 3 chars and end alphanumeric)"
-        )
-    return truncated
+# derive_subdomain is imported from role_factory (single source of truth) so the provisioner
+# and sts-issuer always build the SAME IAM role name — a divergent copy here would make
+# AssumeRole target a role that was never created (ADR-031 review).
 
 
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"

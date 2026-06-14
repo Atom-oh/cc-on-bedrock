@@ -41,4 +41,4 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 8 stacks. `--context governa
 - Stack 05: ALB + Dashboard ECS + **Dashboard CloudFront** (`<dashboardSubdomain>.<domain>`, ADR-016)
 - `governanceOnly=true` context: bin/app.ts에서 Stack 04/07 인스턴스화 skip, Stack 08만 추가 배포
 - Cert ARN context: `cloudfrontCertArn`(Dashboard CF, us-east-1), `devEnvCertArn`(DevEnv CF, us-east-1), `dashboardCertArn`(ALB regional). `unifiedCertArn`은 ADR-013 deprecated
-- Local Governance role 이름: `cc-on-bedrock-local-user-{cognito_sub}` (EC2 모드의 `cc-on-bedrock-task-{subdomain}`과 prefix로 구분 — usage attribute에서 모드 식별)
+- Local Governance role 이름: `cc-on-bedrock-local-user-{subdomain}` (ADR-031). EC2 모드 `cc-on-bedrock-task-{subdomain}`과 **prefix**(`local-user-` vs `task-`)로 모드 구분. 과거 `{cognito_sub}`(ADR-025)는 폐기 — 두 모드 모두 subdomain suffix

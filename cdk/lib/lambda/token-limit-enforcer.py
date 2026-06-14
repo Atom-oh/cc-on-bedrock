@@ -23,10 +23,11 @@ import boto3
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-# ADR-025: usage rows are keyed by Cognito sub, and the Local Governance role is
-# exactly cc-on-bedrock-local-user-{sub} — so the role name is constructed directly
-# (the old iam_role_lookup reverse-index existed only because rows were keyed by
-# subdomain while roles are keyed by sub; that mismatch is gone).
+# ADR-031 (B′): usage rows are keyed by email; the Local Governance role is named
+# cc-on-bedrock-local-user-{subdomain} (the subdomain is carried on each usage row,
+# derived from the email local-part). _attach_deny builds the role name from that
+# row subdomain — NOT from the email PK suffix. (The old iam_role_lookup reverse-index
+# is gone: ADR-025's sub-vs-subdomain mismatch no longer exists under ADR-031.)
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
 
 REGION = os.environ["AWS_REGION"]
