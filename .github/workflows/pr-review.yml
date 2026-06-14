@@ -34,7 +34,7 @@ jobs:
         run: |
           command -v claude >/dev/null 2>&1 || { echo "::warning::claude not found"; npm install -g @anthropic-ai/claude-code; }
           claude --version
-          for c in codex kiro-cli agy; do
+          for c in codex kiro-cli; do
             command -v "$c" >/dev/null 2>&1 || echo "::warning::$c not found on runner (image needs rebuild)"
           done
 
@@ -116,7 +116,7 @@ jobs:
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## 🤖 AI Code Review (Claude Opus 4.8 chair · Codex + Kiro + Antigravity panel)"
+            echo "## 🤖 AI Code Review (Claude Opus 4.8 chair · Codex + Kiro panel)"
             echo ""
             echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
