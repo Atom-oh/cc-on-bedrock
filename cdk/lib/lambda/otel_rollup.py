@@ -11,7 +11,13 @@ Datapoint shape (from the Phase-0 spike): resource attributes carry the injected
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+
+# Conservative email shape for the ADR-029 canonical key. We only need to reject
+# obvious non-emails (the anon user.id hash, empty strings); full RFC validation is
+# unnecessary because the value is org-issued.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Metric names emitted by Claude Code (see monitoring spec).
 M_LOC = "claude_code.lines_of_code.count"
@@ -78,6 +84,28 @@ def parse_otlp_metrics(payload: dict) -> list:
                         "date": _date_from_nano(dp.get("timeUnixNano")),
                     })
     return records
+
+
+def normalize_identity(attrs: dict):
+    """Resolve the ADR-029 canonical key (lowercased email) from `enduser.id`.
+
+    Returns None when absent/invalid; the handler buckets such datapoints as
+    `unattributed` rather than dropping them silently.
+    """
+    raw = attrs.get("enduser.id")
+    if not raw or not isinstance(raw, str):
+        return None
+    email = raw.strip().lower()
+    return email if _EMAIL_RE.match(email) else None
+
+
+def is_unverified(email: str, date: str, bedrock_seen) -> bool:
+    """True when productivity exists for (email, date) but the Bedrock invocation logs
+    show no usage — the cross-check that flags self-reported/tampered client identity
+    (especially on local PCs). `bedrock_seen` is the set of (email, date) pairs observed
+    in the authoritative Bedrock usage table.
+    """
+    return (email, date) not in (bedrock_seen or set())
 
 
 def _blank_rollup() -> dict:

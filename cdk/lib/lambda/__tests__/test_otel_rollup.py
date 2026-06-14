@@ -104,3 +104,22 @@ def test_extract_cost_attribution_by_dimension():
     key = ("Alice@Example.com", EXPECTED_DATE, "skill:code-review")
     assert key in cost
     assert cost[key]["cost_usd"] == 1
+
+
+# --- T2: email-key identity normalization + unverified flag (ADR-029) ---
+
+def test_normalize_identity_lowercases_and_validates():
+    assert rollup.normalize_identity({"enduser.id": "Alice@Example.com"}) == "alice@example.com"
+    assert rollup.normalize_identity({"enduser.id": "  BOB@x.io "}) == "bob@x.io"
+    # missing or non-email -> None (caller buckets as "unattributed")
+    assert rollup.normalize_identity({}) is None
+    assert rollup.normalize_identity({"enduser.id": "not-an-email"}) is None
+    assert rollup.normalize_identity({"enduser.id": ""}) is None
+
+
+def test_is_unverified_cross_checks_bedrock_usage():
+    bedrock_seen = {("alice@example.com", "2026-06-14")}
+    # productivity exists but no Bedrock usage that day -> suspicious
+    assert rollup.is_unverified("bob@example.com", "2026-06-14", bedrock_seen) is True
+    # matched in the Bedrock invocation logs -> verified
+    assert rollup.is_unverified("alice@example.com", "2026-06-14", bedrock_seen) is False
