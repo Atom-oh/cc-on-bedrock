@@ -147,8 +147,10 @@ export class UsageTrackingStack extends cdk.Stack {
     });
 
     // NLB targets see client IPs — allow the OTLP gRPC port from within the VPC only.
+    // Use the CIDR from config (a plain string) rather than vpc.vpcCidrBlock, which would
+    // force a new cross-stack export from the Network stack.
     otelCollector.service.connections.allowFrom(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4317), 'OTLP gRPC from VPC devenvs');
+      ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(4317), 'OTLP gRPC from VPC devenvs');
 
     // The collector writes batched OTLP JSON to the S3 buffer (least-privilege: that bucket only).
     otelRawBucket.grantPut(otelCollector.taskDefinition.taskRole);
