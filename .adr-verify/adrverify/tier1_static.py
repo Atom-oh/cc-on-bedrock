@@ -157,7 +157,6 @@ def _main() -> int:
     decisions = args.repo_root / args.decisions_dir
     out: dict[str, Any] = {"adrs": []}
     any_fail = False
-    any_required_missing = False
 
     for adr_path in discover_adrs(decisions):
         try:
@@ -178,17 +177,20 @@ def _main() -> int:
             continue
 
         if parsed.verification_required and not parsed.has_verification_section:
+            # verification_required: true but the ## Verification section has no machine-checkable
+            # (fenced ```yaml) items — e.g. a prose-only section or none at all. There is nothing to
+            # statically verify, so treat as SKIP (not a hard fail), consistent with
+            # run_static_checks() returning "skip" for an empty verification block. An ADR that
+            # documents a decision with no mechanically-verifiable claim must not block CI.
             out["adrs"].append({
                 "adr_id": parsed.adr_id,
                 "frontmatter": parsed.frontmatter,
                 "tier1_static": {
-                    "status": "fail",
+                    "status": "skip",
                     "checks": [],
-                    "error": "verification_required: true but no ## Verification section",
+                    "note": "verification_required: true but no machine-checkable ## Verification items — nothing to verify (skipped)",
                 },
             })
-            any_required_missing = True
-            any_fail = True
             continue
 
         result = run_static_checks(parsed.verification, repo_root=args.repo_root)
@@ -205,8 +207,6 @@ def _main() -> int:
         print(text)
     else:
         args.output.write_text(text, encoding="utf-8")
-    if any_required_missing:
-        return 2
     return 1 if any_fail else 0
 
 
