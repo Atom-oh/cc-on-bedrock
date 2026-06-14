@@ -85,9 +85,11 @@ const usageTrackingStack = new UsageTrackingStack(app, 'CcOnBedrock-UsageTrackin
   env, config,
   encryptionKey: securityStack.encryptionKey,
   userPool: securityStack.userPool,
-  description: 'CC-on-Bedrock: DynamoDB usage tracking, EventBridge, Lambda',
+  vpc: networkStack.vpc, // central OTel collector push endpoint lives in the VPC (both deploy modes)
+  description: 'CC-on-Bedrock: DynamoDB usage tracking, EventBridge, Lambda, OTel collector',
 });
 usageTrackingStack.addDependency(securityStack);
+usageTrackingStack.addDependency(networkStack);
 
 // Stack 06: WAF (must be in us-east-1 for CloudFront)
 const wafStack = new WafStack(app, 'CcOnBedrock-WAF', {

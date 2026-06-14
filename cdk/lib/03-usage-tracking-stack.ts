@@ -15,6 +15,10 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
+import * as fs from 'fs';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 import * as path from 'path';
@@ -23,6 +27,7 @@ export interface UsageTrackingStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   encryptionKey: kms.Key;
   userPool: cognito.UserPool;
+  vpc: ec2.IVpc;
 }
 
 export class UsageTrackingStack extends cdk.Stack {
@@ -31,7 +36,7 @@ export class UsageTrackingStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: UsageTrackingStackProps) {
     super(scope, id, props);
 
-    const { config, encryptionKey, userPool } = props;
+    const { config, encryptionKey, userPool, vpc } = props;
 
     // SNS Topic for budget alerts
     const alertTopic = new sns.Topic(this, 'BudgetAlertTopic', {
@@ -109,6 +114,51 @@ export class UsageTrackingStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'OtelMetricsRawBucketName', {
       value: otelRawBucket.bucketName,
       exportName: 'cc-otel-metrics-raw-bucket',
+    });
+
+    // Phase 1: central ADOT OTel Collector as the push endpoint for Claude Code metrics.
+    // EC2/ECS devenvs send OTLP/gRPC to the internal NLB; the collector batches and writes
+    // raw OTLP JSON to the S3 buffer. The authenticated public path for Local PCs is Phase 3;
+    // a deploy_mode resource attribute on each metric enables the EC2-vs-Local comparison.
+    const collectorConfig = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'docker', 'otel-collector', 'config.yaml'), 'utf8');
+
+    const otelCollector = new ecsPatterns.NetworkLoadBalancedFargateService(this, 'OtelCollector', {
+      vpc,
+      serviceName: 'cc-on-bedrock-otel-collector',
+      cpu: 256,
+      memoryLimitMiB: 512,
+      desiredCount: 2,
+      publicLoadBalancer: false, // internal NLB — reachable from within the VPC only
+      listenerPort: 4317, // OTLP/gRPC
+      taskImageOptions: {
+        image: ecs.ContainerImage.fromRegistry(
+          'public.ecr.aws/aws-observability/aws-otel-collector:latest'),
+        containerPort: 4317,
+        // The ADOT collector image entrypoint loads inline config from AOT_CONFIG_CONTENT.
+        environment: {
+          AOT_CONFIG_CONTENT: collectorConfig,
+          OTEL_S3_BUCKET: otelRawBucket.bucketName,
+          AWS_REGION: cdk.Aws.REGION,
+        },
+      },
+    });
+
+    // NLB targets see client IPs — allow the OTLP gRPC port from within the VPC only.
+    otelCollector.service.connections.allowFrom(
+      ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4317), 'OTLP gRPC from VPC devenvs');
+
+    // The collector writes batched OTLP JSON to the S3 buffer (least-privilege: that bucket only).
+    otelRawBucket.grantPut(otelCollector.taskDefinition.taskRole);
+
+    const collectorScaling = otelCollector.service.autoScaleTaskCount({
+      minCapacity: 2, maxCapacity: 6,
+    });
+    collectorScaling.scaleOnCpuUtilization('CollectorCpuScaling', { targetUtilizationPercent: 60 });
+
+    new cdk.CfnOutput(this, 'OtelCollectorEndpoint', {
+      value: `${otelCollector.loadBalancer.loadBalancerDnsName}:4317`,
+      description: 'Internal OTLP/gRPC endpoint — set as OTEL_EXPORTER_OTLP_ENDPOINT in devenvs',
     });
 
     // DLP Domain Lists table (DNS Firewall domain management)
