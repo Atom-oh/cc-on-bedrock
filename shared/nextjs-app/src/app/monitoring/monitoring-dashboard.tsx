@@ -7,7 +7,9 @@ import HealthCard from "@/components/cards/health-card";
 import StatCard from "@/components/cards/stat-card";
 import ContainersTable from "@/components/tables/containers-table";
 import AreaTrendChart from "@/components/charts/area-trend-chart";
+import UserDailyTrendChart from "@/components/charts/user-daily-trend-chart";
 import type { HealthStatus, ContainerInfo, ApiResponse } from "@/lib/types";
+import type { UserDailyTrend } from "@/lib/usage-client";
 
 interface MonitoringDashboardProps {
   domainName?: string;
@@ -133,6 +135,7 @@ export default function MonitoringDashboard({
   const [instanceMetrics, setInstanceMetrics] = useState<InstanceMetricsRow[]>([]);
   const [bedrockMetrics, setBedrockMetrics] = useState<BedrockMetricsSnapshot | null>(null);
   const [bedrockTimeSeries, setBedrockTimeSeries] = useState<BedrockTsData | null>(null);
+  const [userTrend, setUserTrend] = useState<UserDailyTrend | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
@@ -204,6 +207,21 @@ export default function MonitoringDashboard({
         }
       } catch (brErr) {
         console.error("Bedrock metrics fetch failed:", brErr);
+      }
+
+      // Per-user daily trend (last 30 days; server scopes by role)
+      try {
+        const end = new Date();
+        const start = new Date(end.getTime() - 29 * 86_400_000);
+        const sd = start.toISOString().slice(0, 10);
+        const ed = end.toISOString().slice(0, 10);
+        const trendRes = await fetch(`/api/usage?action=user_daily_trend&start_date=${sd}&end_date=${ed}`);
+        if (trendRes.ok) {
+          const trendJson = (await trendRes.json()) as ApiResponse<UserDailyTrend>;
+          setUserTrend(trendJson.data ?? null);
+        }
+      } catch (trendErr) {
+        console.error("User daily trend fetch failed:", trendErr);
       }
 
       setLastRefresh(new Date());
@@ -509,6 +527,12 @@ export default function MonitoringDashboard({
               title="Daily Bedrock Cost (Last 7 days)"
               height={220}
             />
+          </div>
+        )}
+
+        {userTrend && userTrend.series.length > 0 && (
+          <div className="mt-4">
+            <UserDailyTrendChart trend={userTrend} title="User Daily Usage (last 30 days, all users)" />
           </div>
         )}
       </section>

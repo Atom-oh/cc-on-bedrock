@@ -6,7 +6,9 @@ export interface UserSession {
   name?: string;
   groups: string[];
   isAdmin: boolean;
+  isDeptManager: boolean;
   subdomain?: string;
+  department?: string;
   containerOs?: "ubuntu" | "al2023";
   resourceTier?: "light" | "standard" | "power";
   securityPolicy?: "open" | "restricted" | "locked";
