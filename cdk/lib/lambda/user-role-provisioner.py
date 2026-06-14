@@ -83,7 +83,7 @@ def _subdomain_owner_email(subdomain: str) -> str | None:
         return ""
 
 
-def _assign_unique_subdomain(base: str, email: str, sub: str) -> str:
+def _assign_unique_subdomain(base: str, email: str) -> str:
     """ADR-031 (B′): guarantee a globally-unique subdomain (no duplicate names).
 
     If the base subdomain's Local role is already owned by a DIFFERENT email,
@@ -348,7 +348,7 @@ def _provision_user(info: dict) -> dict:
     if existing_sd:
         subdomain = existing_sd
     else:
-        subdomain = _assign_unique_subdomain(derive_subdomain(email), email, sub)
+        subdomain = _assign_unique_subdomain(derive_subdomain(email), email)
     sub_changed = existing_sd != subdomain
     if sub_changed:
         _write_subdomain(internal_username, subdomain)
