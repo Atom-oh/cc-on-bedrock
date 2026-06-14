@@ -1,4 +1,4 @@
-"""T8 (ADR-029 B′): backfill identity maps, re-key planning, counter merge,
+"""T8 (ADR-031 B′): backfill identity maps, re-key planning, counter merge,
 subdomain-collision abort.
 """
 import os

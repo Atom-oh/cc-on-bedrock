@@ -109,7 +109,7 @@ def _subdomain_owner_email(subdomain: str) -> str | None:
 
 
 def _assign_unique_subdomain(base: str, email: str, sub: str) -> str:
-    """ADR-029 (B′): guarantee a globally-unique subdomain (no duplicate names).
+    """ADR-031 (B′): guarantee a globally-unique subdomain (no duplicate names).
 
     If the base subdomain's Local role is already owned by a DIFFERENT email,
     append a numeric suffix (john-doe → john-doe-2 → …) until free, staying within
@@ -246,6 +246,8 @@ def _ec2_task_inline_policy() -> dict:
                 "Resource": [
                     "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
+                    "arn:aws:bedrock:*::foundation-model/*embed*",
+                    f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*embed*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",
                 ],
             },
@@ -570,7 +572,7 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
     `override_subdomain` is the operator escape hatch for cases where the
     local-user role is missing or its email tag can't be sanitized — pass it
     explicitly via direct-invoke."""
-    # ADR-029 (B′): the Local role is named by subdomain (local-user-{subdomain});
+    # ADR-031 (B′): the Local role is named by subdomain (local-user-{subdomain});
     # usage/limits rows are keyed by email. Recover both from Cognito (best-effort —
     # the user may already be deleted) or the operator-provided override. The
     # legacy sub-named role (local-user-{sub}) is also reaped for back-compat.
@@ -642,7 +644,7 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
     # Limits-table rows (Local Governance) — per-user counter / deny / warn
     # share PK=USER#{sub}; sweep all SKs. Paginated because daily counters can
     # accumulate past the 1MB / 100-item single-page response window.
-    # ADR-029: limits rows are keyed by email; sweep that PK plus the legacy
+    # ADR-031: limits rows are keyed by email; sweep that PK plus the legacy
     # sub-keyed PK (back-compat for rows written before the migration).
     try:
         deleted_limits = 0

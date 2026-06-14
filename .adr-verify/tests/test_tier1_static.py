@@ -1,9 +1,12 @@
+import json
+import sys
 from pathlib import Path
 import pytest
 from adrverify.tier1_static import (
     run_static_checks,
     StaticResult,
     StaticCheckOutcome,
+    _main,
 )
 
 
@@ -132,3 +135,21 @@ def test_empty_regex_raises(tmp_path: Path):
     verification = {"files": [{"path": "src/a.py", "must_contain": ["//"]}]}
     with pytest.raises(ValueError, match="empty regex"):
         run_static_checks(verification, repo_root=repo)
+
+
+def test_required_but_no_machine_checkable_section_skips(tmp_path, monkeypatch, capsys):
+    """verification_required: true with a prose-only ## Verification (no fenced yaml) → SKIP, exit 0.
+    Nothing machine-checkable must not hard-fail / block CI."""
+    decisions = tmp_path / "docs" / "decisions"
+    decisions.mkdir(parents=True)
+    (decisions / "ADR-029-prose.md").write_text(
+        "---\nstatus: Accepted\ndate: 2026-06-12\nverification_required: true\n---\n\n"
+        "# ADR-029: Prose verification\n\n"
+        "## Verification\nVerified operationally; nothing machine-checkable here.\n"
+    )
+    monkeypatch.setattr(sys, "argv", ["tier1_static", "--repo-root", str(tmp_path), "--output", "-"])
+    rc = _main()
+    assert rc == 0  # does not block CI
+    out = json.loads(capsys.readouterr().out)
+    adr = next(a for a in out["adrs"] if a["adr_id"] == "ADR-029")
+    assert adr["tier1_static"]["status"] == "skip"

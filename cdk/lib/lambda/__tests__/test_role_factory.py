@@ -1,4 +1,4 @@
-"""T2/T4b (ADR-029 B′): role_factory names the Local Governance role by subdomain
+"""T2/T4b (ADR-031 B′): role_factory names the Local Governance role by subdomain
 (cc-on-bedrock-local-user-{subdomain}), tags it with email + subdomain, and guards
 against subdomain collisions (a role already owned by a different email → raise).
 """

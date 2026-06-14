@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const date = searchParams.get("date") ?? new Date().toISOString().split("T")[0];
 
   try {
-    // ADR-029 (B′): DynamoDB usage PK is USER#{email.lower()} (the canonical key).
+    // ADR-031 (B′): DynamoDB usage PK is USER#{email.lower()} (the canonical key).
     const email = (session.user.email ?? "").trim().toLowerCase();
     if (!email) {
       return NextResponse.json({ success: true, data: { totalTokens: 0, dailyLimit: DEFAULT_DAILY_LIMIT, requests: 0, estimatedCost: 0, date } });

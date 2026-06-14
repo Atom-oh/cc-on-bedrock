@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
+import { formatBudgetCap, formatTokenCap, usagePercent } from "@/lib/budget-display";
 import type {
   UserSession,
   ContainerInfo,
@@ -195,13 +196,9 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
     };
   });
 
-  const budgetPercent = budget
-    ? Math.min(100, Math.round((budget.currentSpend / budget.monthlyBudget) * 100))
-    : 0;
-
-  const tokenPercent = budget
-    ? Math.min(100, Math.round((budget.currentTokens / budget.monthlyTokenLimit) * 100))
-    : 0;
+  // null = unlimited (cap <= 0) — no meaningful %; matches budget-check.py enforcement.
+  const budgetPercent = budget ? usagePercent(budget.currentSpend, budget.monthlyBudget) : null;
+  const tokenPercent = budget ? usagePercent(budget.currentTokens, budget.monthlyTokenLimit) : null;
 
   const isOverviewMode = isAdmin && selectedDepartment === "all";
 
@@ -342,44 +339,44 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-gray-400">{t("dept.costUsage") || "Cost Usage"}</span>
                     <span className="text-sm text-gray-300">
-                      ${budget?.currentSpend.toFixed(2) ?? "0.00"} / ${budget?.monthlyBudget.toFixed(2) ?? "0.00"}
+                      ${budget?.currentSpend.toFixed(2) ?? "0.00"} / {formatBudgetCap(budget?.monthlyBudget)}
                     </span>
                   </div>
                   <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        budgetPercent >= 90
+                        (budgetPercent ?? 0) >= 90
                           ? "bg-red-500"
-                          : budgetPercent >= 70
+                          : (budgetPercent ?? 0) >= 70
                           ? "bg-yellow-500"
                           : "bg-green-500"
                       }`}
-                      style={{ width: `${budgetPercent}%` }}
+                      style={{ width: `${budgetPercent ?? 0}%` }}
                     />
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{budgetPercent}% used</p>
+                  <p className="text-xs text-gray-500 mt-1">{budgetPercent === null ? "Unlimited (no cap)" : `${budgetPercent}% used`}</p>
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-gray-400">{t("dept.tokenUsage") || "Token Usage"}</span>
                     <span className="text-sm text-gray-300">
-                      {(budget?.currentTokens ?? 0).toLocaleString()} / {(budget?.monthlyTokenLimit ?? 0).toLocaleString()}
+                      {(budget?.currentTokens ?? 0).toLocaleString()} / {formatTokenCap(budget?.monthlyTokenLimit)}
                     </span>
                   </div>
                   <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        tokenPercent >= 90
+                        (tokenPercent ?? 0) >= 90
                           ? "bg-red-500"
-                          : tokenPercent >= 70
+                          : (tokenPercent ?? 0) >= 70
                           ? "bg-yellow-500"
                           : "bg-blue-500"
                       }`}
-                      style={{ width: `${tokenPercent}%` }}
+                      style={{ width: `${tokenPercent ?? 0}%` }}
                     />
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{tokenPercent}% used</p>
+                  <p className="text-xs text-gray-500 mt-1">{tokenPercent === null ? "Unlimited (no cap)" : `${tokenPercent}% used`}</p>
                 </div>
               </div>
             </div>

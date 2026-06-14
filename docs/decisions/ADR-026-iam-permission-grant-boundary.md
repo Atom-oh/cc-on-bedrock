@@ -1,5 +1,6 @@
 ---
-status: Accepted
+status: Superseded
+superseded_by: ADR-030
 date: 2026-06-10
 verification_required: true
 builds_on: ADR-020
@@ -7,7 +8,11 @@ builds_on: ADR-020
 
 # ADR-026: 사용자 IAM 권한 신청/승인 — 서비스 천장 boundary + admin 위임형 resource-specific 부여 (EC2/Local 양쪽)
 
-**Status:** Accepted (구현 pending)
+> **⚠️ Superseded by [ADR-030](ADR-030-tiered-iam-grant.md) (2026-06-14).** per-service `GrantCeiling*`
+> 천장 모델은 IAM 표현 한계로 폐기되고, tiered 신청 검증 + boundary X(AllowInAccount + DenyEscalation)로
+> 대체됨. 신청/승인 워크플로우·Local 경로 부착 등 ADR-026 의 다른 결정은 유효.
+
+**Status:** Superseded by ADR-030 (구현 pending)
 **Date:** 2026-06-10
 **Builds on:** [ADR-020 Runtime IAM Policy Upsert](ADR-020-runtime-iam-policy-upsert.md) · 관련 [ADR-005 Security Policy Access Control](ADR-005-security-policy-access-control.md), [ADR-014 Local Governance Mode](ADR-014-local-governance-mode.md), [ADR-021 Wildcard Claude IAM](ADR-021-wildcard-claude-iam.md)
 **Collaboration:** co-agent 패널(Kiro CLI · Codex · Gemini) 의사결정, Claude chair 합성

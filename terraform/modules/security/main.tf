@@ -229,6 +229,8 @@ data "aws_iam_policy_document" "bedrock" {
     resources = [
       "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
+      "arn:aws:bedrock:*::foundation-model/*embed*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*embed*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
     ]
   }

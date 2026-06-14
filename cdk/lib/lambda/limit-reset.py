@@ -34,7 +34,7 @@ KST = timezone(timedelta(hours=9))
 
 
 def _role_for_item(item: dict):
-    """Resolve the Local Governance role name for a DENY#active record (ADR-029 B′).
+    """Resolve the Local Governance role name for a DENY#active record (ADR-031 B′).
 
     The limits PK is now the email, so the role name comes from the record's
     `subdomain` attribute (written by the enforcer): cc-on-bedrock-local-user-

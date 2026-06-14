@@ -1,4 +1,4 @@
-"""T4b (ADR-029 B′): provisioner assigns a globally-unique subdomain (no duplicate
+"""T4b (ADR-031 B′): provisioner assigns a globally-unique subdomain (no duplicate
 names) — colliding email local-parts get a numeric suffix, and the Local role is
 named by subdomain.
 """

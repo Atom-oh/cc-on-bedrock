@@ -68,7 +68,7 @@ def get_today_usage():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-029: email
+            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-031: email
             if not _is_valid_user(user):
                 continue  # stale non-Cognito identity (e.g. raw IAM principal) — skip
             cost = float(item.get("estimatedCost", 0))
@@ -103,7 +103,7 @@ def get_monthly_usage_by_department():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-029: email
+            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-031: email
             if not _is_valid_user(user):
                 continue  # stale non-Cognito identity — skip
             cost = float(item.get("estimatedCost", 0))
@@ -270,7 +270,7 @@ def get_user_department(subdomain: str) -> str:
         return "default"
 
 
-# ADR-029 (B′): per-handler map of email → subdomain, populated from the
+# ADR-031 (B′): per-handler map of email → subdomain, populated from the
 # `subdomain` attribute on usage rows during get_today_usage / monthly scans.
 # Lets _candidate_role_names build BOTH IAM role names (local-user-{subdomain},
 # task-{subdomain}) for an email-keyed user. Reset at handler entry.
@@ -304,7 +304,7 @@ def _load_valid_user_keys() -> set:
                 if u.get("Username"):
                     keys.add(u["Username"].strip().lower())
                 for attr in u.get("Attributes", []):
-                    # ADR-029: canonical key is email; lowercase all keys so a
+                    # ADR-031: canonical key is email; lowercase all keys so a
                     # mixed-case email row (USER#{email.lower()}) still matches.
                     if attr["Name"] in ("sub", "custom:subdomain", "email") and attr.get("Value"):
                         keys.add(attr["Value"].strip().lower())
@@ -329,7 +329,7 @@ def _is_valid_user(key: str) -> bool:
 def _candidate_role_names(user: str) -> list:
     """Return all IAM role candidates for a user (Local Governance + EC2 task).
 
-    ADR-029 (B′): usage/limits rows are keyed by email, and ALL IAM role names use
+    ADR-031 (B′): usage/limits rows are keyed by email, and ALL IAM role names use
     the subdomain. Both `cc-on-bedrock-local-user-{subdomain}` and
     `cc-on-bedrock-task-{subdomain}` are built from the row's `subdomain` attribute
     (captured during the usage scans). The email is NEVER used as a role name
@@ -712,7 +712,7 @@ def check_token_limits_backup():
 def set_cognito_budget_flag(user: str, exceeded: bool):
     """Set budget_exceeded flag in Cognito user attributes.
 
-    ADR-029 (B′): callers pass the canonical key = email. `email` is a supported
+    ADR-031 (B′): callers pass the canonical key = email. `email` is a supported
     ListUsers filter attribute, so we filter by it directly (the old `sub` filter
     would match nothing now that PKs are emails).
     """

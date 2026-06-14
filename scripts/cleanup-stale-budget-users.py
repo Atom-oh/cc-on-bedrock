@@ -44,7 +44,7 @@ def load_valid_keys(cognito, pool_id: str) -> set:
             params["PaginationToken"] = pagination_token
         result = cognito.list_users(**params)
         for u in result.get("Users", []):
-            # ADR-029 (B′): canonical key is email (lowercased). Lowercase every
+            # ADR-031 (B′): canonical key is email (lowercased). Lowercase every
             # identity key so an email-keyed USER# row is recognised as valid and
             # never deleted as "stale". sub/subdomain kept for back-compat.
             if u.get("Username"):

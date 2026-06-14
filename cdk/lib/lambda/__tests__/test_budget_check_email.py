@@ -1,4 +1,4 @@
-"""T4 (ADR-029 B′): budget-check enforces by email-keyed rows and builds BOTH IAM
+"""T4 (ADR-031 B′): budget-check enforces by email-keyed rows and builds BOTH IAM
 role names from the row's subdomain (local-user-{subdomain} + task-{subdomain}),
 never local-user-{email}. Cognito budget flag filters by email. Valid-key set and
 comparisons are lowercased.

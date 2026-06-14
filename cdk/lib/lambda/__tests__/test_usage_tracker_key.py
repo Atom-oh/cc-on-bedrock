@@ -1,4 +1,4 @@
-"""T1 (ADR-029 B′): usage tracker keys rows by USER#{email.lower()}, never sub.
+"""T1 (ADR-031 B′): usage tracker keys rows by USER#{email.lower()}, never sub.
 
 The canonical key is the (lowercased) email. subdomain is a row attribute used
 downstream for IAM role names. Cognito sub is eliminated: no sub resolution,

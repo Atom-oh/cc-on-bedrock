@@ -2,7 +2,7 @@
 
 - **작성일**: 2026-06-12 · **개정**: P2 게이트 6 CRITICAL+MAJOR 반영 → **B′ 전환**(패널 2/3 수렴: sub 전면 제거, Local 롤 sub→subdomain, 롤 재생성 승인)
 - **상태**: Approved (brainstorming) → writing-plans 대기
-- **신규 ADR**: **ADR-029** (ADR-025 supersede)
+- **신규 ADR**: **ADR-031** (ADR-025 supersede)
 - **브랜치**: `feat/usage-email-key` (off origin/main `64fde66`)
 
 ---
@@ -87,7 +87,7 @@ ADR-025 canonical=sub. 운영 진단: 트래커 EC2 경로 `_resolve_sub_from_su
 > **전환기 안전망**: (a) sts-issuer·enforcer·budget-check·limit-reset는 `{subdomain}` 롤 시도 → NoSuchEntity면 `{sub}` 롤 fallback(**dual-name on write/assume**, 구롤이 아직 존재하는 1–6단계 동안). dual-name 구 이름 구성을 위한 전환기 `sub`는 **사용자별 `USER#{email}/LIMIT#`·`DENY#active` 레코드**에서 읽음(usage 행 origin 비의존 — P2-R3-R3; cleanup PR에서 제거). (b) COUNTER dual-sum은 **`migration_done` 플래그로 게이트**(step5 검증 후 set — over-count·구키 누락 방지).
 
 ## 6. 변경 파일
-tracker · sts-issuer · token-limit-enforcer · **budget-check** · limit-reset · **user-role-provisioner(롤명)** · admin/limits · **admin/budgets** · **api/local/limits** · api/usage · api/user/usage · usage-client.ts · cloudwatch-client.ts · `scripts/migrate-usage-to-email.py`(신규, 롤 재생성 포함) · ADR-029(신규)·ADR-025(superseded) · 테스트.
+tracker · sts-issuer · token-limit-enforcer · **budget-check** · limit-reset · **user-role-provisioner(롤명)** · admin/limits · **admin/budgets** · **api/local/limits** · api/usage · api/user/usage · usage-client.ts · cloudwatch-client.ts · `scripts/migrate-usage-to-email.py`(신규, 롤 재생성 포함) · ADR-031(신규)·ADR-025(superseded) · 테스트.
 
 ## 7. 비범위
 DEPT# 키 불변. 이메일 변경(불변 전제). dual-read/dual-name 제거는 backfill 후 후속. subdomain 개념 자체의 rename(DNS/routing 등 전면)은 비범위 — subdomain은 유지하되 Local 롤명만 정렬.
@@ -99,7 +99,7 @@ DEPT# 키 불변. 이메일 변경(불변 전제). dual-read/dual-name 제거는
 - **Local 롤 충돌가드**(§3.9): subdomain 충돌 시 공유 대신 provisioning 거부(409 surface, 크래시 금지) + backfill도 충돌 abort — privilege-bridging 방지.
 - backfill dry-run+전카운터 합계검증+미매핑 보존(무손실); 롤 생성도 dry-run+전체 구성+active Deny 복제; re-key는 delete+put(이중합산 방지).
 - email 소문자 정규화로 대소문자 분할 방지.
-- ADR-029 `verification_required: true` → 불변식: (a) usage/limits 신규 쓰기에 `USER#{sub}`/`USER#{subdomain}` 키 부재(email만), (b) 신규 IAM 롤명에 sub-UUID 부재(subdomain만), (c) enforcer/budget-check가 행 subdomain 없을 때 Deny 미부착, (d) end-state(cleanup 후) 행에 `sub` 속성·구 sub-롤 부재. CI/테스트로 검증.
+- ADR-031 `verification_required: true` → 불변식: (a) usage/limits 신규 쓰기에 `USER#{sub}`/`USER#{subdomain}` 키 부재(email만), (b) 신규 IAM 롤명에 sub-UUID 부재(subdomain만), (c) enforcer/budget-check가 행 subdomain 없을 때 Deny 미부착, (d) end-state(cleanup 후) 행에 `sub` 속성·구 sub-롤 부재. CI/테스트로 검증.
 
 ## 9. 테스트
 - 트래커: EC2(태그 email/subdomain)/Local(롤 email/subdomain) → `USER#{email_lower}`+subdomain 속성(**sub 없음**); email 없으면 skip.

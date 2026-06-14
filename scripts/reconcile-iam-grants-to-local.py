@@ -4,7 +4,7 @@ ADR-026 T8 — reconcile existing EC2-only IAM grants onto Local Governance role
 
 Before T5, approved grants were attached only to the EC2 task role
 (cc-on-bedrock-task-{subdomain}). After T5 they go to BOTH the task role and the
-Local role. ADR-029 (B′): the Local role is now cc-on-bedrock-local-user-{subdomain}
+Local role. ADR-031 (B′): the Local role is now cc-on-bedrock-local-user-{subdomain}
 (was {sub}). This script finds inline grant
 policies present on a task role but MISSING on the corresponding local role and
 (optionally) copies them over, so pre-existing grants work in Local mode too.
@@ -30,7 +30,7 @@ def is_grant_policy(name: str) -> bool:
 def gaps(task_grants: dict, local_grants: dict, valid_subdomains) -> list:
     """Pure core: compute (local_role, policy_name) pairs to copy.
 
-    ADR-029 (B′): both the task role and the Local role are named by subdomain
+    ADR-031 (B′): both the task role and the Local role are named by subdomain
     (cc-on-bedrock-task-{subdomain} / cc-on-bedrock-local-user-{subdomain}), so the
     local role is keyed by subdomain directly — no sub indirection.
 
@@ -89,7 +89,7 @@ def main() -> int:
                 pool_id = p["Id"]
     if not pool_id:
         raise SystemExit(f"[ERROR] user pool '{args.user_pool_name}' not found")
-    # ADR-029 (B′): roles are keyed by subdomain; collect the set of Cognito-known
+    # ADR-031 (B′): roles are keyed by subdomain; collect the set of Cognito-known
     # subdomains to filter orphan/stale task roles.
     valid_subdomains = set()
     for page in cognito.get_paginator("list_users").paginate(UserPoolId=pool_id):

@@ -18,6 +18,7 @@ declare module "next-auth/jwt" {
     groups?: string[];
     accessToken?: string;
     subdomain?: string;
+    department?: string;
     containerOs?: string;
     resourceTier?: string;
     securityPolicy?: string;
@@ -103,6 +104,7 @@ export const authOptions: NextAuthOptions = {
         token.groups = Array.isArray(cognitoGroups) ? (cognitoGroups as string[]) : [];
         const p = profile as Record<string, unknown>;
         token.subdomain = (p["custom:subdomain"] as string) ?? undefined;
+        token.department = (p["custom:department"] as string) ?? undefined;
         token.containerOs = (p["custom:container_os"] as string) ?? undefined;
         token.resourceTier = (p["custom:resource_tier"] as string) ?? undefined;
         token.securityPolicy = (p["custom:security_policy"] as string) ?? undefined;
@@ -114,6 +116,7 @@ export const authOptions: NextAuthOptions = {
         const u = user as unknown as Record<string, unknown>;
         token.accessToken = (u.accessToken as string) ?? undefined;
         token.subdomain = (u["custom:subdomain"] as string) ?? undefined;
+        token.department = (u["custom:department"] as string) ?? undefined;
         token.containerOs = (u["custom:container_os"] as string) ?? undefined;
         token.resourceTier = (u["custom:resource_tier"] as string) ?? undefined;
         token.securityPolicy = (u["custom:security_policy"] as string) ?? undefined;
@@ -138,7 +141,9 @@ export const authOptions: NextAuthOptions = {
         name: token.name ?? undefined,
         groups,
         isAdmin: groups.includes("admin"),
+        isDeptManager: groups.includes("dept-manager"),
         subdomain: token.subdomain,
+        department: token.department,
         containerOs: token.containerOs as UserSession["containerOs"],
         resourceTier: token.resourceTier as UserSession["resourceTier"],
         securityPolicy: token.securityPolicy as UserSession["securityPolicy"],

@@ -3,7 +3,7 @@ status: Accepted
 verification_required: true
 ---
 
-# ADR-029: usage/limits canonical key = email, IAM role name = subdomain, Cognito sub eliminated (supersedes ADR-025)
+# ADR-031: usage/limits canonical key = email, IAM role name = subdomain, Cognito sub eliminated (supersedes ADR-025)
 
 ## Status
 Accepted — **supersedes [ADR-025](ADR-025-usage-pipeline-canonical-identifier.md)** (canonical = Cognito sub).

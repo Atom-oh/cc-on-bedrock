@@ -228,7 +228,7 @@ def _deny_policy_doc() -> str:
 def _role_owner_email(role_name: str):
     """Return the role's `email` tag (lowercased) or None. Used to verify a Local
     role belongs to the user before attaching a Deny — defends against a subdomain
-    collision attaching a Deny to a different user's role (ADR-029 owner-tag check)."""
+    collision attaching a Deny to a different user's role (ADR-031 owner-tag check)."""
     try:
         resp = iam.get_role(RoleName=role_name)
         for t in resp.get("Role", {}).get("Tags", []):
@@ -244,7 +244,7 @@ def _role_owner_email(role_name: str):
 def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str):
     """Attach the Deny policy to the user's Local Governance role.
 
-    ADR-029 (B′): the usage PK is the email; the Local role name is
+    ADR-031 (B′): the usage PK is the email; the Local role name is
     `cc-on-bedrock-local-user-{subdomain}` (subdomain from the usage row, NOT the
     email PK suffix). Fail-safe: if subdomain is missing/invalid we skip rather
     than build a wrong role name. Owner-tag check guards against subdomain
@@ -377,7 +377,7 @@ def process_record(rec: dict, limit_cache: dict | None = None):
     if "#" not in sk:
         return  # not a {date}#{model} row
 
-    user_key = pk[len("USER#"):]  # ADR-029: this is the email
+    user_key = pk[len("USER#"):]  # ADR-031: this is the email
     subdomain = (new or {}).get("subdomain")  # drives the Local role name
     model = (new or {}).get("model", "")
     dept = (new or {}).get("department", "default")

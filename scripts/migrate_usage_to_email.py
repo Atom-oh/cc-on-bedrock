@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ADR-029 (B′) backfill: re-key usage/limits/user-budgets from Cognito sub /
+"""ADR-031 (B′) backfill: re-key usage/limits/user-budgets from Cognito sub /
 subdomain → email, and create subdomain-named Local Governance IAM roles.
 
 Rows historically keyed by PK=USER#{sub} (ADR-025) or PK=USER#{subdomain} (the
-broken EC2 fallback) are rewritten to PK=USER#{email.lower()} — the ADR-029
+broken EC2 fallback) are rewritten to PK=USER#{email.lower()} — the ADR-031
 canonical key. A `subdomain` attribute is preserved/added on every row, and the
 per-user LIMIT# record additionally carries a transition `sub` (so the enforcer
 can still target a legacy local-user-{sub} role during cutover — dropped later).

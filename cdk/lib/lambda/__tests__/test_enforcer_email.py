@@ -1,4 +1,4 @@
-"""T3 (ADR-029 B′): enforcer keys limits/counters by USER#{email} and builds the
+"""T3 (ADR-031 B′): enforcer keys limits/counters by USER#{email} and builds the
 Local Governance role name from the row's `subdomain` attribute — never from the
 email PK suffix. Deny attach verifies the role's email owner-tag and fail-safe
 skips when subdomain is missing.

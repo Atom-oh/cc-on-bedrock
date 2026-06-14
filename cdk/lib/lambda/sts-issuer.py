@@ -15,9 +15,10 @@ Behavior:
      - Tags: username/department/project/mode=local (ADR-011 cost allocation)
   3. AssumeRole with DurationSeconds=3600 (1h) — this Lambda assumes another role
      (role-chaining), which AWS hard-caps at 1h, so the ADR-014 8h intent is not
-     attainable; the CLI helper re-fetches on its next run/launch when the
-     cached TTL is < 10min (launch-time only — no in-session background refresh
-     yet, so a single continuous session > 1h can expire mid-work).
+     attainable. In-session continuity is the CLI's job (ADR-029): the AWS SDK
+     profile uses `credential_process = cc-bedrock-local.sh credential-process`,
+     which the SDK re-invokes before each Expiration — sessions of any length
+     survive the 1h cap as long as the Cognito refresh token (30d) is alive.
      MaxSessionDuration on role = 1h to match.
   4. Return credentials + current limit_status (from cc-on-bedrock-limits DENY#active)
 
@@ -58,8 +59,8 @@ ACCOUNT_ID = os.environ["ACCOUNT_ID"]
 LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
 # AWS role chaining hard-caps assumed-role sessions at 1h whenever the caller is itself
 # an assumed-role. The STS Issuer Lambda's execution role IS an assumed role, so the
-# 3600s default holds; the CLI helper re-fetches on its next run/launch when the
-# cached TTL is < 10min (launch-time only, no in-session background refresh yet).
+# 3600s default holds; in-session continuity comes from the CLI's credential_process
+# hook, which the AWS SDK re-invokes before each Expiration (ADR-029).
 SESSION_DURATION_SECONDS = int(os.environ.get("SESSION_DURATION_SECONDS", "3600"))
 INFERENCE_PROFILE_PREFIX = os.environ.get("INFERENCE_PROFILE_PREFIX", "cc-on-bedrock")
 
@@ -69,7 +70,7 @@ limits_table = ddb.Table(LIMITS_TABLE)
 
 
 def _get_limit_status(user_key: str) -> dict:
-    """Read DENY#active item from limits table (ADR-029: keyed by email)."""
+    """Read DENY#active item from limits table (ADR-031: keyed by email)."""
     try:
         resp = limits_table.get_item(Key={"PK": f"USER#{(user_key or '').strip().lower()}", "SK": "DENY#active"})
         item = resp.get("Item")
@@ -150,7 +151,7 @@ def handler(event, context):
     if not email:
         return _http(400, {"error": "email is required"})
 
-    # ADR-029 (B′): the Local role is named by subdomain. Prefer the caller-supplied
+    # ADR-031 (B′): the Local role is named by subdomain. Prefer the caller-supplied
     # subdomain (= Cognito custom:subdomain, may be disambiguated) and fall back to
     # deriving it from the email local-part.
     subdomain = payload.get("subdomain") or ""

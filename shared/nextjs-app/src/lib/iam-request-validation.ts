@@ -45,13 +45,29 @@ export interface ValidationResult {
 // Resource-policy mutation, public-making, and privilege-delegation actions.
 // These can escalate beyond the granted resource even when scoped to "own" ARNs.
 const DEFAULT_DANGEROUS: RegExp[] = [
-  /:put[a-z]*policy$/i, // s3:PutBucketPolicy, sns:PutResourcePolicy, ...
+  /:(put|delete)[a-z]*policy$/i, // s3:PutBucketPolicy/DeleteBucketPolicy, *Put/DeleteResourcePolicy, ...
   /:set[a-z]*attributes$/i, // sns:SetTopicAttributes, sqs:SetQueueAttributes
-  /:(add|remove)permission$/i, // lambda/sqs/sns AddPermission/RemovePermission — opens resource policy cross-account/public
-  /^iam:/i, // any iam:* (PassRole, CreateRole, ...)
-  /^sts:assumerole/i,
+  /:(add|remove|put)[a-z]*permission$/i, // *AddPermission/RemovePermission/PutPermission, lambda:AddLayerVersionPermission — opens resource policy cross-account/public
+  /:put[a-z]*publicaccessblock$/i, // s3:PutAccountPublicAccessBlock / PutPublicAccessBlock — disables public-access protection
+  /^ec2:(authorize|revoke|modify)securitygroup/i, // SG ingress/egress mutation — network exposure / lateral movement
+  /^ec2:modify(snapshot|image)attribute$/i, // make an EBS snapshot / AMI public or cross-account (data exposure)
+  /^s3:put[a-z]*acl$/i, // s3:PutBucketAcl / PutObjectAcl — ACL-based public/cross-account exposure
+  /^lambda:put[a-z]*concurrency$/i, // lambda:PutFunctionConcurrency — concurrency starvation (boundary-denied)
+  /^eks:(create|update|delete)accessentry$/i, // grant self a Kubernetes access entry (cluster admin)
+  /^eks:(associate|disassociate)accesspolicy$/i, // attach a cluster access policy to an entry (cluster admin)
+  // Whole-service control planes the runtime boundary X denies ENTIRELY (`service:*`). Reject ALL
+  // tiers here — including Tier-1/2 reads (List*/Describe*/Get*) which are otherwise any-service —
+  // so a read request can't pass validation then silently runtime-deny (ADR-030 review finding).
+  /^(iam|organizations|account|sso|sso-directory|identitystore|ram):/i,
+  /^sts:(assumerole|getfederationtoken|getsessiontoken)/i, // role assumption / credential pivoting (boundary-denied)
   /:[a-z]*resourcepolicy$/i, // *PutResourcePolicy / *DeleteResourcePolicy
 ];
+// ADR-030 coherence: an action the runtime boundary X denies must ALSO be rejected here at
+// request time, else an admin could approve a grant the boundary then silently denies. Two cases,
+// both enforced by scripts/check-policyset-boundary.py: (b) write actions on a *requestable*
+// (write-allowlisted) service; (d) any boundary-denied action that the READ tier would accept —
+// whole-service `service:*` denies (reads are any-service) and read-verb-shaped specific denies
+// (e.g. sts:GetFederationToken). Adding to the boundary Deny floor requires a matching pattern here.
 
 function actionMatchesAny(action: string, patterns: string[]): boolean {
   const a = action.toLowerCase();
@@ -78,6 +94,25 @@ function isReadWildcardOp(op: string): boolean {
   if (stem.includes("*")) return false;
   const s = stem.toLowerCase();
   return READ_WILDCARD_PREFIXES.some((p) => s === p);
+}
+
+// ADR-030 Tier-1: List*/Describe* are pure metadata (no bulk data/secrets) — `Resource:*`
+// is acceptable on ANY service. NOTE: Get* is deliberately NOT here (kinesis:GetRecords,
+// dynamodb:GetItem, s3:GetObject, secretsmanager:GetSecretValue, … read data/secrets).
+function isMetadataAction(action: string): boolean {
+  const op = (action.split(":")[1] ?? "").toLowerCase();
+  const verb = op.endsWith("*") ? op.slice(0, -1) : op;
+  return verb.startsWith("list") || verb.startsWith("describe");
+}
+
+// ADR-030: read-tier actions bypass the WRITE service allowlist (reads are allowed on any
+// service — still concrete-ARN-scoped by the resource rules below, except metadata). Write
+// actions (Put/Update/Delete/Create/…) stay confined to the allowlist. Unknown verbs default
+// to write-tier (allowlist-gated) — the safe direction.
+function isReadTierAction(action: string, wildcardOk: string[]): boolean {
+  if (actionMatchesAny(action, wildcardOk)) return true;
+  const op = (action.split(":")[1] ?? "").toLowerCase();
+  return READ_WILDCARD_PREFIXES.some((p) => op.startsWith(p));
 }
 
 export function validateIamRequest(statements: IamStatement[], opts: ValidateOpts): ValidationResult {
@@ -119,8 +154,11 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
         }
       }
       actionServices.add(svc.toLowerCase());
-      if (!allowlist.includes(svc.toLowerCase())) {
-        errors.push(`service not in allowlist: ${svc}`);
+      // ADR-030 tiered: the service allowlist gates WRITE/mutate actions only. Reads
+      // (Get*/List*/Describe*/Query/Scan/BatchGet* + wildcard-ok set) are allowed on ANY
+      // service — they stay concrete-ARN-scoped below (except List*/Describe* metadata).
+      if (!isReadTierAction(action, opts.wildcardOkActions) && !allowlist.includes(svc.toLowerCase())) {
+        errors.push(`service not in write-allowlist: ${svc}`);
       }
       if (dangerous.some((re) => re.test(action))) {
         errors.push(`dangerous action not allowed: ${action}`);
@@ -131,7 +169,10 @@ export function validateIamRequest(statements: IamStatement[], opts: ValidateOpt
     // s3:listallmybuckets) — actions that genuinely lack resource-level scoping. Read-only wildcard
     // ops (s3:Get*/List*) are NOT auto-granted Resource:* — they must be scoped to a concrete ARN,
     // else `s3:Get*`+Resource:* = account-wide reads (gate consensus: codex/kiro HIGH).
-    const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions));
+    // ADR-030 Tier-1: Resource:'*' allowed for the resource-level-unsupported wildcard-ok set
+    // OR for pure metadata (List*/Describe*) on any service. Data reads (Get*/Query/Scan) are
+    // NOT eligible — they must be scoped to a concrete ARN.
+    const allActionsWildcardOk = actions.length > 0 && actions.every((a) => actionMatchesAny(a, opts.wildcardOkActions) || isMetadataAction(a));
     for (const res of resources) {
       if (res === "*") {
         if (!allActionsWildcardOk) {

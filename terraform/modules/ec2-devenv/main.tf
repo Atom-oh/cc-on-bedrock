@@ -17,6 +17,8 @@ locals {
   bedrock_resources = [
     "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
     "arn:aws:bedrock:*:${local.account_id}:inference-profile/*anthropic.claude-*",
+    "arn:aws:bedrock:*::foundation-model/*embed*",
+    "arn:aws:bedrock:*:${local.account_id}:inference-profile/*embed*",
     "arn:aws:bedrock:*:${local.account_id}:application-inference-profile/*",
   ]
 

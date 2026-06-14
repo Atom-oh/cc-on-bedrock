@@ -1,4 +1,4 @@
-"""T7 (ADR-029 B′): limit-reset detaches the Deny from local-user-{subdomain}
+"""T7 (ADR-031 B′): limit-reset detaches the Deny from local-user-{subdomain}
 (subdomain from the DENY#active record, NOT the email PK suffix). Legacy non-email
 PKs (sub/subdomain) still resolve via the suffix.
 """

@@ -7,17 +7,17 @@ cd "$(dirname "$0")/.."
 echo "== Next.js dashboard: typecheck + vitest =="
 ( cd shared/nextjs-app && npx tsc --noEmit && npx vitest run )
 
-echo "== nginx config generator: code-server boot 502 interception (unit) =="
-python3 -m pytest tests/unit/test_nginx_config_gen.py -q
+echo "== Python unit tests (nginx config-gen, usage-tracker pricing, …) =="
+python3 -m pytest tests/unit/ -q
 
-echo "== ADR-026: boundary ⊇ service-allowlist invariant (self-test) =="
+echo "== ADR-030: boundary-X deny-floor + validator coherence invariant (self-test) =="
 python3 scripts/check-policyset-boundary.py --self-test
 
 # Full invariant check when a synthesized Security template is available
 # (CI synth step writes cdk/cdk.out/CcOnBedrock-Security.template.json).
 TPL="cdk/cdk.out/CcOnBedrock-Security.template.json"
 if [ -f "$TPL" ]; then
-  echo "== ADR-026: boundary ⊇ service-allowlist (synthesized template) =="
+  echo "== ADR-030: boundary-X deny-floor + validator coherence (synthesized template) =="
   python3 scripts/check-policyset-boundary.py --template "$TPL"
 else
   echo "(skip boundary template check — no synthesized template; run 'cd cdk && npx cdk synth CcOnBedrock-Security')"
