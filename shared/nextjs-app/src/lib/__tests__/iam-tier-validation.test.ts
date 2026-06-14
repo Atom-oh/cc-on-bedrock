@@ -69,4 +69,27 @@ describe("tiered IAM validation (ADR-030)", () => {
       ).toBe(false);
     }
   });
+
+  // ADR-030 review: the READ tier allows List*/Describe* (any service, Resource:*) and Get* (any
+  // service, concrete ARN). Boundary X denies iam/organizations/account/sso/identitystore/ram
+  // wholesale + sts:Get*Token — so those reads must be rejected at request time or they'd pass
+  // validation then silently runtime-deny. Reads on a non-boundary-denied service stay allowed.
+  it("reads on whole-service-denied control planes are rejected (no silent-deny)", () => {
+    const rejected: [string, string][] = [
+      ["organizations:DescribeOrganization", "*"],
+      ["account:GetContactInformation", "*"],
+      ["sso:ListInstances", "*"],
+      ["identitystore:ListUsers", "*"],
+      ["ram:ListResources", "*"],
+      ["sts:GetFederationToken", arn("sts", "federated-user/x")],
+    ];
+    for (const [action, resource] of rejected) {
+      expect(
+        validateIamRequest([{ Action: [action], Resource: [resource] }], opts).ok,
+        `${action} should be rejected (boundary X denies the whole service)`,
+      ).toBe(false);
+    }
+    // sanity: a read on a NON-denied service is still allowed (tier model intact)
+    expect(validateIamRequest([{ Action: ["rds:DescribeDBInstances"], Resource: ["*"] }], opts).ok).toBe(true);
+  });
 });

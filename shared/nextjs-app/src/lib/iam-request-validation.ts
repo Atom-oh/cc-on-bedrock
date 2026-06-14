@@ -53,15 +53,19 @@ const DEFAULT_DANGEROUS: RegExp[] = [
   /^ec2:modify(snapshot|image)attribute$/i, // make an EBS snapshot / AMI public or cross-account (data exposure)
   /^eks:(create|update|delete)accessentry$/i, // grant self a Kubernetes access entry (cluster admin)
   /^eks:(associate|disassociate)accesspolicy$/i, // attach a cluster access policy to an entry (cluster admin)
-  /^iam:/i, // any iam:* (PassRole, CreateRole, ...)
-  /^sts:assumerole/i,
+  // Whole-service control planes the runtime boundary X denies ENTIRELY (`service:*`). Reject ALL
+  // tiers here — including Tier-1/2 reads (List*/Describe*/Get*) which are otherwise any-service —
+  // so a read request can't pass validation then silently runtime-deny (ADR-030 review finding).
+  /^(iam|organizations|account|sso|sso-directory|identitystore|ram):/i,
+  /^sts:(assumerole|getfederationtoken|getsessiontoken)/i, // role assumption / credential pivoting (boundary-denied)
   /:[a-z]*resourcepolicy$/i, // *PutResourcePolicy / *DeleteResourcePolicy
 ];
-// ADR-030 T2 coherence: every boundary-X DenyEscalation action on a *requestable*
-// (write-allowlisted) service MUST also match a pattern above — otherwise an admin could
-// approve a request that the runtime boundary then silently denies. Enforced by
-// scripts/check-policyset-boundary.py invariant (b). Adding to the boundary Deny floor on a
-// requestable service therefore requires adding the matching dangerous pattern here.
+// ADR-030 coherence: an action the runtime boundary X denies must ALSO be rejected here at
+// request time, else an admin could approve a grant the boundary then silently denies. Two cases,
+// both enforced by scripts/check-policyset-boundary.py: (b) write actions on a *requestable*
+// (write-allowlisted) service; (d) any boundary-denied action that the READ tier would accept —
+// whole-service `service:*` denies (reads are any-service) and read-verb-shaped specific denies
+// (e.g. sts:GetFederationToken). Adding to the boundary Deny floor requires a matching pattern here.
 
 function actionMatchesAny(action: string, patterns: string[]): boolean {
   const a = action.toLowerCase();

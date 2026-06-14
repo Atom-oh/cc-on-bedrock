@@ -90,6 +90,15 @@ escalation/노출 액션"을 도출. **Access Analyzer 로 모든 추가 액션�
   AccessPolicy`(self 클러스터 admin), `ec2:ModifySnapshotAttribute/ModifyImageAttribute`(공개 EBS/AMI).
 - **네트워크 노출**: `ec2:Authorize/ModifySecurityGroup*`.
 
+**read-tier ⇄ whole-service deny 일관성 (PR #71 리뷰 반영):** tiered 검증기는 읽기(`List*`/`Describe*`/
+`Get*`)를 *전 서비스* 허용한다. 그런데 boundary 는 `iam`/`organizations`/`account`/`sso`/`sso-directory`/
+`identitystore`/`ram` 을 **통째로(`service:*`) deny** 한다. 따라서 이들 서비스의 *읽기* 신청
+(예: `organizations:DescribeOrganization`)이 검증을 통과한 뒤 런타임에 silent-deny 될 수 있다 —
+ADR-030 이 없애려던 바로 그 문제. → 검증기 `DEFAULT_DANGEROUS` 에 이들 whole-service 를 **전 tier
+거부**(`^(iam|organizations|account|sso|sso-directory|identitystore|ram):`, `^sts:(assumerole|
+getfederationtoken|getsessiontoken)`)로 추가해 request-time 에 차단한다. CI 불변식 (d)가 강제:
+boundary 의 whole-service deny + read-verb 형 deny 액션은 모두 검증기가 거부해야 한다.
+
 ### 수용된 잔여 위험 (의도적으로 플로어에 넣지 않음 — 문서화)
 - **기존 컴퓨팅 confused-deputy**: `lambda:UpdateFunctionCode`, `ssm:SendCommand/StartSession`,
   `ecs:ExecuteCommand`, `cloudformation:UpdateStack`, `codebuild:StartBuild`, `glue:StartJobRun`,
@@ -103,6 +112,9 @@ escalation/노출 액션"을 도출. **Access Analyzer 로 모든 추가 액션�
   해당 서비스는 admin 게이트. 비-신청가능 서비스의 모든 리소스정책 액션을 망라하는 것은 불가능(표현 벽).
 - **`iam:*` over-broad**: `iam:Get*`/`SimulatePrincipalPolicy` 도 막아 dev 가 자기 역할 디버깅 불가.
   → 단순·안전 우선으로 `iam:*` 유지. 지원 부하가 크면 read-only carve-out 재검토.
+- `ec2:RevokeSecurityGroup*` 는 boundary deny 에 없음(검증기는 `revoke` 포함). revoke 는 SG 허용
+  규칙을 *제거*해 접근을 줄이므로 escalation 이 아님 — boundary 에서 굳이 막지 않음(검증기가 거부해도
+  silent-deny 아님: 승인 단계에서 안 넘어갈 뿐). 의도된 비대칭.
 - 패널 이견 기록: Codex 는 `sts:GetFederationToken/GetSessionToken` 추가를 "fail-closed 로 이미
   무력, 불필요"로 봄(Gemini 는 추가 권고). harmless belt-and-suspenders 로 **유지**. Codex 는
   `kms` 수명주기·`lambda:PutFunctionConcurrency` 를 "escalation 아닌 DoS"로 분류 — defense-in-depth

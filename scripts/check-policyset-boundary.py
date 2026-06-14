@@ -161,6 +161,36 @@ def allowlist_services(ts_path: Path) -> set:
     return {s.lower() for g in re.findall(r'"([^"]+)"|\'([^\']+)\'', m.group(1)) for s in g if s}
 
 
+# ADR-030 review: the read tier accepts List*/Describe* (any service, Resource:*) and Get*/Query*/
+# Scan* (any service, concrete ARN). So a boundary-denied action that the read tier would accept is
+# a silent-deny unless the validator also rejects it. This is NOT limited to write-allowlist
+# services (reads are any-service) — invariant (b) alone structurally misses it.
+READ_PREFIXES = ("get", "list", "describe", "batchget", "query", "scan")
+
+
+def whole_service_denies(deny: set) -> set:
+    """Services the boundary denies entirely (action == 'svc:*')."""
+    return {d.split(":")[0] for d in deny if d.endswith(":*")}
+
+
+def read_tier_silent_deny(deny: set, patterns: list) -> list:
+    """Boundary-denied actions a read-tier request would PASS but the validator does NOT reject
+    (empty = OK). (d1) whole-service denies — probe read verbs on the service; (d2) specific
+    read-verb-shaped deny actions (e.g. sts:GetFederationToken)."""
+    bad = []
+    for svc in sorted(whole_service_denies(deny)):
+        probe = f"{svc}:listprobe"
+        if not any(p.search(probe) for p in patterns):
+            bad.append(f"{svc}:* (read requests not rejected by validator, e.g. {probe})")
+    for d in deny:
+        if d.endswith("*") or ":" not in d:
+            continue
+        verb = d.split(":", 1)[1]
+        if verb.startswith(READ_PREFIXES) and not any(p.search(d) for p in patterns):
+            bad.append(d)
+    return bad
+
+
 def floor_not_flagged_by_validator(patterns: list, allowlist: set) -> list:
     """Floor actions on a REQUESTABLE service that the validator would NOT reject (empty = OK).
 
@@ -217,6 +247,11 @@ def _self_test() -> int:
     notflagged = floor_not_flagged_by_validator(pats, alw)
     assert notflagged == [], f"requestable floor actions not flagged dangerous by validator: {notflagged}"
 
+    # (d) read-tier silent-deny: whole-service denies + read-verb specific denies must be rejected.
+    assert read_tier_silent_deny({"organizations:*"}, pats) == []  # validator has ^organizations:
+    assert read_tier_silent_deny({"sts:getfederationtoken"}, pats) == []  # ^sts:...getfederationtoken
+    assert read_tier_silent_deny({"foobar:*"}, [re.compile(r"^iam:", re.I)]) != []  # unguarded whole-svc
+
     # (c) account confinement detection.
     good = {"Statement": [{"Effect": "Allow", "Action": "*",
                            "Condition": {"StringEquals": {"aws:ResourceAccount": "123"}}}]}
@@ -261,6 +296,7 @@ def main() -> int:
 
     missing = uncovered_floor(deny)
     notflagged = floor_not_flagged_by_validator(patterns, alw)
+    silent_read = read_tier_silent_deny(deny, patterns)
     confined = account_confinement(doc)
 
     print(f"boundary Deny actions: {len(deny)}")
@@ -274,12 +310,15 @@ def main() -> int:
     if notflagged:
         print(f"[FAIL] (b) deny-floor action NOT flagged dangerous by request validator (drift): {sorted(notflagged)}", file=sys.stderr)
         failed = True
+    if silent_read:
+        print(f"[FAIL] (d) boundary-denied action a READ-tier request would pass but validator allows (silent-deny): {sorted(silent_read)}", file=sys.stderr)
+        failed = True
     if not confined:
         print("[FAIL] (c) no Allow Action:'*' statement with StringEquals aws:ResourceAccount (cross-account not fail-closed)", file=sys.stderr)
         failed = True
     if failed:
         return 1
-    print("[OK] boundary denies the escalation floor, floor is validator-coherent, account-confined")
+    print("[OK] boundary denies the escalation floor; validator-coherent (writes + read-tier); account-confined")
     return 0
 
 

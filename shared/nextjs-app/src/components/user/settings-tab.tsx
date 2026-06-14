@@ -618,8 +618,9 @@ function IamRequestSection({ onSuccess, onError }: { onSuccess: () => void; onEr
       {expanded && (
         <div className="mt-3 space-y-3">
           <p className="text-[10px] text-gray-500">
-            서비스·액션·리소스 ARN을 직접 지정해 신청합니다. 읽기 와일드카드(Get*/List*/Describe*)만 허용,
-            `*`·`s3:*`·쓰기 와일드카드·교차계정은 거부됩니다. 관리자 승인 후 부여됩니다.
+            서비스·액션·리소스 ARN을 직접 지정해 신청합니다. 메타데이터(List*/Describe*)는 전 서비스·Resource:* 허용,
+            데이터 읽기(Get* 등)는 전 서비스이되 구체 ARN 필수, 쓰기는 허용 서비스에 한해 가능합니다.
+            `*`·임베디드 와일드카드·교차계정·위험 액션(권한위임/리소스정책/공개화)은 거부됩니다. 관리자 승인 후 부여됩니다.
           </p>
           {/* Form ↔ raw-JSON input toggle */}
           <div className="flex gap-1 text-[10px]">
