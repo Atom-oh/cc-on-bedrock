@@ -284,11 +284,22 @@ _subdomain_by_user: dict = {}
 # fail-open (do not filter) so a transient Cognito error can't zero all spend or
 # release every deny policy.
 _valid_user_keys: set = set()
+# {email: subdomain} built from the SAME Cognito scan as _valid_user_keys (see below). Used by the
+# release path to resolve idle/denied users' Local role without an N+1 per-user ListUsers.
+_email_subdomain_map: dict = {}
 
 
 def _load_valid_user_keys() -> set:
     """Build the set of authoritative Cognito identifiers (sub / subdomain / email /
-    username). Returns an empty set on any failure so callers fail open."""
+    username). Returns an empty set on any failure so callers fail open.
+
+    Side effect: rebuilds the module-level _email_subdomain_map {email: subdomain} from the SAME
+    single paginated scan. The release path needs subdomains for denied/idle users (no usage row
+    this period) to detach their Deny; doing it from this one scan avoids a per-user ListUsers
+    (N+1 → Cognito throttle at scale → release failures) — PR #68 review.
+    """
+    global _email_subdomain_map
+    _email_subdomain_map = {}
     keys: set = set()
     if not USER_POOL_ID:
         return keys
@@ -303,11 +314,18 @@ def _load_valid_user_keys() -> set:
             for u in result.get("Users", []):
                 if u.get("Username"):
                     keys.add(u["Username"].strip().lower())
+                u_email = u_subdomain = None
                 for attr in u.get("Attributes", []):
                     # ADR-031: canonical key is email; lowercase all keys so a
                     # mixed-case email row (USER#{email.lower()}) still matches.
                     if attr["Name"] in ("sub", "custom:subdomain", "email") and attr.get("Value"):
                         keys.add(attr["Value"].strip().lower())
+                    if attr["Name"] == "email" and attr.get("Value"):
+                        u_email = attr["Value"].strip().lower()
+                    elif attr["Name"] == "custom:subdomain" and attr.get("Value"):
+                        u_subdomain = attr["Value"].strip()
+                if u_email and u_subdomain:
+                    _email_subdomain_map[u_email] = u_subdomain
             pagination_token = result.get("PaginationToken")
             pages += 1
             if not pagination_token or pages >= MAX_SCAN_PAGES:
@@ -738,34 +756,6 @@ def set_cognito_budget_flag(user: str, exceeded: bool):
         print(f"Cognito update failed for {email}: {e}")
 
 
-def _resolve_subdomain_via_cognito(email: str):
-    """Release-path fallback for the deny-deadlock (PR #68 review).
-
-    A denied/idle user can't invoke Bedrock → has no usage row this period → the usage scans
-    never capture its subdomain into `_subdomain_by_user`, so `_candidate_role_names` returns []
-    and `remove_deny_policy` is a no-op → the Deny stays attached forever even after the budget is
-    raised. The subdomain CANNOT be re-derived from the email (the provisioner disambiguates
-    collisions, e.g. `john-doe-2`), so read the authoritative `custom:subdomain` from Cognito.
-    Returns the subdomain, or None on miss/unconfigured.
-    """
-    if not USER_POOL_ID:
-        return None
-    e = (email or "").strip().lower()
-    if "@" not in e:
-        return None
-    try:
-        result = cognito_client.list_users(
-            UserPoolId=USER_POOL_ID, Filter=f'email = "{e}"', Limit=1,
-        )
-        for u in result.get("Users", []):
-            for attr in u.get("Attributes", []):
-                if attr.get("Name") == "custom:subdomain" and attr.get("Value"):
-                    return attr["Value"].strip()
-    except Exception as ex:
-        print(f"[RELEASE] Cognito subdomain lookup failed for {e}: {ex}")
-    return None
-
-
 def check_department_budgets(user_spend):
     """Check department monthly budgets and return lists of warnings and over-budget depts."""
     dept_monthly = get_monthly_usage_by_department()
@@ -883,10 +873,10 @@ def handler(event, context):
         if user not in over_budget_users:
             # Deny-deadlock fix (PR #68 review): a denied/idle user isn't in the usage scans, so
             # its subdomain may be absent from _subdomain_by_user → _candidate_role_names would
-            # no-op and the Deny would never detach. Backfill the subdomain from Cognito first so
-            # the release actually reaches the role.
+            # no-op and the Deny would never detach. Backfill from the one-shot _email_subdomain_map
+            # (built by _load_valid_user_keys in a single scan) — no per-user ListUsers.
             if not _subdomain_by_user.get(user) and "@" in user:
-                sd = _resolve_subdomain_via_cognito(user)
+                sd = _email_subdomain_map.get(user)
                 if sd:
                     _subdomain_by_user[user] = sd
             if remove_deny_policy(user):

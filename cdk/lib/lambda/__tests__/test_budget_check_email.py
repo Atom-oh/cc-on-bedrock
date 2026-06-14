@@ -52,26 +52,30 @@ def test_is_valid_user_lowercase():
     assert not bc._is_valid_user("bob@example.com")
 
 
-def test_resolve_subdomain_via_cognito_reads_custom_attr():
-    # Deny-deadlock fix: release path resolves a denied/idle user's subdomain from Cognito
-    # (email filter → custom:subdomain), since usage scans never captured it.
-    captured = {}
+def test_load_valid_user_keys_builds_email_subdomain_map_one_scan():
+    # Deny-deadlock fix (no N+1): the release path's email→subdomain map is built from the SAME
+    # single paginated Cognito scan as the valid-key set — not a per-user ListUsers.
+    calls = {"n": 0}
     cog = mock.Mock()
 
     def list_users(**kw):
-        captured["Filter"] = kw.get("Filter", "")
-        return {"Users": [{"Username": "u1", "Attributes": [
-            {"Name": "email", "Value": "john@example.com"},
-            {"Name": "custom:subdomain", "Value": "john-doe-2"},
-        ]}]}
+        calls["n"] += 1  # must be ONE call (no pagination here, no per-user lookups)
+        return {"Users": [
+            {"Username": "u1", "Attributes": [
+                {"Name": "email", "Value": "John@Example.com"},
+                {"Name": "custom:subdomain", "Value": "john-doe-2"}]},
+            {"Username": "u2", "Attributes": [
+                {"Name": "email", "Value": "amy@example.com"},
+                {"Name": "custom:subdomain", "Value": "amy"}]},
+        ]}
     cog.list_users.side_effect = list_users
     with mock.patch.object(bc, "cognito_client", cog):
-        sd = bc._resolve_subdomain_via_cognito("John@Example.com")
-    assert sd == "john-doe-2"  # collision-disambiguated subdomain, not derivable from email
-    assert 'email = "john@example.com"' in captured["Filter"]
-    # non-email / miss → None (fail-safe, no bad role)
-    with mock.patch.object(bc, "cognito_client", cog):
-        assert bc._resolve_subdomain_via_cognito("not-an-email") is None
+        keys = bc._load_valid_user_keys()
+    assert calls["n"] == 1
+    # collision-disambiguated subdomain captured, email lowercased
+    assert bc._email_subdomain_map["john@example.com"] == "john-doe-2"
+    assert bc._email_subdomain_map["amy@example.com"] == "amy"
+    assert "john@example.com" in keys
 
 
 def test_is_valid_user_failopen_when_empty():
