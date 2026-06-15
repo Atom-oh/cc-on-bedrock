@@ -18,7 +18,7 @@ import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
-import * as fs from 'fs';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 import * as path from 'path';
@@ -118,12 +118,16 @@ export class UsageTrackingStack extends cdk.Stack {
       exportName: 'cc-otel-metrics-raw-bucket',
     });
 
-    // Phase 1: central ADOT OTel Collector as the push endpoint for Claude Code metrics.
+    // Phase 1: central OTel Collector as the push endpoint for Claude Code metrics.
     // EC2/ECS devenvs send OTLP/gRPC to the internal NLB; the collector batches and writes
     // raw OTLP JSON to the S3 buffer. The authenticated public path for Local PCs is Phase 3;
     // a deploy_mode resource attribute on each metric enables the EC2-vs-Local comparison.
-    const collectorConfig = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'docker', 'otel-collector', 'config.yaml'), 'utf8');
+    //
+    // Image: the upstream OTel Collector *contrib* distro (has awss3exporter, which the AWS
+    // ADOT distro lacks), config baked in, built ARM64, mirrored into private ECR and pulled
+    // in-VPC via the existing ECR endpoints (no public-registry runtime dependency).
+    const collectorRepo = ecr.Repository.fromRepositoryName(
+      this, 'OtelCollectorRepo', 'cc-on-bedrock/otel-collector');
 
     const otelCollector = new ecsPatterns.NetworkLoadBalancedFargateService(this, 'OtelCollector', {
       vpc,
@@ -131,15 +135,17 @@ export class UsageTrackingStack extends cdk.Stack {
       cpu: 256,
       memoryLimitMiB: 512,
       desiredCount: 2,
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64, // image is built arm64 (Graviton)
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
       publicLoadBalancer: false, // internal NLB — reachable from within the VPC only
       listenerPort: 4317, // OTLP/gRPC
       taskImageOptions: {
-        image: ecs.ContainerImage.fromRegistry(
-          'public.ecr.aws/aws-observability/aws-otel-collector:latest'),
+        image: ecs.ContainerImage.fromEcrRepository(collectorRepo, 'latest'),
         containerPort: 4317,
-        // The ADOT collector image entrypoint loads inline config from AOT_CONFIG_CONTENT.
+        // Config is baked into the image; bucket + region come from env (config uses ${env:...}).
         environment: {
-          AOT_CONFIG_CONTENT: collectorConfig,
           OTEL_S3_BUCKET: otelRawBucket.bucketName,
           AWS_REGION: cdk.Aws.REGION,
         },
