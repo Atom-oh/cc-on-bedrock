@@ -107,10 +107,13 @@ export class UsageTrackingStack extends cdk.Stack {
     });
     this.usageTable.grantReadWriteData(otelRollupLambda);
     otelRawBucket.grantRead(otelRollupLambda);
+    // Trigger on the collector's output prefix rather than a `.json` suffix: the awss3
+    // exporter's object extension is version-dependent, and this bucket only ever receives
+    // collector output, so a prefix filter can't silently miss real metric objects.
     otelRawBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
       new s3n.LambdaDestination(otelRollupLambda),
-      { suffix: '.json' },
+      { prefix: 'otlp-metrics/' },
     );
 
     new cdk.CfnOutput(this, 'OtelMetricsRawBucketName', {
