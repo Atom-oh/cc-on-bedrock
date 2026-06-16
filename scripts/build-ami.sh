@@ -205,6 +205,10 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
       "# EC2 Hibernation agent (ADR-010)",
       "apt-get update -qq && apt-get install -y ec2-hibinit-agent",
       "echo GRUB_CMDLINE_LINUX_DEFAULT=\\\"nokaslr\\\" > /etc/default/grub.d/99-hibernation.cfg",
+      "# Disable Ubuntu cloud-image initrdless boot (GRUB_FORCE_PARTUUID): it intermittently",
+      "# hangs at \\\"attempting initrdless boot\\\" on Graviton (esp. on stop/start), bricking the devenv.",
+      "echo GRUB_DISABLE_INITRDLESS_BOOT=true > /etc/default/grub.d/98-disable-initrdless.cfg",
+      "update-initramfs -u || true",
       "update-grub",
       "# Cleanup",
       "apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*"
