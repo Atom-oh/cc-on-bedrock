@@ -1,0 +1,12 @@
+# Build-context excludes — none of these belong in any image (images install their own
+# deps via npm ci). Keeps `docker build` context small and fast.
+**/node_modules
+**/.next
+.git
+**/*.tsbuildinfo
+cdk/cdk.out
+.claude
+output
+.serena
+.headroom
+**/*.log
