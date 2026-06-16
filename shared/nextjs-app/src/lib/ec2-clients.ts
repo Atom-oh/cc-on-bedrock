@@ -393,11 +393,12 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
       ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      // Model defaults: Opus 4.8 as the active default, Sonnet→4.6, fast→Haiku 4.5 (Bedrock IDs).
-      `echo "ANTHROPIC_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
-      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
-      `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
+      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 4.6.
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6[1m]" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]" >> /etc/environment`,
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
+      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `# Allow coder to use package managers without password`,
       `cat > /etc/sudoers.d/coder << 'SUDOEOF'`,
@@ -428,6 +429,11 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `CSCFG`,
       ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
+      // systemd does NOT read /etc/environment, so code-server's process (and its integrated
+      // terminal → claude) would otherwise miss the OTEL + model vars. This drop-in loads them.
+      `mkdir -p /etc/systemd/system/code-server.service.d`,
+      `printf '[Service]\\nEnvironmentFile=-/etc/environment\\n' > /etc/systemd/system/code-server.service.d/env.conf`,
+      `systemctl daemon-reload`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
       `if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
@@ -830,11 +836,12 @@ export async function restoreFromSnapshot(
       // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
       ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      // Model defaults: Opus 4.8 as the active default, Sonnet→4.6, fast→Haiku 4.5 (Bedrock IDs).
-      `echo "ANTHROPIC_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
-      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
-      `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
+      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 4.6.
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6[1m]" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]" >> /etc/environment`,
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
+      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `mkdir -p /home/coder/.config/code-server`,
       // Default code-server (VS Code) to a dark theme without clobbering existing user settings.
@@ -850,6 +857,11 @@ export async function restoreFromSnapshot(
       `CSCFG`,
       ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
+      // systemd does NOT read /etc/environment, so code-server's process (and its integrated
+      // terminal → claude) would otherwise miss the OTEL + model vars. This drop-in loads them.
+      `mkdir -p /etc/systemd/system/code-server.service.d`,
+      `printf '[Service]\\nEnvironmentFile=-/etc/environment\\n' > /etc/systemd/system/code-server.service.d/env.conf`,
+      `systemctl daemon-reload`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
       `if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
