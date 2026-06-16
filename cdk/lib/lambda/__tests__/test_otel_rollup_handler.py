@@ -50,8 +50,10 @@ def _s3_event(bucket="otel-metrics-raw", key="2026/06/14/abc.json"):
 class _FakeS3:
     def __init__(self, payload):
         self._payload = payload
+        self.last_key = None
 
     def get_object(self, Bucket, Key):
+        self.last_key = Key
         return {"Body": io.BytesIO(json.dumps(self._payload).encode())}
 
 
@@ -122,6 +124,19 @@ def _otlp_two_users():
                 "scopeMetrics": [{"metrics": [
                     {"name": "claude_code.commit.count", "sum": {"dataPoints": [dp(1)]}}]}]}
     return {"resourceMetrics": [block("alice@example.com"), block("bob@example.com")]}
+
+
+def test_url_encoded_s3_key_is_decoded():
+    # Collector writes Hive-style keys (year=2026/...); S3 events arrive percent-encoded.
+    ddb = _FakeDDB()
+    fake_s3 = _FakeS3(_otlp())
+    encoded = "otlp-metrics/year%3D2026/month%3D06/day%3D16/metricsmetrics_1.json"
+    event = {"Records": [{"s3": {"bucket": {"name": "otel-metrics-raw"},
+                                 "object": {"key": encoded}}}]}
+    with mock.patch.object(handler_mod, "s3", fake_s3), \
+         mock.patch.object(handler_mod, "ddb", ddb):
+        handler_mod.handler(event, None)
+    assert fake_s3.last_key == "otlp-metrics/year=2026/month=06/day=16/metricsmetrics_1.json"
 
 
 def test_multi_user_object_writes_one_transaction_per_user():

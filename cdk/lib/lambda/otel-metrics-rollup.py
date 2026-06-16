@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 from collections import defaultdict
 
 import boto3
@@ -133,7 +134,9 @@ def handler(event, context):
     processed = 0
     for rec in event.get("Records", []):
         bucket = rec["s3"]["bucket"]["name"]
-        key = rec["s3"]["object"]["key"]
+        # S3 event notifications URL-encode the object key (the collector writes Hive-style
+        # keys like year=2026/month=06/..., whose '=' arrives as %3D); decode before GetObject.
+        key = urllib.parse.unquote_plus(rec["s3"]["object"]["key"])
         if _process_object(bucket, key):
             processed += 1
     return {"processed": processed}
