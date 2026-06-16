@@ -160,6 +160,31 @@ export interface InstanceInfo {
  * - If instance exists (stopped): StartInstances
  * - If no instance: RunInstances from Launch Template
  */
+/**
+ * Phase 1 (OTel productivity monitoring): user-data lines that enable Claude Code
+ * telemetry on an EC2/AMI devenv. EC2 devenvs run code-server natively (systemd), NOT the
+ * container `entrypoint.sh`, so the OTel env must be written to /etc/environment here (which
+ * the `claude` process inherits). Returns [] when no collector endpoint is configured, so
+ * telemetry stays off fail-safe. `email` is the ADR-029 canonical key (= Cognito username).
+ */
+function otelEnvUserData(email: string, department: string): string[] {
+  const ep = process.env.OTEL_COLLECTOR_ENDPOINT;
+  if (!ep) return [];
+  const endpoint = /^https?:\/\//.test(ep) ? ep : `http://${ep}`;
+  const dept = department || "default";
+  const attrs = email
+    ? `enduser.id=${email},department=${dept},deploy_mode=ec2`
+    : `department=${dept},deploy_mode=ec2`;
+  return [
+    `echo "CLAUDE_CODE_ENABLE_TELEMETRY=1" >> /etc/environment`,
+    `echo "OTEL_METRICS_EXPORTER=otlp" >> /etc/environment`,
+    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=grpc" >> /etc/environment`,
+    `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}" >> /etc/environment`,
+    `echo "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta" >> /etc/environment`,
+    `echo "OTEL_RESOURCE_ATTRIBUTES=${attrs}" >> /etc/environment`,
+  ];
+}
+
 export async function startInstance(input: StartInstanceInput): Promise<InstanceInfo> {
   // Fail-closed: unknown/missing policy lands on the restricted tier, never open.
   // Computed up front so BOTH paths (restart of an existing stopped instance and
@@ -364,10 +389,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // to "unattributed" and per-user productivity rollups can't be keyed.
       `echo "USER_EMAIL=${input.username}" >> /etc/environment`,
       `echo "USER_DEPARTMENT=${input.department}" >> /etc/environment`,
-      // Phase 1: collector endpoint enables OTel push (entrypoint gates on it; absent = telemetry off).
-      ...(process.env.OTEL_COLLECTOR_ENDPOINT
-        ? [`echo "OTEL_COLLECTOR_ENDPOINT=${process.env.OTEL_COLLECTOR_ENDPOINT}" >> /etc/environment`]
-        : []),
+      // Phase 1 (OTel): enable Claude Code telemetry via /etc/environment. No-op when
+      // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
+      ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
@@ -794,10 +818,9 @@ export async function restoreFromSnapshot(
       // ADR-029 key). Without these, metrics fall back to "unattributed".
       `echo "USER_EMAIL=${record?.username ?? ""}" >> /etc/environment`,
       `echo "USER_DEPARTMENT=${record?.department ?? "default"}" >> /etc/environment`,
-      // Phase 1: collector endpoint enables OTel push (entrypoint gates on it; absent = telemetry off).
-      ...(process.env.OTEL_COLLECTOR_ENDPOINT
-        ? [`echo "OTEL_COLLECTOR_ENDPOINT=${process.env.OTEL_COLLECTOR_ENDPOINT}" >> /etc/environment`]
-        : []),
+      // Phase 1 (OTel): enable Claude Code telemetry via /etc/environment. No-op when
+      // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
+      ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
