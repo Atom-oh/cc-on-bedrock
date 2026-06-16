@@ -393,7 +393,11 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
       ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
+      // Model defaults: Opus 4.8 as the active default, Sonnet→4.6, fast→Haiku 4.5 (Bedrock IDs).
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `# Allow coder to use package managers without password`,
       `cat > /etc/sudoers.d/coder << 'SUDOEOF'`,
@@ -411,6 +415,10 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `sudo -u coder mkdir -p /home/coder/workspace`,
       `# Set per-user code-server password`,
       `mkdir -p /home/coder/.config/code-server`,
+      // Default code-server (VS Code) to a dark theme without clobbering existing user settings.
+      `mkdir -p /home/coder/.local/share/code-server/User`,
+      `[ -f /home/coder/.local/share/code-server/User/settings.json ] || echo '{"workbench.colorTheme":"Default Dark Modern"}' > /home/coder/.local/share/code-server/User/settings.json`,
+      `chown -R coder:coder /home/coder/.local/share/code-server 2>/dev/null || true`,
       `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
       `bind-addr: 0.0.0.0:8080`,
       `auth: password`,
@@ -822,9 +830,17 @@ export async function restoreFromSnapshot(
       // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
       ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
+      // Model defaults: Opus 4.8 as the active default, Sonnet→4.6, fast→Haiku 4.5 (Bedrock IDs).
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `mkdir -p /home/coder/.config/code-server`,
+      // Default code-server (VS Code) to a dark theme without clobbering existing user settings.
+      `mkdir -p /home/coder/.local/share/code-server/User`,
+      `[ -f /home/coder/.local/share/code-server/User/settings.json ] || echo '{"workbench.colorTheme":"Default Dark Modern"}' > /home/coder/.local/share/code-server/User/settings.json`,
+      `chown -R coder:coder /home/coder/.local/share/code-server 2>/dev/null || true`,
       `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
       `bind-addr: 0.0.0.0:8080`,
       `auth: password`,
