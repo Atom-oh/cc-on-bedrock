@@ -311,7 +311,7 @@ COMMAND_ID=$(aws ssm send-command \
     "",
     "[Service]",
     "Type=oneshot",
-    "ExecStart=/bin/bash -c 'systemctl restart amazon-ssm-agent; systemctl restart amazon-cloudwatch-agent 2>/dev/null; systemctl restart code-server 2>/dev/null; logger -t hibernate-resume agents-restarted'",
+    "ExecStart=/bin/bash -c \"systemctl restart amazon-ssm-agent; systemctl restart amazon-cloudwatch-agent 2>/dev/null; systemctl restart code-server 2>/dev/null; logger -t hibernate-resume agents-restarted\"",
     "",
     "[Install]",
     "WantedBy=hibernate.target",
