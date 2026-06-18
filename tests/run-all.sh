@@ -13,6 +13,10 @@ python3 -m pytest tests/unit/test_nginx_config_gen.py -q
 echo "== Lambda unit tests (usage/limits/rollup, incl. OTel productivity rollup) =="
 python3 -m pytest cdk/lib/lambda/__tests__ -q
 
+echo "== Local CLI (cc-bedrock-local): syntax + credential_process unit tests =="
+bash -n tools/cc-bedrock-local.sh
+bash tests/unit/test-cc-bedrock-local.sh
+
 echo "== ADR-026: boundary ⊇ service-allowlist invariant (self-test) =="
 python3 scripts/check-policyset-boundary.py --self-test
 

@@ -43,6 +43,18 @@ echo "== emit_credprocess_json: missing creds -> error exit =="
 printf '%s' '{"profileSnippet":"[cc-bedrock]\n"}' | emit_credprocess_json >/dev/null 2>&1
 [ $? -ne 0 ] && echo "  ok: non-zero exit on missing credentials" || { echo "  FAIL: should error"; fail=1; }
 
+echo "== write_credprocess_profile: config gets credential_process, static creds purged =="
+mkdir -p "$(dirname "${AWS_CREDS_FILE}")"
+printf '[cc-bedrock]\naws_access_key_id=STALE\n\n[other]\nx=1\n' > "${AWS_CREDS_FILE}"
+write_credprocess_profile
+ok=1
+grep -q '^\[profile cc-bedrock\]' "${AWS_CONFIG_FILE}" || ok=0
+grep -q 'credential_process = bash .*_cred-process' "${AWS_CONFIG_FILE}" || ok=0
+grep -q '^\[cc-bedrock\]' "${AWS_CREDS_FILE}" && ok=0   # static block MUST be purged (precedence)
+grep -q '^\[other\]' "${AWS_CREDS_FILE}" || ok=0        # unrelated profiles preserved
+[ "${ok}" -eq 1 ] && echo "  ok: config credential_process; static [cc-bedrock] purged; [other] kept" \
+  || { echo "  FAIL: write_credprocess_profile"; fail=1; }
+
 echo "== non-Bedrock ANTHROPIC_MODEL is sanitized (dropped) =="
 [ -z "${ANTHROPIC_MODEL}" ] && echo "  ok: bare/empty ANTHROPIC_MODEL not pinned in test env" || echo "  (info) ANTHROPIC_MODEL=${ANTHROPIC_MODEL}"
 
