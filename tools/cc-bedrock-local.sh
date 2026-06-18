@@ -191,6 +191,32 @@ open(path, "w").write(content + "\n" + snippet.rstrip() + "\n")
 PY
 }
 
+# Write the credential_process profile to ~/.aws/config and PURGE any static block from
+# ~/.aws/credentials (credentials takes precedence over config — a leftover static block
+# would win and defeat auto-refresh). credential_process runs as `bash <script>` so it does
+# not depend on the executable bit / shebang.
+write_credprocess_profile() {
+  mkdir -p "$(dirname "${AWS_CONFIG_FILE}")"
+  touch "${AWS_CONFIG_FILE}"; chmod 600 "${AWS_CONFIG_FILE}"
+  python3 - "${AWS_CONFIG_FILE}" "${AWS_PROFILE_NAME}" "${SCRIPT_PATH}" "${AWS_REGION}" <<'PY'
+import sys, re, os
+path, profile, script, region = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+content = open(path).read() if os.path.exists(path) else ""
+content = re.sub(rf"\[profile {re.escape(profile)}\].*?(?=^\[|\Z)", "", content, flags=re.M | re.S).strip()
+block = f"[profile {profile}]\ncredential_process = bash {script} _cred-process\nregion = {region}\n"
+open(path, "w").write((content + "\n\n" if content else "") + block)
+PY
+  if [[ -f "${AWS_CREDS_FILE}" ]]; then
+    python3 - "${AWS_CREDS_FILE}" "${AWS_PROFILE_NAME}" <<'PY'
+import sys, re
+path, profile = sys.argv[1], sys.argv[2]
+content = open(path).read()
+content = re.sub(rf"\[{re.escape(profile)}\].*?(?=^\[|\Z)", "", content, flags=re.M | re.S).strip()
+open(path, "w").write(content + "\n" if content else "")
+PY
+  fi
+}
+
 save_state() { echo "$1" > "${STATE_FILE}"; chmod 600 "${STATE_FILE}"; }
 
 # Extract a field from a Cognito InitiateAuth response (or print error to stderr).
@@ -256,11 +282,11 @@ issue_sts() {  # issue_sts <access_token>
   local sts_resp
   sts_resp=$(sts_exchange "$1")
   if echo "${sts_resp}" | python3 -c 'import json,sys; sys.exit(0 if "credentials" in json.loads(sys.stdin.read()) else 1)' 2>/dev/null; then
-    write_aws_creds "${sts_resp}"
+    write_credprocess_profile   # auto-refresh via credential_process (not static keys)
     save_state "${sts_resp}"
     local exp
     exp="$(echo "${sts_resp}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["credentials"]["expiration"])')"
-    echo "✓ STS credentials written: profile=${AWS_PROFILE_NAME}, expires=${exp}"
+    echo "✓ STS OK; profile=${AWS_PROFILE_NAME} auto-refreshes (credential_process); first creds expire=${exp}"
   else
     echo "${sts_resp}" >&2
     die "dashboard refused STS issue"
@@ -323,6 +349,7 @@ do_run() {
     fi
   fi
 
+  write_credprocess_profile   # ensure the auto-refresh profile exists this launch
   CLAUDE_CODE_USE_BEDROCK=1 \
     AWS_PROFILE="${AWS_PROFILE_NAME}" \
     AWS_REGION="${AWS_REGION}" \
@@ -357,6 +384,7 @@ do_claude() {
     echo "[Bedrock] sonnet=${ANTHROPIC_DEFAULT_SONNET_MODEL} opus=${ANTHROPIC_DEFAULT_OPUS_MODEL} haiku=${ANTHROPIC_DEFAULT_HAIKU_MODEL}"
   fi
 
+  write_credprocess_profile   # ensure the auto-refresh profile exists this launch
   export CLAUDE_CODE_USE_BEDROCK=1
   export AWS_PROFILE="${AWS_PROFILE_NAME}"
   export AWS_REGION="${AWS_REGION}"
