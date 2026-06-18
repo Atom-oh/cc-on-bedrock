@@ -49,6 +49,14 @@ AWS_REGION="${AWS_REGION:-ap-northeast-2}"
 # backs "Opus", Haiku 4.5 backs "Haiku"/background. ANTHROPIC_MODEL is intentionally
 # unset so the picker shows "Default" — setting it forces the "Custom" slot.
 ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
+# A leaked 1P-style bare id (e.g. claude-opus-4-8[1m]) is NOT a valid Bedrock model
+# identifier and would pin the broken /model "Custom" slot -> "400 invalid model".
+# Bedrock inference-profile ids always contain ".anthropic." (global./apac./us./eu. ...).
+# Drop anything else so the picker default (Sonnet) is used; pin via `cc pin <id>` instead.
+if [[ -n "${ANTHROPIC_MODEL}" && "${ANTHROPIC_MODEL}" != *".anthropic."* ]]; then
+  echo "[Bedrock] WARN: ignoring non-Bedrock ANTHROPIC_MODEL='${ANTHROPIC_MODEL}' (use a 'global.anthropic.*' id or /model)" >&2
+  ANTHROPIC_MODEL=""
+fi
 ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-4-6}"
 ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-8[1m]}"
 # ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
