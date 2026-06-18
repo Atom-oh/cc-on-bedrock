@@ -28,6 +28,10 @@ CFG_FILE="${CFG_DIR}/config"
 STATE_FILE="${CFG_DIR}/state.json"
 TOKEN_CACHE="${CFG_DIR}/cognito-tokens.json"
 AWS_CREDS_FILE="${HOME}/.aws/credentials"
+AWS_CONFIG_FILE="${HOME}/.aws/config"
+# Absolute path to THIS script — used in the credential_process line, invoked as
+# `bash <path> _cred-process` so it does not depend on the executable bit / shebang.
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 mkdir -p "${CFG_DIR}"
 
@@ -483,6 +487,60 @@ Config file: ${CFG_FILE}
 EOF
 }
 
+# ─── credential_process (auto-refresh; invoked by the AWS SDK) ───
+# Pure: dashboard STS response on stdin -> AWS credential_process JSON on stdout.
+emit_credprocess_json() {
+  # -c (not a heredoc) so the piped response reaches sys.stdin. Version is the integer 1.
+  python3 -c '
+import json, sys, re
+try:
+    d = json.load(sys.stdin)
+except Exception as e:
+    sys.stderr.write("cred-process: bad response JSON: %s\n" % e); sys.exit(1)
+creds = d.get("credentials") or {}
+snip = d.get("profileSnippet") or ""
+def snp(k):
+    m = re.search(r"^\s*%s\s*=\s*(.+?)\s*$" % k, snip, re.M)
+    return m.group(1).strip() if m else ""
+ak  = creds.get("AccessKeyId")     or snp("aws_access_key_id")
+sk  = creds.get("SecretAccessKey") or snp("aws_secret_access_key")
+tok = creds.get("SessionToken")    or snp("aws_session_token")
+exp = creds.get("expiration")      or creds.get("Expiration") or ""
+if not (ak and sk and tok):
+    sys.stderr.write("cred-process: response missing credentials\n"); sys.exit(1)
+out = {"Version": 1, "AccessKeyId": ak, "SecretAccessKey": sk, "SessionToken": tok}
+if exp:
+    out["Expiration"] = exp
+sys.stdout.write(json.dumps(out))
+'
+}
+
+do_cred_process() {  # stdout = credential_process JSON ONLY; everything else -> stderr
+  [[ -n "${DASHBOARD_URL}" ]] || { echo "cred-process: not configured — run 'cc-bedrock-local login'" >&2; exit 2; }
+  # Serialize concurrent SDK invocations (avoid racing the cognito refresh / token-cache write).
+  exec 9>"${CFG_DIR}/.cred.lock"
+  flock 9 2>/dev/null || true
+  local access_token resp="" rt rresp at
+  access_token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("accessToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
+  [[ -n "${access_token}" ]] && resp=$(sts_exchange "${access_token}" 2>/dev/null || true)
+  if ! printf '%s' "${resp}" | python3 -c 'import json,sys; sys.exit(0 if "credentials" in json.loads(sys.stdin.read() or "{}") else 1)' 2>/dev/null; then
+    # access token missing/expired -> silent cognito refresh (does NOT write the AWS profile)
+    rt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("refreshToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
+    [[ -n "${rt}" ]] || { echo "cred-process: no cached session — run 'cc-bedrock-local login'" >&2; exit 2; }
+    rresp=$(cognito_refresh_request "${rt}" 2>/dev/null || true)
+    at=$(printf '%s' "${rresp}" | parse_cognito_token "AccessToken" 2>/dev/null || echo "")
+    [[ -n "${at}" ]] || { echo "cred-process: refresh token expired — run 'cc-bedrock-local login'" >&2; exit 2; }
+    cache_tokens "${at}" "${rt}"
+    resp=$(sts_exchange "${at}" 2>/dev/null || true)
+  fi
+  printf '%s' "${resp}" | python3 -c 'import json,sys; sys.exit(0 if "credentials" in json.loads(sys.stdin.read() or "{}") else 1)' 2>/dev/null \
+    || { echo "cred-process: STS issue failed" >&2; exit 1; }
+  save_state "${resp}" 2>/dev/null || true
+  printf '%s' "${resp}" | emit_credprocess_json
+}
+
+# Guard the dispatch so the script can be `source`d by tests without running a subcommand.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 sub="${1:-}"; shift || true
 case "${sub}" in
   login)        do_login "$@" ;;
@@ -495,6 +553,8 @@ case "${sub}" in
   set-model|set_model) do_set_model "$@" ;;
   models)       do_models ;;
   config)       do_config ;;
+  _cred-process|_credprocess) do_cred_process ;;
   ""|-h|--help|help) do_usage ;;
   *) die "unknown subcommand: ${sub}" ;;
 esac
+fi
