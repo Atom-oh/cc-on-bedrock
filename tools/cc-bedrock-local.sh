@@ -203,16 +203,19 @@ import sys, re, os
 path, profile, script, region = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 content = open(path).read() if os.path.exists(path) else ""
 content = re.sub(rf"\[profile {re.escape(profile)}\].*?(?=^\[|\Z)", "", content, flags=re.M | re.S).strip()
-block = f"[profile {profile}]\ncredential_process = bash {script} _cred-process\nregion = {region}\n"
+# Single-quote the script path so install dirs with spaces (e.g. macOS "My Documents") work.
+block = f"[profile {profile}]\ncredential_process = bash '{script}' _cred-process\nregion = {region}\n"
 open(path, "w").write((content + "\n\n" if content else "") + block)
+os.chmod(path, 0o600)
 PY
   if [[ -f "${AWS_CREDS_FILE}" ]]; then
     python3 - "${AWS_CREDS_FILE}" "${AWS_PROFILE_NAME}" <<'PY'
-import sys, re
+import sys, re, os
 path, profile = sys.argv[1], sys.argv[2]
 content = open(path).read()
 content = re.sub(rf"\[{re.escape(profile)}\].*?(?=^\[|\Z)", "", content, flags=re.M | re.S).strip()
 open(path, "w").write(content + "\n" if content else "")
+os.chmod(path, 0o600)   # credentials file holds nothing now, but keep it locked down
 PY
   fi
 }
@@ -558,12 +561,12 @@ do_cred_process() {  # stdout = credential_process JSON ONLY; everything else ->
     rresp=$(cognito_refresh_request "${rt}" 2>/dev/null || true)
     at=$(printf '%s' "${rresp}" | parse_cognito_token "AccessToken" 2>/dev/null || echo "")
     [[ -n "${at}" ]] || { echo "cred-process: refresh token expired — run 'cc-bedrock-local login'" >&2; exit 2; }
-    cache_tokens "${at}" "${rt}"
+    cache_tokens "${at}" "${rt}" >/dev/null 2>&1
     resp=$(sts_exchange "${at}" 2>/dev/null || true)
   fi
   printf '%s' "${resp}" | python3 -c 'import json,sys; sys.exit(0 if "credentials" in json.loads(sys.stdin.read() or "{}") else 1)' 2>/dev/null \
     || { echo "cred-process: STS issue failed" >&2; exit 1; }
-  save_state "${resp}" 2>/dev/null || true
+  save_state "${resp}" >/dev/null 2>&1 || true
   printf '%s' "${resp}" | emit_credprocess_json
 }
 
