@@ -74,6 +74,12 @@ export async function migrateLegacyInstance(
           `cannot attach across AZ (fail-closed)`,
       );
     }
+    // A reused volume may still be `detaching` from a prior instance — wait for `available`
+    // before attach (no-op if already available; ensureDataVolumeAttached handles the case
+    // where it is already attached to THIS instance).
+    if (existing.state !== "available") {
+      await waitForVolumeAvailable(volumeId, 30, 2000);
+    }
   } else {
     volumeId = await createDataVolume(az, subdomain, username, department);
     // A freshly created volume must reach `available` before it can be attached.

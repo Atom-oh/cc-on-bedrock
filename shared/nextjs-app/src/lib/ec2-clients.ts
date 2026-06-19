@@ -530,8 +530,17 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   if (dataPlan.mode === "reattach" && dataPlan.expectedVolumeId) {
     // FATAL on failure: the user's existing /home/coder lives on this volume. Booting without
     // it would silently land them on the ephemeral root and lose data on the next terminate —
-    // far worse than a failed launch the user can retry (codex P4 CRITICAL).
-    await attachDataVolume(instanceId, dataPlan.expectedVolumeId);
+    // far worse than a failed launch the user can retry (codex P4 CRITICAL). Terminate the
+    // just-launched (still unregistered) instance before throwing so it isn't leaked.
+    try {
+      await attachDataVolume(instanceId, dataPlan.expectedVolumeId);
+    } catch (attachErr) {
+      console.error(`[EC2] reattach AttachVolume failed for ${input.subdomain}; terminating orphan ${instanceId}`);
+      await ec2Client.send(new TerminateInstancesCommand({ InstanceIds: [instanceId] })).catch((e) =>
+        console.error(`[EC2] failed to terminate orphan ${instanceId}:`, e),
+      );
+      throw attachErr;
+    }
   } else {
     // Born-attached: the volume already exists (in the RunInstances BDM), so a tagging failure
     // is non-fatal — it leaves the volume under-tagged for operator follow-up, not lost.

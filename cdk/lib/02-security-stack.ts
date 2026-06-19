@@ -500,7 +500,14 @@ export class SecurityStack extends cdk.Stack {
           sid: 'Ec2DataVolumeDelete',
           actions: ['ec2:DeleteVolume'],
           resources: [`arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:volume/*`],
-          conditions: { StringEquals: { 'ec2:ResourceTag/cc:role': 'data' } },
+          // BOTH tags required: cc:role=data excludes the OS root; cc:project excludes any
+          // unrelated account volume that merely happens to carry cc:role=data (codex P4 round 2).
+          conditions: {
+            StringEquals: {
+              'ec2:ResourceTag/cc:role': 'data',
+              'ec2:ResourceTag/cc:project': 'cc-on-bedrock',
+            },
+          },
         }),
         // ADR-032 Task 6: SSM RunCommand for legacy migration. Split so the AWS-owned document
         // (which has no project tag) is allowed unconditionally, while the *targets* are gated

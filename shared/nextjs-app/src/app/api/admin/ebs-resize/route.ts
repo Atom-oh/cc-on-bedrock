@@ -200,7 +200,29 @@ export async function POST(req: NextRequest) {
         );
       }
     } else if (approved && !targetVolumeId) {
-      console.log(`[admin/ebs-resize] Approved resize for ${userId} (data volume will be resized once provisioned)`);
+      // No data volume yet (pre-migration). Do NOT report this as an applied resize — keep the
+      // request actionable by parking it in `resize_deferred` so it is re-applied after the
+      // user is migrated, instead of silently marking it approved-and-done (codex P4 round 2).
+      await dynamodb.send(new UpdateItemCommand({
+        TableName: USER_VOLUMES_TABLE,
+        Key: { user_id: { S: userId } },
+        UpdateExpression: "SET resizeStatus = :status",
+        ExpressionAttributeValues: { ":status": { S: "resize_deferred" } },
+      })).catch(() => {});
+      console.log(`[admin/ebs-resize] resize for ${userId} DEFERRED — no data volume yet; migrate the user first`);
+      return NextResponse.json({
+        success: true,
+        deferred: true,
+        data: {
+          userId,
+          status: "resize_deferred",
+          requestedSizeGb: item.requestedSizeGb,
+          approvedBy: session.user.email,
+          updatedAt: now,
+          volumeResizeTriggered: false,
+          message: "No persistent data volume yet — resize will apply after the user is migrated (ADR-032).",
+        },
+      });
     }
 
     return NextResponse.json({
