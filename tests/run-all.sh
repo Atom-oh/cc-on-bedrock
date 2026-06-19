@@ -17,6 +17,9 @@ echo "== Local CLI (cc-bedrock-local): syntax + credential_process unit tests ==
 bash -n tools/cc-bedrock-local.sh
 bash tests/unit/test-cc-bedrock-local.sh
 
+echo "== AMI build: ADR-032 cc-data-migrate unit (static safety checks) =="
+bash tests/unit/test-build-ami-datavol.sh
+
 echo "== ADR-026: boundary ⊇ service-allowlist invariant (self-test) =="
 python3 scripts/check-policyset-boundary.py --self-test
 
