@@ -21,3 +21,9 @@ variable "project_prefix" {
   type        = string
   default     = "cc-on-bedrock"
 }
+
+variable "lambda_src_dir" {
+  description = "Path to Lambda source (cdk/lib/lambda) for archive packaging"
+  type        = string
+  default     = "../cdk/lib/lambda"
+}

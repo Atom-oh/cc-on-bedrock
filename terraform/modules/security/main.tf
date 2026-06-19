@@ -71,11 +71,44 @@ resource "aws_cognito_user_pool" "this" {
     string_attribute_constraints {}
   }
 
+  # ADR-022 / parity with CDK custom attributes
+  schema {
+    name                = "department"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+  schema {
+    name                = "budget_exceeded"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+  schema {
+    name                = "storage_type"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+  schema {
+    name                = "dept_manager_sub"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
   # Sign-in aliases
   username_attributes = ["email"]
 
   admin_create_user_config {
     allow_admin_create_user_only = true
+  }
+
+  # ADR-028: JIT-provisioning shim on JIT-creation (POST_CONFIRMATION) and
+  # self-heal on every login (POST_AUTHENTICATION). Fail-open in the handler.
+  lambda_config {
+    post_confirmation   = aws_lambda_function.cognito_provisioner_trigger.arn
+    post_authentication = aws_lambda_function.cognito_provisioner_trigger.arn
   }
 }
 
@@ -562,4 +595,77 @@ resource "aws_iam_role_policy" "dashboard_ec2_devenv" {
       },
     ]
   })
+}
+
+# ---- ADR-028 Cognito provisioner-trigger shim ------------------------------
+# Ported from cdk/lib/02-security-stack.ts CognitoProvisionerTrigger. Async-invokes
+# the UserRoleProvisioner (Stack 08 / local-governance module) by static name —
+# fail-open, so logins are unaffected if the provisioner is absent.
+data "aws_iam_policy_document" "lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+data "archive_file" "cognito_provisioner_trigger" {
+  type        = "zip"
+  source_file = "${var.lambda_src_dir}/cognito-provisioner-trigger.py"
+  output_path = "${path.module}/.build/cognito-provisioner-trigger.zip"
+}
+
+resource "aws_iam_role" "cognito_provisioner_trigger" {
+  name               = "cc-on-bedrock-cognito-provisioner-trigger"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "cognito_provisioner_trigger_basic" {
+  role       = aws_iam_role.cognito_provisioner_trigger.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "cognito_provisioner_trigger_invoke" {
+  name = "invoke-provisioner"
+  role = aws_iam_role.cognito_provisioner_trigger.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:cc-on-bedrock-user-role-provisioner"]
+    }]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "cognito_provisioner_trigger" {
+  name              = "/aws/lambda/cc-on-bedrock-cognito-provisioner-trigger"
+  retention_in_days = 30
+}
+
+resource "aws_lambda_function" "cognito_provisioner_trigger" {
+  function_name    = "cc-on-bedrock-cognito-provisioner-trigger"
+  runtime          = "python3.12"
+  handler          = "cognito-provisioner-trigger.handler"
+  filename         = data.archive_file.cognito_provisioner_trigger.output_path
+  source_code_hash = data.archive_file.cognito_provisioner_trigger.output_base64sha256
+  role             = aws_iam_role.cognito_provisioner_trigger.arn
+  timeout          = 4
+  memory_size      = 128
+  environment {
+    variables = {
+      PROVISIONER_FUNCTION_NAME = "cc-on-bedrock-user-role-provisioner"
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.cognito_provisioner_trigger]
+}
+
+resource "aws_lambda_permission" "cognito_invoke_trigger" {
+  statement_id  = "AllowCognitoInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.cognito_provisioner_trigger.function_name
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = aws_cognito_user_pool.this.arn
 }
