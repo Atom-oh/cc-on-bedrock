@@ -173,3 +173,42 @@ export async function createDataVolume(
 export async function attachDataVolume(instanceId: string, volumeId: string): Promise<void> {
   await ec2.send(new AttachVolumeCommand({ InstanceId: instanceId, VolumeId: volumeId, Device: DATA_DEVICE }));
 }
+
+export interface LaunchPlan {
+  /** born-attached = new volume via RunInstances BDM; reattach = existing volume, attach post-launch. */
+  mode: "born-attached" | "reattach";
+  blockDeviceMappings: ReturnType<typeof dataVolumeBlockDeviceMapping>[];
+  /** reattach → the volume's AZ to pin the launch subnet to; born-attached → null (any subnet). */
+  pinAz: string | null;
+  /** reattach → the volume id to attach + wait for; born-attached → null (resolved post-launch). */
+  expectedVolumeId: string | null;
+}
+
+/**
+ * Pure decision for how to provision the data volume at launch. New user → born-attached
+ * (fresh BDM volume); returning user with an existing volume → reattach, pinned to the
+ * volume's AZ (rule 2). No AWS calls — the caller resolves the subnet/attaches.
+ */
+export function planDataVolumeLaunch(
+  dataVol: DataVolumeRef | null,
+  sizeGb: number = DEFAULT_DATA_SIZE_GB,
+): LaunchPlan {
+  if (!dataVol) {
+    return {
+      mode: "born-attached",
+      blockDeviceMappings: [dataVolumeBlockDeviceMapping(sizeGb)],
+      pinAz: null,
+      expectedVolumeId: null,
+    };
+  }
+  return { mode: "reattach", blockDeviceMappings: [], pinAz: dataVol.az, expectedVolumeId: dataVol.volumeId };
+}
+
+/** Extract the data volume id from a launched instance's block-device mappings (post-born-attached). */
+export function dataVolumeIdFromInstance(
+  blockDeviceMappings: { DeviceName?: string; Ebs?: { VolumeId?: string } }[] | undefined,
+  deviceName: string = DATA_DEVICE,
+): string | null {
+  const m = (blockDeviceMappings ?? []).find((b) => b.DeviceName === deviceName);
+  return m?.Ebs?.VolumeId ?? null;
+}

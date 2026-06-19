@@ -53,6 +53,14 @@ import {
 } from "@aws-sdk/client-secrets-manager";
 import { randomBytes } from "crypto";
 import type { CustomRoute, CustomRoutesRecord } from "@/lib/types";
+import {
+  findDataVolume,
+  resolveSubnetForAz,
+  planDataVolumeLaunch,
+  dataVolumeIdFromInstance,
+  tagDataVolumeAfterLaunch,
+  attachDataVolume,
+} from "@/lib/data-volume";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const ec2Client = new EC2Client({ region });
@@ -329,8 +337,20 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
   const sg = SG_MAP[effectivePolicy];
   const dlp = dlpCodeServerUserData(effectivePolicy);
-  const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
+
+  // ADR-032: provision the persistent /home/coder data volume. A returning user whose
+  // instance was terminated still has a detached data volume — reattach it (pinned to its
+  // AZ to avoid InvalidVolume.ZoneMismatch). A new user gets a born-attached fresh volume.
+  const existingDataVol = await findDataVolume(input.subdomain).catch((e) => {
+    // fail-closed (duplicate volumes) must surface, not silently create a second one.
+    console.error(`[EC2] data-volume lookup failed for ${input.subdomain}:`, e);
+    throw e;
+  });
+  const dataPlan = planDataVolumeLaunch(existingDataVol);
+  const subnet = dataPlan.pinAz
+    ? await resolveSubnetForAz(dataPlan.pinAz)
+    : VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
 
   // Per-user instance profile for individual Bedrock usage tracking
   const instanceProfileName = await ensureUserInstanceProfile(input.subdomain, input.username, input.department);
@@ -348,6 +368,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     MaxCount: 1,
     SubnetId: subnet,
     SecurityGroupIds: sg ? [sg] : undefined,
+    // ADR-032: born-attached persistent data volume (DeleteOnTermination=false) for new
+    // users; empty for reattach (the existing volume is attached after launch).
+    BlockDeviceMappings: dataPlan.blockDeviceMappings.length ? dataPlan.blockDeviceMappings : undefined,
     TagSpecifications: [
       {
         ResourceType: "instance",
@@ -384,6 +407,12 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     UserData: Buffer.from([
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${input.subdomain}" >> /etc/environment`,
+      // ADR-032: on reattach, tell the baked cc-data-migrate unit exactly which volume id
+      // to wait for (closes the attach race). Born-attached leaves this absent — the unit
+      // then mounts/formats the single fresh data volume it discovers on first boot.
+      ...(dataPlan.expectedVolumeId
+        ? [`echo "${dataPlan.expectedVolumeId}" > /etc/cc-data-expected-volume`]
+        : []),
       // Phase 1 (OTel productivity monitoring): per-user identity for OTEL_RESOURCE_ATTRIBUTES.
       // username IS the email (ADR-029 canonical key); without these the entrypoint falls back
       // to "unattributed" and per-user productivity rollups can't be keyed.
@@ -490,6 +519,29 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Wait for running
   const info = await waitForRunning(instanceId);
 
+  // ADR-032: resolve the persistent data volume id + AZ (authoritative reference stored in
+  // DynamoDB). Born-attached → read it off the launched instance's block-device mappings and
+  // re-tag it cc:role=data (RunInstances volume TagSpec can't differentiate root from data).
+  // Reattach → attach the existing volume now (the boot unit waits for it via the hint file).
+  let dataVolumeId: string | undefined = dataPlan.expectedVolumeId ?? undefined;
+  const dataVolumeAz = dataPlan.pinAz ?? undefined;
+  try {
+    if (dataPlan.mode === "reattach" && dataPlan.expectedVolumeId) {
+      await attachDataVolume(instanceId, dataPlan.expectedVolumeId);
+    } else {
+      const desc = await ec2Client.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+      const bdm = desc.Reservations?.[0]?.Instances?.[0]?.BlockDeviceMappings;
+      dataVolumeId = dataVolumeIdFromInstance(bdm) ?? undefined;
+      if (dataVolumeId) {
+        await tagDataVolumeAfterLaunch(dataVolumeId, input.subdomain, input.username, input.department);
+      }
+    }
+  } catch (err) {
+    // Non-fatal: the instance is up; the data volume just isn't fully wired. Surfaced for
+    // operator follow-up rather than failing the whole launch.
+    console.error(`[EC2] data-volume wiring failed for ${input.subdomain} (instance ${instanceId}):`, err);
+  }
+
   // Register routing
   await registerRoute(input.subdomain, info.privateIp);
 
@@ -506,6 +558,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       instanceType: info.instanceType,
       privateIp: info.privateIp,
       status: "running",
+      // ADR-032: authoritative data-volume reference for resize/reattach/cleanup.
+      ...(dataVolumeId ? { dataVolumeId } : {}),
+      ...(dataVolumeAz ? { dataVolumeAz } : {}),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }),
