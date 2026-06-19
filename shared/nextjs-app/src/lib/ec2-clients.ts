@@ -14,6 +14,7 @@ import {
   CreateTagsCommand,
   CreateSnapshotCommand,
   DescribeSnapshotsCommand,
+  DescribeImagesCommand,
   RegisterImageCommand,
   DeregisterImageCommand,
   ModifyInstanceAttributeCommand,
@@ -313,8 +314,21 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Per-user code-server password (Secrets Manager)
   const codeserverPassword = await ensureCodeserverPassword(input.subdomain);
 
+  // Resolve the AMI's actual root device name so the DeleteOnTermination override
+  // below targets the real root volume (ubuntu=/dev/sda1; al2023 may differ).
+  const amiDesc = await ec2Client.send(new DescribeImagesCommand({ ImageIds: [amiId!] }));
+  const rootDeviceName = amiDesc.Images?.[0]?.RootDeviceName ?? "/dev/sda1";
+
   const result = await runInstancesWithIamRetry({
     ImageId: amiId!,
+    // Preserve the per-user root volume on Terminate (not just Stop/Hibernate).
+    // Golden AMIs default the root device to DeleteOnTermination=true; without this
+    // override a Terminate destroys the user's workspace+system state. Mirrors the
+    // Launch Template and the snapshot-restore path (which bake false in).
+    BlockDeviceMappings: [{
+      DeviceName: rootDeviceName,
+      Ebs: { DeleteOnTermination: false },  // size/snapshot inherited from the AMI
+    }],
     IamInstanceProfile: { Name: instanceProfileName },
     InstanceType: tier.type as never,
     MetadataOptions: { HttpTokens: "required", HttpPutResponseHopLimit: 2 },
