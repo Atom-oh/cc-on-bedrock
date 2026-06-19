@@ -440,3 +440,126 @@ resource "aws_iam_policy" "task_permission_boundary" {
     ]
   })
 }
+
+# ---- Dashboard EC2 role: data-infra + EC2 devenv mgmt (ADR-032) -------------
+# Ported from cdk/lib/02-security-stack.ts DashboardDataInfraPolicy + DashboardEc2DevenvPolicy.
+resource "aws_iam_role_policy" "dashboard_data_infra" {
+  name = "data-infra"
+  role = aws_iam_role.dashboard_ec2.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "IamTaskRoleManagement"
+        Effect   = "Allow"
+        Action   = ["iam:CreateRole", "iam:GetRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:TagRole", "iam:DeleteRole"]
+        Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-task-*"]
+      },
+      {
+        Sid      = "SecretsManagerCodeserver"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret", "secretsmanager:GetSecretValue"]
+        Resource = ["arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/codeserver/*"]
+      },
+      {
+        Sid    = "DynamoDBAccess"
+        Effect = "Allow"
+        Action = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchGetItem"]
+        Resource = [
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.project_prefix}-usage",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.project_prefix}-usage/*",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-department-budgets",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-approval-requests",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-user-budgets",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.project_prefix}-limits",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dept-mcp-config",
+        ]
+      },
+      {
+        Sid      = "IamLocalUserRoleReset"
+        Effect   = "Allow"
+        Action   = ["iam:DeleteRolePolicy", "iam:GetRolePolicy"]
+        Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-local-user-*"]
+      },
+      {
+        Sid      = "RoutingTableAccess"
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem", "dynamodb:DeleteItem"]
+        Resource = ["arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-routing-table"]
+      },
+      {
+        Sid      = "EcsTaskDefRegistration"
+        Effect   = "Allow"
+        Action   = ["ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition", "ecs:DescribeClusters"]
+        Resource = ["*"]
+      },
+      {
+        Sid      = "LambdaInvoke"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:cc-on-bedrock-*"]
+      },
+      {
+        Sid      = "KmsDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
+        Resource = [aws_kms_key.this.arn]
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "dashboard_ec2_devenv" {
+  name = "ec2-devenv"
+  role = aws_iam_role.dashboard_ec2.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Ec2DevenvInstances"
+        Effect = "Allow"
+        Action = [
+          "ec2:RunInstances", "ec2:StartInstances", "ec2:StopInstances",
+          "ec2:TerminateInstances", "ec2:DescribeInstances", "ec2:CreateTags",
+          "ec2:ModifyInstanceAttribute", "ec2:ModifyNetworkInterfaceAttribute",
+          "ec2:DescribeVolumes", "ec2:DescribeSubnets",
+        ]
+        Resource = ["*"]
+      },
+      {
+        Sid       = "Ec2DataVolumeCreate"
+        Effect    = "Allow"
+        Action    = ["ec2:CreateVolume"]
+        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*"]
+        Condition = { StringEquals = { "aws:RequestTag/cc:project" = "cc-on-bedrock" } }
+      },
+      {
+        Sid       = "Ec2DataVolumeManage"
+        Effect    = "Allow"
+        Action    = ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:ModifyVolume"]
+        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*", "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*"]
+        Condition = { StringEquals = { "ec2:ResourceTag/cc:project" = "cc-on-bedrock" } }
+      },
+      {
+        Sid       = "Ec2DataVolumeDelete"
+        Effect    = "Allow"
+        Action    = ["ec2:DeleteVolume"]
+        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*"]
+        Condition = { StringEquals = { "ec2:ResourceTag/cc:role" = "data", "ec2:ResourceTag/cc:project" = "cc-on-bedrock" } }
+      },
+      {
+        Sid      = "Ec2DataVolumeSsmDocument"
+        Effect   = "Allow"
+        Action   = ["ssm:SendCommand"]
+        Resource = ["arn:aws:ssm:${data.aws_region.current.name}::document/AWS-RunShellScript"]
+      },
+      {
+        Sid       = "Ec2DataVolumeSsmTargets"
+        Effect    = "Allow"
+        Action    = ["ssm:SendCommand"]
+        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*"]
+        Condition = { StringEquals = { "ssm:resourceTag/cc:project" = "cc-on-bedrock" } }
+      },
+    ]
+  })
+}
