@@ -42,3 +42,11 @@ output "dashboard_ec2_role_arn" {
 output "dashboard_ec2_instance_profile_name" {
   value = aws_iam_instance_profile.dashboard_ec2.name
 }
+
+output "task_permission_boundary_arn" {
+  value = aws_iam_policy.task_permission_boundary.arn
+}
+
+output "task_permission_boundary_name" {
+  value = aws_iam_policy.task_permission_boundary.name
+}

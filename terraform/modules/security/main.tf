@@ -299,3 +299,144 @@ resource "aws_iam_instance_profile" "dashboard_ec2" {
   name = "cc-on-bedrock-dashboard-ec2"
   role = aws_iam_role.dashboard_ec2.name
 }
+
+# ---- ADR-026 Task Permission Boundary --------------------------------------
+# Ported from cdk/lib/02-security-stack.ts (TaskPermissionBoundary). The ceiling
+# for per-user task/local roles: boundary >= any role inline policy (else effective
+# perms = empty), and boundary >= the request-validator service allowlist (T6 CI check).
+resource "aws_iam_policy" "task_permission_boundary" {
+  name        = "${var.project_prefix}-task-boundary"
+  description = "ADR-026 permission boundary ceiling for per-user roles"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockClaude"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
+          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
+          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+        ]
+      },
+      {
+        Sid    = "S3Access"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+        Resource = [
+          "arn:aws:s3:::cc-on-bedrock-user-data-${data.aws_caller_identity.current.account_id}",
+          "arn:aws:s3:::cc-on-bedrock-user-data-${data.aws_caller_identity.current.account_id}/*",
+          "arn:aws:s3:::${var.project_prefix}-deploy-${data.aws_caller_identity.current.account_id}",
+          "arn:aws:s3:::${var.project_prefix}-deploy-${data.aws_caller_identity.current.account_id}/*",
+        ]
+      },
+      {
+        Sid      = "KmsDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
+        Resource = [aws_kms_key.this.arn]
+      },
+      {
+        Sid      = "CloudWatchMetrics"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:PutMetricData"]
+        Resource = ["*"]
+      },
+      {
+        Sid      = "CloudWatchLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:CreateLogGroup"]
+        Resource = ["arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/cc-on-bedrock/*"]
+      },
+      {
+        Sid      = "EcrAuth"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = ["*"]
+      },
+      {
+        Sid      = "EcrPull"
+        Effect   = "Allow"
+        Action   = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
+        Resource = ["arn:aws:ecr:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:repository/cc-on-bedrock/*"]
+      },
+      {
+        Sid      = "SsmMessages"
+        Effect   = "Allow"
+        Action   = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"]
+        Resource = ["*"]
+      },
+      {
+        Sid      = "SecretsRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = ["arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/*"]
+      },
+      {
+        Sid      = "AgentCoreGateway"
+        Effect   = "Allow"
+        Action   = ["bedrock-agentcore:InvokeGateway"]
+        Resource = ["arn:aws:bedrock-agentcore:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:gateway/*"]
+      },
+      {
+        Sid      = "DynamoDbMcpConfig"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:Query"]
+        Resource = ["arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dept-mcp-config"]
+      },
+      {
+        Sid      = "GrantCeilingSqs"
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:ChangeMessageVisibility"]
+        Resource = ["arn:aws:sqs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"]
+      },
+      {
+        Sid      = "GrantCeilingSns"
+        Effect   = "Allow"
+        Action   = ["sns:Publish", "sns:Subscribe", "sns:Unsubscribe", "sns:GetTopicAttributes"]
+        Resource = ["arn:aws:sns:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"]
+      },
+      {
+        Sid    = "GrantCeilingDynamoDb"
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem", "dynamodb:DescribeTable"]
+        Resource = [
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/*",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/*/index/*",
+        ]
+      },
+      {
+        Sid      = "GrantCeilingLambda"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction", "lambda:GetFunction"]
+        Resource = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:*"]
+      },
+      {
+        Sid      = "GrantCeilingStepFunctions"
+        Effect   = "Allow"
+        Action   = ["states:StartExecution", "states:StopExecution", "states:DescribeExecution", "states:ListExecutions"]
+        Resource = ["arn:aws:states:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"]
+      },
+      {
+        Sid    = "GrantCeilingEks"
+        Effect = "Allow"
+        Action = ["eks:DescribeCluster", "eks:ListNodegroups", "eks:DescribeNodegroup"]
+        Resource = [
+          "arn:aws:eks:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:cluster/*",
+          "arn:aws:eks:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:nodegroup/*",
+        ]
+      },
+      {
+        Sid    = "GrantCeilingReadOnly"
+        Effect = "Allow"
+        Action = [
+          "eks:ListClusters", "sqs:ListQueues", "sns:ListTopics", "sns:ListSubscriptions",
+          "ec2:Describe*", "s3:ListAllMyBuckets", "states:ListStateMachines",
+          "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics",
+        ]
+        Resource = ["*"]
+      },
+    ]
+  })
+}
