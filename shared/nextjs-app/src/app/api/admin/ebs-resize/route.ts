@@ -10,6 +10,8 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { EC2Client, ModifyVolumeCommand } from "@aws-sdk/client-ec2";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { getDataVolumeId } from "@/lib/ec2-clients";
+import { resizeTargetVolumeId } from "@/lib/data-volume";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const USER_VOLUMES_TABLE = process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes";
@@ -157,16 +159,31 @@ export async function POST(req: NextRequest) {
       })
     );
 
+    // ADR-032: resize the persistent DATA volume, never the OS root. Prefer the authoritative
+    // dataVolumeId; fall back to the legacy stored volumeId for not-yet-migrated instances.
+    let targetVolumeId: string | null = item.volumeId ?? null;
+    try {
+      const dataVolumeId = await getDataVolumeId(userId);
+      targetVolumeId = resizeTargetVolumeId(dataVolumeId, item.volumeId);
+    } catch (resolveErr) {
+      // fail-closed (duplicate data volumes) — refuse to guess a resize target.
+      console.error("[admin/ebs-resize] data-volume resolve failed:", resolveErr);
+      return NextResponse.json(
+        { success: false, error: "Could not resolve a unique data volume to resize" },
+        { status: 409 }
+      );
+    }
+
     // If approved, call ec2:ModifyVolume directly to resize
-    if (approved && item.volumeId) {
+    if (approved && targetVolumeId) {
       try {
         await ec2.send(
           new ModifyVolumeCommand({
-            VolumeId: item.volumeId,
+            VolumeId: targetVolumeId,
             Size: item.requestedSizeGb,
           })
         );
-        console.log(`[admin/ebs-resize] ModifyVolume ${item.volumeId} → ${item.requestedSizeGb}GB for ${userId}`);
+        console.log(`[admin/ebs-resize] ModifyVolume ${targetVolumeId} → ${item.requestedSizeGb}GB for ${userId}`);
       } catch (ec2Err) {
         console.error("[admin/ebs-resize] ModifyVolume failed:", ec2Err);
         // Rollback DDB status to resize_pending so admin can retry
@@ -181,8 +198,8 @@ export async function POST(req: NextRequest) {
           { status: 500 }
         );
       }
-    } else if (approved && !item.volumeId) {
-      console.log(`[admin/ebs-resize] Approved resize for ${userId} (volume will be resized on next start)`);
+    } else if (approved && !targetVolumeId) {
+      console.log(`[admin/ebs-resize] Approved resize for ${userId} (data volume will be resized once provisioned)`);
     }
 
     return NextResponse.json({
@@ -193,7 +210,7 @@ export async function POST(req: NextRequest) {
         requestedSizeGb: item.requestedSizeGb,
         approvedBy: session.user.email,
         updatedAt: now,
-        volumeResizeTriggered: approved && !!item.volumeId,
+        volumeResizeTriggered: approved && !!targetVolumeId,
       },
     });
   } catch (err) {

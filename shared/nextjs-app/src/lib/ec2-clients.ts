@@ -60,6 +60,7 @@ import {
   dataVolumeIdFromInstance,
   tagDataVolumeAfterLaunch,
   attachDataVolume,
+  waitForVolumeAvailable,
 } from "@/lib/data-volume";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
@@ -640,6 +641,9 @@ export async function terminateInstance(subdomain: string): Promise<void> {
     }));
   } catch { /* may not have protection */ }
 
+  // ADR-032: the persistent /home/coder data volume has DeleteOnTermination=false, so it
+  // SURVIVES this terminate (becomes `available`) and is reattached by tag on the next
+  // startInstance. Only an explicit admin "complete delete" removes it (deleteUserDataVolume).
   await ec2Client.send(new TerminateInstancesCommand({
     InstanceIds: [record.instanceId],
   }));
@@ -651,8 +655,22 @@ export async function terminateInstance(subdomain: string): Promise<void> {
 }
 
 /**
- * Switch a user's instance OS. Snapshots the current root EBS for recovery,
- * terminates the old instance, and creates a new one with the target OS AMI.
+ * ADR-032: resolve the persistent data volume id for a subdomain — the authoritative
+ * DynamoDB `dataVolumeId` first, then a tag lookup (fail-closed on duplicates). Used by the
+ * EBS-resize routes to retarget ModifyVolume at the data volume instead of the OS root.
+ */
+export async function getDataVolumeId(subdomain: string): Promise<string | null> {
+  const record = await getUserInstance(subdomain);
+  if (record?.dataVolumeId) return record.dataVolumeId;
+  const found = await findDataVolume(subdomain);
+  return found?.volumeId ?? null;
+}
+
+/**
+ * Switch a user's instance OS. The persistent /home/coder data volume (ADR-032) is detached
+ * with the old instance and reattached to the new one, so the OS swap is data-loss-free; the
+ * root snapshot is kept only for OS rollback. Recreation goes through startInstance, whose
+ * reattach path pins the new instance to the data volume's AZ.
  */
 export async function switchOs(
   subdomain: string,
@@ -738,6 +756,15 @@ export async function switchOs(
       DisableApiTermination: { Value: false },
     }));
   } catch { /* may not have protection */ }
+  // ADR-032: capture the data volume id BEFORE terminate so we can wait for it to fully
+  // detach. The instance is already stopped (step 2), so terminate detaches the volume
+  // cleanly — no live unmount/corruption. We must wait for `available` before the new
+  // instance's reattach, else AttachVolume hits the volume mid-`detaching` (codex/agy MAJOR).
+  const dataVolId =
+    record.dataVolumeId ??
+    dataVolumeIdFromInstance(instance.BlockDeviceMappings as { DeviceName?: string; Ebs?: { VolumeId?: string } }[]) ??
+    undefined;
+
   await ec2Client.send(new TerminateInstancesCommand({
     InstanceIds: [record.instanceId],
   }));
@@ -746,6 +773,11 @@ export async function switchOs(
     TableName: INSTANCE_TABLE,
     Key: marshall({ user_id: subdomain }),
   }));
+
+  if (dataVolId) {
+    const ok = await waitForVolumeAvailable(dataVolId);
+    if (!ok) console.warn(`[EC2] data volume ${dataVolId} not 'available' before relaunch — reattach may retry`);
+  }
 
   // 7. Create new instance with new OS
   console.log(`[EC2] Creating new ${newOs} instance for ${subdomain}`);
@@ -1403,6 +1435,8 @@ interface UserInstanceRecord {
   department?: string;
   securityPolicy?: string;
   containerOs?: string;
+  dataVolumeId?: string;  // ADR-032: authoritative persistent data-volume reference
+  dataVolumeAz?: string;
   [key: string]: unknown;
 }
 

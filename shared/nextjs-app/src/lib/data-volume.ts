@@ -13,6 +13,8 @@ import {
   DescribeSubnetsCommand,
   CreateVolumeCommand,
   AttachVolumeCommand,
+  DetachVolumeCommand,
+  DeleteVolumeCommand,
   CreateTagsCommand,
 } from "@aws-sdk/client-ec2";
 
@@ -211,4 +213,53 @@ export function dataVolumeIdFromInstance(
 ): string | null {
   const m = (blockDeviceMappings ?? []).find((b) => b.DeviceName === deviceName);
   return m?.Ebs?.VolumeId ?? null;
+}
+
+/**
+ * Pure precedence for the EBS-resize target (ADR-032 rule 7): the persistent DATA volume,
+ * never the OS root. Falls back to a legacy volume id only when no data volume is known yet
+ * (pre-migration instances), preserving the old behavior without regression.
+ */
+export function resizeTargetVolumeId(
+  dataVolumeId: string | null | undefined,
+  legacyVolumeId: string | null | undefined,
+): string | null {
+  return dataVolumeId ?? legacyVolumeId ?? null;
+}
+
+/** Poll until a volume reaches `available` (after detach/terminate) — avoids attach-on-detaching races. */
+export async function waitForVolumeAvailable(
+  volumeId: string,
+  attempts: number = 60,
+  delayMs: number = 5000,
+): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
+      if (res.Volumes?.[0]?.State === "available") return true;
+    } catch {
+      /* transient — keep polling */
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
+/**
+ * Orphan cleanup for admin "complete delete" (ADR-024/032 rule 9): detach → wait available →
+ * (optional) final snapshot is left to the caller → DeleteVolume. Returns false (no delete)
+ * if the volume never reaches `available`, so a still-attached volume is never force-deleted.
+ */
+export async function deleteDataVolume(volumeId: string, instanceId?: string): Promise<boolean> {
+  if (instanceId) {
+    try {
+      await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId, InstanceId: instanceId }));
+    } catch {
+      /* may already be detached */
+    }
+  }
+  const available = await waitForVolumeAvailable(volumeId);
+  if (!available) return false;
+  await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
+  return true;
 }
