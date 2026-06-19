@@ -469,8 +469,39 @@ export class SecurityStack extends cdk.Stack {
             'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
             'ec2:ModifyInstanceAttribute', 'ec2:ModifyNetworkInterfaceAttribute',
             'ec2:ModifyVolume', 'ec2:DescribeVolumes',
+            // ADR-032: AZ resolution for data-volume reattach (Describe* has no resource-level scoping).
+            'ec2:DescribeSubnets',
           ],
           resources: ['*'],
+        }),
+        // ADR-032: persistent data-volume lifecycle, action-split with tag conditions
+        // (least-privilege per the consensus gate; ADR-026 boundary unaffected — this is the
+        // dashboard role, not the per-user task role).
+        new iam.PolicyStatement({
+          sid: 'Ec2DataVolumeCreate',
+          actions: ['ec2:CreateVolume'],
+          resources: [`arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:volume/*`],
+          conditions: { StringEquals: { 'aws:RequestTag/cc:project': 'cc-on-bedrock' } },
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DataVolumeManage',
+          actions: ['ec2:AttachVolume', 'ec2:DetachVolume', 'ec2:DeleteVolume'],
+          resources: [
+            `arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:volume/*`,
+            `arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/*`,
+          ],
+          conditions: { StringEquals: { 'ec2:ResourceTag/cc:project': 'cc-on-bedrock' } },
+        }),
+        // ADR-032 Task 6: out-of-band migration of legacy instances via SSM RunCommand,
+        // scoped to the RunShellScript document and project-tagged instances.
+        new iam.PolicyStatement({
+          sid: 'Ec2DataVolumeSsmMigrate',
+          actions: ['ssm:SendCommand'],
+          resources: [
+            `arn:aws:ssm:${cdk.Aws.REGION}::document/AWS-RunShellScript`,
+            `arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/*`,
+          ],
+          conditions: { StringEquals: { 'ssm:resourceTag/cc:project': 'cc-on-bedrock' } },
         }),
         new iam.PolicyStatement({
           sid: 'Ec2DevenvDynamoDB',
