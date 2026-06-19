@@ -527,21 +527,24 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Reattach → attach the existing volume now (the boot unit waits for it via the hint file).
   let dataVolumeId: string | undefined = dataPlan.expectedVolumeId ?? undefined;
   const dataVolumeAz = dataPlan.pinAz ?? undefined;
-  try {
-    if (dataPlan.mode === "reattach" && dataPlan.expectedVolumeId) {
-      await attachDataVolume(instanceId, dataPlan.expectedVolumeId);
-    } else {
+  if (dataPlan.mode === "reattach" && dataPlan.expectedVolumeId) {
+    // FATAL on failure: the user's existing /home/coder lives on this volume. Booting without
+    // it would silently land them on the ephemeral root and lose data on the next terminate —
+    // far worse than a failed launch the user can retry (codex P4 CRITICAL).
+    await attachDataVolume(instanceId, dataPlan.expectedVolumeId);
+  } else {
+    // Born-attached: the volume already exists (in the RunInstances BDM), so a tagging failure
+    // is non-fatal — it leaves the volume under-tagged for operator follow-up, not lost.
+    try {
       const desc = await ec2Client.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
       const bdm = desc.Reservations?.[0]?.Instances?.[0]?.BlockDeviceMappings;
       dataVolumeId = dataVolumeIdFromInstance(bdm) ?? undefined;
       if (dataVolumeId) {
         await tagDataVolumeAfterLaunch(dataVolumeId, input.subdomain, input.username, input.department);
       }
+    } catch (err) {
+      console.error(`[EC2] born-attached data-volume tagging failed for ${input.subdomain} (instance ${instanceId}):`, err);
     }
-  } catch (err) {
-    // Non-fatal: the instance is up; the data volume just isn't fully wired. Surfaced for
-    // operator follow-up rather than failing the whole launch.
-    console.error(`[EC2] data-volume wiring failed for ${input.subdomain} (instance ${instanceId}):`, err);
   }
 
   // Register routing
@@ -804,7 +807,15 @@ export async function switchOs(
 
   if (dataVolId) {
     const ok = await waitForVolumeAvailable(dataVolId);
-    if (!ok) console.warn(`[EC2] data volume ${dataVolId} not 'available' before relaunch — reattach may retry`);
+    if (!ok) {
+      // Do NOT relaunch: startInstance's reattach would race the still-`detaching` volume and
+      // its AttachVolume would fail. Surface it so the OS switch can be retried cleanly
+      // (the DynamoDB record was deleted; the data volume is preserved and reattaches next start).
+      throw new Error(
+        `OS switch aborted: data volume ${dataVolId} did not reach 'available' after terminate. ` +
+          `The volume is preserved; retry the switch or start the instance to reattach it.`,
+      );
+    }
   }
 
   // 7. Create new instance with new OS

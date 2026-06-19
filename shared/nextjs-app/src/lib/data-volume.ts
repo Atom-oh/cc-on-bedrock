@@ -176,6 +176,24 @@ export async function attachDataVolume(instanceId: string, volumeId: string): Pr
   await ec2.send(new AttachVolumeCommand({ InstanceId: instanceId, VolumeId: volumeId, Device: DATA_DEVICE }));
 }
 
+/**
+ * Idempotent attach: attach the volume, but tolerate the "already attached to THIS instance"
+ * case (re-run / reused volume). Any other failure (e.g. attached elsewhere, AZ mismatch) is
+ * fatal — we must never proceed believing the data volume is attached when it is not.
+ */
+export async function ensureDataVolumeAttached(instanceId: string, volumeId: string): Promise<void> {
+  try {
+    await attachDataVolume(instanceId, volumeId);
+  } catch (err) {
+    const res = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
+    const attached = (res.Volumes?.[0] as { Attachments?: { InstanceId?: string }[] } | undefined)?.Attachments?.some(
+      (a) => a.InstanceId === instanceId,
+    );
+    if (attached) return; // already attached to this instance — idempotent no-op
+    throw err;
+  }
+}
+
 export interface LaunchPlan {
   /** born-attached = new volume via RunInstances BDM; reattach = existing volume, attach post-launch. */
   mode: "born-attached" | "reattach";
@@ -216,15 +234,12 @@ export function dataVolumeIdFromInstance(
 }
 
 /**
- * Pure precedence for the EBS-resize target (ADR-032 rule 7): the persistent DATA volume,
- * never the OS root. Falls back to a legacy volume id only when no data volume is known yet
- * (pre-migration instances), preserving the old behavior without regression.
+ * Pure resolution of the EBS-resize target (ADR-032 rule 7): the persistent DATA volume ONLY,
+ * never the OS root. Returns null for a not-yet-migrated instance (no data volume) — the caller
+ * then defers the resize (and should migrate first) rather than silently growing the root disk.
  */
-export function resizeTargetVolumeId(
-  dataVolumeId: string | null | undefined,
-  legacyVolumeId: string | null | undefined,
-): string | null {
-  return dataVolumeId ?? legacyVolumeId ?? null;
+export function resizeTargetVolumeId(dataVolumeId: string | null | undefined): string | null {
+  return dataVolumeId ?? null;
 }
 
 /** Pure: a volume is safe to act on (attach/delete) only once it reports `available`. */

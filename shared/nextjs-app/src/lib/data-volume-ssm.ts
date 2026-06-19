@@ -10,7 +10,7 @@ import { EC2Client, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
 import { SSMClient, SendCommandCommand } from "@aws-sdk/client-ssm";
 import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
-import { createDataVolume, attachDataVolume, findDataVolume } from "@/lib/data-volume";
+import { createDataVolume, ensureDataVolumeAttached, findDataVolume, waitForVolumeAvailable } from "@/lib/data-volume";
 import { dataVolumeMigrateScript } from "@/lib/data-volume-userdata";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
@@ -76,14 +76,14 @@ export async function migrateLegacyInstance(
     }
   } else {
     volumeId = await createDataVolume(az, subdomain, username, department);
+    // A freshly created volume must reach `available` before it can be attached.
+    const ready = await waitForVolumeAvailable(volumeId, 30, 2000);
+    if (!ready) throw new Error(`created data volume ${volumeId} did not reach 'available'`);
   }
 
-  try {
-    await attachDataVolume(instanceId, volumeId);
-  } catch (err) {
-    // Already attached is fine; anything else is fatal for this migration.
-    console.warn(`[ssm-migrate] attach ${volumeId}→${instanceId} (may already be attached):`, err);
-  }
+  // FATAL on failure (idempotent for already-attached-to-this-instance): we must not record
+  // the volume in DynamoDB or run the migrate command unless the volume is truly attached.
+  await ensureDataVolumeAttached(instanceId, volumeId);
 
   await ddb.send(
     new UpdateItemCommand({

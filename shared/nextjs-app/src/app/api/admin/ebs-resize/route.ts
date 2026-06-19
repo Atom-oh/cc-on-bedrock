@@ -159,12 +159,13 @@ export async function POST(req: NextRequest) {
       })
     );
 
-    // ADR-032: resize the persistent DATA volume, never the OS root. Prefer the authoritative
-    // dataVolumeId; fall back to the legacy stored volumeId for not-yet-migrated instances.
-    let targetVolumeId: string | null = item.volumeId ?? null;
+    // ADR-032: resize the persistent DATA volume ONLY, never the OS root. A not-yet-migrated
+    // instance resolves to null → the resize is deferred (the user must be migrated first)
+    // rather than silently growing the root disk.
+    let targetVolumeId: string | null = null;
     try {
       const dataVolumeId = await getDataVolumeId(userId);
-      targetVolumeId = resizeTargetVolumeId(dataVolumeId, item.volumeId);
+      targetVolumeId = resizeTargetVolumeId(dataVolumeId);
     } catch (resolveErr) {
       // fail-closed (duplicate data volumes) — refuse to guess a resize target.
       console.error("[admin/ebs-resize] data-volume resolve failed:", resolveErr);

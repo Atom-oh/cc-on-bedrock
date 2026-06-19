@@ -202,10 +202,12 @@ DEV=""
 ROOT_DEV=$(findmnt -no SOURCE / 2>/dev/null | sed "s/p\{0,1\}[0-9]*$//")
 for i in $(seq 1 60); do
   if [ -n "$EXPECT_VOL" ]; then
+    # Reattach: wait ONLY for the expected volume by id. No generic fallback here — picking the
+    # first non-root disk could mkfs an unrelated volume before the expected one attaches.
     SER=$(echo "$EXPECT_VOL" | tr -d "-")
     [ -e "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$SER" ] && DEV=$(readlink -f "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$SER")
-  fi
-  if [ -z "$DEV" ]; then
+  else
+    # Born-attached first boot: no expected id known — take the single non-root data disk.
     for d in /dev/nvme*n1; do
       [ -b "$d" ] || continue
       [ "$d" = "$ROOT_DEV" ] && continue
@@ -221,7 +223,7 @@ if ! blkid -L "$LABEL" >/dev/null 2>&1; then
   mkfs.ext4 -L "$LABEL" "$DEV" || { echo "cc-data: mkfs failed — fail-safe"; exit 0; }
 fi
 mkdir -p "$TMP"
-mount "$DEV" "$TMP" 2>/dev/null || mount LABEL="$LABEL" "$TMP" 2>/dev/null || { echo "cc-data: temp mount failed — fail-safe"; exit 0; }
+mount "$DEV" "$TMP" 2>/dev/null || { echo "cc-data: temp mount of $DEV failed — fail-safe"; exit 0; }
 if [ ! -f "$TMP/.cc-data-volume" ]; then
   [ -d "$MOUNT" ] && { rsync -aXH --numeric-ids "$MOUNT"/ "$TMP"/ || { umount "$TMP"; echo "cc-data: rsync failed — fail-safe"; exit 0; }; }
   touch "$TMP/.cc-data-volume"; sync; umount "$TMP"
@@ -232,7 +234,7 @@ else
   umount "$TMP"
 fi
 grep -q "LABEL=$LABEL" /etc/fstab 2>/dev/null || echo "LABEL=CCDATA /home/coder ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" >> /etc/fstab
-mount "$MOUNT" 2>/dev/null || mount LABEL="$LABEL" "$MOUNT" || { echo "cc-data: final mount failed — fail-safe"; exit 0; }
+mount "$DEV" "$MOUNT" 2>/dev/null || mount "$MOUNT" || { echo "cc-data: final mount of $DEV failed — fail-safe"; exit 0; }
 resize2fs "$DEV" 2>/dev/null || true
 chown coder:coder "$MOUNT" 2>/dev/null || true
 echo "cc-data: $MOUNT on persistent data volume"
@@ -266,7 +268,13 @@ COMMAND_ID=$(aws ssm send-command \
   --output text \
   --region "$REGION")
 aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
-echo "  cc-data-migrate installed"
+# Verify the install actually succeeded — never publish an AMI missing the migration unit.
+DV_STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query 'Status' --output text --region "$REGION" 2>/dev/null || echo "Unknown")
+if [ "$DV_STATUS" != "Success" ]; then
+  echo "ERROR: cc-data-migrate install did not succeed (status=$DV_STATUS) — aborting AMI build" >&2
+  exit 1
+fi
+echo "  cc-data-migrate installed (status=$DV_STATUS)"
 
 # OS-specific EC2 setup (SSM agent, CWAgent, code-server, hibernation)
 echo "Running EC2-specific setup ($OS_TYPE)..."

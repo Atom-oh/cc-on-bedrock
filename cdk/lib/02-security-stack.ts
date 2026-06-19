@@ -468,7 +468,7 @@ export class SecurityStack extends cdk.Stack {
             'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
             'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
             'ec2:ModifyInstanceAttribute', 'ec2:ModifyNetworkInterfaceAttribute',
-            'ec2:ModifyVolume', 'ec2:DescribeVolumes',
+            'ec2:DescribeVolumes',
             // ADR-032: AZ resolution for data-volume reattach (Describe* has no resource-level scoping).
             'ec2:DescribeSubnets',
           ],
@@ -483,24 +483,37 @@ export class SecurityStack extends cdk.Stack {
           resources: [`arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:volume/*`],
           conditions: { StringEquals: { 'aws:RequestTag/cc:project': 'cc-on-bedrock' } },
         }),
+        // Attach/Detach/Modify touch both the volume and the instance; the instance carries
+        // cc:project (not cc:role), so these are gated on cc:project.
         new iam.PolicyStatement({
           sid: 'Ec2DataVolumeManage',
-          actions: ['ec2:AttachVolume', 'ec2:DetachVolume', 'ec2:DeleteVolume'],
+          actions: ['ec2:AttachVolume', 'ec2:DetachVolume', 'ec2:ModifyVolume'],
           resources: [
             `arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:volume/*`,
             `arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/*`,
           ],
           conditions: { StringEquals: { 'ec2:ResourceTag/cc:project': 'cc-on-bedrock' } },
         }),
-        // ADR-032 Task 6: out-of-band migration of legacy instances via SSM RunCommand,
-        // scoped to the RunShellScript document and project-tagged instances.
+        // DeleteVolume is the only destructive action — scope it to cc:role=data so the OS
+        // ROOT volume (which has cc:project but NOT cc:role) can NEVER be deleted (codex P4).
         new iam.PolicyStatement({
-          sid: 'Ec2DataVolumeSsmMigrate',
+          sid: 'Ec2DataVolumeDelete',
+          actions: ['ec2:DeleteVolume'],
+          resources: [`arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:volume/*`],
+          conditions: { StringEquals: { 'ec2:ResourceTag/cc:role': 'data' } },
+        }),
+        // ADR-032 Task 6: SSM RunCommand for legacy migration. Split so the AWS-owned document
+        // (which has no project tag) is allowed unconditionally, while the *targets* are gated
+        // to project-tagged instances (codex P4 — a single tag condition would mis-scope the doc).
+        new iam.PolicyStatement({
+          sid: 'Ec2DataVolumeSsmDocument',
           actions: ['ssm:SendCommand'],
-          resources: [
-            `arn:aws:ssm:${cdk.Aws.REGION}::document/AWS-RunShellScript`,
-            `arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/*`,
-          ],
+          resources: [`arn:aws:ssm:${cdk.Aws.REGION}::document/AWS-RunShellScript`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DataVolumeSsmTargets',
+          actions: ['ssm:SendCommand'],
+          resources: [`arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/*`],
           conditions: { StringEquals: { 'ssm:resourceTag/cc:project': 'cc-on-bedrock' } },
         }),
         new iam.PolicyStatement({

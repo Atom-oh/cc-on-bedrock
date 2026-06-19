@@ -78,8 +78,9 @@ fi
 
 # Stage on a temp mount and verify BEFORE touching the original /home/coder.
 mkdir -p "$TMP"
-mount "$DEV" "$TMP" 2>/dev/null || mount LABEL="$LABEL" "$TMP" 2>/dev/null || {
-  echo "cc-data: temp mount failed — fail-safe, keeping root $MOUNT"; exit 0; }
+# Mount the RESOLVED device only — never a global LABEL fallback that could bind a different
+# CCDATA volume than the one we resolved by id (codex P4).
+mount "$DEV" "$TMP" 2>/dev/null || { echo "cc-data: temp mount of $DEV failed — fail-safe, keeping root $MOUNT"; exit 0; }
 
 if [ ! -f "$TMP/.cc-data-volume" ]; then
   # Fresh volume: migrate the existing root home into it, verify, then mark complete.
@@ -100,10 +101,14 @@ else
   umount "$TMP"
 fi
 
-# Persist mount via fstab (nofail so a future absent volume never blocks boot), then mount.
+# Persist mount via fstab (nofail so a future absent volume never blocks boot), then mount the
+# resolved device. (fstab keeps LABEL=CCDATA for reboot persistence — stable per-volume.)
 grep -q "LABEL=$LABEL" /etc/fstab 2>/dev/null || echo "${FSTAB_LINE}" >> /etc/fstab
-mount "$MOUNT" 2>/dev/null || mount LABEL="$LABEL" "$MOUNT" || {
-  echo "cc-data: final mount failed — fail-safe"; exit 0; }
+mount "$DEV" "$MOUNT" 2>/dev/null || mount "$MOUNT" || {
+  echo "cc-data: final mount of $DEV failed — fail-safe"; exit 0; }
+# Grow the filesystem to the volume after a ModifyVolume resize (raw ext4 → resize2fs direct,
+# never growpart). No-op when already at size.
+resize2fs "$DEV" 2>/dev/null || true
 chown coder:coder "$MOUNT" 2>/dev/null || true
 echo "cc-data: $MOUNT is now on persistent data volume $EXPECT_VOL"
 exit 0
