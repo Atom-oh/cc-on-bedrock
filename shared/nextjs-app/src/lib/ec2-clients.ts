@@ -61,6 +61,7 @@ import {
   tagDataVolumeAfterLaunch,
   attachDataVolume,
   waitForVolumeAvailable,
+  deleteDataVolume,
 } from "@/lib/data-volume";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
@@ -652,6 +653,33 @@ export async function terminateInstance(subdomain: string): Promise<void> {
     TableName: INSTANCE_TABLE,
     Key: marshall({ user_id: subdomain }),
   }));
+}
+
+/**
+ * ADR-032 rule 9 (orphan cleanup, pairs with ADR-024 Cognito deletion): permanently delete a
+ * user's persistent data volume on COMPLETE account deletion. Detaches, waits for `available`,
+ * deletes, then clears the DynamoDB reference. Returns false if the volume could not be safely
+ * deleted (never force-deletes a still-attached volume). NOT called by ordinary terminate.
+ */
+export async function deleteUserDataVolume(subdomain: string): Promise<boolean> {
+  const record = await getUserInstance(subdomain);
+  const volumeId = record?.dataVolumeId ?? (await findDataVolume(subdomain))?.volumeId ?? null;
+  if (!volumeId) return false;
+  const instanceId = record?.instanceId;
+  const deleted = await deleteDataVolume(volumeId, instanceId);
+  if (deleted) {
+    try {
+      await ddbClient.send(new UpdateItemCommand({
+        TableName: INSTANCE_TABLE,
+        Key: marshall({ user_id: subdomain }),
+        UpdateExpression: "REMOVE dataVolumeId, dataVolumeAz",
+      }));
+    } catch (e) {
+      console.warn(`[EC2] data volume ${volumeId} deleted but DynamoDB clear failed for ${subdomain}:`, e);
+    }
+    console.log(`[EC2] deleted persistent data volume ${volumeId} for ${subdomain} (complete delete)`);
+  }
+  return deleted;
 }
 
 /**

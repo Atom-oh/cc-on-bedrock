@@ -227,6 +227,11 @@ export function resizeTargetVolumeId(
   return dataVolumeId ?? legacyVolumeId ?? null;
 }
 
+/** Pure: a volume is safe to act on (attach/delete) only once it reports `available`. */
+export function volumeIsAvailable(state: string | undefined): boolean {
+  return state === "available";
+}
+
 /** Poll until a volume reaches `available` (after detach/terminate) — avoids attach-on-detaching races. */
 export async function waitForVolumeAvailable(
   volumeId: string,
@@ -236,7 +241,7 @@ export async function waitForVolumeAvailable(
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
-      if (res.Volumes?.[0]?.State === "available") return true;
+      if (volumeIsAvailable(res.Volumes?.[0]?.State)) return true;
     } catch {
       /* transient — keep polling */
     }
@@ -245,12 +250,21 @@ export async function waitForVolumeAvailable(
   return false;
 }
 
+export interface VolumeWaitOpts {
+  attempts?: number;
+  delayMs?: number;
+}
+
 /**
  * Orphan cleanup for admin "complete delete" (ADR-024/032 rule 9): detach → wait available →
- * (optional) final snapshot is left to the caller → DeleteVolume. Returns false (no delete)
- * if the volume never reaches `available`, so a still-attached volume is never force-deleted.
+ * DeleteVolume. Returns false (NO delete) if the volume never reaches `available`, so a
+ * still-attached volume is never force-deleted (an optional final snapshot is the caller's job).
  */
-export async function deleteDataVolume(volumeId: string, instanceId?: string): Promise<boolean> {
+export async function deleteDataVolume(
+  volumeId: string,
+  instanceId?: string,
+  opts: VolumeWaitOpts = {},
+): Promise<boolean> {
   if (instanceId) {
     try {
       await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId, InstanceId: instanceId }));
@@ -258,7 +272,7 @@ export async function deleteDataVolume(volumeId: string, instanceId?: string): P
       /* may already be detached */
     }
   }
-  const available = await waitForVolumeAvailable(volumeId);
+  const available = await waitForVolumeAvailable(volumeId, opts.attempts ?? 60, opts.delayMs ?? 5000);
   if (!available) return false;
   await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
   return true;
