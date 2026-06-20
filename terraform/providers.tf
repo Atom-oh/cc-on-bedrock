@@ -27,3 +27,16 @@ provider "aws" {
     }
   }
 }
+
+# CLOUDFRONT-scope WAF must be created in us-east-1 (ADR-016).
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  default_tags {
+    tags = {
+      Project   = "cc-on-bedrock"
+      ManagedBy = "terraform"
+    }
+  }
+}

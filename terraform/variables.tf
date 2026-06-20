@@ -91,3 +91,9 @@ variable "devenv_instance_type" {
   type        = string
   default     = "t4g.large"
 }
+
+variable "lambda_src_dir" {
+  description = "Path to Lambda source (cdk/lib/lambda), relative to terraform/ root"
+  type        = string
+  default     = "../cdk/lib/lambda"
+}

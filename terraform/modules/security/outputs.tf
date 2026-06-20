@@ -50,3 +50,7 @@ output "task_permission_boundary_arn" {
 output "task_permission_boundary_name" {
   value = aws_iam_policy.task_permission_boundary.name
 }
+
+output "department_budgets_table_name" {
+  value = aws_dynamodb_table.department_budgets.name
+}

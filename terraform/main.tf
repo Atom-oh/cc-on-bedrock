@@ -74,3 +74,36 @@ module "ec2_devenv" {
   # task_permission_boundary_arn intentionally left default ("") — the boundary
   # is created by CDK Stack 02; pass its ARN via tfvars when running TF-only.
 }
+
+# ---- 03 Usage Tracking (DynamoDB, Lambdas, EventBridge, OTel) ----------------
+module "usage_tracking" {
+  source = "./modules/usage-tracking"
+
+  kms_key_arn                   = module.security.kms_key_arn
+  kms_key_id                    = module.security.kms_key_id
+  user_pool_id                  = module.security.user_pool_id
+  user_pool_arn                 = module.security.user_pool_arn
+  department_budgets_table_name = module.security.department_budgets_table_name
+  ecs_cluster_name              = module.ecs_devenv.cluster_name
+  lambda_src_dir                = var.lambda_src_dir
+}
+
+# ---- 08 Local Governance (ADR-014: STS issuer, limits, enforcers) ------------
+module "local_governance" {
+  source = "./modules/local-governance"
+
+  kms_key_arn                   = module.security.kms_key_arn
+  kms_key_id                    = module.security.kms_key_id
+  usage_table_stream_arn        = module.usage_tracking.usage_table_stream_arn
+  task_permission_boundary_arn  = module.security.task_permission_boundary_arn
+  task_permission_boundary_name = module.security.task_permission_boundary_name
+  lambda_src_dir                = var.lambda_src_dir
+}
+
+# ---- 06 WAF (CLOUDFRONT-scope WebACL, us-east-1) -----------------------------
+module "waf" {
+  source = "./modules/waf"
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+}
