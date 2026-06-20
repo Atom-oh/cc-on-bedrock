@@ -44,6 +44,7 @@ module "ecs_devenv" {
   dev_subdomain           = var.dev_subdomain
   cloudfront_secret_value = module.security.cloudfront_secret_value
   ecs_host_instance_type  = var.ecs_host_instance_type
+  lambda_src_dir          = var.lambda_src_dir
 }
 
 # ---- 05 Dashboard ------------------------------------------------------------
