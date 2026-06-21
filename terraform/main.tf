@@ -87,6 +87,11 @@ module "usage_tracking" {
   department_budgets_table_name = module.security.department_budgets_table_name
   ecs_cluster_name              = module.ecs_devenv.cluster_name
   lambda_src_dir                = var.lambda_src_dir
+
+  # Phase 1 (OTel) collector networking
+  vpc_id             = module.network.vpc_id
+  vpc_cidr           = module.network.vpc_cidr
+  private_subnet_ids = module.network.private_subnet_ids
 }
 
 # ---- 08 Local Governance (ADR-014: STS issuer, limits, enforcers) ------------
