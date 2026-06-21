@@ -155,6 +155,10 @@ ecsTaskRole(`04-ecs-devenv-stack.ts`), dashboard 역할(`05-dashboard-stack.ts`)
 ```yaml
 # Tier 1: Static
 files:
+  # NOTE (ADR-033): the *anthropic.claude-* ceiling is enforced platform-wide by the
+  # boundary (security/main.tf) + the live per-user role (ec2-devenv) + lambda role_factory.
+  # ecs-devenv (deprecated ECS path) grants Bedrock Resource="*" and modules/dashboard has no
+  # Bedrock grant, so those are intentionally not evidence here (tracked in terraform/CLAUDE.md).
   - path: terraform/modules/security/main.tf
     must_contain:
       - "*anthropic.claude-*"

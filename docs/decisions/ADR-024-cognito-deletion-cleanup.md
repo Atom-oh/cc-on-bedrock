@@ -206,6 +206,9 @@ curl -X DELETE 'https://<dashboard>/api/users?username=foo&action=permanent' \
 
 ```yaml
 # Tier 1: Static
+# NOTE (ADR-033): the AdminDeleteUser EventBridge rule + DLQ wiring is the deferred
+# UserRoleProvisioner TF port (terraform/CLAUDE.md parity gap); the deprovision LOGIC is
+# verified in the handler below.
 files:
   - path: lambda/user-role-provisioner.py
     must_contain:

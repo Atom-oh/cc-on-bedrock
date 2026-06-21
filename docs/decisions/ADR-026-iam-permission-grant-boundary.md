@@ -125,7 +125,7 @@ resource-specific 승인"으로 달성**한다 — boundary 는 서비스 천장
 files:
   - path: terraform/modules/security/main.tf
     must_contain:
-      - "task-boundary"
+      - "${var.project_prefix}-task-boundary"
   - path: lambda/role_factory.py
     must_contain:
       - "cc-on-bedrock-task-boundary"

@@ -160,8 +160,8 @@ files:
       - "cc-on-bedrock-user-role-provisioner"
   - path: terraform/modules/security/main.tf
     must_contain:
-      - "POST_CONFIRMATION"
-      - "POST_AUTHENTICATION"
+      - "post_confirmation"
+      - "post_authentication"
       - "cognito-provisioner-trigger"
 
 # Tier 2: Semantic
