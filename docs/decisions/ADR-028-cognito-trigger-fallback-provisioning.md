@@ -152,13 +152,13 @@ shim을 Stack 02에 두는 이유: `addTrigger`는 UserPool 리소스를 변경�
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/lambda/cognito-provisioner-trigger.py
+  - path: lambda/cognito-provisioner-trigger.py
     must_exist: true
     must_contain:
       - "custom:subdomain"
       - "InvocationType"
       - "cc-on-bedrock-user-role-provisioner"
-  - path: cdk/lib/02-security-stack.ts
+  - path: terraform/modules/security/main.tf
     must_contain:
       - "POST_CONFIRMATION"
       - "POST_AUTHENTICATION"

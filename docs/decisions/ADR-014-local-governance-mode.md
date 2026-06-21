@@ -193,22 +193,22 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/08-local-governance-stack.ts
+  - path: terraform/modules/local-governance/main.tf
     must_contain:
-      - "cc-on-bedrock-sts-issuer"
+      - "sts-issuer"
       - "cc-on-bedrock-limits"
       - "token-limit-enforcer"
       - "limit-reset"
-  - path: cdk/lib/lambda/sts-issuer.py
+  - path: lambda/sts-issuer.py
     must_contain:
       - "ensure_role"
       - "RoleSessionName"
       - "SESSION_DURATION_SECONDS"
-  - path: cdk/lib/lambda/token-limit-enforcer.py
+  - path: lambda/token-limit-enforcer.py
     must_exist: true
-  - path: cdk/lib/lambda/limit-reset.py
+  - path: lambda/limit-reset.py
     must_exist: true
-  - path: cdk/lib/lambda/role_factory.py
+  - path: lambda/role_factory.py
     must_contain:
       - "cc-on-bedrock-local-user-"
       - "cc-on-bedrock-task-boundary"

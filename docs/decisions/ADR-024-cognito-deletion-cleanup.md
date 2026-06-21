@@ -207,15 +207,12 @@ curl -X DELETE 'https://<dashboard>/api/users?username=foo&action=permanent' \
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/lambda/user-role-provisioner.py
+  - path: lambda/user-role-provisioner.py
     must_contain:
       - "AdminDeleteUser"
       - "_deprovision_user"
       - "_safe_delete_role"
       - "_terminate_user_instances"
-  - path: cdk/lib/08-local-governance-stack.ts
-    must_contain:
-      - "AdminDeleteUser"
 
 # Tier 2: Semantic
 semantic:

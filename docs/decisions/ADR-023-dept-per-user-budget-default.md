@@ -142,7 +142,7 @@ The third approach is preferable because:
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/lambda/budget-check.py
+  - path: lambda/budget-check.py
     must_contain:
       - "perUserMonthlyBudget"
   - path: shared/nextjs-app/src/app/api/admin/budgets/route.ts

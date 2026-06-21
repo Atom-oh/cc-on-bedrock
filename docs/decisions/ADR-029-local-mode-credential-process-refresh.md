@@ -133,7 +133,7 @@ files:
       - "credential_process ="
       - "emit_credentials_json"
       - "setup_aws_profile"
-  - path: cdk/lib/lambda/sts-issuer.py
+  - path: lambda/sts-issuer.py
     must_contain:
       - "ADR-029"
     must_not_contain:

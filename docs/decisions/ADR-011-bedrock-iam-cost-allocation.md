@@ -68,10 +68,10 @@ Native billing alone cannot support the 5-minute budget enforcement cycle requir
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/02-security-stack.ts
+  - path: terraform/modules/security/main.tf
     must_contain:
       - "application-inference-profile"
-  - path: cdk/lib/lambda/role_factory.py
+  - path: lambda/role_factory.py
     must_contain:
       - "application-inference-profile/*"
       - "department"

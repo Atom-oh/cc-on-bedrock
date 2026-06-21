@@ -170,14 +170,14 @@ Local Governance probe (`cc login` as user07 = data-science manager):
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/lambda/user-role-provisioner.py
+  - path: lambda/user-role-provisioner.py
     must_contain:
       - "AdminCreateUser"
       - "SignUp"
       - "derive_subdomain"
       - "cc-on-bedrock-local-user-"
       - "cc-on-bedrock-task-"
-  - path: cdk/lib/lambda/role_factory.py
+  - path: lambda/role_factory.py
     must_exist: true
 
 # Tier 2: Semantic

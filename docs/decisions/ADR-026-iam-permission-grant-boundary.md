@@ -123,10 +123,10 @@ resource-specific 승인"으로 달성**한다 — boundary 는 서비스 천장
 ```yaml
 # Tier 1: Static — 현행 사실(결정의 전제) 검증. 구현 완료 시 Follow-ups 항목 기준으로 확장할 것.
 files:
-  - path: cdk/lib/02-security-stack.ts
+  - path: terraform/modules/security/main.tf
     must_contain:
-      - "cc-on-bedrock-task-boundary"
-  - path: cdk/lib/lambda/role_factory.py
+      - "task-boundary"
+  - path: lambda/role_factory.py
     must_contain:
       - "cc-on-bedrock-task-boundary"
   # NOTE: v3 구현(plan T1~T8)이 addIamPolicySet/IAM_POLICY_SETS 를 자유형 grant 로 대체할 예정이므로

@@ -155,23 +155,17 @@ ecsTaskRole(`04-ecs-devenv-stack.ts`), dashboard 역할(`05-dashboard-stack.ts`)
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/02-security-stack.ts
+  - path: terraform/modules/security/main.tf
     must_contain:
       - "*anthropic.claude-*"
       - "application-inference-profile/*"
-  - path: cdk/lib/04-ecs-devenv-stack.ts
+  - path: terraform/modules/ec2-devenv/main.tf
     must_contain:
       - "*anthropic.claude-*"
-  - path: cdk/lib/05-dashboard-stack.ts
+  - path: lambda/role_factory.py
     must_contain:
       - "*anthropic.claude-*"
-  - path: cdk/lib/07-ec2-devenv-stack.ts
-    must_contain:
-      - "*anthropic.claude-*"
-  - path: cdk/lib/lambda/role_factory.py
-    must_contain:
-      - "*anthropic.claude-*"
-  - path: cdk/lib/lambda/user-role-provisioner.py
+  - path: lambda/user-role-provisioner.py
     must_contain:
       - "*anthropic.claude-*"
       - "application-inference-profile/*"
@@ -186,7 +180,7 @@ files:
   # `foundation-model/anthropic.claude-3-haiku-20240307-v1:0`, which the regex
   # below matches while leaving the correct wildcard `foundation-model/*anthropic.claude-*`
   # untouched (no contiguous `foundation-model/anthropic.claude-…` substring).
-  - path: cdk/lib/**/*.ts
+  - path: terraform/modules/**/*.tf
     must_not_contain:
       - "/foundation-model/anthropic\\.claude-[a-z0-9-]+/"
   - path: shared/nextjs-app/src/**/*.ts
