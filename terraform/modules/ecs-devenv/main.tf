@@ -65,18 +65,11 @@ resource "aws_iam_role_policy" "ecs_exec_secrets" {
 }
 
 # ---- ECR Repository ----------------------------------------------------------
-resource "aws_ecr_repository" "devenv" {
-  name                 = "cc-on-bedrock/devenv"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = var.kms_key_arn
-  }
+# ADR-033: the cc-on-bedrock/* ECR repos are created by scripts/create-ecr-repos.sh
+# and kept across the CDK→TF wipe (devenv holds 82 images). TF references the existing
+# repo (data source) instead of managing/replacing it — a replace would delete all images.
+data "aws_ecr_repository" "devenv" {
+  name = "cc-on-bedrock/devenv"
 }
 
 # ---- EFS File System ---------------------------------------------------------
@@ -504,9 +497,10 @@ resource "aws_cloudfront_distribution" "this" {
 
 # ---- Route 53 Wildcard Record ------------------------------------------------
 resource "aws_route53_record" "wildcard" {
-  zone_id = var.hosted_zone_id
-  name    = "*.${var.dev_subdomain}.${var.domain_name}"
-  type    = "A"
+  zone_id         = var.hosted_zone_id
+  name            = "*.${var.dev_subdomain}.${var.domain_name}"
+  type            = "A"
+  allow_overwrite = true # shared kept zone (ADR-033)
 
   alias {
     name                   = aws_cloudfront_distribution.this.domain_name

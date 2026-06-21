@@ -192,11 +192,12 @@ resource "aws_route53_record" "devenv_cert_validation" {
     }
   }
 
-  zone_id = var.hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  records = [each.value.record]
-  ttl     = 300
+  zone_id         = var.hosted_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 300
+  allow_overwrite = true # shared kept zone (ADR-033)
 }
 
 resource "aws_acm_certificate_validation" "devenv" {
@@ -224,11 +225,12 @@ resource "aws_route53_record" "dashboard_cert_validation" {
     }
   }
 
-  zone_id = var.hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  records = [each.value.record]
-  ttl     = 300
+  zone_id         = var.hosted_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 300
+  allow_overwrite = true # shared kept zone (ADR-033)
 }
 
 resource "aws_acm_certificate_validation" "dashboard" {

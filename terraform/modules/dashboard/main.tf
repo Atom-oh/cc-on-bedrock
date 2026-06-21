@@ -232,9 +232,10 @@ resource "aws_cloudfront_distribution" "this" {
 
 # ---- Route 53 Record ---------------------------------------------------------
 resource "aws_route53_record" "dashboard" {
-  zone_id = var.hosted_zone_id
-  name    = "dashboard.${var.domain_name}"
-  type    = "A"
+  zone_id         = var.hosted_zone_id
+  name            = "dashboard.${var.domain_name}"
+  type            = "A"
+  allow_overwrite = true # shared kept zone (ADR-033) — take over any stale record
 
   alias {
     name                   = aws_cloudfront_distribution.this.domain_name
