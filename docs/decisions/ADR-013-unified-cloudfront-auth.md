@@ -82,7 +82,7 @@ Replaces the 345-line `devenv-auth-edge` (Cognito OAuth + JWKS + HMAC).
 | `bin/app.ts` | Stack 05 depends on Stack 04 (NLB DNS via `Fn::ImportValue`) |
 
 ### Deleted Code
-- `cdk/lib/lambda/devenv-auth-edge/` (entire directory) — replaced by session-validator
+- `lambda/devenv-auth-edge/` (entire directory) — replaced by session-validator
 
 ## Key Design Decisions
 

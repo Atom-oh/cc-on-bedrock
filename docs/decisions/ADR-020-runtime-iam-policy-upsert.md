@@ -115,4 +115,4 @@ async function ensureUserInstanceProfile(subdomain, dept, project) {
 - ADR-011: Bedrock IAM Cost Allocation (태그 정책의 발단)
 - ADR-014: Local Governance Mode (같은 upsert 패턴을 sts-issuer Lambda에서도 채용)
 - 관련 commit: `f3a90bf` (upsert + sudo apt + Claude symlink), `40aebc3` (migrate-role-tags.sh 삭제)
-- 관련 파일: `shared/nextjs-app/src/lib/ec2-clients.ts`, `cdk/lib/lambda/sts-issuer.py`
+- 관련 파일: `shared/nextjs-app/src/lib/ec2-clients.ts`, `lambda/sts-issuer.py`

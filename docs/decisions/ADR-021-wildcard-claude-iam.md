@@ -46,12 +46,12 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 - `application-inference-profile/*` — 모든 dept별 App Inference Profile (ADR-011 cost allocation 기존 사용처)
 
 ### 적용 위치
-- `cdk/lib/02-security-stack.ts` — `bedrockPolicy` (Dashboard role) + `taskPermissionBoundary` (Permission Boundary)
-- `cdk/lib/04-ecs-devenv-stack.ts` — `ecsTaskRole` Bedrock 권한
-- `cdk/lib/05-dashboard-stack.ts` — `dashboardPolicy` BedrockAccess statement
-- `cdk/lib/07-ec2-devenv-stack.ts` — `devenvRole` BedrockAccess statement
-- `cdk/lib/lambda/role_factory.py` — `allowed_model_arns()` 와일드카드 반환으로 단순화 (sts-issuer.py는 `from role_factory import ensure_role`), `ALLOWED_MODELS` env var 제거
-- `cdk/lib/08-local-governance-stack.ts` — `ALLOWED_MODELS` env / `allowedModels` prop 제거
+- `terraform/modules/security/main.tf` — `bedrockPolicy` (Dashboard role) + `taskPermissionBoundary` (Permission Boundary)
+- `terraform/modules/ecs-devenv/main.tf` — `ecsTaskRole` Bedrock 권한
+- `terraform/modules/dashboard/main.tf` — `dashboardPolicy` BedrockAccess statement
+- `terraform/modules/ec2-devenv/main.tf` — `devenvRole` BedrockAccess statement
+- `lambda/role_factory.py` — `allowed_model_arns()` 와일드카드 반환으로 단순화 (sts-issuer.py는 `from role_factory import ensure_role`), `ALLOWED_MODELS` env var 제거
+- `terraform/modules/local-governance/main.tf` — `ALLOWED_MODELS` env / `allowedModels` prop 제거
 - `cdk/bin/app.ts` — `LocalGovernanceStack`의 `allowedModels` prop 전달 제거
 - `terraform/modules/security/main.tf` — `data.aws_iam_policy_document.bedrock` 동기화
 
@@ -120,7 +120,7 @@ arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*
 - ADR-015: Dollar Budget × Normalized Token Limit Integration (dept-budget deny)
 - ADR-019: Bedrock Model ID Normalization (호출 후 model ID parsing, 와일드카드 흡수의 사후 정규화 layer)
 - ADR-020: Runtime IAM Policy Upsert (`_ensure_role()` 매 호출 시 inline policy 덮어쓰기 — wildcard 마이그레이션도 이 경로로 자동 적용)
-- 코드: `cdk/lib/02-security-stack.ts`, `cdk/lib/lambda/role_factory.py` (`allowed_model_arns()`), `cdk/lib/lambda/sts-issuer.py` (`from role_factory import ensure_role`), `cdk/lib/08-local-governance-stack.ts`
+- 코드: `terraform/modules/security/main.tf`, `lambda/role_factory.py` (`allowed_model_arns()`), `lambda/sts-issuer.py` (`from role_factory import ensure_role`), `terraform/modules/local-governance/main.tf`
 
 ## Addendum (2026-06-13) — Embedding models added to the governed ceiling
 
@@ -155,10 +155,11 @@ ecsTaskRole(`04-ecs-devenv-stack.ts`), dashboard 역할(`05-dashboard-stack.ts`)
 ```yaml
 # Tier 1: Static
 files:
-  # NOTE (ADR-033): the *anthropic.claude-* ceiling is enforced platform-wide by the
-  # boundary (security/main.tf) + the live per-user role (ec2-devenv) + lambda role_factory.
-  # ecs-devenv (deprecated ECS path) grants Bedrock Resource="*" and modules/dashboard has no
-  # Bedrock grant, so those are intentionally not evidence here (tracked in terraform/CLAUDE.md).
+  # NOTE (ADR-033): evidence for the *anthropic.claude-* ceiling is the boundary (security/main.tf)
+  # + the live per-user role (ec2-devenv) + lambda role_factory — all claude-scoped. KNOWN GAP:
+  # the still-deployed ecs_task role (terraform/modules/ecs-devenv/main.tf) grants bedrock:InvokeModel
+  # Resource="*" — a ceiling BYPASS to be scoped to *anthropic.claude-* as an ADR-021 follow-up.
+  # modules/dashboard has no Bedrock grant, so it is not evidence here.
   - path: terraform/modules/security/main.tf
     must_contain:
       - "*anthropic.claude-*"
@@ -195,13 +196,13 @@ files:
 semantic:
   - claim: "Permission Boundary와 Bedrock-using stack(02/04/05/07) 모두 동일한 wildcard *anthropic.claude-* 패턴 사용"
     context_files:
-      - cdk/lib/02-security-stack.ts
-      - cdk/lib/04-ecs-devenv-stack.ts
-      - cdk/lib/05-dashboard-stack.ts
-      - cdk/lib/07-ec2-devenv-stack.ts
+      - terraform/modules/security/main.tf
+      - terraform/modules/ecs-devenv/main.tf
+      - terraform/modules/dashboard/main.tf
+      - terraform/modules/ec2-devenv/main.tf
   - claim: "STS Issuer Lambda가 ALLOWED_MODELS env var를 더 이상 받지 않으며 role_factory가 wildcard ARN을 반환"
     context_files:
-      - cdk/lib/lambda/sts-issuer.py
-      - cdk/lib/lambda/role_factory.py
-      - cdk/lib/08-local-governance-stack.ts
+      - lambda/sts-issuer.py
+      - lambda/role_factory.py
+      - terraform/modules/local-governance/main.tf
 ```

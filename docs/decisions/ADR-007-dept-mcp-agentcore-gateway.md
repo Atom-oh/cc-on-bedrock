@@ -96,6 +96,6 @@ Departments are already modeled in the system (Cognito `custom:department`, Dyna
 ## References
 - Design spec: `docs/superpowers/specs/2026-04-10-dept-mcp-agentcore-gateway-design.md`
 - Existing gateway provisioning: `agent/lambda/create_targets.py`
-- Department model: ADR-004 (EC2-per-user), `cdk/lib/02-security-stack.ts` (Cognito groups)
+- Department model: ADR-004 (EC2-per-user), `terraform/modules/security/main.tf` (Cognito groups)
 - AgentCore integration: `agent/agent.py`, `agent/streamable_http_sigv4.py`
-- Budget management: `cdk/lib/03-usage-tracking-stack.ts` (cc-department-budgets)
+- Budget management: `terraform/modules/usage-tracking/main.tf` (cc-department-budgets)

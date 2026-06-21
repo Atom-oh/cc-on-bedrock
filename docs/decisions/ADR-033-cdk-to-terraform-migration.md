@@ -24,7 +24,7 @@ verification_required: true
 
 **Terraform을 유일한 IaC로 단일화한다. CDK(`cdk/`)는 인프라 정의로서 폐기한다.**
 
-단, **Lambda 런타임 코드(`cdk/lib/lambda/*.py`)와 Next.js 대시보드 앱(`shared/nextjs-app`)·AMI 빌드(`scripts/build-ami.sh`)는 IaC 무관 자산으로 유지**한다 — Terraform이 `cdk/lib/lambda/`에서 직접 `archive_file`로 패키징하므로 Lambda 로직은 이미 TF로 흐른다. (디렉터리명 `cdk/lib/lambda`는 역사적 잔재이나 경로 의존이 많아 이번 범위에서 개명하지 않는다.)
+단, **Lambda 런타임 코드(`lambda/*.py`)와 Next.js 대시보드 앱(`shared/nextjs-app`)·AMI 빌드(`scripts/build-ami.sh`)는 IaC 무관 자산으로 유지**한다 — Terraform이 `lambda/`에서 직접 `archive_file`로 패키징하므로 Lambda 로직은 이미 TF로 흐른다. (디렉터리명 `lambda`는 역사적 잔재이나 경로 의존이 많아 이번 범위에서 개명하지 않는다.)
 
 CloudFormation(`cloudformation/`)도 동일 사유로 정리 대상이나 본 ADR 범위 밖(별도 후속).
 

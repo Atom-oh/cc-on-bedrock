@@ -131,13 +131,13 @@ Admin → PUT /api/admin/approval-requests
 
 | 구성요소 | 구현 위치 |
 |---------|---------|
-| DLP 3-tier Security Groups | `cdk/lib/07-ec2-devenv-stack.ts` — DevenvSgOpen / SgRestricted / SgLocked |
+| DLP 3-tier Security Groups | `terraform/modules/ec2-devenv/main.tf` — DevenvSgOpen / SgRestricted / SgLocked |
 | 인스턴스별 SG 선택 | `shared/nextjs-app/src/lib/ec2-clients.ts` — `SG_MAP`, `startInstance()` |
 | 실행 중 SG 교체 | `ec2-clients.ts` — `changeSecurityPolicy()` (ENI SG swap, 재시작 불필요) |
 | IAM Policy Set Catalog | `ec2-clients.ts` — `IAM_POLICY_SETS` (7개 사전 정의 정책) |
 | Policy 부착/제거 | `ec2-clients.ts` — `addIamPolicySet()`, `removeIamPolicySet()` (수동 해제만; `removeIamPolicySet()`는 스케줄러에서 호출되지 않음) |
 | ~~Policy 기간 자동 만료(7/30/90일)~~ | **미구현** — duration 입력 필드·EventBridge 만료 규칙 없음. 부여된 policy set은 영구 (2026-06-10) |
-| 승인 요청 테이블 | `cdk/lib/03-usage-tracking-stack.ts` — `cc-on-bedrock-approval-requests` |
+| 승인 요청 테이블 | `terraform/modules/usage-tracking/main.tf` — `cc-on-bedrock-approval-requests` |
 | 사용자 신청 API | `src/app/api/user/container-request/route.ts` — tier/dlp/iam 3종 |
 | Admin 승인 API | `src/app/api/admin/approval-requests/route.ts` — approve/reject + 자동 적용 |
 

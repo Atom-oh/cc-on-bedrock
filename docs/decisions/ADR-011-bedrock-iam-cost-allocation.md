@@ -81,10 +81,10 @@ files:
 semantic:
   - claim: "Application Inference Profile ARN이 per-user role inline policy의 Resource에 포함되어 dept 단위 비용 attribution이 가능하다"
     context_files:
-      - cdk/lib/lambda/role_factory.py
-      - cdk/lib/02-security-stack.ts
+      - lambda/role_factory.py
+      - terraform/modules/security/main.tf
   - claim: "Per-user role 생성 시 department, project, mode 태그가 부착되어 AWS Cost Allocation Tag 분류가 가능하다"
     context_files:
-      - cdk/lib/lambda/role_factory.py
-      - cdk/lib/lambda/user-role-provisioner.py
+      - lambda/role_factory.py
+      - lambda/user-role-provisioner.py
 ```

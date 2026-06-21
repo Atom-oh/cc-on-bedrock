@@ -7,7 +7,7 @@ verification_required: false
 # ADR-015: Dollar Budget × Normalized Token Limit Integration
 
 ## Status
-Accepted (2026-05-12) — implemented in `cdk/lib/lambda/budget-check.py` (canonical policy names + Local Governance role coverage).
+Accepted (2026-05-12) — implemented in `lambda/budget-check.py` (canonical policy names + Local Governance role coverage).
 Canonical 정책명 cutover 완료 (2026-06-10): `cc-bedrock-user-daily-deny` / `cc-bedrock-dept-budget-deny`로 attach하며, legacy 이름(`BudgetExceededDeny` / `DeptBudgetExceededDeny`)은 attach/release 시 발견되는 대로 자동 제거 (ADR-020 runtime-upsert 패턴, 일회성 마이그레이션 스크립트 없음).
 
 ## Context
@@ -154,7 +154,7 @@ Live data confirmed the symptom: `currentSpend=$6.31 > monthlyBudget=$3`,
 `COUNTER#monthly normalized=421106 >> max_normalized=200001`, but the role's
 inline-policy list was just `BedrockInvokeInline` — no deny attached.
 
-A new shared module `cdk/lib/lambda/iam_role_lookup.py` resolves Cognito
+A new shared module `lambda/iam_role_lookup.py` resolves Cognito
 username → real role name by reading the `username` IAM tag (already set by
 `role_factory.ensure_role`). The three enforcement sites above are switched
 to call `local_role_names_for(username)`. When the lookup returns an empty

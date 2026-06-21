@@ -95,14 +95,14 @@ direct-invoke 계약(`{"action":"ensure","sub":...}`, ADR-022 §6)으로 호출�
 **옵션 1.** 구현 형상:
 
 ```
-cdk/lib/lambda/cognito-provisioner-trigger.py   (신규 shim, Stack 02)
+lambda/cognito-provisioner-trigger.py   (신규 shim, Stack 02)
   - triggerSource 무관 동일 로직:
       custom:subdomain 존재 → return event        (no-op, 지연 없음)
       부재 → lambda:Invoke(Event) user-role-provisioner {"action":"ensure","sub":...}
              → return event
   - 전체 try/except: 어떤 실패도 로그인을 막지 않음 (fail-open)
 
-cdk/lib/02-security-stack.ts
+terraform/modules/security/main.tf
   - userPool.addTrigger(POST_CONFIRMATION, shim)
   - userPool.addTrigger(POST_AUTHENTICATION, shim)
   - shim → 프로비저너 참조는 정적 함수 이름
@@ -168,17 +168,17 @@ files:
 semantic:
   - claim: "shim 트리거는 custom:subdomain attribute가 이미 존재하면 프로비저너를 invoke하지 않고 이벤트를 그대로 반환한다 (no-op fast path)"
     context_files:
-      - cdk/lib/lambda/cognito-provisioner-trigger.py
+      - lambda/cognito-provisioner-trigger.py
   - claim: "shim 트리거는 프로비저너를 InvocationType=Event(비동기)로 호출하며, 어떤 예외가 발생해도 이벤트를 반환하여 로그인을 실패시키지 않는다 (fail-open, Cognito 5초 동기 타임아웃 대응)"
     context_files:
-      - cdk/lib/lambda/cognito-provisioner-trigger.py
+      - lambda/cognito-provisioner-trigger.py
   - claim: "Stack 02는 프로비저너를 cross-stack export가 아닌 정적 함수 이름 문자열로 참조하여 Stack 08과의 순환 의존을 만들지 않는다"
     context_files:
-      - cdk/lib/02-security-stack.ts
+      - terraform/modules/security/main.tf
 ```
 
 ## 참고 자료
 
 - [Customizing user pool workflows with Lambda triggers — Lambda triggers for federated users](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-working-with-lambda-triggers.html) (federated trigger source 표, 5초 타임아웃, 에러 시 인증 실패)
-- ADR-022 §6 direct-invoke 계약: `cdk/lib/lambda/user-role-provisioner.py` (`{"action":"ensure","sub":...}`)
+- ADR-022 §6 direct-invoke 계약: `lambda/user-role-provisioner.py` (`{"action":"ensure","sub":...}`)
 - 검증 로그: `psungbum` AdminCreateUser 경로 정상 동작 확인 (2026-06-11, provisioner CloudWatch log)

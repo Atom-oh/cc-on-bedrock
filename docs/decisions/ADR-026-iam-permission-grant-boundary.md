@@ -140,8 +140,8 @@ files:
 semantic:
   - claim: "EC2 task 역할과 Local Governance 역할이 동일한 permission boundary(cc-on-bedrock-task-boundary)를 공유한다"
     context_files:
-      - cdk/lib/02-security-stack.ts
-      - cdk/lib/lambda/role_factory.py
+      - terraform/modules/security/main.tf
+      - lambda/role_factory.py
   - claim: "사용자 IAM 권한 확장은 admin 승인 플로우(approval-requests)를 거쳐야만 역할에 inline policy로 부착된다"
     context_files:
       - shared/nextjs-app/src/lib/ec2-clients.ts

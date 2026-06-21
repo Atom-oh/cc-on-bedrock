@@ -87,10 +87,10 @@ AWS EC2 Hibernation은 RAM 내용을 암호화된 EBS 루트 볼륨에 저장하
 | 파일 | 변경 |
 |------|------|
 | `scripts/build-ami.sh` | `ec2-hibinit-agent` 설치, KASLR 비활성화 |
-| `cdk/lib/07-ec2-devenv-stack.ts` | Launch Template `hibernationConfigured: true` |
-| `cdk/lib/03-usage-tracking-stack.ts` | Lambda 환경변수 + 60일 rotation EventBridge rule |
+| `terraform/modules/ec2-devenv/main.tf` | Launch Template `hibernationConfigured: true` |
+| `terraform/modules/usage-tracking/main.tf` | Lambda 환경변수 + 60일 rotation EventBridge rule |
 | `shared/nextjs-app/src/lib/ec2-clients.ts` | Feature flag, `HibernationOptions`, `isHibernateCapable()`, fallback |
-| `cdk/lib/lambda/ec2-idle-stop.py` | Hibernate stop + 60일 rotation 액션 |
+| `lambda/ec2-idle-stop.py` | Hibernate stop + 60일 rotation 액션 |
 | `shared/nextjs-app/src/components/user/environment-tab.tsx` | HIBERNATED 상태 UI |
 | `shared/nextjs-app/src/app/api/user/container/route.ts` | 상태 매핑 |
 
@@ -144,6 +144,6 @@ AWS EC2 Hibernation은 RAM 내용을 암호화된 EBS 루트 볼륨에 저장하
 - AWS EC2 Hibernation: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-hibernate-overview.html
 - EC2-per-user 아키텍처: ADR-004
 - 현재 인스턴스 관리: `shared/nextjs-app/src/lib/ec2-clients.ts`
-- 유휴 자동 Stop: `cdk/lib/lambda/ec2-idle-stop.py`
+- 유휴 자동 Stop: `lambda/ec2-idle-stop.py`
 - AMI 빌드: `scripts/build-ami.sh`
-- Launch Template: `cdk/lib/07-ec2-devenv-stack.ts`
+- Launch Template: `terraform/modules/ec2-devenv/main.tf`
