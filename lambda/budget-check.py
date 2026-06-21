@@ -68,7 +68,7 @@ def get_today_usage():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-029: email
+            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-031: email
             if not _is_valid_user(user):
                 continue  # stale non-Cognito identity (e.g. raw IAM principal) — skip
             cost = float(item.get("estimatedCost", 0))
@@ -103,7 +103,7 @@ def get_monthly_usage_by_department():
             params["ExclusiveStartKey"] = last_key
         result = table.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-029: email
+            user = item["PK"].replace("USER#", "").strip().lower()  # ADR-031: email
             if not _is_valid_user(user):
                 continue  # stale non-Cognito identity — skip
             cost = float(item.get("estimatedCost", 0))
@@ -270,7 +270,7 @@ def get_user_department(subdomain: str) -> str:
         return "default"
 
 
-# ADR-029 (B′): per-handler map of email → subdomain, populated from the
+# ADR-031 (B′): per-handler map of email → subdomain, populated from the
 # `subdomain` attribute on usage rows during get_today_usage / monthly scans.
 # Lets _candidate_role_names build BOTH IAM role names (local-user-{subdomain},
 # task-{subdomain}) for an email-keyed user. Reset at handler entry.
@@ -284,11 +284,22 @@ _subdomain_by_user: dict = {}
 # fail-open (do not filter) so a transient Cognito error can't zero all spend or
 # release every deny policy.
 _valid_user_keys: set = set()
+# {email: subdomain} built from the SAME Cognito scan as _valid_user_keys (see below). Used by the
+# release path to resolve idle/denied users' Local role without an N+1 per-user ListUsers.
+_email_subdomain_map: dict = {}
 
 
 def _load_valid_user_keys() -> set:
     """Build the set of authoritative Cognito identifiers (sub / subdomain / email /
-    username). Returns an empty set on any failure so callers fail open."""
+    username). Returns an empty set on any failure so callers fail open.
+
+    Side effect: rebuilds the module-level _email_subdomain_map {email: subdomain} from the SAME
+    single paginated scan. The release path needs subdomains for denied/idle users (no usage row
+    this period) to detach their Deny; doing it from this one scan avoids a per-user ListUsers
+    (N+1 → Cognito throttle at scale → release failures) — PR #68 review.
+    """
+    global _email_subdomain_map
+    _email_subdomain_map = {}
     keys: set = set()
     if not USER_POOL_ID:
         return keys
@@ -303,11 +314,18 @@ def _load_valid_user_keys() -> set:
             for u in result.get("Users", []):
                 if u.get("Username"):
                     keys.add(u["Username"].strip().lower())
+                u_email = u_subdomain = None
                 for attr in u.get("Attributes", []):
-                    # ADR-029: canonical key is email; lowercase all keys so a
+                    # ADR-031: canonical key is email; lowercase all keys so a
                     # mixed-case email row (USER#{email.lower()}) still matches.
                     if attr["Name"] in ("sub", "custom:subdomain", "email") and attr.get("Value"):
                         keys.add(attr["Value"].strip().lower())
+                    if attr["Name"] == "email" and attr.get("Value"):
+                        u_email = attr["Value"].strip().lower()
+                    elif attr["Name"] == "custom:subdomain" and attr.get("Value"):
+                        u_subdomain = attr["Value"].strip()
+                if u_email and u_subdomain:
+                    _email_subdomain_map[u_email] = u_subdomain
             pagination_token = result.get("PaginationToken")
             pages += 1
             if not pagination_token or pages >= MAX_SCAN_PAGES:
@@ -329,7 +347,7 @@ def _is_valid_user(key: str) -> bool:
 def _candidate_role_names(user: str) -> list:
     """Return all IAM role candidates for a user (Local Governance + EC2 task).
 
-    ADR-029 (B′): usage/limits rows are keyed by email, and ALL IAM role names use
+    ADR-031 (B′): usage/limits rows are keyed by email, and ALL IAM role names use
     the subdomain. Both `cc-on-bedrock-local-user-{subdomain}` and
     `cc-on-bedrock-task-{subdomain}` are built from the row's `subdomain` attribute
     (captured during the usage scans). The email is NEVER used as a role name
@@ -421,9 +439,10 @@ def attach_deny_policy(subdomain: str):
     of the user's roles (EC2 task + Local Governance).
 
     Previously this only tried the EC2 `cc-on-bedrock-task-{subdomain}` role, so Local-only
-    users (whose role is `cc-on-bedrock-local-user-{cognito_sub}`) silently bypassed the
-    daily/monthly $ budget enforcement. The Local role is looked up via the same
-    `username`-tag index that `attach_dept_deny_policy` already uses.
+    users (whose role is `cc-on-bedrock-local-user-{subdomain}`) silently bypassed the
+    daily/monthly $ budget enforcement. Both role names are now built from the usage row's
+    `subdomain` attribute via `_candidate_role_names` (ADR-031). NOTE: the `subdomain` param
+    is actually the email user-key (the map is email-keyed) — misnamed, not a bug.
     """
     deny_policy = json.dumps({
         "Version": "2012-10-17",
@@ -660,8 +679,9 @@ def check_token_limits_backup():
     for (etype, key), (period, used, mx) in tripped.items():
         if etype != "USER":
             continue
-        # ADR-025: `key` is the Cognito sub → Local role name is direct; the EC2
-        # task role is added when the subdomain is known from today's usage scan.
+        # ADR-031: `key` is the canonical email; `_candidate_role_names` resolves the
+        # row's `subdomain` (captured during the usage scan) to build both the Local
+        # and EC2 task role names.
         candidate_roles = _candidate_role_names(key)
         for role in candidate_roles:
             checked += 1
@@ -712,7 +732,7 @@ def check_token_limits_backup():
 def set_cognito_budget_flag(user: str, exceeded: bool):
     """Set budget_exceeded flag in Cognito user attributes.
 
-    ADR-029 (B′): callers pass the canonical key = email. `email` is a supported
+    ADR-031 (B′): callers pass the canonical key = email. `email` is a supported
     ListUsers filter attribute, so we filter by it directly (the old `sub` filter
     would match nothing now that PKs are emails).
     """
@@ -771,7 +791,7 @@ def check_department_budgets(user_spend):
 
 def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
-    # ADR-025: reset the per-invocation sub→subdomain map (repopulated by the scans).
+    # ADR-031: reset the per-invocation email→subdomain map (repopulated by the scans).
     global _subdomain_by_user, _valid_user_keys
     _subdomain_by_user = {}
     # Load the authoritative Cognito identity set so the scans below skip stale
@@ -853,6 +873,14 @@ def handler(event, context):
     release_candidates = all_known_users | set(user_budgets.keys())
     for user in release_candidates:
         if user not in over_budget_users:
+            # Deny-deadlock fix (PR #68 review): a denied/idle user isn't in the usage scans, so
+            # its subdomain may be absent from _subdomain_by_user → _candidate_role_names would
+            # no-op and the Deny would never detach. Backfill from the one-shot _email_subdomain_map
+            # (built by _load_valid_user_keys in a single scan) — no per-user ListUsers.
+            if not _subdomain_by_user.get(user) and "@" in user:
+                sd = _email_subdomain_map.get(user)
+                if sd:
+                    _subdomain_by_user[user] = sd
             if remove_deny_policy(user):
                 released += 1
                 set_cognito_budget_flag(user, False)

@@ -12,8 +12,8 @@ Single source of truth for everything that must exist when a Cognito user is bor
     2. Writes `custom:subdomain` back to Cognito (so dashboard / DNS / IAM names all
        converge on the same value regardless of how the user was created — sh seed,
        dashboard /api/users POST, AWS Console, or SDK).
-    3. Creates the Local Governance per-user role `cc-on-bedrock-local-user-{sub}`
-       (covers the IAM propagation race for `cc` login).
+    3. Creates the Local Governance per-user role `cc-on-bedrock-local-user-{subdomain}`
+       (ADR-031; covers the IAM propagation race for `cc` login).
     4. Creates the EC2 mode per-user role + instance profile
        `cc-on-bedrock-task-{subdomain}` (covers the IAM propagation race for first
        EC2 instance start — see ec2-clients.ts:ensureUserInstanceProfile).
@@ -28,7 +28,7 @@ import re
 import boto3
 from botocore.exceptions import ClientError
 
-from role_factory import ensure_role
+from role_factory import ensure_role, derive_subdomain
 
 # Fail fast at cold-start if USER_POOL_ID is missing — every code path needs it,
 # and an empty string would let calls into cognito.list_users(UserPoolId="")
@@ -58,34 +58,9 @@ print("user-role-provisioner cold start")
 EC2_ROLE_PREFIX = "cc-on-bedrock-task-"
 
 
-def derive_subdomain(email_or_username: str) -> str:
-    """Email local-part -> canonical subdomain.
-
-    Rules (matches validation.ts regex /^[a-z0-9][a-z0-9-]*[a-z0-9]$/, 3-30 chars):
-      - take local-part before '@'
-      - lowercase
-      - non-[a-z0-9] -> '-'
-      - collapse repeating dashes, strip leading/trailing dashes
-      - truncate to 30
-
-    Raises ValueError if the resulting subdomain would be shorter than 3 chars.
-    Previously we padded with '000' which made every empty-local-part user collide
-    onto a shared `cc-on-bedrock-task-000` role — an obvious privilege-bridging
-    hole. Fail loudly so the caller surfaces a real error to the admin instead.
-    """
-    local = (email_or_username or "").split("@")[0].lower()
-    cleaned = re.sub(r"[^a-z0-9-]", "-", local)
-    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
-    # Truncate first, THEN re-strip — `cleaned[:30]` could land on a `-` and
-    # violate validation.ts regex /^[a-z0-9][a-z0-9-]*[a-z0-9]$/ if the 30th
-    # char is a sanitization-inserted dash.
-    truncated = cleaned[:30].rstrip("-")
-    if len(truncated) < 3:
-        raise ValueError(
-            f"cannot derive subdomain from email/username {email_or_username!r}: "
-            f"sanitized result {truncated!r} (must be >= 3 chars and end alphanumeric)"
-        )
-    return truncated
+# derive_subdomain is imported from role_factory (single source of truth) so the provisioner
+# and sts-issuer always build the SAME IAM role name — a divergent copy here would make
+# AssumeRole target a role that was never created (ADR-031 review).
 
 
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
@@ -108,13 +83,20 @@ def _subdomain_owner_email(subdomain: str) -> str | None:
         return ""
 
 
-def _assign_unique_subdomain(base: str, email: str, sub: str) -> str:
-    """ADR-029 (B′): guarantee a globally-unique subdomain (no duplicate names).
+def _assign_unique_subdomain(base: str, email: str) -> str:
+    """ADR-031 (B′): guarantee a globally-unique subdomain (no duplicate names).
 
     If the base subdomain's Local role is already owned by a DIFFERENT email,
     append a numeric suffix (john-doe → john-doe-2 → …) until free, staying within
     the 30-char limit. Idempotent for the same user (returns base when the role is
     unowned or owned by this email).
+
+    Concurrency: this is a best-effort check-then-act (a TOCTOU window exists if two
+    same-local-part users onboard simultaneously). It is NOT the uniqueness guarantee —
+    the authoritative lock is role_factory.ensure_role()'s create-guard, which raises on
+    a name already owned by a different email (and IAM CreateRole is itself atomic on the
+    name). So a lost race fails SAFE: the second provisioning errors out (retryable),
+    never a silently shared cross-tenant role.
     """
     email_l = (email or "").strip().lower()
     owner = _subdomain_owner_email(base)
@@ -196,6 +178,10 @@ def _extract_sub_from_event(detail: dict) -> str | None:
 
 
 def _write_subdomain(internal_username: str, subdomain: str) -> None:
+    # NOTE: custom:subdomain is NOT a third identity axis. It is the DNS/IAM-safe
+    # derivative of the canonical key (email) — derive_subdomain(email) — persisted
+    # only so a disambiguated value (e.g. john-doe-2 when two emails collide on the
+    # local-part) is reused deterministically. email stays the single source of truth.
     cognito.admin_update_user_attributes(
         UserPoolId=USER_POOL_ID,
         Username=internal_username,
@@ -246,6 +232,8 @@ def _ec2_task_inline_policy() -> dict:
                 "Resource": [
                     "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
+                    "arn:aws:bedrock:*::foundation-model/*embed*",
+                    f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*embed*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",
                 ],
             },
@@ -276,58 +264,51 @@ def _ec2_task_inline_policy() -> dict:
     }
 
 
-def _ensure_ec2_task_role(subdomain: str, email: str, department: str, sub: str) -> dict:
+def _ensure_ec2_task_role(subdomain: str, email: str, department: str) -> dict:
     """Create or refresh the EC2 mode per-user IAM role + instance profile.
     Mirrors ec2-clients.ts:ensureUserInstanceProfile but runs ahead of first start.
 
-    Subdomain collision guard: if a role with the same name already exists tagged
-    to a different Cognito sub, raise instead of silently re-tagging. Subdomains
-    derive from email local-part, so `user01@a.com` and `user01@b.com` would
-    naturally collide; rather than silently hand the second user the first
-    user's EC2 permissions, we fail and require the admin to disambiguate.
+    Subdomain collision guard (ADR-031: email is THE canonical ownership identity —
+    unified with role_factory.ensure_role and ec2-clients.ts; cognito_sub eliminated).
+    If a role with the same name already exists owned by a DIFFERENT email, raise
+    instead of silently re-tagging. Subdomains derive from the email local-part, so
+    `user01@a.com` and `user01@b.com` would naturally collide; rather than silently
+    hand the second user the first user's EC2 permissions, we fail and require the
+    admin to disambiguate. (An existing role with no email/username tag is treated as
+    ours to (re)tag — same takeover stance as role_factory; the role name is platform-
+    namespaced `cc-on-bedrock-task-*`.)
     """
     role_name = f"{EC2_ROLE_PREFIX}{subdomain}"
+    email_l = (email or "").strip().lower()
     tags = [
         {"Key": "cc-on-bedrock", "Value": "user-instance-role"},
-        {"Key": "username", "Value": email},
+        {"Key": "username", "Value": email_l},
         {"Key": "department", "Value": department or "default"},
         {"Key": "project", "Value": "cc-on-bedrock"},
         {"Key": "subdomain", "Value": subdomain},
         {"Key": "cost-center", "Value": department or "default"},
-        {"Key": "cognito_sub", "Value": sub},
+        {"Key": "email", "Value": email_l},
     ]
     created = False
     try:
         iam.get_role(RoleName=role_name)
+        # Ownership/collision guard keyed on email (ADR-031), mirroring
+        # role_factory.ensure_role. A pre-existing role owned by a different email
+        # means two users derived the same subdomain — refuse takeover rather than
+        # leak one user's EC2 identity to another (cross-tenant privilege leak).
         existing = iam.list_role_tags(RoleName=role_name).get("Tags", [])
-        existing_sub = next((t["Value"] for t in existing if t["Key"] == "cognito_sub"), "")
-        if existing_sub and existing_sub != sub:
+        existing_email = next(
+            (t["Value"].strip().lower() for t in existing if t["Key"] in ("email", "username")),
+            "",
+        )
+        if existing_email and email_l and existing_email != email_l:
             raise RuntimeError(
                 f"subdomain collision on {role_name}: existing role owned by "
-                f"cognito_sub={existing_sub!r} but provisioner invoked for sub={sub!r}. "
+                f"email={existing_email!r} but provisioner invoked for {email_l!r}. "
                 f"Two users derived the same subdomain — likely same email local-part "
                 f"across different domains. Resolve by changing one email or extending "
                 f"derive_subdomain() to disambiguate."
             )
-        if not existing_sub:
-            # Pre-ADR-022 role created by ec2-clients.ts:ensureUserInstanceProfile
-            # (it tagged username + subdomain but not cognito_sub). Use the legacy
-            # `username` tag to decide whether this is the same user being
-            # backfilled (safe to take over) or a different user colliding on
-            # the subdomain (must reject; otherwise two Cognito users share one
-            # IAM identity — cross-tenant privilege leak).
-            existing_username = next(
-                (t["Value"] for t in existing if t["Key"] == "username"), ""
-            )
-            if not existing_username or existing_username != email:
-                raise RuntimeError(
-                    f"legacy role {role_name} has no cognito_sub tag and its "
-                    f"username tag ({existing_username!r}) does not match the "
-                    f"current user email ({email!r}). Refusing takeover for "
-                    f"sub={sub!r} — delete the legacy role manually after "
-                    f"confirming ownership, or invoke the deprovisioner."
-                )
-            # Same-user backfill: fall through and tag_role adds cognito_sub.
         iam.tag_role(RoleName=role_name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
@@ -378,7 +359,7 @@ def _provision_user(info: dict) -> dict:
     if existing_sd:
         subdomain = existing_sd
     else:
-        subdomain = _assign_unique_subdomain(derive_subdomain(email), email, sub)
+        subdomain = _assign_unique_subdomain(derive_subdomain(email), email)
     sub_changed = existing_sd != subdomain
     if sub_changed:
         _write_subdomain(internal_username, subdomain)
@@ -398,7 +379,7 @@ def _provision_user(info: dict) -> dict:
     local_result = ensure_role(
         subdomain=subdomain, email=email, department=department, project=project,
     )
-    ec2_result = _ensure_ec2_task_role(subdomain, email, department, sub)
+    ec2_result = _ensure_ec2_task_role(subdomain, email, department)
 
     return {
         "sub": sub,
@@ -570,7 +551,7 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
     `override_subdomain` is the operator escape hatch for cases where the
     local-user role is missing or its email tag can't be sanitized — pass it
     explicitly via direct-invoke."""
-    # ADR-029 (B′): the Local role is named by subdomain (local-user-{subdomain});
+    # ADR-031 (B′): the Local role is named by subdomain (local-user-{subdomain});
     # usage/limits rows are keyed by email. Recover both from Cognito (best-effort —
     # the user may already be deleted) or the operator-provided override. The
     # legacy sub-named role (local-user-{sub}) is also reaped for back-compat.
@@ -642,7 +623,7 @@ def _deprovision_user(sub: str, override_subdomain: str | None = None) -> dict:
     # Limits-table rows (Local Governance) — per-user counter / deny / warn
     # share PK=USER#{sub}; sweep all SKs. Paginated because daily counters can
     # accumulate past the 1MB / 100-item single-page response window.
-    # ADR-029: limits rows are keyed by email; sweep that PK plus the legacy
+    # ADR-031: limits rows are keyed by email; sweep that PK plus the legacy
     # sub-keyed PK (back-compat for rows written before the migration).
     try:
         deleted_limits = 0

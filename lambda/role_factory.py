@@ -24,7 +24,7 @@ iam = boto3.client("iam")
 
 
 def derive_subdomain(email_or_username: str) -> str:
-    """Email local-part -> canonical subdomain (ADR-029). Shared by the provisioner
+    """Email local-part -> canonical subdomain (ADR-031). Shared by the provisioner
     and sts-issuer so both build the same IAM role name. [a-z0-9-], 3-30 chars.
     Raises ValueError if the sanitized result is < 3 chars (no shared-role pad)."""
     local = (email_or_username or "").split("@")[0].lower()
@@ -40,7 +40,7 @@ def derive_subdomain(email_or_username: str) -> str:
 
 
 def role_name(subdomain: str) -> str:
-    """subdomain -> IAM-safe Local Governance role name (ADR-029 B′).
+    """subdomain -> IAM-safe Local Governance role name (ADR-031 B′).
 
     The canonical resource name is the subdomain (= readable email id, derived by
     user-role-provisioner.derive_subdomain, [a-z0-9-] 3-30 chars). IAM role names
@@ -56,6 +56,8 @@ def allowed_model_arns() -> list:
     return [
         "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
         f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
+        "arn:aws:bedrock:*::foundation-model/*embed*",
+        f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*embed*",
         f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",
     ]
 
@@ -106,7 +108,7 @@ def inline_policy(department: str) -> dict:
 def ensure_role(subdomain: str, email: str, department: str, project: str) -> dict:
     """Create or refresh the per-user Local Governance role. Idempotent.
 
-    ADR-029 (B′): the role is named by `subdomain` (cc-on-bedrock-local-user-
+    ADR-031 (B′): the role is named by `subdomain` (cc-on-bedrock-local-user-
     {subdomain}) and tagged with `email` (the canonical key) + `subdomain`.
     Collision guard: if a role of this name already exists owned by a DIFFERENT
     email, raise — two users must never share one Local role (subdomain uniqueness

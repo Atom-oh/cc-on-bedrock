@@ -74,7 +74,7 @@ export async function GET(_req: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
-  // ADR-029 (B′): usage/limits canonical key = email (lowercased), not Cognito sub.
+  // ADR-031 (B′): usage/limits canonical key = email (lowercased), not Cognito sub.
   const userKey = (session.user.email ?? "").trim().toLowerCase();
   const dept = (session.user as { department?: string }).department ?? "default";
   if (!userKey) {
@@ -120,7 +120,7 @@ export async function GET(_req: NextRequest) {
 
     // USD budget deny (cc-bedrock-user-daily-deny, ADR-015) — not in the limits
     // table, so read the budget row and surface a release estimate to the user.
-    // ADR-029 (B′): cc-user-budgets is keyed by email; legacy rows may still be
+    // ADR-031 (B′): cc-user-budgets is keyed by email; legacy rows may still be
     // keyed by subdomain, so fall back to it.
     let budgetDeny: { active: boolean; currentSpend: number; budget: number; releaseAt: string } | null = null;
     const subdomain = (session.user as { subdomain?: string }).subdomain;

@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
       // than a Cognito identity. Accept a row whose user_id matches any authoritative
       // Cognito identifier — sub (ADR-025), legacy subdomain, email, or username —
       // and drop everything else (stale non-user rows).
-      // ADR-029 (B′): canonical key is email (lowercased). Keep sub/subdomain for
+      // ADR-031 (B′): canonical key is email (lowercased). Keep sub/subdomain for
       // back-compat matching of not-yet-migrated rows; lowercase every key so a
       // mixed-case email row still matches.
       const validUserKeys = new Set<string>();
@@ -178,7 +178,7 @@ export async function PUT(req: NextRequest) {
         ExpressionAttributeValues: exprVals,
       }));
     } else if (type === "user") {
-      // ADR-029 (B′): the per-user canonical key is the lowercased email. Normalize
+      // ADR-031 (B′): the per-user canonical key is the lowercased email. Normalize
       // once so BOTH the cc-user-budgets row AND the mirrored LIMIT#monthly land
       // under USER#{email.lower()} — matching the tracker/enforcer key (else the
       // enforcer can't read the mirrored cap → token-limit bypass).

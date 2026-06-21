@@ -1,4 +1,4 @@
-"""T4b (ADR-029 B′): provisioner assigns a globally-unique subdomain (no duplicate
+"""T4b (ADR-031 B′): provisioner assigns a globally-unique subdomain (no duplicate
 names) — colliding email local-parts get a numeric suffix, and the Local role is
 named by subdomain.
 """
@@ -25,12 +25,12 @@ def test_derive_subdomain_basic():
 def test_assign_unique_subdomain_free():
     # base not owned by anyone → returned as-is
     with mock.patch.object(prov, "_subdomain_owner_email", return_value=None):
-        assert prov._assign_unique_subdomain("alice", "alice@a.com", "sub-1") == "alice"
+        assert prov._assign_unique_subdomain("alice", "alice@a.com") == "alice"
 
 
 def test_assign_unique_subdomain_same_owner_idempotent():
     with mock.patch.object(prov, "_subdomain_owner_email", return_value="alice@a.com"):
-        assert prov._assign_unique_subdomain("alice", "Alice@A.com", "sub-1") == "alice"
+        assert prov._assign_unique_subdomain("alice", "Alice@A.com") == "alice"
 
 
 def test_assign_unique_subdomain_collision_gets_suffix():
@@ -41,6 +41,6 @@ def test_assign_unique_subdomain_collision_gets_suffix():
         return owners.get(sd)  # None for any free candidate
 
     with mock.patch.object(prov, "_subdomain_owner_email", side_effect=owner):
-        out = prov._assign_unique_subdomain("john-doe", "john.doe@a.com", "sub-2")
+        out = prov._assign_unique_subdomain("john-doe", "john.doe@a.com")
     assert out == "john-doe-2"
     assert out != "john-doe"

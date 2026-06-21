@@ -29,7 +29,7 @@
 - `src/app/api/containers/route.ts` - EC2 인스턴스 관리 (Admin)
 - `src/app/api/container-metrics/route.ts` - EC2 CloudWatch 메트릭 + Bedrock 사용량(DynamoDB) (Admin)
 - `src/app/api/users/route.ts` - Cognito 사용자 관리 (Admin)
-- `src/app/api/usage/route.ts` - Usage Analytics API (Admin)
+- `src/app/api/usage/route.ts` - Usage Analytics API (Admin). `action=user_daily_trend`: per-user 일별 cost/token 트렌드. **서버측 fail-closed RBAC** (admin=전체 · dept-manager=자기 부서 · user=본인; 스코프 속성 없으면 403). 날짜창 ≤92일 검증 (spec `docs/superpowers/specs/2026-06-13-per-user-daily-usage-trend-design.md`)
 - `src/app/api/security/route.ts` - 보안 현황 조회 (Admin)
 - `src/app/api/admin/ebs-resize/route.ts` - EBS 리사이즈 승인/거부 (Admin)
 - `src/app/api/admin/budgets/route.ts` - 부서 예산 관리 (Admin)
@@ -40,8 +40,8 @@
 - `src/app/api/admin/mcp/gateways/route.ts` - MCP 게이트웨이 관리 (Admin)
 - `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 동기화 트리거 (Admin)
 - `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-부서 할당 (Admin, ADR-007)
-- `src/app/api/admin/limits/route.ts` - Local Governance normalized token 한도 CRUD (Admin, ADR-014)
-- `src/app/api/admin/limits/reset/route.ts` - 사용자 한도 강제 reset + Deny policy detach (Admin, ADR-014)
+- `src/app/api/admin/limits/route.ts` - Local Governance normalized token 한도 CRUD (Admin, ADR-014). **USER 키 = 소문자 email** (ADR-031, 과거 Cognito sub)
+- `src/app/api/admin/limits/reset/route.ts` - 사용자 한도 강제 reset + Deny policy detach (Admin, ADR-014). body `{email}`로 `USER#{email}/DENY#active` 조회 → 행의 `subdomain`으로 Local 롤명(`local-user-{subdomain}`) 해석·detach·삭제 (ADR-031; 키=email, 롤명=subdomain 분리). 활성 deny 없으면 404
 
 ### User Self-Service
 - `src/app/api/user/container/route.ts` - EC2 인스턴스 시작/중지
@@ -98,7 +98,7 @@
 - `src/lib/ec2-clients.ts` - EC2 인스턴스 관리 (start/stop, RunInstances, password sync, gateway policy)
   - **UserData boot script** — `startInstance` / `restoreFromSnapshot`에서 systemd unit `cc-cli-update.service`(oneshot, every boot)를 생성·enable해 Claude Code/Kiro CLI를 자동 업데이트. `User=coder`로 실행하되 `ExecStartPost`에 `+` prefix를 붙여 `/usr/local/bin` symlink 갱신만 root로 수행 (CWAgent, MCP config sync 포함)
 - `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 (EC2 CPU/Memory/Network/Disk)
-- `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용)
+- `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용). `buildUserDailyTrend` (순수 pivot: user×date, Top-N+others, 전구간 zero-fill) + `getUserDailyTrend` (fetch wrapper) — per-user 일별 트렌드 차트용
 - `src/lib/slack-client.ts` - Slack API 클라이언트 (알림, 명령 처리)
 - `src/lib/validation.ts` - 입력 검증 유틸리티
 - `src/lib/iam-request-validation.ts` - **ADR-026** IAM 권한 신청 검증 (Resource:*·쓰기/임베디드 와일드카드·위험액션·교차계정 거부; **읽기 와일드카드 Get*/List*/Describe*/BatchGet*/Query*/Scan* 허용** T8) + `buildIamExtensionRequest` + DEFAULT_SERVICE_ALLOWLIST/WILDCARD_OK_ACTIONS. 클라이언트(settings-tab)·서버 공유 단일 검증 출처

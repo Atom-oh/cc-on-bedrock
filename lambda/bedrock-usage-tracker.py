@@ -10,7 +10,7 @@ DynamoDB Schema:
   PK: USER#{username}  SK: {date}#{model}
   GSI: PK starts_with DEPT# for department queries
 """
-from __future__ import annotations
+from __future__ import annotations  # PEP 563: lazy annotations (3.12 `X | None` parses on older runtimes/tests too)
 import json
 import os
 import gzip
@@ -62,6 +62,10 @@ FAMILY_PRICING = {
     "opus": {"input": 15.0, "output": 75.0},
     "sonnet": {"input": 3.0, "output": 15.0},
     "haiku": {"input": 0.80, "output": 4.0},
+    # Bedrock embeddings (Titan/Cohere) are input-only — no output tokens. Rate is a
+    # conservative representative (~$0.02-0.10/1M across Titan v2/v1/Cohere); without
+    # this, embeddings fall to the Sonnet $3/$15 default and over-count cost/budget.
+    "embed": {"input": 0.10, "output": 0.0},
 }
 
 # Anthropic prompt-cache pricing multipliers (relative to base input rate).
@@ -74,7 +78,7 @@ CACHE_WRITE_MULTIPLIER = 1.25
 
 # Cache: identity_arn → (email, subdomain, department)
 _task_cache: dict = {}
-# ADR-029: subdomain → email (from EC2 instance tag / Cognito) for the EC2 task-role path.
+# ADR-031: subdomain → email (from EC2 instance tag / Cognito) for the EC2 task-role path.
 _email_cache: dict = {}
 # Cache: subdomain → department (from EC2 instance tags)
 _dept_cache: dict = {}
@@ -127,7 +131,7 @@ def _resolve_department(subdomain: str) -> str:
 
 
 def _resolve_email_from_subdomain(subdomain: str) -> str | None:
-    """EC2 path: map a subdomain → user email (ADR-029 canonical key).
+    """EC2 path: map a subdomain → user email (ADR-031 canonical key).
 
     The EC2 task role name carries only the subdomain. The canonical usage key
     is the email, obtained from the instance tag `cc:user`/`username` (set by the
@@ -202,7 +206,7 @@ def _subdomain_email_map() -> dict:
 def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
     """Resolve (email, subdomain, department) from an IAM role ARN.
 
-    ADR-029 (B′): the canonical user key is the lowercased email. `subdomain` is
+    ADR-031 (B′): the canonical user key is the lowercased email. `subdomain` is
     returned for display + IAM role-name construction downstream. Cognito sub is
     not used. Returns (None, ...) when the email cannot be resolved so the caller
     skips the record rather than writing a non-canonical key.
@@ -230,8 +234,8 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
         dept = _resolve_department(subdomain)
         email = _resolve_email_from_subdomain(subdomain)
         if email is None:
-            # No email resolvable — skip rather than write a bad key (ADR-029).
-            print(f"[ADR-029] email unresolved for {role_name}; skipping record")
+            # No email resolvable — skip rather than write a bad key (ADR-031).
+            print(f"[ADR-031] email unresolved for {role_name}; skipping record")
             return None, subdomain, dept
         _task_cache[cache_key] = (email, subdomain, dept)
         print(f"Resolved {role_name} → email={email} subdomain={subdomain}({dept})")
@@ -245,7 +249,7 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
         subdomain = sub_tag if _is_valid_username(sub_tag) else None
         dept = dept_tag or (_resolve_department(subdomain) if subdomain else "default") or "default"
         if email is None:
-            print(f"[ADR-029] email unresolved for {role_name}; skipping record")
+            print(f"[ADR-031] email unresolved for {role_name}; skipping record")
             return None, subdomain, dept
         if cacheable:
             _task_cache[cache_key] = (email, subdomain, dept)
@@ -267,7 +271,7 @@ def _is_valid_username(candidate: str) -> bool:
 def _resolve_user_dept_from_role_tags(role_name: str) -> tuple:
     """Read email + subdomain + department tags from a Local Governance IAM role.
     Returns ((email, subdomain, department), cacheable). cacheable=False on transient
-    errors so the caller skips caching and retries on the next event. (ADR-029: the
+    errors so the caller skips caching and retries on the next event. (ADR-031: the
     canonical key is email; `subdomain`/`username` tag drives the role name.)
     """
     try:
@@ -368,7 +372,7 @@ def upsert_usage(email: str, subdomain: str | None, department: str, date_str: s
                  cache_read_tokens: int = 0, cache_write_tokens: int = 0):
     """Atomic upsert to DynamoDB.
 
-    ADR-029 (B′): rows are keyed by the lowercased email (PK=USER#{email}).
+    ADR-031 (B′): rows are keyed by the lowercased email (PK=USER#{email}).
     `subdomain` is stored as a row attribute — it drives the IAM role names
     (`task-{subdomain}`, `local-user-{subdomain}`) used by the enforcer. No sub.
     """

@@ -23,10 +23,11 @@ import boto3
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-# ADR-025: usage rows are keyed by Cognito sub, and the Local Governance role is
-# exactly cc-on-bedrock-local-user-{sub} — so the role name is constructed directly
-# (the old iam_role_lookup reverse-index existed only because rows were keyed by
-# subdomain while roles are keyed by sub; that mismatch is gone).
+# ADR-031 (B′): usage rows are keyed by email; the Local Governance role is named
+# cc-on-bedrock-local-user-{subdomain} (the subdomain is carried on each usage row,
+# derived from the email local-part). _attach_deny builds the role name from that
+# row subdomain — NOT from the email PK suffix. (The old iam_role_lookup reverse-index
+# is gone: ADR-025's sub-vs-subdomain mismatch no longer exists under ADR-031.)
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
 
 REGION = os.environ["AWS_REGION"]
@@ -125,12 +126,13 @@ def _decimal(n) -> Decimal:
 # Limit lookup
 # ──────────────────────────────────────────────────────────
 
-def _get_user_limit(sub: str, period: str, cache: dict | None = None) -> dict:
-    """Look up USER#{sub}/LIMIT#{period} — cache hit avoids GetItem (review #4)."""
+def _get_user_limit(user_key: str, period: str, cache: dict | None = None) -> dict:
+    """Look up USER#{email}/LIMIT#{period} — `user_key` is the canonical email
+    PK suffix (ADR-031). Cache hit avoids GetItem (review #4)."""
     if cache is not None:
-        return cache.get((f"USER#{sub}", f"LIMIT#{period}"), {})
+        return cache.get((f"USER#{user_key}", f"LIMIT#{period}"), {})
     try:
-        r = limits.get_item(Key={"PK": f"USER#{sub}", "SK": f"LIMIT#{period}"})
+        r = limits.get_item(Key={"PK": f"USER#{user_key}", "SK": f"LIMIT#{period}"})
         return r.get("Item") or {}
     except Exception as e:
         print(f"user_limit fetch failed: {e}")
@@ -161,10 +163,10 @@ def _prefetch_limits(records: list) -> dict:
         pk = new.get("PK", "")
         if not pk.startswith("USER#"):
             continue
-        sub = pk[len("USER#"):]
+        user_key = pk[len("USER#"):]  # canonical email (ADR-031)
         dept = new.get("department", "")
         for period in PERIODS:
-            keys.add((f"USER#{sub}", f"LIMIT#{period}"))
+            keys.add((f"USER#{user_key}", f"LIMIT#{period}"))
             if dept:
                 keys.add((f"DEPT#{dept}", f"LIMIT#{period}"))
     if not keys:
@@ -228,23 +230,27 @@ def _deny_policy_doc() -> str:
 def _role_owner_email(role_name: str):
     """Return the role's `email` tag (lowercased) or None. Used to verify a Local
     role belongs to the user before attaching a Deny — defends against a subdomain
-    collision attaching a Deny to a different user's role (ADR-029 owner-tag check)."""
+    collision attaching a Deny to a different user's role (ADR-031 owner-tag check)."""
+    # Use list_role_tags, NOT get_role: the enforcer role is granted iam:ListRoleTags (not
+    # iam:GetRole) on the user-role ARN pattern. get_role would AccessDenied → None → _attach_deny
+    # would skip for EVERY user → token-limit Deny never attached (enforcement bypass). (PR #68 review)
     try:
-        resp = iam.get_role(RoleName=role_name)
-        for t in resp.get("Role", {}).get("Tags", []):
-            if t.get("Key") == "email":
-                return (t.get("Value") or "").strip().lower()
+        resp = iam.list_role_tags(RoleName=role_name)
     except iam.exceptions.NoSuchEntityException:
-        return None
-    except Exception as e:
-        print(f"[DENY] get_role tags failed for {role_name}: {e}")
-    return None
+        return None  # role genuinely doesn't exist → legit skip (not an error)
+    # Transient/unknown errors (throttling, InternalFailure) are deliberately NOT caught: they
+    # propagate → handler records a batchItemFailure → the DynamoDB stream RETRIES, rather than
+    # returning None and silently skipping enforcement for this user (PR #68 review).
+    for t in resp.get("Tags", []):
+        if t.get("Key") == "email":
+            return (t.get("Value") or "").strip().lower()
+    return None  # role exists but has no email tag → caller treats as not-owned (skip)
 
 
 def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str):
     """Attach the Deny policy to the user's Local Governance role.
 
-    ADR-029 (B′): the usage PK is the email; the Local role name is
+    ADR-031 (B′): the usage PK is the email; the Local role name is
     `cc-on-bedrock-local-user-{subdomain}` (subdomain from the usage row, NOT the
     email PK suffix). Fail-safe: if subdomain is missing/invalid we skip rather
     than build a wrong role name. Owner-tag check guards against subdomain
@@ -302,7 +308,7 @@ def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: s
     return True
 
 
-def _maybe_warn(sub: str, period: str, used: Decimal, limit: Decimal, who: str):
+def _maybe_warn(user_key: str, period: str, used: Decimal, limit: Decimal, who: str):
     if limit <= 0:
         return
     ratio = float(used / limit) if limit else 0.0
@@ -312,7 +318,7 @@ def _maybe_warn(sub: str, period: str, used: Decimal, limit: Decimal, who: str):
             try:
                 limits.put_item(
                     Item={
-                        "PK": f"USER#{sub}",
+                        "PK": f"USER#{user_key}",
                         "SK": f"WARN#{period}#{int(threshold*100)}",
                         "ratio": Decimal(str(round(ratio, 4))),
                         "ts": datetime.utcnow().isoformat(),
@@ -377,7 +383,7 @@ def process_record(rec: dict, limit_cache: dict | None = None):
     if "#" not in sk:
         return  # not a {date}#{model} row
 
-    user_key = pk[len("USER#"):]  # ADR-029: this is the email
+    user_key = pk[len("USER#"):]  # ADR-031: this is the email
     subdomain = (new or {}).get("subdomain")  # drives the Local role name
     model = (new or {}).get("model", "")
     dept = (new or {}).get("department", "default")

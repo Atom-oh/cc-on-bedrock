@@ -1,16 +1,16 @@
 ---
 status: Superseded
-superseded_by: ADR-029
+superseded_by: ADR-031
 date: 2026-06-09
-verification_required: true
+verification_required: false
 builds_on: ADR-014
 ---
 
 # ADR-025: 사용량/한도 파이프라인의 canonical 유저 식별자 = Cognito sub
 
-> **⚠ Superseded by [ADR-029](ADR-029-usage-email-canonical-key.md) (2026-06-13).** 운영 진단: sub 키는 (a) 트래커 EC2 경로의 `custom:subdomain` 필터가 Cognito 미지원 → 항상 실패 → `USER#{subdomain}` fallback으로 **동일인 분할 + 집행 우회**, (b) UUID라 가독성 0. ADR-029는 canonical 키를 **email**, 모든 IAM 롤명을 **subdomain**으로 전환하고 sub를 식별자에서 제거한다.
+> **⚠ Superseded by [ADR-031](ADR-031-usage-email-canonical-key.md) (2026-06-13).** 운영 진단: sub 키는 (a) 트래커 EC2 경로의 `custom:subdomain` 필터가 Cognito 미지원 → 항상 실패 → `USER#{subdomain}` fallback으로 **동일인 분할 + 집행 우회**, (b) UUID라 가독성 0. ADR-031는 canonical 키를 **email**, 모든 IAM 롤명을 **subdomain**으로 전환하고 sub를 식별자에서 제거한다.
 
-**Status:** Superseded by ADR-029 — (구) 코드 cutover 구현 완료(usage-tracker/budget-check/enforcer sub-키), stale 비-Cognito 레코드 정리 완료(2026-06-10, `scripts/cleanup-stale-budget-users.py`)
+**Status:** Superseded by ADR-031 — (구) 코드 cutover 구현 완료(usage-tracker/budget-check/enforcer sub-키), stale 비-Cognito 레코드 정리 완료(2026-06-10, `scripts/cleanup-stale-budget-users.py`)
 **Date:** 2026-06-09
 **Builds on:** [ADR-014 Local Governance Mode](ADR-014-local-governance-mode.md)
 **Collaboration:** co-agent 패널(Kiro CLI · Codex · Gemini) 의사결정, Claude chair 합성
@@ -96,35 +96,11 @@ sub 기반인 읽기 측에 맞춘다. 사람 가독성은 **표시 계층에서
 
 ## Verification
 
-```yaml
-# Tier 1: Static
-files:
-  - path: cdk/lib/lambda/bedrock-usage-tracker.py
-    must_contain:
-      - "USER#{sub}"
-  - path: cdk/lib/lambda/budget-check.py
-    must_contain:
-      - "ADR-025"
-      - "_candidate_role_names"
-  - path: cdk/lib/lambda/token-limit-enforcer.py
-    must_contain:
-      - "USER#"
-  - path: scripts/cleanup-stale-budget-users.py
-    must_exist: true
-
-# Tier 2: Semantic
-semantic:
-  - claim: "usage 파이프라인의 쓰기 키가 USER#{sub}(Cognito sub)로 통일되어 있고, EC2 task/Local 역할명에서 sub를 역해석한다"
-    context_files:
-      - cdk/lib/lambda/bedrock-usage-tracker.py
-  - claim: "budget-check가 sub 키 기준으로 사용량을 집계하고 Local(cc-on-bedrock-local-user-{sub})·EC2(cc-on-bedrock-task-{subdomain}) 역할 모두에 deny를 처리한다"
-    context_files:
-      - cdk/lib/lambda/budget-check.py
-  - claim: "비-Cognito 식별자(raw IAM principal 등)는 usage/budget 집계·표시에서 제외된다"
-    context_files:
-      - cdk/lib/lambda/budget-check.py
-      - shared/nextjs-app/src/app/api/admin/budgets/route.ts
-```
+**Superseded — no active verification.** This ADR's canonical key (`USER#{sub}`, Cognito sub) was
+replaced by **[ADR-031](ADR-031-usage-email-canonical-key.md)** (`USER#{email}`). The static/semantic
+assertions that once pinned the `USER#{sub}` implementation no longer match the codebase by design,
+so they are removed here (a superseded ADR must not assert its replaced behavior). The current
+usage-pipeline key is verified by ADR-031.
 
 ## Follow-ups (RESOLVED — cutover 완료)
 - ~~dual-write tracker 구현(1단계) → backfill 스크립트 → cutover.~~ **RESOLVED**: tracker가 직접 `USER#{sub}` 단일 키로 기록하도록 cutover 완료. dual-write/backfill 단계는 불필요해져 생략됨.

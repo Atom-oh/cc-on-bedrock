@@ -1,242 +1,145 @@
-name: PR Review (Claude Code)
+name: AI Code Review
+
+# PR마다 멀티 AI 패널(Codex + Kiro x3 + Antigravity)이 리뷰하고 Claude Opus 4.8 의장이
+# 종합해 코멘트로 게시(fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
+#   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
+#   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO/ANTIGRAVITY)
+#   - 리전: us-east-1 (Claude us. geo / codex gpt-5.5 bedrock-mantle In-Region)
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize]
-
-permissions:
-  contents: read
-  id-token: write
-  pull-requests: write
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  AWS_REGION: ap-northeast-2
-  # Pin the model explicitly so the workflow does not silently break when the
-  # claude CLI default changes or the model is unavailable in the AWS account.
-  # Opus 4.8 — inference-profile/global.anthropic.claude-opus-4-8 in ap-northeast-2.
-  ANTHROPIC_MODEL: global.anthropic.claude-opus-4-8
-  CLAUDE_CODE_USE_BEDROCK: "1"
 
 jobs:
   review:
     name: AI Code Review
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: cc-on-bedrock-claude-arm
     concurrency:
       group: pr-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-
+    permissions:
+      pull-requests: write
+      contents: read
+    env:
+      # us-east-1 통일: Claude us. geo(on-demand) + codex gpt-5.5 mantle(In-Region).
+      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-8
+      CLAUDE_CODE_USE_BEDROCK: 1
+      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
+      AWS_REGION: us-east-1
     steps:
+      # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Generate PR diff
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Verify CLIs present (runner image)
         run: |
-          # Fetch full diff, then strip generated artefacts / lockfiles / build
-          # output hunks before review so the model sees only meaningful changes.
-          # Each diff hunk starts with `diff --git a/<path> b/<path>` — awk
-          # toggles a skip flag per hunk based on the path.
-          git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/pr-diff-raw.txt
+          command -v claude >/dev/null 2>&1 || { echo "::warning::claude not found"; npm install -g @anthropic-ai/claude-code; }
+          claude --version
+          for c in codex kiro-cli; do
+            command -v "$c" >/dev/null 2>&1 || echo "::warning::$c not found on runner (image needs rebuild)"
+          done
+
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff-raw.txt
           awk '
             /^diff --git/ {
-              # $3 is "a/<path>" — strip leading "a/" to get the path
               path = substr($3, 3)
-              skip = (path ~ /(^|\/)tsconfig\.tsbuildinfo$/) ||
-                     (path ~ /\.tsbuildinfo$/) ||
-                     (path ~ /(^|\/)package-lock\.json$/) ||
-                     (path ~ /(^|\/)yarn\.lock$/) ||
+              skip = (path ~ /(^|\/)package-lock\.json$/) ||
                      (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
-                     (path ~ /^cdk\/lib\/\.gen\//) ||
-                     (path ~ /^cdk\/lib\/lambda\/devenv-session-validator-built\//) ||
-                     (path ~ /^cdk\.out\//) ||
-                     (path ~ /^shared\/nextjs-app\/\.next\//) ||
-                     (path ~ /^Screenshot /)
+                     (path ~ /(^|\/)yarn\.lock$/) ||
+                     (path ~ /(^|\/)node_modules\//) ||
+                     (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
+                     (path ~ /(^|\/)(dist|out|build)\//) ||
+                     (path ~ /\.terraform\.lock\.hcl$/)
             }
             !skip
           ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
+          echo "total_lines=$(wc -l < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
 
-          RAW=$(wc -l < /tmp/pr-diff-raw.txt)
-          LINES=$(wc -l < /tmp/pr-diff.txt)
-          echo "Diff: $LINES lines (raw $RAW, filtered $((RAW - LINES)))"
-
-          if [ "$LINES" -gt 5000 ]; then
-            head -5000 /tmp/pr-diff.txt > /tmp/pr-diff-review.txt
-            echo "TRUNCATED=true" >> "$GITHUB_ENV"
-          else
-            cp /tmp/pr-diff.txt /tmp/pr-diff-review.txt
-            echo "TRUNCATED=false" >> "$GITHUB_ENV"
+      - name: Build panel prompt
+        run: |
+          set -euo pipefail
+          MAX_LINES=3000
+          head -"$MAX_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-truncated.txt
+          cat <<'PROMPT_EOF' > /tmp/panel-prompt.txt
+          Review the diff provided via stdin for bugs, security risks, logic errors,
+          and convention violations (read CLAUDE.md / AGENTS.md for this repo's conventions).
+          Output concise findings grouped CRITICAL/MAJOR/MINOR.
+          DO NOT output a VERDICT line — that is the chair's job.
+          한국어+영문 기술용어 혼용 가능.
+          PROMPT_EOF
+          if [ "${total_lines:-0}" -gt "$MAX_LINES" ]; then
+            echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed." >> /tmp/panel-prompt.txt
+            echo "panel_truncated=1" >> "$GITHUB_ENV"
           fi
-          echo "REVIEW_LINES=$LINES" >> "$GITHUB_ENV"
 
-      - name: Review with Claude Code
+      - name: Run panel + synthesize
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PANEL_TIMEOUT: "300"
         run: |
-          # fail-soft: capture stderr and any non-zero exit so the post-comment
-          # step always has something to publish. Without this the step exits 1
-          # via the default `bash -e {0}` shell, leaving the PR with zero signal.
-          # Prompt is a heredoc rather than a quoted CLI arg so commas/quotes are safe.
-          cat <<PROMPT_EOF > /tmp/prompt.txt
-          You are reviewing PR #${PR_NUMBER}: ${PR_TITLE}
+          set -euo pipefail
+          mkdir -p /tmp/pr-review
+          bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/panel-prompt.txt /tmp/pr-review
+          bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
+            "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
+          echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
-          Read CLAUDE.md (project root, plus relevant module-level CLAUDE.md under cdk/, shared/nextjs-app/, docker/, terraform/, cloudformation/, tools/, tests/) for project context, then review the PR diff provided via stdin.
-
-          ## Required output structure
-
-          1. **Summary** — 2-3 sentences on what this PR does, ground them in the actual diff (file paths, behavior changes).
-          2. **Issues** — bugs, security risks, logic errors. Group by severity headers:
-             - \`### CRITICAL\` — production-breaking: data loss, security holes, infinite loops, crashes on common input, IAM over-grant that escalates privilege
-             - \`### MAJOR\` — significant correctness or performance: N+1 queries, missing await, race conditions, missing input validation, IAM resource too broad, broken happy-path edge case
-             - \`### MINOR\` — quality/maintainability: dead code, unclear naming, missing comment for non-obvious code, brittle test, missing CLAUDE.md update
-             Omit a severity header if no issues at that level.
-          3. **Suggestions** — non-blocking improvements (refactors, follow-up ADRs, telemetry adds). Bullet list.
-          4. **Verdict** — one short paragraph: LGTM / Changes Requested + reasoning.
-
-          ## Rules
-
-          - Every issue MUST cite a specific file and line number, e.g. \`cdk/lib/lambda/sts-issuer.py:142\`. If you cannot point to a line, do not raise it.
-          - Be concise: 1-3 sentences per finding. Quote a 1-line snippet only when ambiguity demands it.
-          - Korean for explanations, English for code/identifiers.
-          - Project context: AWS CDK (TypeScript) + Next.js (App Router) + ECS + Bedrock. Multi-tenant per-user IAM. ADR-014 Local Governance / ADR-015 budget×token / ADR-016 CloudFront split / ADR-019 model normalization / ADR-020 runtime IAM upsert.
-          - Specifically check (when relevant to the diff):
-            - **IAM** — least privilege, resource ARNs not '*', no PassRole without service condition, AssumeRole trust policy correctness
-            - **NextAuth / API routes** — \`getServerSession\` check, admin gating on \`/admin/*\`, no PII in logs
-            - **Bedrock** — model normalization (ADR-019), wildcard ARN scope (ADR-021), token usage attribution
-            - **CDK** — cross-stack export safety (no synth-time hard deps), \`crossRegionReferences\` correctness, \`logRetention\` not deprecated, \`pointInTimeRecovery\` not deprecated
-            - **CloudFront** — Lambda@Edge cold-start handling, SSM secret access, replication delay risk
-            - **Lambda Python** — DynamoDB conditional writes for idempotency, exception handling on AWS API calls, retry/backoff for IAM eventual consistency
-          - Do NOT flag style preferences (formatting, naming preference, where to put braces).
-          - Do NOT flag changes already covered by an ADR (e.g. don't flag wildcard Claude ARN — ADR-021).
-          - The very last line of your output MUST be exactly one of:
-            \`VERDICT: PASS\`
-            \`VERDICT: FAIL\`
-            Use FAIL if there is at least one CRITICAL or MAJOR issue. Otherwise PASS.
-          - Output ONLY the markdown review (Summary / Issues / Suggestions / Verdict + final VERDICT line). No preamble, no closing remarks.
-          PROMPT_EOF
-
-          set +e
-          cat /tmp/pr-diff-review.txt \
-            | claude -p "$(cat /tmp/prompt.txt)" \
-            > /tmp/review.md 2> /tmp/claude-err.log
-          CLAUDE_EXIT=$?
-          set -e
-
-          if [ "$CLAUDE_EXIT" -ne 0 ] || [ ! -s /tmp/review.md ]; then
-            echo "Claude CLI failed (exit=$CLAUDE_EXIT)" >&2
-            cat /tmp/claude-err.log >&2 || true
-            {
-              echo "## AI Review Tool Error"
-              echo ""
-              echo "Claude CLI exited with status \`$CLAUDE_EXIT\`. Output size: \`$(wc -c < /tmp/review.md) bytes\`."
-              echo ""
-              if [ -s /tmp/claude-err.log ]; then
-                echo "**stderr:**"
-                echo '```'
-                head -40 /tmp/claude-err.log
-                echo '```'
-                echo ""
-              fi
-              echo "**Common causes:**"
-              echo "- Bedrock model \`${ANTHROPIC_MODEL}\` not active or access-denied in \`${AWS_REGION}\` (IAM role lacks invoke permission)"
-              echo "- Diff still too large for the model input window after filtering (review_lines=\`${REVIEW_LINES}\`)"
-              echo "- \`claude\` CLI install failed or version incompatible with \`--output-format\` flags"
-              echo "- Network egress blocked to \`bedrock-runtime.${AWS_REGION}.amazonaws.com\`"
-              echo ""
-              echo "PR can still be merged manually if reviewers are satisfied; this is an informational reviewer, not a blocking check."
-            } > /tmp/review.md
-          fi
-          echo "Review generated: $(wc -c < /tmp/review.md) bytes"
-
-      - name: Parse verdict
+      - name: Check for blocking issues
         id: gate
         run: |
-          # Read the final VERDICT line. This is INFORMATIONAL — the workflow
-          # never exits non-zero based on the verdict; the badge in the comment
-          # is the only effect. To turn this into a true blocking gate, add an
-          # `Enforce gate` step downstream and register it as a required check.
-          # Patterns tolerate trailing whitespace / CR so model output quirks
-          # don't trip the parser.
-          if grep -Eq "^VERDICT: FAIL[[:space:]]*$" /tmp/review.md; then
+          if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=VERDICT: FAIL (CRITICAL or MAJOR issues present)" >> "$GITHUB_OUTPUT"
-          elif grep -Eq "^VERDICT: PASS[[:space:]]*$" /tmp/review.md; then
+          elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
-            echo "reason=No CRITICAL or MAJOR issues" >> "$GITHUB_OUTPUT"
-          elif [ -s /tmp/review.md ] && ! grep -q "## AI Review Tool Error" /tmp/review.md; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=No VERDICT line found — fail-closed" >> "$GITHUB_OUTPUT"
           else
-            # Tool failure already wrote the error block; treat as PASS (informational)
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-            echo "reason=Review tool failed; not blocking" >> "$GITHUB_OUTPUT"
+            echo "result=fail" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Post review comment
+      - name: Post review comment (upsert)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           GATE_RESULT: ${{ steps.gate.outputs.result }}
-          GATE_REASON: ${{ steps.gate.outputs.reason }}
         run: |
-          MARKER="<!-- bedrock-pr-review -->"
-
-          # This badge is informational — the verdict does NOT block PR merge.
-          # Reviewers decide whether to act on the finding. Word the badge so it
-          # reflects severity, not enforcement: "Issues found" instead of "BLOCKED".
+          MARKER="<!-- multi-ai-pr-review -->"
           if [ "$GATE_RESULT" = "fail" ]; then
-            STATUS_BADGE="**Verdict: Issues Found (CRITICAL or MAJOR)** — ${GATE_REASON}"
+            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
           else
-            STATUS_BADGE="**Verdict: LGTM** — ${GATE_REASON}"
+            STATUS_BADGE="**Status: PASSED** — No blocking issues found"
           fi
-
-          # Strip the VERDICT: line wherever it appears (model output occasionally
-          # has trailing blank lines; the position-anchored `$ {}` form misses it
-          # when VERDICT isn't on the literal last line).
-          sed -E '/^VERDICT: (PASS|FAIL)[[:space:]]*$/d' /tmp/review.md > /tmp/review-clean.md
-
+          sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## AI Code Review (Claude Code + ${ANTHROPIC_MODEL##*.})"
+            echo "## 🤖 AI Code Review (Claude Opus 4.8 chair · Codex + Kiro panel)"
+            echo ""
+            echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
+            [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
             cat /tmp/review-clean.md
-            if [ "${TRUNCATED:-false}" = "true" ]; then
-              echo ""
-              echo "> Note: Diff was truncated to 5000 lines for review."
-            fi
             echo ""
             echo "---"
-            echo "_Automated review by Claude Code CLI with Bedrock (model: \`${ANTHROPIC_MODEL}\`)_"
+            echo "_Triggered by commit \`${{ github.event.pull_request.head.sha }}\` · workflow: \`.github/workflows/pr-review.yml\`_"
           } > /tmp/comment.md
-
-          # Idempotent: PATCH existing review comment if found (marker match),
-          # else post a new one. Avoids comment spam on every push to the PR.
           EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
+            --jq '.[] | select(.body | contains("<!-- multi-ai-pr-review -->")) | .id' 2>/dev/null | head -1)
           if [ -n "$EXISTING" ]; then
-            gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH \
-              -f body="$(cat /tmp/comment.md)" 2>/dev/null \
-              || gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+            gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH -f body="$(cat /tmp/comment.md)" 2>/dev/null || \
+              gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
           else
             gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
           fi
+
+      - name: Fail if CRITICAL or MAJOR
+        if: steps.gate.outputs.result == 'fail'
+        run: |
+          echo "AI Review failed"
+          exit 1

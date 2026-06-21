@@ -34,7 +34,7 @@ KST = timezone(timedelta(hours=9))
 
 
 def _role_for_item(item: dict):
-    """Resolve the Local Governance role name for a DENY#active record (ADR-029 B′).
+    """Resolve the Local Governance role name for a DENY#active record (ADR-031 B′).
 
     The limits PK is now the email, so the role name comes from the record's
     `subdomain` attribute (written by the enforcer): cc-on-bedrock-local-user-
@@ -51,20 +51,24 @@ def _role_for_item(item: dict):
     return None  # email PK without subdomain attr → cannot safely build a role
 
 
-def _detach(role: str) -> bool:
-    """Detach the deny policy from the given Local Governance role.
-    NoSuchEntity (no Local role for this user) is treated as a normal skip."""
+def _detach(role: str) -> str:
+    """Detach the deny policy from the given Local Governance role. Returns a tri-state so the
+    caller knows whether it is SAFE to clear the DENY#active tracking row (PR #68 review):
+      "ok"     — policy detached;
+      "absent" — role or policy already gone (NoSuchEntity) → deny is not attached → safe to clear;
+      "error"  — transient/unknown failure → deny may still be attached → do NOT clear (retry).
+    """
     if not role:
-        return False
+        return "error"
     try:
         iam.delete_role_policy(RoleName=role, PolicyName=DENY_POLICY_NAME)
         print(f"[RESET] detached {DENY_POLICY_NAME} from {role}")
-        return True
+        return "ok"
     except iam.exceptions.NoSuchEntityException:
-        return False
+        return "absent"
     except Exception as e:
         print(f"[RESET] detach failed for {role}: {e}")
-        return False
+        return "error"
 
 
 def _scan_deny_active(period: str):
@@ -169,8 +173,24 @@ def handler(event, context):
 
     detached = 0
     for item in _scan_deny_active(period):
-        if _detach(_role_for_item(item)):
+        role = _role_for_item(item)
+        if role is None:
+            # Email-keyed row without a `subdomain` attr → can't resolve the Local role, so the
+            # IAM Deny may still be attached. Preserve DENY#active + warn rather than silently
+            # clearing the only tracking record → avoids permanent lockout (PR #68 review).
+            # Same fail-safe as admin/limits/reset/route.ts: it also PRESERVES DENY#active
+            # (returns 207 + warning, no delete) when the role can't be resolved.
+            print(f"[RESET] role unresolved for {item.get('PK')} — preserving DENY#active (deny may remain attached)")
+            continue
+        status = _detach(role)
+        if status == "error":
+            # Transient IAM failure: deny may still be attached → keep DENY#active so the next
+            # scheduled run retries. Clearing it now would orphan the deny (permanent lockout).
+            print(f"[RESET] detach error for {role} — preserving DENY#active for retry")
+            continue
+        if status == "ok":
             detached += 1
+        # "ok" or "absent": the deny is not attached → safe to clear the tracking row.
         try:
             limits.delete_item(Key={"PK": item["PK"], "SK": "DENY#active"})
         except Exception as e:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ADR-029 (B′) backfill: re-key usage/limits/user-budgets from Cognito sub /
+"""ADR-031 (B′) backfill: re-key usage/limits/user-budgets from Cognito sub /
 subdomain → email, and create subdomain-named Local Governance IAM roles.
 
 Rows historically keyed by PK=USER#{sub} (ADR-025) or PK=USER#{subdomain} (the
-broken EC2 fallback) are rewritten to PK=USER#{email.lower()} — the ADR-029
+broken EC2 fallback) are rewritten to PK=USER#{email.lower()} — the ADR-031
 canonical key. A `subdomain` attribute is preserved/added on every row, and the
 per-user LIMIT# record additionally carries a transition `sub` (so the enforcer
 can still target a legacy local-user-{sub} role during cutover — dropped later).
@@ -40,9 +40,16 @@ REGION_DEFAULT = "ap-northeast-2"
 LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"
 
 # Numeric usage/counter fields summed on SK conflict (sum-preserving merge).
+# - usage table ({date}#{model} rows): the 8 token/cost/latency fields.
+# - limits table (COUNTER#{period}#{bucket} rows): `normalized` — the cumulative
+#   normalized-token count the enforcer ADDs (token-limit-enforcer._add_counter).
+#   It MUST be summed too; a split-identity user can have a counter under both
+#   USER#{sub} and USER#{subdomain} for the same bucket, and dropping it here would
+#   under-count enforcement (the exact loss this migration exists to fix).
 COUNTER_FIELDS = (
     "inputTokens", "outputTokens", "totalTokens", "cacheReadTokens",
     "cacheWriteTokens", "requests", "estimatedCost", "latencySumMs",
+    "normalized",
 )
 
 
@@ -105,10 +112,6 @@ def merge_counters(existing: dict, incoming: dict) -> dict:
         if f in existing or f in incoming:
             merged[f] = _num(existing.get(f)) + _num(incoming.get(f))
     return merged
-
-
-def _is_counter_sk(sk: str) -> bool:
-    return sk.startswith("COUNTER#") or "#" in sk and not sk.startswith(("LIMIT#", "DENY#", "WARN#"))
 
 
 def plan_row(item: dict, maps: dict):
@@ -186,7 +189,11 @@ def _migrate_table(table, maps, args, label):
                 continue
             new_item, old_key, is_limit = planned
             tgt_key = {"PK": new_item["PK"], "SK": new_item["SK"]}
-            existing = table.get_item(Key=tgt_key).get("Item") if args.apply else None
+            # ConsistentRead: two source rows (USER#{sub} + USER#{subdomain}) for the same person
+            # merge into ONE target SK. The eventually-consistent default could let the 2nd merge's
+            # read miss the 1st merge's just-written put → overwrite instead of sum → counter loss
+            # (the exact split-identity case this migration fixes). Strong read closes that window.
+            existing = table.get_item(Key=tgt_key, ConsistentRead=True).get("Item") if args.apply else None
             if existing and not is_limit:
                 new_item = merge_counters(existing, new_item)
                 merged += 1
@@ -198,10 +205,16 @@ def _migrate_table(table, maps, args, label):
             # up twice in the UI. --delete-old gates only IAM ROLE deletion (active
             # sessions), never DynamoDB rows.
             delete_src = args.apply
+            # prefer-new: for LIMIT#/DENY#/WARN# (is_limit) rows, an existing USER#{email} target is
+            # authoritative (e.g. an admin set it post-migration) — do NOT clobber it with the legacy
+            # source value; just drop the source. Counter rows (not is_limit) are summed via merge above.
+            prefer_existing = bool(is_limit and existing)
             print(f"  [{label}] {old_key['PK']} | SK={old_key['SK']} → {new_item['PK']}"
-                  f"{' (merge)' if existing and not is_limit else ''}{' +del-src' if delete_src else ''}")
+                  f"{' (merge)' if existing and not is_limit else ''}"
+                  f"{' (prefer-existing)' if prefer_existing else ''}{' +del-src' if delete_src else ''}")
             if args.apply:
-                table.put_item(Item=new_item)
+                if not prefer_existing:
+                    table.put_item(Item=new_item)
                 if delete_src:
                     table.delete_item(Key=old_key)
                     deleted += 1

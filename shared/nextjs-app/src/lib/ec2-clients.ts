@@ -1838,6 +1838,8 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
           Resource: [
             `arn:aws:bedrock:*::foundation-model/*anthropic.claude-*`,
             `arn:aws:bedrock:*:${accountId}:inference-profile/*anthropic.claude-*`,
+            `arn:aws:bedrock:*::foundation-model/*embed*`,
+            `arn:aws:bedrock:*:${accountId}:inference-profile/*embed*`,
             `arn:aws:bedrock:*:${accountId}:application-inference-profile/*`,
           ],
         },

@@ -8,6 +8,8 @@ import AreaTrendChart from "@/components/charts/area-trend-chart";
 import MultiLineChart from "@/components/charts/multi-line-chart";
 import HorizontalBarChart from "@/components/charts/horizontal-bar-chart";
 import DonutChart from "@/components/charts/donut-chart";
+import UserDailyTrendChart from "@/components/charts/user-daily-trend-chart";
+import type { UserDailyTrend } from "@/lib/usage-client";
 import type {
   SpendLog,
   ModelMetrics,
@@ -299,6 +301,7 @@ export default function AnalyticsDashboard({
   const [deptSummaries, setDeptSummaries] = useState<DepartmentSummary[]>([]);
   const [userSummariesApi, setUserSummariesApi] = useState<UserUsageSummary[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
+  const [userTrend, setUserTrend] = useState<UserDailyTrend | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -345,6 +348,17 @@ export default function AnalyticsDashboard({
       if (userSumRes) {
         const userSumJson = (await userSumRes.json()) as ApiResponse<UserUsageSummary[]>;
         setUserSummariesApi(userSumJson.data ?? []);
+      }
+
+      // Per-user daily trend (server scopes by role: admin=all, dept-manager=dept, user=self)
+      try {
+        const trendRes = await fetch(`/api/usage?action=user_daily_trend&start_date=${start}&end_date=${end}`);
+        if (trendRes.ok) {
+          const trendJson = (await trendRes.json()) as ApiResponse<UserDailyTrend>;
+          setUserTrend(trendJson.data ?? null);
+        }
+      } catch (trendErr) {
+        console.error("User daily trend fetch failed:", trendErr);
       }
 
       setLastUpdated(new Date());
@@ -687,6 +701,16 @@ export default function AnalyticsDashboard({
           </button>
         </div>
       </div>
+
+      {/* Per-user daily usage trend (scoped server-side by role) */}
+      {userTrend && userTrend.series.length > 0 && (
+        <div className="mb-6">
+          <UserDailyTrendChart
+            trend={userTrend}
+            title={userTrend.series.length > 1 ? "Department Daily Usage" : "My Daily Usage"}
+          />
+        </div>
+      )}
 
       {/* Filters */}
       {isAdmin && logs.length > 0 && (

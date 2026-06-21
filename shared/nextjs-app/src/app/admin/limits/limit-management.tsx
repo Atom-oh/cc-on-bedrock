@@ -101,13 +101,13 @@ export default function LimitManagement() {
 
           <label className="flex flex-col text-xs sm:col-span-2">
             <span className="text-gray-500 mb-1.5 font-medium">
-              {form.entity === "USER" ? "Cognito sub" : "Department"}
+              {form.entity === "USER" ? "User email" : "Department"}
             </span>
             <input
               className={inputBase}
               value={form.key}
               onChange={(e) => setForm({ ...form, key: e.target.value })}
-              placeholder={form.entity === "USER" ? "04d8edac-e041-7010-…" : "platform-team"}
+              placeholder={form.entity === "USER" ? "user@example.com" : "platform-team"}
             />
           </label>
 
@@ -148,7 +148,7 @@ export default function LimitManagement() {
             {saving ? "Saving…" : "Save"}
           </button>
           <p className="text-xs text-gray-500">
-            Aliases: daily / weekly / monthly • USER key = Cognito <code>sub</code>, DEPT key = <code>department</code> attribute
+            Aliases: daily / weekly / monthly • USER key = lowercased <code>email</code> (ADR-031), DEPT key = <code>department</code> attribute
           </p>
         </div>
 

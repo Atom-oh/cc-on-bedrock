@@ -11,7 +11,7 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
 // ADR-014/015: admin CRUD for normalized-token limits in cc-on-bedrock-limits.
 //
-// Schema (ADR-029 B′):
+// Schema (ADR-031 B′):
 //   PK = "USER#{email}" | "DEPT#{dept}"   (canonical user key = lowercased email)
 //   SK = "LIMIT#{daily|weekly|monthly}"
 //   attrs: max_normalized (number), updatedAt (string)
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(max) || max < 0) {
     return NextResponse.json({ error: "maxNormalized must be >= 0" }, { status: 400 });
   }
-  // ADR-029 (B′): USER key is the email — lowercase it so the written LIMIT# PK
+  // ADR-031 (B′): USER key is the email — lowercase it so the written LIMIT# PK
   // matches USER#{email.lower()} that the tracker/enforcer key by (else the cap
   // is invisible to the enforcer → token-limit bypass). DEPT keys are unaffected.
   const pkKey = entity === "USER" ? key.trim().toLowerCase() : key;
