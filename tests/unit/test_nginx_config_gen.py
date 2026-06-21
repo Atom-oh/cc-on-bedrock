@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-LAMBDA = REPO / "cdk/lib/lambda/nginx-config-gen.py"
+LAMBDA = REPO / "lambda/nginx-config-gen.py"
 
 
 def _load_module():

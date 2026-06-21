@@ -79,8 +79,9 @@ module "ec2_devenv" {
   vpc_cidr             = module.network.vpc_cidr
   kms_key_arn          = module.security.kms_key_arn
   devenv_instance_type = var.devenv_instance_type
-  # task_permission_boundary_arn intentionally left default ("") — the boundary
-  # is created by CDK Stack 02; pass its ARN via tfvars when running TF-only.
+  # ADR-033: the boundary is now created by the TF security module (was CDK Stack 02).
+  # Wire it so per-user DevEnv roles are created WITH the ADR-026 grant ceiling.
+  task_permission_boundary_arn = module.security.task_permission_boundary_arn
 }
 
 # ---- 03 Usage Tracking (DynamoDB, Lambdas, EventBridge, OTel) ----------------
