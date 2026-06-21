@@ -95,7 +95,7 @@ variable "devenv_instance_type" {
 variable "lambda_src_dir" {
   description = "Path to Lambda source (cdk/lib/lambda), relative to terraform/ root"
   type        = string
-  default     = "../cdk/lib/lambda"
+  default     = "../lambda"
 }
 
 variable "dashboard_subdomain" {

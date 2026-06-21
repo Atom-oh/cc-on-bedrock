@@ -11,7 +11,7 @@ echo "== nginx config generator: code-server boot 502 interception (unit) =="
 python3 -m pytest tests/unit/test_nginx_config_gen.py -q
 
 echo "== Lambda unit tests (usage/limits/rollup, incl. OTel productivity rollup) =="
-python3 -m pytest cdk/lib/lambda/__tests__ -q
+python3 -m pytest lambda/__tests__ -q
 
 echo "== Local CLI (cc-bedrock-local): syntax + credential_process unit tests =="
 bash -n tools/cc-bedrock-local.sh
@@ -23,14 +23,9 @@ bash tests/unit/test-build-ami-datavol.sh
 echo "== ADR-026: boundary ⊇ service-allowlist invariant (self-test) =="
 python3 scripts/check-policyset-boundary.py --self-test
 
-# Full invariant check when a synthesized Security template is available
-# (CI synth step writes cdk/cdk.out/CcOnBedrock-Security.template.json).
-TPL="cdk/cdk.out/CcOnBedrock-Security.template.json"
-if [ -f "$TPL" ]; then
-  echo "== ADR-026: boundary ⊇ service-allowlist (synthesized template) =="
-  python3 scripts/check-policyset-boundary.py --template "$TPL"
-else
-  echo "(skip boundary template check — no synthesized template; run 'cd cdk && npx cdk synth CcOnBedrock-Security')"
-fi
+# ADR-033: CDK removed — boundary is now defined in terraform/modules/security
+# (aws_iam_policy.task_permission_boundary). The --self-test above validates the
+# coverage logic; the deployed boundary is verified by `terraform plan` (drift) +
+# Phase-B live checks. (Former cdk synth template check retired with cdk/.)
 
 echo "ALL GREEN"

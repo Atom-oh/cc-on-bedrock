@@ -25,7 +25,7 @@ variable "project_prefix" {
 variable "lambda_src_dir" {
   description = "Path to Lambda source (cdk/lib/lambda) for archive packaging"
   type        = string
-  default     = "../cdk/lib/lambda"
+  default     = "../lambda"
 }
 
 variable "dashboard_subdomain" {
