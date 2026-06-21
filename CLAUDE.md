@@ -2,7 +2,7 @@
 
 ## Overview
 CC-on-Bedrock: AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼.
-CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 3가지 IaC로 동일 인프라 구현.
+**Terraform(HCL)이 유일한 IaC** (ADR-033: CDK·CloudFormation 폐기, 2026-06). Lambda 소스는 `lambda/` (repo root), TF가 archive_file로 패키징. State는 S3 backend(`cc-on-bedrock-tfstate-{account}`).
 
 두 가지 배포 프로파일 지원:
 - **EC2 DevEnv 모드** (기본, ADR-004): per-user EC2에서 Claude Code 실행
