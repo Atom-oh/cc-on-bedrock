@@ -51,3 +51,9 @@ variable "ecs_host_instance_type" {
   type    = string
   default = "m7g.4xlarge"
 }
+
+variable "lambda_src_dir" {
+  description = "Path to Lambda source (cdk/lib/lambda) for archive packaging"
+  type        = string
+  default     = "../lambda"
+}

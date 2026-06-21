@@ -53,6 +53,16 @@ import {
 } from "@aws-sdk/client-secrets-manager";
 import { randomBytes } from "crypto";
 import type { CustomRoute, CustomRoutesRecord } from "@/lib/types";
+import {
+  findDataVolume,
+  resolveSubnetForAz,
+  planDataVolumeLaunch,
+  dataVolumeIdFromInstance,
+  tagDataVolumeAfterLaunch,
+  attachDataVolume,
+  waitForVolumeAvailable,
+  deleteDataVolume,
+} from "@/lib/data-volume";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const ec2Client = new EC2Client({ region });
@@ -160,6 +170,31 @@ export interface InstanceInfo {
  * - If instance exists (stopped): StartInstances
  * - If no instance: RunInstances from Launch Template
  */
+/**
+ * Phase 1 (OTel productivity monitoring): user-data lines that enable Claude Code
+ * telemetry on an EC2/AMI devenv. EC2 devenvs run code-server natively (systemd), NOT the
+ * container `entrypoint.sh`, so the OTel env must be written to /etc/environment here (which
+ * the `claude` process inherits). Returns [] when no collector endpoint is configured, so
+ * telemetry stays off fail-safe. `email` is the ADR-029 canonical key (= Cognito username).
+ */
+function otelEnvUserData(email: string, department: string): string[] {
+  const ep = process.env.OTEL_COLLECTOR_ENDPOINT;
+  if (!ep) return [];
+  const endpoint = /^https?:\/\//.test(ep) ? ep : `http://${ep}`;
+  const dept = department || "default";
+  const attrs = email
+    ? `enduser.id=${email},department=${dept},deploy_mode=ec2`
+    : `department=${dept},deploy_mode=ec2`;
+  return [
+    `echo "CLAUDE_CODE_ENABLE_TELEMETRY=1" >> /etc/environment`,
+    `echo "OTEL_METRICS_EXPORTER=otlp" >> /etc/environment`,
+    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=grpc" >> /etc/environment`,
+    `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}" >> /etc/environment`,
+    `echo "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta" >> /etc/environment`,
+    `echo "OTEL_RESOURCE_ATTRIBUTES=${attrs}" >> /etc/environment`,
+  ];
+}
+
 export async function startInstance(input: StartInstanceInput): Promise<InstanceInfo> {
   // Fail-closed: unknown/missing policy lands on the restricted tier, never open.
   // Computed up front so BOTH paths (restart of an existing stopped instance and
@@ -304,8 +339,20 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
   const sg = SG_MAP[effectivePolicy];
   const dlp = dlpCodeServerUserData(effectivePolicy);
-  const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
+
+  // ADR-032: provision the persistent /home/coder data volume. A returning user whose
+  // instance was terminated still has a detached data volume — reattach it (pinned to its
+  // AZ to avoid InvalidVolume.ZoneMismatch). A new user gets a born-attached fresh volume.
+  const existingDataVol = await findDataVolume(input.subdomain).catch((e) => {
+    // fail-closed (duplicate volumes) must surface, not silently create a second one.
+    console.error(`[EC2] data-volume lookup failed for ${input.subdomain}:`, e);
+    throw e;
+  });
+  const dataPlan = planDataVolumeLaunch(existingDataVol);
+  const subnet = dataPlan.pinAz
+    ? await resolveSubnetForAz(dataPlan.pinAz)
+    : VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
 
   // Per-user instance profile for individual Bedrock usage tracking
   const instanceProfileName = await ensureUserInstanceProfile(input.subdomain, input.username, input.department);
@@ -323,6 +370,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     MaxCount: 1,
     SubnetId: subnet,
     SecurityGroupIds: sg ? [sg] : undefined,
+    // ADR-032: born-attached persistent data volume (DeleteOnTermination=false) for new
+    // users; empty for reattach (the existing volume is attached after launch).
+    BlockDeviceMappings: dataPlan.blockDeviceMappings.length ? dataPlan.blockDeviceMappings : undefined,
     TagSpecifications: [
       {
         ResourceType: "instance",
@@ -359,8 +409,27 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     UserData: Buffer.from([
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${input.subdomain}" >> /etc/environment`,
+      // ADR-032: on reattach, tell the baked cc-data-migrate unit exactly which volume id
+      // to wait for (closes the attach race). Born-attached leaves this absent — the unit
+      // then mounts/formats the single fresh data volume it discovers on first boot.
+      ...(dataPlan.expectedVolumeId
+        ? [`echo "${dataPlan.expectedVolumeId}" > /etc/cc-data-expected-volume`]
+        : []),
+      // Phase 1 (OTel productivity monitoring): per-user identity for OTEL_RESOURCE_ATTRIBUTES.
+      // username IS the email (ADR-029 canonical key); without these the entrypoint falls back
+      // to "unattributed" and per-user productivity rollups can't be keyed.
+      `echo "USER_EMAIL=${input.username}" >> /etc/environment`,
+      `echo "USER_DEPARTMENT=${input.department}" >> /etc/environment`,
+      // Phase 1 (OTel): enable Claude Code telemetry via /etc/environment. No-op when
+      // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
+      ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
+      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 4.6.
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6[1m]" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]" >> /etc/environment`,
+      `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
+      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `# Allow coder to use package managers without password`,
       `cat > /etc/sudoers.d/coder << 'SUDOEOF'`,
@@ -378,6 +447,10 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `sudo -u coder mkdir -p /home/coder/workspace`,
       `# Set per-user code-server password`,
       `mkdir -p /home/coder/.config/code-server`,
+      // Default code-server (VS Code) to a dark theme without clobbering existing user settings.
+      `mkdir -p /home/coder/.local/share/code-server/User`,
+      `[ -f /home/coder/.local/share/code-server/User/settings.json ] || echo '{"workbench.colorTheme":"Default Dark Modern"}' > /home/coder/.local/share/code-server/User/settings.json`,
+      `chown -R coder:coder /home/coder/.local/share/code-server 2>/dev/null || true`,
       `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
       `bind-addr: 0.0.0.0:8080`,
       `auth: password`,
@@ -387,6 +460,11 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `CSCFG`,
       ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
+      // systemd does NOT read /etc/environment, so code-server's process (and its integrated
+      // terminal → claude) would otherwise miss the OTEL + model vars. This drop-in loads them.
+      `mkdir -p /etc/systemd/system/code-server.service.d`,
+      `printf '[Service]\\nEnvironmentFile=-/etc/environment\\n' > /etc/systemd/system/code-server.service.d/env.conf`,
+      `systemctl daemon-reload`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
       `if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
@@ -443,6 +521,41 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Wait for running
   const info = await waitForRunning(instanceId);
 
+  // ADR-032: resolve the persistent data volume id + AZ (authoritative reference stored in
+  // DynamoDB). Born-attached → read it off the launched instance's block-device mappings and
+  // re-tag it cc:role=data (RunInstances volume TagSpec can't differentiate root from data).
+  // Reattach → attach the existing volume now (the boot unit waits for it via the hint file).
+  let dataVolumeId: string | undefined = dataPlan.expectedVolumeId ?? undefined;
+  const dataVolumeAz = dataPlan.pinAz ?? undefined;
+  if (dataPlan.mode === "reattach" && dataPlan.expectedVolumeId) {
+    // FATAL on failure: the user's existing /home/coder lives on this volume. Booting without
+    // it would silently land them on the ephemeral root and lose data on the next terminate —
+    // far worse than a failed launch the user can retry (codex P4 CRITICAL). Terminate the
+    // just-launched (still unregistered) instance before throwing so it isn't leaked.
+    try {
+      await attachDataVolume(instanceId, dataPlan.expectedVolumeId);
+    } catch (attachErr) {
+      console.error(`[EC2] reattach AttachVolume failed for ${input.subdomain}; terminating orphan ${instanceId}`);
+      await ec2Client.send(new TerminateInstancesCommand({ InstanceIds: [instanceId] })).catch((e) =>
+        console.error(`[EC2] failed to terminate orphan ${instanceId}:`, e),
+      );
+      throw attachErr;
+    }
+  } else {
+    // Born-attached: the volume already exists (in the RunInstances BDM), so a tagging failure
+    // is non-fatal — it leaves the volume under-tagged for operator follow-up, not lost.
+    try {
+      const desc = await ec2Client.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+      const bdm = desc.Reservations?.[0]?.Instances?.[0]?.BlockDeviceMappings;
+      dataVolumeId = dataVolumeIdFromInstance(bdm) ?? undefined;
+      if (dataVolumeId) {
+        await tagDataVolumeAfterLaunch(dataVolumeId, input.subdomain, input.username, input.department);
+      }
+    } catch (err) {
+      console.error(`[EC2] born-attached data-volume tagging failed for ${input.subdomain} (instance ${instanceId}):`, err);
+    }
+  }
+
   // Register routing
   await registerRoute(input.subdomain, info.privateIp);
 
@@ -459,6 +572,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       instanceType: info.instanceType,
       privateIp: info.privateIp,
       status: "running",
+      // ADR-032: authoritative data-volume reference for resize/reattach/cleanup.
+      ...(dataVolumeId ? { dataVolumeId } : {}),
+      ...(dataVolumeAz ? { dataVolumeAz } : {}),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }),
@@ -538,6 +654,9 @@ export async function terminateInstance(subdomain: string): Promise<void> {
     }));
   } catch { /* may not have protection */ }
 
+  // ADR-032: the persistent /home/coder data volume has DeleteOnTermination=false, so it
+  // SURVIVES this terminate (becomes `available`) and is reattached by tag on the next
+  // startInstance. Only an explicit admin "complete delete" removes it (deleteUserDataVolume).
   await ec2Client.send(new TerminateInstancesCommand({
     InstanceIds: [record.instanceId],
   }));
@@ -549,8 +668,49 @@ export async function terminateInstance(subdomain: string): Promise<void> {
 }
 
 /**
- * Switch a user's instance OS. Snapshots the current root EBS for recovery,
- * terminates the old instance, and creates a new one with the target OS AMI.
+ * ADR-032 rule 9 (orphan cleanup, pairs with ADR-024 Cognito deletion): permanently delete a
+ * user's persistent data volume on COMPLETE account deletion. Detaches, waits for `available`,
+ * deletes, then clears the DynamoDB reference. Returns false if the volume could not be safely
+ * deleted (never force-deletes a still-attached volume). NOT called by ordinary terminate.
+ */
+export async function deleteUserDataVolume(subdomain: string): Promise<boolean> {
+  const record = await getUserInstance(subdomain);
+  const volumeId = record?.dataVolumeId ?? (await findDataVolume(subdomain))?.volumeId ?? null;
+  if (!volumeId) return false;
+  const instanceId = record?.instanceId;
+  const deleted = await deleteDataVolume(volumeId, instanceId);
+  if (deleted) {
+    try {
+      await ddbClient.send(new UpdateItemCommand({
+        TableName: INSTANCE_TABLE,
+        Key: marshall({ user_id: subdomain }),
+        UpdateExpression: "REMOVE dataVolumeId, dataVolumeAz",
+      }));
+    } catch (e) {
+      console.warn(`[EC2] data volume ${volumeId} deleted but DynamoDB clear failed for ${subdomain}:`, e);
+    }
+    console.log(`[EC2] deleted persistent data volume ${volumeId} for ${subdomain} (complete delete)`);
+  }
+  return deleted;
+}
+
+/**
+ * ADR-032: resolve the persistent data volume id for a subdomain — the authoritative
+ * DynamoDB `dataVolumeId` first, then a tag lookup (fail-closed on duplicates). Used by the
+ * EBS-resize routes to retarget ModifyVolume at the data volume instead of the OS root.
+ */
+export async function getDataVolumeId(subdomain: string): Promise<string | null> {
+  const record = await getUserInstance(subdomain);
+  if (record?.dataVolumeId) return record.dataVolumeId;
+  const found = await findDataVolume(subdomain);
+  return found?.volumeId ?? null;
+}
+
+/**
+ * Switch a user's instance OS. The persistent /home/coder data volume (ADR-032) is detached
+ * with the old instance and reattached to the new one, so the OS swap is data-loss-free; the
+ * root snapshot is kept only for OS rollback. Recreation goes through startInstance, whose
+ * reattach path pins the new instance to the data volume's AZ.
  */
 export async function switchOs(
   subdomain: string,
@@ -636,6 +796,15 @@ export async function switchOs(
       DisableApiTermination: { Value: false },
     }));
   } catch { /* may not have protection */ }
+  // ADR-032: capture the data volume id BEFORE terminate so we can wait for it to fully
+  // detach. The instance is already stopped (step 2), so terminate detaches the volume
+  // cleanly — no live unmount/corruption. We must wait for `available` before the new
+  // instance's reattach, else AttachVolume hits the volume mid-`detaching` (codex/agy MAJOR).
+  const dataVolId =
+    record.dataVolumeId ??
+    dataVolumeIdFromInstance(instance.BlockDeviceMappings as { DeviceName?: string; Ebs?: { VolumeId?: string } }[]) ??
+    undefined;
+
   await ec2Client.send(new TerminateInstancesCommand({
     InstanceIds: [record.instanceId],
   }));
@@ -644,6 +813,19 @@ export async function switchOs(
     TableName: INSTANCE_TABLE,
     Key: marshall({ user_id: subdomain }),
   }));
+
+  if (dataVolId) {
+    const ok = await waitForVolumeAvailable(dataVolId);
+    if (!ok) {
+      // Do NOT relaunch: startInstance's reattach would race the still-`detaching` volume and
+      // its AttachVolume would fail. Surface it so the OS switch can be retried cleanly
+      // (the DynamoDB record was deleted; the data volume is preserved and reattaches next start).
+      throw new Error(
+        `OS switch aborted: data volume ${dataVolId} did not reach 'available' after terminate. ` +
+          `The volume is preserved; retry the switch or start the instance to reattach it.`,
+      );
+    }
+  }
 
   // 7. Create new instance with new OS
   console.log(`[EC2] Creating new ${newOs} instance for ${subdomain}`);
@@ -781,10 +963,26 @@ export async function restoreFromSnapshot(
     UserData: Buffer.from([
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${subdomain}" >> /etc/environment`,
+      // Phase 1 (OTel productivity monitoring): per-user identity (username IS the email,
+      // ADR-029 key). Without these, metrics fall back to "unattributed".
+      `echo "USER_EMAIL=${record?.username ?? ""}" >> /etc/environment`,
+      `echo "USER_DEPARTMENT=${record?.department ?? "default"}" >> /etc/environment`,
+      // Phase 1 (OTel): enable Claude Code telemetry via /etc/environment. No-op when
+      // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
+      ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
+      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 4.6.
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6[1m]" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]" >> /etc/environment`,
+      `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
+      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `mkdir -p /home/coder/.config/code-server`,
+      // Default code-server (VS Code) to a dark theme without clobbering existing user settings.
+      `mkdir -p /home/coder/.local/share/code-server/User`,
+      `[ -f /home/coder/.local/share/code-server/User/settings.json ] || echo '{"workbench.colorTheme":"Default Dark Modern"}' > /home/coder/.local/share/code-server/User/settings.json`,
+      `chown -R coder:coder /home/coder/.local/share/code-server 2>/dev/null || true`,
       `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
       `bind-addr: 0.0.0.0:8080`,
       `auth: password`,
@@ -794,6 +992,11 @@ export async function restoreFromSnapshot(
       `CSCFG`,
       ...dlp.postLines,
       `chown -R coder:coder /home/coder/.config`,
+      // systemd does NOT read /etc/environment, so code-server's process (and its integrated
+      // terminal → claude) would otherwise miss the OTEL + model vars. This drop-in loads them.
+      `mkdir -p /etc/systemd/system/code-server.service.d`,
+      `printf '[Service]\\nEnvironmentFile=-/etc/environment\\n' > /etc/systemd/system/code-server.service.d/env.conf`,
+      `systemctl daemon-reload`,
       `systemctl restart code-server || systemctl start code-server`,
       `# Install CloudWatch Agent for memory/disk metrics`,
       `if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
@@ -1280,6 +1483,8 @@ interface UserInstanceRecord {
   department?: string;
   securityPolicy?: string;
   containerOs?: string;
+  dataVolumeId?: string;  // ADR-032: authoritative persistent data-volume reference
+  dataVolumeAz?: string;
   [key: string]: unknown;
 }
 

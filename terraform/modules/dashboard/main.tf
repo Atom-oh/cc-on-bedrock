@@ -120,6 +120,10 @@ resource "aws_launch_template" "this" {
 #!/bin/bash
 set -euo pipefail
 
+# ADR-033/OTel: internal collector endpoint for the dashboard app to inject into
+# devenv launches (empty = telemetry off, fail-safe). Read by the Next.js app.
+echo "OTEL_COLLECTOR_ENDPOINT=${var.otel_collector_endpoint}" >> /etc/environment
+
 # Install Node.js 20
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
 yum install -y nodejs
@@ -183,6 +187,7 @@ resource "aws_autoscaling_group" "this" {
 resource "aws_cloudfront_distribution" "this" {
   comment = "CC-on-Bedrock Dashboard"
   enabled = true
+  aliases = ["${var.dashboard_subdomain}.${var.domain_name}"]
 
   origin {
     domain_name = aws_lb.this.dns_name
@@ -220,7 +225,9 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate_validation.cloudfront.certificate_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 
   tags = { Name = "cc-dashboard-cloudfront" }
@@ -228,13 +235,48 @@ resource "aws_cloudfront_distribution" "this" {
 
 # ---- Route 53 Record ---------------------------------------------------------
 resource "aws_route53_record" "dashboard" {
-  zone_id = var.hosted_zone_id
-  name    = "dashboard.${var.domain_name}"
-  type    = "A"
+  zone_id         = var.hosted_zone_id
+  name            = "${var.dashboard_subdomain}.${var.domain_name}"
+  type            = "A"
+  allow_overwrite = true # shared kept zone (ADR-033) — take over any stale record
 
   alias {
     name                   = aws_cloudfront_distribution.this.domain_name
     zone_id                = aws_cloudfront_distribution.this.hosted_zone_id
     evaluate_target_health = false
   }
+}
+
+# ---- CloudFront ACM cert (MUST be us-east-1) for the dashboard custom domain --
+# ADR-016/033: CloudFront only accepts us-east-1 certs. Covers cconbedrock-dashboard.<domain>.
+resource "aws_acm_certificate" "cloudfront" {
+  provider          = aws.us_east_1
+  domain_name       = "${var.dashboard_subdomain}.${var.domain_name}"
+  validation_method = "DNS"
+  lifecycle {
+    create_before_destroy = true
+  }
+  tags = { Name = "cc-dashboard-cloudfront" }
+}
+
+resource "aws_route53_record" "cloudfront_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.cloudfront.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+  zone_id         = var.hosted_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 300
+  allow_overwrite = true
+}
+
+resource "aws_acm_certificate_validation" "cloudfront" {
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.cloudfront.arn
+  validation_record_fqdns = [for r in aws_route53_record.cloudfront_cert_validation : r.fqdn]
 }

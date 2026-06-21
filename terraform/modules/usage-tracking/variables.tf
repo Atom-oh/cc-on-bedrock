@@ -44,3 +44,22 @@ variable "lambda_src_dir" {
   description = "Absolute path to CDK Lambda source directory (cdk/lib/lambda)"
   type        = string
 }
+
+# Phase 1 (OTel) — collector Fargate service networking
+variable "vpc_id" {
+  description = "VPC for the OTel collector Fargate service + NLB"
+  type        = string
+  default     = ""
+}
+
+variable "vpc_cidr" {
+  description = "VPC CIDR — OTLP/gRPC (4317) ingress is restricted to this"
+  type        = string
+  default     = ""
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnets for the internal NLB + collector tasks"
+  type        = list(string)
+  default     = []
+}

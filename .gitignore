@@ -65,3 +65,11 @@ docusaurus-*.png
 
 # co-agent consensus session state (local only)
 .claude/co-agent-consensus/
+
+# Terraform local state / env / build artifacts
+terraform/terraform.tfvars
+terraform/.terraform/
+terraform/**/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/**/.build/

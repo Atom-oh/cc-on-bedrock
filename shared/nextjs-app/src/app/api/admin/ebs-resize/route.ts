@@ -10,6 +10,8 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { EC2Client, ModifyVolumeCommand } from "@aws-sdk/client-ec2";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { getDataVolumeId } from "@/lib/ec2-clients";
+import { resizeTargetVolumeId } from "@/lib/data-volume";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const USER_VOLUMES_TABLE = process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes";
@@ -157,16 +159,32 @@ export async function POST(req: NextRequest) {
       })
     );
 
+    // ADR-032: resize the persistent DATA volume ONLY, never the OS root. A not-yet-migrated
+    // instance resolves to null → the resize is deferred (the user must be migrated first)
+    // rather than silently growing the root disk.
+    let targetVolumeId: string | null = null;
+    try {
+      const dataVolumeId = await getDataVolumeId(userId);
+      targetVolumeId = resizeTargetVolumeId(dataVolumeId);
+    } catch (resolveErr) {
+      // fail-closed (duplicate data volumes) — refuse to guess a resize target.
+      console.error("[admin/ebs-resize] data-volume resolve failed:", resolveErr);
+      return NextResponse.json(
+        { success: false, error: "Could not resolve a unique data volume to resize" },
+        { status: 409 }
+      );
+    }
+
     // If approved, call ec2:ModifyVolume directly to resize
-    if (approved && item.volumeId) {
+    if (approved && targetVolumeId) {
       try {
         await ec2.send(
           new ModifyVolumeCommand({
-            VolumeId: item.volumeId,
+            VolumeId: targetVolumeId,
             Size: item.requestedSizeGb,
           })
         );
-        console.log(`[admin/ebs-resize] ModifyVolume ${item.volumeId} → ${item.requestedSizeGb}GB for ${userId}`);
+        console.log(`[admin/ebs-resize] ModifyVolume ${targetVolumeId} → ${item.requestedSizeGb}GB for ${userId}`);
       } catch (ec2Err) {
         console.error("[admin/ebs-resize] ModifyVolume failed:", ec2Err);
         // Rollback DDB status to resize_pending so admin can retry
@@ -181,8 +199,30 @@ export async function POST(req: NextRequest) {
           { status: 500 }
         );
       }
-    } else if (approved && !item.volumeId) {
-      console.log(`[admin/ebs-resize] Approved resize for ${userId} (volume will be resized on next start)`);
+    } else if (approved && !targetVolumeId) {
+      // No data volume yet (pre-migration). Do NOT report this as an applied resize — keep the
+      // request actionable by parking it in `resize_deferred` so it is re-applied after the
+      // user is migrated, instead of silently marking it approved-and-done (codex P4 round 2).
+      await dynamodb.send(new UpdateItemCommand({
+        TableName: USER_VOLUMES_TABLE,
+        Key: { user_id: { S: userId } },
+        UpdateExpression: "SET resizeStatus = :status",
+        ExpressionAttributeValues: { ":status": { S: "resize_deferred" } },
+      })).catch(() => {});
+      console.log(`[admin/ebs-resize] resize for ${userId} DEFERRED — no data volume yet; migrate the user first`);
+      return NextResponse.json({
+        success: true,
+        deferred: true,
+        data: {
+          userId,
+          status: "resize_deferred",
+          requestedSizeGb: item.requestedSizeGb,
+          approvedBy: session.user.email,
+          updatedAt: now,
+          volumeResizeTriggered: false,
+          message: "No persistent data volume yet — resize will apply after the user is migrated (ADR-032).",
+        },
+      });
     }
 
     return NextResponse.json({
@@ -193,7 +233,7 @@ export async function POST(req: NextRequest) {
         requestedSizeGb: item.requestedSizeGb,
         approvedBy: session.user.email,
         updatedAt: now,
-        volumeResizeTriggered: approved && !!item.volumeId,
+        volumeResizeTriggered: approved && !!targetVolumeId,
       },
     });
   } catch (err) {

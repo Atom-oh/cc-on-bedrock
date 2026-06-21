@@ -14,26 +14,17 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
 - `modules/ecs-devenv/` - ECS Cluster, NLB + Nginx Fargate, DynamoDB Routing Table, DLP SGs, Lambda (nginx-config-gen), EC2 DevEnv (Launch Template, per-user IAM)
 - `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront
 
-## Drift vs CDK (parity gaps)
-- ※ **Module-exists-but-not-wired** (modules present under `modules/`, root `main.tf` does not call them yet):
-  - `usage-tracking/` — CDK Stack 03 (DynamoDB Streams, Lambda, EventBridge)
-  - `local-governance/` — CDK Stack 08 (ADR-014: STS Issuer, token-limit-enforcer, limit-reset, `cc-on-bedrock-limits` table)
-  - `waf/` — CDK Stack 06 (CLOUDFRONT-scope WebACL, us-east-1)
-- ※ **Wired (parity restored)**:
-  - `ec2-devenv/` — CDK Stack 07 (ADR-004 Launch Template + DLP SGs) — root 연결 완료 (2026-06-11). `task_permission_boundary_arn`은 tfvars로 전달 (CDK Stack 02 생성분)
-- ※ **Intentionally CDK-only (NOT a gap — do not duplicate in TF)**:
-  - **task permission boundary `cc-on-bedrock-task-boundary` (boundary X, ADR-030)** — the
-    security floor for all ~4000 per-user task roles. Authored ONCE in CDK Stack 02
-    (`02-security-stack.ts`) so there is a single source of truth; a hand-maintained TF copy of
-    the 63-action DenyEscalation floor would drift silently (the CI invariant
-    `scripts/check-policyset-boundary.py` validates the CDK synth only). TF/CFN roles consume the
-    boundary by ARN via `task_permission_boundary_arn` (tfvars). See ADR-030 §T3.
-- ※ **Still missing (no module yet)**:
-  - Route 53 Resolver **DNS Firewall** (CDK 01-network-stack) — TF 미구현, DLP DNS 계층은 CDK 전용
-  - `modules/ecs-devenv/`의 중복 DLP SG 세트 — deprecated ECS 경로용, `SECURITY_POLICY="open"` 하드코딩. ec2-devenv 모듈이 정본; ECS 경로 제거 시 함께 정리
-  - ADR-022 `UserRoleProvisioner` Lambda + EventBridge `cc-on-bedrock-cognito-user-created` rule + DLQ + Cognito triggers — defer to follow-up PR
-  - ADR-016 CloudFront split — `modules/dashboard/`는 단일 CloudFront. CDK는 Dashboard CF (Stack 05) + DevEnv CF (Stack 04) 분리. `*.dev.<domain>` ACM 인증서는 us-east-1 별도 필요
-  - `governanceOnly` 플래그 동등 변수 (CDK context → TF variable)
+## Status (post-ADR-033 — Terraform is the sole IaC)
+- ✅ **All 8 modules wired into root `main.tf`** (network, security, ecs-devenv, dashboard, usage-tracking, local-governance, waf, ec2-devenv).
+- ✅ **task permission boundary `cc-on-bedrock-task-boundary` is now created in TF** (`modules/security`, `aws_iam_policy.task_permission_boundary`) and wired to ec2-devenv/local-governance via `task_permission_boundary_arn`. ADR-033 **supersedes ADR-030 §T3's "boundary is CDK-only"** stance (CDK is deleted; there is nowhere else to author it). NOTE: the ported policy is the ADR-026 ceiling — **porting ADR-030's boundary-X DenyEscalation floor refinement to the TF boundary is a follow-up**.
+- ✅ OTel pipeline, nginx-config-gen + routing table, cognito-provisioner-trigger ported.
+- ⚠️ **Remaining parity gaps (follow-up)**:
+  - **Dashboard real-app deploy** — `modules/dashboard` user_data is a placeholder stub, not the real Next.js container.
+  - ADR-022 `UserRoleProvisioner` Lambda + EventBridge `cc-on-bedrock-cognito-user-created` rule + DLQ.
+  - Route 53 Resolver **DNS Firewall** (DLP DNS layer).
+  - ADR-016 CloudFront split — DevEnv CF (`*.dev.<domain>`, us-east-1 cert) separate from Dashboard CF.
+  - `modules/ecs-devenv/` 중복 DLP SG 세트 (deprecated ECS 경로) 정리.
+  - `governanceOnly` 플래그 동등 변수.
 
 ## Commands
 ```bash

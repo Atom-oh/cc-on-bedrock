@@ -25,7 +25,7 @@ output "cloudfront_distribution_id" {
 # `terraform validate`. To restore them, port the corresponding CDK resources first.
 
 output "ecr_repository_url" {
-  value = aws_ecr_repository.devenv.repository_url
+  value = data.aws_ecr_repository.devenv.repository_url
 }
 
 output "dlp_sg_open_id" {

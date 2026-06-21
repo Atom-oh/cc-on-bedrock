@@ -65,18 +65,11 @@ resource "aws_iam_role_policy" "ecs_exec_secrets" {
 }
 
 # ---- ECR Repository ----------------------------------------------------------
-resource "aws_ecr_repository" "devenv" {
-  name                 = "cc-on-bedrock/devenv"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = var.kms_key_arn
-  }
+# ADR-033: the cc-on-bedrock/* ECR repos are created by scripts/create-ecr-repos.sh
+# and kept across the CDK→TF wipe (devenv holds 82 images). TF references the existing
+# repo (data source) instead of managing/replacing it — a replace would delete all images.
+data "aws_ecr_repository" "devenv" {
+  name = "cc-on-bedrock/devenv"
 }
 
 # ---- EFS File System ---------------------------------------------------------
@@ -504,13 +497,128 @@ resource "aws_cloudfront_distribution" "this" {
 
 # ---- Route 53 Wildcard Record ------------------------------------------------
 resource "aws_route53_record" "wildcard" {
-  zone_id = var.hosted_zone_id
-  name    = "*.${var.dev_subdomain}.${var.domain_name}"
-  type    = "A"
+  zone_id         = var.hosted_zone_id
+  name            = "*.${var.dev_subdomain}.${var.domain_name}"
+  type            = "A"
+  allow_overwrite = true # shared kept zone (ADR-033)
 
   alias {
     name                   = aws_cloudfront_distribution.this.domain_name
     zone_id                = aws_cloudfront_distribution.this.hosted_zone_id
     evaluate_target_health = false
   }
+}
+
+# ---- Routing table + nginx-config-gen (ADR-027 code-server routing) --------
+# Ported from cdk/lib/04-ecs-devenv-stack.ts (RoutingTable + NginxConfigLambda).
+resource "aws_dynamodb_table" "routing" {
+  name         = "cc-routing-table"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "subdomain"
+
+  attribute {
+    name = "subdomain"
+    type = "S"
+  }
+
+  stream_enabled   = true
+  stream_view_type = "NEW_AND_OLD_IMAGES"
+
+  tags = { Name = "cc-routing-table" }
+}
+
+data "aws_iam_policy_document" "nginx_lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "nginx_config_gen" {
+  name               = "cc-on-bedrock-nginx-config-gen"
+  assume_role_policy = data.aws_iam_policy_document.nginx_lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "nginx_config_gen_basic" {
+  role       = aws_iam_role.nginx_config_gen.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "nginx_config_gen" {
+  name = "nginx-config-gen"
+  role = aws_iam_role.nginx_config_gen.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "RoutingTableRead"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
+        Resource = [aws_dynamodb_table.routing.arn]
+      },
+      {
+        Sid      = "RoutingTableStream"
+        Effect   = "Allow"
+        Action   = ["dynamodb:DescribeStream", "dynamodb:GetRecords", "dynamodb:GetShardIterator", "dynamodb:ListStreams"]
+        Resource = ["${aws_dynamodb_table.routing.arn}/stream/*"]
+      },
+      {
+        Sid      = "ConfigBucketWrite"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${aws_s3_bucket.user_data.arn}/*"]
+      },
+      {
+        Sid      = "InstanceTableRouteStatus"
+        Effect   = "Allow"
+        Action   = ["dynamodb:UpdateItem"]
+        Resource = ["arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-user-instances"]
+      },
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "nginx_config_gen" {
+  name              = "/aws/lambda/cc-on-bedrock-nginx-config-gen"
+  retention_in_days = 30
+}
+
+data "archive_file" "nginx_config_gen" {
+  type        = "zip"
+  source_file = "${var.lambda_src_dir}/nginx-config-gen.py"
+  output_path = "${path.module}/.build/nginx-config-gen.zip"
+}
+
+resource "aws_lambda_function" "nginx_config_gen" {
+  function_name    = "cc-on-bedrock-nginx-config-gen"
+  runtime          = "python3.12"
+  handler          = "nginx-config-gen.handler"
+  filename         = data.archive_file.nginx_config_gen.output_path
+  source_code_hash = data.archive_file.nginx_config_gen.output_base64sha256
+  role             = aws_iam_role.nginx_config_gen.arn
+  timeout          = 30
+  environment {
+    variables = {
+      ROUTING_TABLE     = aws_dynamodb_table.routing.name
+      CONFIG_BUCKET     = aws_s3_bucket.user_data.id
+      CONFIG_KEY        = "nginx/nginx.conf"
+      DEV_DOMAIN        = "${var.dev_subdomain}.${var.domain_name}"
+      REGION            = data.aws_region.current.name
+      CLOUDFRONT_SECRET = var.cloudfront_secret_value
+      VPC_CIDR          = var.vpc_cidr
+      INSTANCE_TABLE    = "cc-user-instances"
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.nginx_config_gen]
+}
+
+resource "aws_lambda_event_source_mapping" "nginx_routing_stream" {
+  event_source_arn       = aws_dynamodb_table.routing.stream_arn
+  function_name          = aws_lambda_function.nginx_config_gen.arn
+  starting_position      = "TRIM_HORIZON"
+  batch_size             = 10
+  maximum_retry_attempts = 3
 }

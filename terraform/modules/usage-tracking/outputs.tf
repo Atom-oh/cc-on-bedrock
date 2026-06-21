@@ -53,3 +53,12 @@ output "mcp_catalog_table_name" {
 output "dept_mcp_config_table_name" {
   value = aws_dynamodb_table.dept_mcp_config.name
 }
+
+output "otel_collector_endpoint" {
+  description = "Internal OTLP/gRPC endpoint (NLB DNS:4317) for devenv telemetry push"
+  value       = "${aws_lb.otel.dns_name}:4317"
+}
+
+output "otel_metrics_raw_bucket" {
+  value = aws_s3_bucket.otel_raw.id
+}
