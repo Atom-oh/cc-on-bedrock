@@ -62,6 +62,7 @@ module "dashboard" {
   domain_name                         = var.domain_name
   cloudfront_secret_value             = module.security.cloudfront_secret_value
   instance_type                       = var.dashboard_instance_type
+  otel_collector_endpoint             = module.usage_tracking.otel_collector_endpoint
 }
 
 # ---- 07 EC2 Dev Environment (ADR-004 per-user EC2 + DLP SGs) ------------------

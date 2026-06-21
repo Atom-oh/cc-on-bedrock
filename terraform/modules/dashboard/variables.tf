@@ -43,3 +43,9 @@ variable "instance_type" {
   type    = string
   default = "t4g.xlarge"
 }
+
+variable "otel_collector_endpoint" {
+  description = "Internal OTLP/gRPC endpoint (NLB DNS:4317); empty = telemetry off"
+  type        = string
+  default     = ""
+}

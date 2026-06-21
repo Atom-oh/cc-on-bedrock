@@ -120,6 +120,10 @@ resource "aws_launch_template" "this" {
 #!/bin/bash
 set -euo pipefail
 
+# ADR-033/OTel: internal collector endpoint for the dashboard app to inject into
+# devenv launches (empty = telemetry off, fail-safe). Read by the Next.js app.
+echo "OTEL_COLLECTOR_ENDPOINT=${var.otel_collector_endpoint}" >> /etc/environment
+
 # Install Node.js 20
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
 yum install -y nodejs
