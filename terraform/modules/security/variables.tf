@@ -27,3 +27,9 @@ variable "lambda_src_dir" {
   type        = string
   default     = "../cdk/lib/lambda"
 }
+
+variable "dashboard_subdomain" {
+  description = "Dashboard subdomain label"
+  type        = string
+  default     = "cconbedrock-dashboard"
+}

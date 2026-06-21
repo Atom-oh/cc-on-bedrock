@@ -22,9 +22,10 @@ module "network" {
 module "security" {
   source = "./modules/security"
 
-  domain_name    = var.domain_name
-  dev_subdomain  = var.dev_subdomain
-  hosted_zone_id = module.network.hosted_zone_id
+  domain_name         = var.domain_name
+  dev_subdomain       = var.dev_subdomain
+  hosted_zone_id      = module.network.hosted_zone_id
+  dashboard_subdomain = var.dashboard_subdomain
 }
 
 # ---- 03 ECS Dev Environment --------------------------------------------------
@@ -63,6 +64,11 @@ module "dashboard" {
   cloudfront_secret_value             = module.security.cloudfront_secret_value
   instance_type                       = var.dashboard_instance_type
   otel_collector_endpoint             = module.usage_tracking.otel_collector_endpoint
+  dashboard_subdomain                 = var.dashboard_subdomain
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
 }
 
 # ---- 07 EC2 Dev Environment (ADR-004 per-user EC2 + DLP SGs) ------------------

@@ -49,3 +49,9 @@ variable "otel_collector_endpoint" {
   type        = string
   default     = ""
 }
+
+variable "dashboard_subdomain" {
+  description = "Dashboard subdomain label"
+  type        = string
+  default     = "cconbedrock-dashboard"
+}

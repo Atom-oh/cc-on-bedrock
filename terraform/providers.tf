@@ -1,4 +1,12 @@
 terraform {
+  backend "s3" {
+    bucket       = "cc-on-bedrock-tfstate-180294183052"
+    key          = "cc-on-bedrock/terraform.tfstate"
+    region       = "ap-northeast-2"
+    encrypt      = true
+    use_lockfile = true
+  }
+
   required_version = ">= 1.5"
 
   required_providers {

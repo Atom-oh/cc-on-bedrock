@@ -8,7 +8,7 @@ data "aws_region" "current" {}
 
 locals {
   dev_domain       = "*.${var.dev_subdomain}.${var.domain_name}"
-  dashboard_domain = "dashboard.${var.domain_name}"
+  dashboard_domain = "${var.dashboard_subdomain}.${var.domain_name}"
 }
 
 # ---- KMS Encryption Key -----------------------------------------------------
@@ -127,8 +127,8 @@ resource "aws_cognito_user_pool_client" "this" {
   allowed_oauth_flows_user_pool_client = true
   supported_identity_providers         = ["COGNITO"]
 
-  callback_urls = ["https://dashboard.${var.domain_name}/api/auth/callback/cognito"]
-  logout_urls   = ["https://dashboard.${var.domain_name}"]
+  callback_urls = ["https://${var.dashboard_subdomain}.${var.domain_name}/api/auth/callback/cognito"]
+  logout_urls   = ["https://${var.dashboard_subdomain}.${var.domain_name}"]
 }
 
 # Cognito Groups
