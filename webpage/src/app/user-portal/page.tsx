@@ -190,7 +190,7 @@ cc-bedrock-local status   # 잔여 시간 / 한도 / Deny 상태 확인`}
       />
 
       <H3>{t("2-B. EBS 확장 신청", "2-B. Request EBS expansion")}</H3>
-      <P>{t("EBS 저장소를 쓰는 경우(기본값)에만 표시됩니다. EFS 사용자는 자동 확장이라 신청 버튼이 없음.", "Only visible when you're on EBS (default). EFS users get auto-grow so no button.")}</P>
+      <P>{t("EBS GP3 저장소 확장이 필요할 때 관리자 승인으로 처리됩니다.", "EBS GP3 expansion is handled through admin approval.")}</P>
       <ol className="text-sm text-gray-400 space-y-1.5 list-decimal pl-5 mb-4">
         <li>
           <strong className="text-white">{t("희망 크기 선택", "Pick target size")}</strong> — 40 / 60 / 100 GB ({t("현재보다 커야 함", "must be larger than current")})

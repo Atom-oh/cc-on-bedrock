@@ -155,8 +155,7 @@ export default function UsersTable({
         </select>
         <select value={filterStorage} onChange={(e) => setFilterStorage(e.target.value)} className={selectClass}>
           <option value="all">All Storage</option>
-          <option value="ebs">EBS</option>
-          <option value="efs">EFS</option>
+          <option value="ebs">EBS GP3</option>
         </select>
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className={selectClass}>
           <option value="all">All Status</option>

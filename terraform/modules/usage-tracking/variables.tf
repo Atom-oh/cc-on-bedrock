@@ -41,6 +41,6 @@ variable "department_budgets_table_name" {
 }
 
 variable "lambda_src_dir" {
-  description = "Absolute path to CDK Lambda source directory (cdk/lib/lambda)"
+  description = "Absolute path to canonical Lambda source directory (repo lambda/)"
   type        = string
 }

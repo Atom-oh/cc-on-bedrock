@@ -1,6 +1,6 @@
 ###############################################################################
 # Network Module - VPC, Subnets, NAT Gateways, VPC Endpoints, Route 53
-# Equivalent to cdk/lib/01-network-stack.ts
+# Network module
 ###############################################################################
 
 data "aws_region" "current" {}
@@ -62,7 +62,7 @@ resource "aws_route_table_association" "public_c" {
   route_table_id = aws_route_table.public.id
 }
 
-# ---- NAT Gateways (one per AZ, matching CDK natGateways: 2) -----------------
+# ---- NAT Gateways (one per AZ) ----------------------------------------------
 resource "aws_eip" "nat_a" {
   domain = "vpc"
   tags   = { Name = "${var.vpc_name}-nat-a" }

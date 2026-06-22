@@ -10,6 +10,10 @@ output "user_pool_client_id" {
   value = aws_cognito_user_pool_client.this.id
 }
 
+output "cli_public_client_id" {
+  value = aws_cognito_user_pool_client.cli_public.id
+}
+
 output "devenv_certificate_arn" {
   value = aws_acm_certificate.devenv.arn
 }
@@ -41,4 +45,16 @@ output "dashboard_ec2_role_arn" {
 
 output "dashboard_ec2_instance_profile_name" {
   value = aws_iam_instance_profile.dashboard_ec2.name
+}
+
+output "department_budgets_table_name" {
+  value = aws_dynamodb_table.department_budgets.name
+}
+
+output "task_permission_boundary_arn" {
+  value = aws_iam_policy.task_boundary.arn
+}
+
+output "task_permission_boundary_name" {
+  value = aws_iam_policy.task_boundary.name
 }

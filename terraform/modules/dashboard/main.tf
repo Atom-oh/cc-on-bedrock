@@ -1,9 +1,13 @@
 ###############################################################################
 # Dashboard Module - EC2 ASG, ALB, CloudFront
-# Equivalent to cdk/lib/05-dashboard-stack.ts
+# Dashboard hosting module
 ###############################################################################
 
 data "aws_region" "current" {}
+
+locals {
+  dashboard_domain = "cconbedrock-dashboard.${var.domain_name}"
+}
 
 # ---- Security Groups ---------------------------------------------------------
 resource "aws_security_group" "alb" {
@@ -179,10 +183,46 @@ resource "aws_autoscaling_group" "this" {
   }
 }
 
+# ---- CloudFront Certificate --------------------------------------------------
+resource "aws_acm_certificate" "cloudfront" {
+  provider          = aws.us_east_1
+  domain_name       = local.dashboard_domain
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = { Name = "cc-on-bedrock-dashboard-cloudfront" }
+}
+
+resource "aws_route53_record" "cloudfront_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.cloudfront.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  zone_id = var.hosted_zone_id
+  name    = each.value.name
+  type    = each.value.type
+  records = [each.value.record]
+  ttl     = 300
+}
+
+resource "aws_acm_certificate_validation" "cloudfront" {
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.cloudfront.arn
+  validation_record_fqdns = [for r in aws_route53_record.cloudfront_cert_validation : r.fqdn]
+}
+
 # ---- CloudFront Distribution -------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
   comment = "CC-on-Bedrock Dashboard"
   enabled = true
+  aliases = [local.dashboard_domain]
 
   origin {
     domain_name = aws_lb.this.dns_name
@@ -220,7 +260,9 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate_validation.cloudfront.certificate_arn
+    minimum_protocol_version = "TLSv1.2_2021"
+    ssl_support_method       = "sni-only"
   }
 
   tags = { Name = "cc-dashboard-cloudfront" }
@@ -229,7 +271,7 @@ resource "aws_cloudfront_distribution" "this" {
 # ---- Route 53 Record ---------------------------------------------------------
 resource "aws_route53_record" "dashboard" {
   zone_id = var.hosted_zone_id
-  name    = "dashboard.${var.domain_name}"
+  name    = local.dashboard_domain
   type    = "A"
 
   alias {

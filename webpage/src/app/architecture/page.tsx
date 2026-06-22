@@ -42,11 +42,11 @@ export default function ArchitecturePage() {
         <ul className="space-y-1 list-disc pl-5">
           <li>
             <strong className="text-white">{t("기본", "Default")}:</strong>{" "}
-            <Code>cdk deploy --all</Code> — {t("1~8 모두 배포 (EC2 + Local 공존)", "deploys 1–8 (EC2 + Local coexist)")}
+            <Code>terraform -chdir=terraform apply</Code> — {t("EC2 + Local 공존", "EC2 + Local coexist")}
           </li>
           <li>
             <strong className="text-white">Governance only:</strong>{" "}
-            <Code>cdk deploy --all -c governanceOnly=true</Code> — {t("7번 스킵 (EC2 DevEnv 미배포)", "skips 7 (no EC2 DevEnv)")}
+            <Code>curl -fsSL https://dashboard.example.com/api/install | bash</Code> — {t("배포 후 Local CLI 사용", "use Local CLI after deployment")}
           </li>
         </ul>
       </Callout>
@@ -54,8 +54,8 @@ export default function ArchitecturePage() {
       <H2 id="ec2">{t("2. EC2-per-user DevEnv", "2. EC2-per-user DevEnv")}</H2>
       <P>
         {t(
-          "각 사용자에게 전용 EC2 인스턴스 1대가 할당됩니다. ECS Task 모델은 폐기됨.",
-          "Each user is allocated a single dedicated EC2 instance. The ECS Task model is deprecated."
+          "각 사용자에게 전용 EC2 인스턴스 1대가 할당됩니다. 공유 nginx 라우터가 사용자별 인스턴스로 연결합니다.",
+          "Each user is allocated a single dedicated EC2 instance. The shared nginx router connects users to their instance."
         )}
       </P>
       <ul className="text-sm text-gray-400 space-y-1.5 list-disc pl-5 mb-5">

@@ -49,6 +49,12 @@ rule group, 또는 (b) 인스턴스 수준 resolver 제한(UserData) 을 별도 
 
 ### 2. IAM 확장: 사전 정의 Policy Set Catalog
 
+> **⚠️ 이 절(IAM 확장 메커니즘)은 [ADR-030](ADR-030-tiered-iam-grant.md)으로 대체됨 (superseded).**
+> 고정 policy-set catalog 모델은 폐기되고, tiered 신청 검증 + boundary X(AllowInAccount +
+> DenyEscalation)로 재설계됨 (ADR-026→030 경유). **본 ADR의 DLP 3-tier 결정은 여전히 유효**하며,
+> IAM 신청/승인의 현재 메커니즘은 ADR-030과 SSOT(`docs/architecture.md` pillar 7)를 따른다.
+> 아래 catalog 내용은 역사적 기록으로 보존한다.
+
 사용자가 추가 AWS 서비스 접근을 요청할 때, **자유 IAM policy 작성이 아닌 사전 정의된 policy set에서 선택**:
 
 | Policy Set | 서비스 | Actions | 리소스 선택 |

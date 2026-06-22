@@ -12,24 +12,13 @@ export default function UsagePage() {
       subtitle={t("배포부터 두 가지 사용 모드까지 핵심 흐름 요약.", "From deployment to two usage modes, the essential flow.")}
     >
       <H2 id="deploy">{t("1. 인프라 배포", "1. Infrastructure deployment")}</H2>
-      <H3>AWS CDK ({t("권장", "recommended")})</H3>
-      <CodeBlock lang="bash">
-{`cd cdk
-npm install
-npx cdk deploy --all                          # EC2 + Local 모두
-npx cdk deploy --all -c governanceOnly=true   # Local 전용`}
-      </CodeBlock>
       <H3>Terraform</H3>
       <CodeBlock lang="bash">
 {`cd terraform
 terraform init
 terraform validate
+terraform plan
 terraform apply`}
-      </CodeBlock>
-      <H3>CloudFormation</H3>
-      <CodeBlock lang="bash">
-{`cd cloudformation
-bash deploy.sh`}
       </CodeBlock>
 
       <H2 id="dashboard">{t("2. 대시보드 사용", "2. Using the dashboard")}</H2>

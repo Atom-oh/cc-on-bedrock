@@ -65,3 +65,9 @@ docusaurus-*.png
 
 # co-agent consensus session state (local only)
 .claude/co-agent-consensus/
+
+# AI tooling local state (per-repo, personal)
+.headroom/
+.serena/
+.codex-log/
+**/.codex-log/

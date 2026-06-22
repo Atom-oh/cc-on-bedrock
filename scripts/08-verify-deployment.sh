@@ -22,34 +22,13 @@ echo "=== CC-on-Bedrock Deployment Verification ==="
 echo "Domain: $DOMAIN_NAME"
 echo "Region: $REGION"
 
-# --- CDK Stacks ---
-header "1. CloudFormation Stacks"
-EXPECTED_STACKS=(
-  "CcOnBedrock-Network"
-  "CcOnBedrock-Security"
-  "CcOnBedrock-UsageTracking"
-  "CcOnBedrock-WAF"
-  "CcOnBedrock-Ec2Devenv"
-  "CcOnBedrock-EcsDevenv"
-  "CcOnBedrock-Dashboard"
-)
-
-for STACK in "${EXPECTED_STACKS[@]}"; do
-  if [ "$STACK" = "CcOnBedrock-WAF" ]; then
-    CHECK_REGION="us-east-1"
-  else
-    CHECK_REGION="$REGION"
-  fi
-  STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$CHECK_REGION" \
-    --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
-  if [[ "$STATUS" == *"COMPLETE"* ]]; then
-    ok "$STACK ($STATUS)"
-  elif [ "$STATUS" = "NOT_FOUND" ]; then
-    warn "$STACK not deployed"
-  else
-    fail "$STACK ($STATUS)"
-  fi
-done
+# --- Terraform state ---
+header "1. Terraform Outputs"
+if terraform -chdir=terraform output -json >/tmp/cc-on-bedrock-terraform-output.json 2>/dev/null; then
+  ok "Terraform state outputs readable"
+else
+  warn "Terraform state outputs not readable; run from a deployed Terraform workspace"
+fi
 
 # --- Cognito ---
 header "2. Cognito User Pool"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # CC-on-Bedrock Deployment Validation Script
-# Tests: IMDS block, Task Role, EFS isolation, NLB→Nginx→ECS, Dashboard
+# Tests: IMDS block, task role, EC2 security groups, NLB -> nginx -> EC2, Dashboard
 set -euo pipefail
 
 CLUSTER="cc-on-bedrock-devenv"

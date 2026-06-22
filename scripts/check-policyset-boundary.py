@@ -9,8 +9,7 @@ service allowlist" superset check is trivially true and no longer meaningful. Th
 matters — and that this check enforces — is the **Deny floor**: the escalation / resource-policy /
 control-plane actions that must NEVER be reachable by a task role, no matter what an admin grants.
 
-Invariants enforced against the SYNTHESIZED CloudFormation template (so CDK constructs/spreads
-are accounted for):
+Invariants enforced against a rendered IAM managed policy/template:
   (a) Deny-floor coverage   — every action in CANONICAL_DENY_FLOOR is denied by the boundary's
                               Deny statements (wildcard-aware: boundary `iam:*` covers `iam:PassRole`).
   (b) validator coherence   — every CANONICAL_DENY_FLOOR action is ALSO flagged dangerous by the
@@ -29,8 +28,7 @@ subset of BOTH the boundary Deny and the validator-dangerous set. ADR-030 T4 rev
 
 Usage:
   python3 scripts/check-policyset-boundary.py --self-test           # logic fixtures
-  python3 scripts/check-policyset-boundary.py --template <cfn.json> # check a synth'd template
-  python3 scripts/check-policyset-boundary.py                       # runs `npx cdk synth` then checks
+  python3 scripts/check-policyset-boundary.py --template <template.json>
 """
 import argparse
 import json
@@ -266,16 +264,7 @@ def _self_test() -> int:
 def _load_template(args) -> dict:
     if args.template:
         return json.loads(Path(args.template).read_text(encoding="utf-8"))
-    out = subprocess.run(
-        ["npx", "cdk", "synth", "CcOnBedrock-Security"],
-        cwd="cdk", capture_output=True, text=True,
-    )
-    if out.returncode != 0:
-        raise SystemExit(f"[ERROR] cdk synth failed:\n{out.stderr[-2000:]}")
-    tpl = Path("cdk/cdk.out/CcOnBedrock-Security.template.json")
-    if not tpl.exists():
-        raise SystemExit(f"[ERROR] synthesized template not found: {tpl}")
-    return json.loads(tpl.read_text(encoding="utf-8"))
+    raise SystemExit("[ERROR] pass --template <rendered-template.json> or use --self-test")
 
 
 def main() -> int:

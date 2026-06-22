@@ -55,25 +55,14 @@ function formatRemaining(iso: string | null | undefined): string {
   return `${h}h ${m}m`;
 }
 
-type CliScriptResponse = {
-  token: string;
-  hash: string;
-  script: string;
-  issuedAt: string;
-  expiresAt: string;
-  ttlDays: number;
-};
-
 export default function LocalModeTab() {
   const [creds, setCreds] = useState<CredentialsResponse | null>(null);
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [cliScript, setCliScript] = useState<CliScriptResponse | null>(null);
-  const [cliLoading, setCliLoading] = useState(false);
-  const [cliError, setCliError] = useState<string | null>(null);
   const dashboardOrigin = typeof window !== "undefined" ? window.location.origin : "";
+  const installCommand = `curl -fsSL ${dashboardOrigin || "https://dashboard.example.com"}/api/install | bash`;
 
   const refreshUsage = async () => {
     try {
@@ -112,51 +101,10 @@ export default function LocalModeTab() {
     setTimeout(() => setCopied(null), 1500);
   };
 
-  const issueCliScript = async () => {
-    setCliError(null);
-    setCliLoading(true);
-    try {
-      const r = await fetch("/api/user/cli-script", { method: "POST" });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error(j.error ?? `request failed (${r.status})`);
-      }
-      setCliScript(await r.json());
-    } catch (e) {
-      setCliError(e instanceof Error ? e.message : "unknown error");
-    } finally {
-      setCliLoading(false);
-    }
-  };
-
-  const revokeAllCliTokens = async () => {
-    if (!confirm("기존에 발급된 모든 CLI 토큰을 폐기합니다. 진행할까요?")) return;
-    setCliError(null);
-    try {
-      await fetch("/api/user/cli-script", { method: "DELETE" });
-      setCliScript(null);
-    } catch (e) {
-      setCliError(e instanceof Error ? e.message : "revoke failed");
-    }
-  };
-
-  const downloadCliScript = () => {
-    if (!cliScript) return;
-    const blob = new Blob([cliScript.script], { type: "text/x-shellscript;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "cc-bedrock-login.sh";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <div className="space-y-4">
       <header className="text-sm text-gray-400">
-        Claude Code를 로컬 PC에서 Bedrock 직접 호출로 사용하기 위한 8h STS 자격증명, 사용량, 한도 상태입니다.
+        Claude Code를 로컬 PC에서 Bedrock 직접 호출로 사용하기 위한 1h STS 자격증명, 자동 갱신 CLI, 사용량, 한도 상태입니다.
         (ADR-014 Local Governance Mode)
       </header>
 
@@ -181,7 +129,7 @@ export default function LocalModeTab() {
           disabled={loading}
           className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm disabled:opacity-50"
         >
-          {loading ? "Issuing…" : creds ? "Refresh credentials" : "Get credentials (8h)"}
+          {loading ? "Issuing…" : creds ? "Refresh one-hour credentials" : "Get one-hour credentials"}
         </button>
         {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
         {creds && (
@@ -292,106 +240,36 @@ export default function LocalModeTab() {
         )}
       </section>
 
-      {/* Local Bedrock CLI — downloadable script with embedded long-lived bearer token */}
+      {/* Local Bedrock CLI — Cognito login + credential_process auto-renew */}
       <section className="border border-gray-800 rounded p-4 bg-gray-900/50">
         <div className="flex items-start justify-between gap-3 mb-2">
           <div>
             <h3 className="text-base font-medium text-gray-200">Local Bedrock CLI</h3>
             <p className="text-sm text-gray-500 mt-1">
-              로컬 PC에서 한 번 실행하면 8h Bedrock 자격증명을 자동으로 받아{" "}
-              <code className="text-gray-400">~/.aws/credentials</code>에 기록하는 셸 스크립트입니다.
-              내부에 본인 전용 long-lived 토큰이 임베디드되므로 외부 공유 금지.
+              설치 후 Cognito로 로그인하면 <code className="text-gray-400">~/.aws/config</code>에{" "}
+              <code className="text-gray-400">credential_process</code>가 등록됩니다. Claude Code 세션 중에도
+              AWS SDK가 1h STS 만료 전에 자동으로 다시 발급받습니다.
             </p>
           </div>
           <button
-            onClick={issueCliScript}
-            disabled={cliLoading}
+            onClick={() => copy(installCommand, "install")}
             className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium disabled:opacity-50 whitespace-nowrap"
           >
-            {cliLoading ? "Issuing…" : cliScript ? "Re-issue script" : "Generate script"}
+            {copied === "install" ? "Copied" : "Copy install"}
           </button>
         </div>
-        {cliError && <p className="mt-2 text-sm text-red-400">{cliError}</p>}
-
-        {cliScript && (
-          <div className="mt-4 space-y-3">
-            {/* Token metadata */}
-            <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500">
-              <span>
-                Issued <span className="text-gray-300">{cliScript.issuedAt}</span>
-              </span>
-              <span>
-                Expires <span className="text-gray-300">{cliScript.expiresAt}</span>{" "}
-                ({cliScript.ttlDays}d TTL)
-              </span>
-              <span>
-                Token prefix <code className="text-gray-300">{cliScript.token.slice(0, 12)}…</code>
-              </span>
-            </div>
-
-            {/* Download + copy actions */}
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={downloadCliScript}
-                className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium"
-              >
-                ⬇ Download cc-bedrock-login.sh
-              </button>
-              <button
-                onClick={() => copy(cliScript.script, "cli-script")}
-                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-100 text-xs font-medium"
-              >
-                {copied === "cli-script" ? "✓ Copied" : "📋 Copy script to clipboard"}
-              </button>
-              <button
-                onClick={revokeAllCliTokens}
-                className="px-3 py-2 rounded bg-red-700/70 hover:bg-red-600 text-white text-xs font-medium"
-              >
-                Revoke all CLI tokens
-              </button>
-            </div>
-
-            {/* One-line how-to */}
-            <div className="text-xs text-gray-500 space-y-1">
-              <div>
-                다운로드 후 실행:{" "}
-                <code className="text-gray-300">
-                  chmod +x cc-bedrock-login.sh && ./cc-bedrock-login.sh
-                </code>
-              </div>
-              <div>
-                또는 클립보드 붙여넣기:{" "}
-                <code className="text-gray-300">pbpaste &gt; cc-bedrock-login.sh</code>{" "}
-                (macOS) /{" "}
-                <code className="text-gray-300">xclip -o -selection clipboard &gt; cc-bedrock-login.sh</code>{" "}
-                (Linux)
-              </div>
-            </div>
-
-            {/* Preview (collapsible — first 8 lines) */}
-            <details className="text-xs">
-              <summary className="cursor-pointer text-gray-400 hover:text-gray-200">
-                스크립트 미리보기
-              </summary>
-              <pre className="mt-2 p-3 bg-black/40 border border-gray-800 rounded overflow-auto text-gray-300 max-h-80">
-                {cliScript.script}
-              </pre>
-            </details>
-
-            <div className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-300">
-              <span className="font-semibold">보안:</span> 이 스크립트는 본인 식별 정보가 포함된
-              {cliScript.ttlDays}일 유효 토큰을 담고 있습니다. Git 커밋 / Slack / 채팅에 붙여넣지 마세요.
-              유출 의심 시 위 <span className="font-semibold">Revoke all CLI tokens</span> 버튼을 누른 뒤
-              다시 발급하세요.
-            </div>
+        <pre className="mt-3 p-3 bg-black/40 border border-gray-800 rounded overflow-auto text-xs text-gray-300">
+          {installCommand}
+        </pre>
+        <div className="mt-3 text-xs text-gray-500 space-y-1">
+          <div>
+            설치 후 <code className="text-gray-300">cc</code>를 실행하면 Cognito 비밀번호를 묻고 Claude Code를 Bedrock 모드로 실행합니다.
           </div>
-        )}
-
-        {!cliScript && !cliLoading && (
-          <p className="mt-3 text-xs text-gray-500">
-            대시보드: <code className="text-gray-400">{dashboardOrigin}</code> · 토큰 미발급 상태.
-          </p>
-        )}
+          <div>
+            상태 확인: <code className="text-gray-300">cc --status</code> · 로그아웃:{" "}
+            <code className="text-gray-300">cc --logout</code>
+          </div>
+        </div>
       </section>
     </div>
   );

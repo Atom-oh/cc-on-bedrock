@@ -7,7 +7,7 @@ import types
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-LAMBDA = REPO / "cdk/lib/lambda/bedrock-usage-tracker.py"
+LAMBDA = REPO / "lambda/bedrock-usage-tracker.py"
 
 
 def _load():

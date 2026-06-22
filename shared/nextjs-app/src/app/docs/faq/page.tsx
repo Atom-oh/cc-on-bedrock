@@ -137,10 +137,10 @@ export default function FaqPage() {
             : "DynamoDB cc-routing-table stores {subdomain → privateIp:port} mappings. On changes, DynamoDB Streams → Lambda regenerates nginx.conf to S3, Nginx containers pull every 30s. Supports 4,000+ users without ALB's 100-rule limit. See ADR-002."}
         />
         <FaqItem
-          q={ko ? "3가지 IaC 도구 중 어떤 것을 사용해야 하나요?" : "Which of the 3 IaC tools should I use?"}
+          q={ko ? "어떤 IaC 도구를 사용해야 하나요?" : "Which IaC tool should I use?"}
           a={ko
-            ? "CDK를 권장합니다. CDK는 TypeScript 타입 안전성, L2 Construct의 편의성, 스택 의존성 자동 관리를 제공합니다. Terraform은 멀티 클라우드 환경에서, CloudFormation은 AWS 네이티브 환경에서 선택하세요. 3가지 모두 동일한 아키텍처를 배포합니다."
-            : "CDK is recommended. It provides TypeScript type safety, L2 Construct convenience, and automatic stack dependency management. Use Terraform for multi-cloud, CloudFormation for AWS-native environments. All three deploy the same architecture."}
+            ? "Terraform만 사용합니다. Lambda 소스는 lambda/에 두고 Terraform이 패키징하며, 배포/검증/출력도 Terraform 기준으로만 관리합니다."
+            : "Use Terraform only. Lambda source lives in lambda/, Terraform packages it, and deployment, validation, and outputs are managed from Terraform."}
         />
       </FaqSection>
 

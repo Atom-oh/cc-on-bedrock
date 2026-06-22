@@ -15,7 +15,8 @@ variable "private_subnet_ids" {
 }
 
 variable "isolated_subnet_ids" {
-  type = list(string)
+  description = "Deprecated; kept for tfvars compatibility. The Nginx router does not use isolated subnets."
+  type        = list(string)
 }
 
 variable "kms_key_arn" {
@@ -48,6 +49,18 @@ variable "cloudfront_secret_value" {
 }
 
 variable "ecs_host_instance_type" {
-  type    = string
-  default = "m7g.4xlarge"
+  description = "Deprecated; the shared Nginx router runs on Fargate."
+  type        = string
+  default     = "m7g.4xlarge"
+}
+
+variable "lambda_src_dir" {
+  description = "Absolute path to canonical Lambda source directory (repo lambda/)"
+  type        = string
+}
+
+variable "web_acl_arn" {
+  description = "Optional CloudFront WAF WebACL ARN"
+  type        = string
+  default     = ""
 }

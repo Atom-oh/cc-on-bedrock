@@ -6,6 +6,15 @@ import { CognitoIdentityProviderClient, InitiateAuthCommand, GetUserCommand } fr
 import { createHmac } from "crypto";
 import type { UserSession } from "./types";
 
+const cognitoClientSecret = process.env.COGNITO_CLIENT_SECRET;
+
+function getSecretHash(username: string, clientId: string) {
+  if (!cognitoClientSecret) return undefined;
+  return createHmac("sha256", cognitoClientSecret)
+    .update(username + clientId)
+    .digest("base64");
+}
+
 declare module "next-auth" {
   interface Session {
     user: UserSession;
@@ -31,7 +40,7 @@ export const authOptions: NextAuthOptions = {
   providers: [
     CognitoProvider({
       clientId: process.env.COGNITO_CLIENT_ID!,
-      clientSecret: process.env.COGNITO_CLIENT_SECRET!,
+      clientSecret: cognitoClientSecret ?? "",
       issuer: process.env.COGNITO_ISSUER!,
       authorization: { params: { scope: "openid email profile" } },
       profile(profile) {
@@ -56,11 +65,7 @@ export const authOptions: NextAuthOptions = {
           region: process.env.AWS_REGION ?? "ap-northeast-2",
         });
         const clientId = process.env.COGNITO_CLIENT_ID!;
-        const clientSecret = process.env.COGNITO_CLIENT_SECRET!;
-        // Compute SECRET_HASH for Cognito app client with secret
-        const secretHash = createHmac("sha256", clientSecret)
-          .update(credentials.email + clientId)
-          .digest("base64");
+        const secretHash = getSecretHash(credentials.email, clientId);
         try {
           const authResult = await cognitoClient.send(new InitiateAuthCommand({
             AuthFlow: "USER_PASSWORD_AUTH",
@@ -68,7 +73,7 @@ export const authOptions: NextAuthOptions = {
             AuthParameters: {
               USERNAME: credentials.email,
               PASSWORD: credentials.password,
-              SECRET_HASH: secretHash,
+              ...(secretHash ? { SECRET_HASH: secretHash } : {}),
             },
           }));
           const accessToken = authResult.AuthenticationResult?.AccessToken;

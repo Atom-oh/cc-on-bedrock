@@ -1,4 +1,4 @@
-# DevEnv 사용자 커스텀 포트 노출 — 설계 (Spec)
+the# DevEnv 사용자 커스텀 포트 노출 — 설계 (Spec)
 
 - **작성일**: 2026-06-09
 - **상태**: Approved (brainstorming) → writing-plans 대기

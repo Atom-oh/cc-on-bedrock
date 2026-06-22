@@ -261,27 +261,17 @@ export default function LocalGovernancePage() {
       <section className="border rounded p-4 bg-white">
         <h2 className="text-lg font-medium mb-2">CLI helper</h2>
         <p className="text-sm text-gray-600 mb-2">
-          Download <code>cc-bedrock-local.sh</code> to refresh credentials and run{" "}
-          <code>claude</code> with the right environment.
+          Install <code>cc-bedrock-local</code> once. It logs in with Cognito and wires AWS SDK{" "}
+          <code>credential_process</code> so Claude Code keeps working across 1-hour STS rotations.
         </p>
         <pre className="p-3 bg-gray-50 border rounded text-xs overflow-auto">
 {`# one-time setup
-curl -fsSL ${typeof window !== "undefined" ? window.location.origin : ""}/tools/cc-bedrock-local.sh \\
-  -o /usr/local/bin/cc-bedrock-local
-chmod +x /usr/local/bin/cc-bedrock-local
-
-# configure
-mkdir -p ~/.config/cc-bedrock
-cat > ~/.config/cc-bedrock/config <<EOF
-DASHBOARD_URL=${typeof window !== "undefined" ? window.location.origin : "https://dashboard.example.com"}
-CC_BEDROCK_TOKEN=<paste the CLI token from the Dashboard>
-AWS_PROFILE_NAME=cc-bedrock
-AWS_REGION=ap-northeast-2
-EOF
+curl -fsSL ${typeof window !== "undefined" ? window.location.origin : "https://dashboard.example.com"}/api/install | bash
 
 # use it
-cc-bedrock-local refresh
-cc-bedrock-local run -- claude`}
+cc
+cc --status
+cc --logout`}
         </pre>
       </section>
     </div>

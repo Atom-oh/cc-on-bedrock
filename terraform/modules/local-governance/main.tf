@@ -1,7 +1,5 @@
 ###############################################################################
 # Local Governance Module (ADR-014, ADR-015, ADR-021)
-# Equivalent to cdk/lib/08-local-governance-stack.ts
-#
 # Resources:
 #   - cc-on-bedrock-limits DynamoDB table (per-user / per-dept normalized-token state)
 #   - STS Issuer Lambda + Function URL (IAM auth)
@@ -53,7 +51,7 @@ resource "aws_dynamodb_table" "limits" {
     kms_key_arn = var.kms_key_arn
   }
 
-  # CDK applies removalPolicy=RETAIN on this table; mirror that here so a
+  # Limit state is retained so a
   # mistaken `terraform destroy` doesn't wipe per-user / per-dept normalized-
   # token state.
   lifecycle {
@@ -64,7 +62,7 @@ resource "aws_dynamodb_table" "limits" {
 
 # ─── Lambda packaging ────────────────────────────────────────────────────────
 #
-# sts-issuer.py imports role_factory.py (same directory in cdk/lib/lambda/) so
+# sts-issuer.py imports role_factory.py (same directory in repo lambda/) so
 # the two files must be packaged together — otherwise Lambda init fails with
 # ModuleNotFoundError: No module named 'role_factory'. The other handlers
 # (token-limit-enforcer.py, limit-reset.py) are self-contained single-file
@@ -170,8 +168,7 @@ resource "aws_lambda_function" "sts_issuer" {
   filename         = data.archive_file.sts_issuer.output_path
   source_code_hash = data.archive_file.sts_issuer.output_base64sha256
   # Worst-case path (pre-provisioner miss): AssumeRole + 31s eventual-consistency
-  # backoff + ensure_role + DDB lookups. CDK uses 45s
-  # (cdk/lib/08-local-governance-stack.ts:111, ADR-022).
+  # backoff + ensure_role + DDB lookups.
   timeout     = 45
   memory_size = 256
 

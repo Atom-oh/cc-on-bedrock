@@ -13,7 +13,7 @@ export default function DeploymentPage() {
         "CC-on-Bedrock을 AWS 계정에 배포하기 위한 전체 과정과 아키텍처 원리를 설명합니다.",
         "Step-by-step deployment to your AWS account, with architectural context."
       )}
-      tags={[{ label: "8 stacks", color: "cyan" }, { label: "CDK / TF / CFN", color: "green" }]}
+      tags={[{ label: "Terraform", color: "cyan" }, { label: "EC2 + Local", color: "green" }]}
     >
       <H2 id="prereq">{t("Prerequisites", "Prerequisites")}</H2>
       <Table
@@ -24,8 +24,8 @@ export default function DeploymentPage() {
         rows={[
           { item: t("AWS 계정", "AWS account"), req: "AdministratorAccess IAM" },
           { item: "Region", req: t("ap-northeast-2 (Seoul) — 다른 리전 시 inference profile 변경 필요", "ap-northeast-2 (Seoul) — change inference profile if using other regions") },
-          { item: "Node.js", req: "v20+ (CDK + Next.js)" },
-          { item: "AWS CDK CLI", req: <Code>npm install -g aws-cdk</Code> },
+          { item: "Terraform", req: "v1.6+" },
+          { item: "Node.js", req: "v20+ (Next.js)" },
           { item: "Docker", req: t("ARM64 build host 권장", "ARM64 build host recommended") },
           { item: t("Domain (옵션)", "Domain (optional)"), req: t("Route 53 hosted zone + ACM 인증서", "Route 53 hosted zone + ACM certificate") },
         ]}
@@ -36,24 +36,24 @@ export default function DeploymentPage() {
         columns={[
           { key: "p", label: t("프로파일", "Profile") },
           { key: "cmd", label: t("명령", "Command") },
-          { key: "incl", label: t("포함 스택", "Stacks included") },
+          { key: "incl", label: t("포함 범위", "Scope") },
         ]}
         rows={[
-          { p: t("EC2 + Local 공존 (기본)", "EC2 + Local coexist (default)"), cmd: <Code>cdk deploy --all</Code>, incl: "1–8" },
-          { p: "Local Governance only", cmd: <Code>cdk deploy --all -c governanceOnly=true</Code>, incl: t("1–6, 8 (7 스킵)", "1–6, 8 (skip 7)") },
+          { p: t("EC2 + Local 공존 (기본)", "EC2 + Local coexist (default)"), cmd: <Code>terraform -chdir=terraform apply</Code>, incl: t("전체 모듈", "all modules") },
+          { p: "Local Governance", cmd: <Code>curl -fsSL https://dashboard.example.com/api/install | bash</Code>, incl: t("Terraform 배포 후 사용자 PC에서 사용", "user-local flow after Terraform deploy") },
         ]}
       />
 
       <H2 id="steps">{t("배포 단계 상세", "Deployment steps")}</H2>
 
-      <H3 id="s1">Step 1 — Network (01)</H3>
+      <H3 id="s1">Step 1 — Network</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>VPC <Code>10.100.0.0/16</Code> · 2 AZ · Public + Private + Isolated subnet</li>
         <li>NAT Gateway / VPC Endpoints (S3, DynamoDB, Bedrock Runtime, KMS, Secrets Manager)</li>
         <li>DNS Firewall · Route 53 hosted zone</li>
       </ul>
 
-      <H3 id="s2">Step 2 — Security (02)</H3>
+      <H3 id="s2">Step 2 — Security</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>Cognito User Pool + App Client (USER_PASSWORD_AUTH) + custom 속성</li>
         <li>ACM wildcard 인증서 + us-east-1 별도 발급 (WAF용)</li>
@@ -61,7 +61,7 @@ export default function DeploymentPage() {
         <li>IAM Permission Boundary <Code>cc-on-bedrock-task-boundary</Code></li>
       </ul>
 
-      <H3 id="s3">Step 3 — Usage Tracking (03)</H3>
+      <H3 id="s3">Step 3 — Usage Tracking</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>{t("Bedrock invocation logging → CloudWatch Logs (textDataDeliveryEnabled: false, 비용 ~99% 절감)", "Bedrock invocation logging → CloudWatch Logs (text/image/embedding off, ~99% cost cut)")}</li>
         <li>{t("Subscription Filter → bedrock-usage-tracker Lambda (IAM role prefix 매칭)", "Subscription Filter → bedrock-usage-tracker Lambda (IAM role prefix match)")}</li>
@@ -69,26 +69,26 @@ export default function DeploymentPage() {
         <li>budget-check · ec2-idle-stop · audit-logger · gateway-manager Lambdas</li>
       </ul>
 
-      <H3 id="s4">Step 4 — ECS Dashboard infra (04)</H3>
+      <H3 id="s4">Step 4 — Shared Nginx Router</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>NLB internet-facing (CloudFront prefix list only on port 80)</li>
         <li>Nginx Fargate 2-task HA + 5초 hot-reload pipeline</li>
         <li>Lambda <Code>nginx-config-gen</Code> + S3 sync</li>
       </ul>
 
-      <H3 id="s5">Step 5 — Dashboard (05)</H3>
+      <H3 id="s5">Step 5 — Dashboard</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
-        <li>Next.js Standalone ECS Task (rolling deployment + circuit breaker)</li>
+        <li>Next.js dashboard on EC2 ASG behind ALB</li>
         <li>{t("통합 CloudFront — Dashboard + DevEnv 라우팅", "Unified CloudFront — routes Dashboard + DevEnv")}</li>
         <li>Lambda@Edge: <Code>session-validator</Code> (NextAuth JWE) + <Code>origin-router</Code></li>
       </ul>
 
-      <H3 id="s6">Step 6 — WAF (06)</H3>
+      <H3 id="s6">Step 6 — WAF</H3>
       <P>{t("CloudFront-scope WebACL (us-east-1) — AWS Managed Common Rule Set + 사용자 정의 rate limit.", "CloudFront-scope WebACL (us-east-1) — AWS Managed Common Rule Set + custom rate limit.")}</P>
 
-      <H3 id="s7">Step 7 — EC2 DevEnv (07)</H3>
+      <H3 id="s7">Step 7 — EC2 DevEnv</H3>
       <P>
-        <span className="text-accent-orange">[{t("governanceOnly=true 시 스킵", "skipped if governanceOnly=true")}]</span>
+        <span className="text-accent-orange">[{t("EC2 모드가 필요한 사용자에게 할당", "assigned only to users who need EC2 mode")}]</span>
       </P>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>Launch Template (ARM64 t4g.large, Ubuntu 24.04 또는 AL2023)</li>
@@ -98,7 +98,7 @@ export default function DeploymentPage() {
         <li>Hibernation (60-day rotation 한도)</li>
       </ul>
 
-      <H3 id="s8">Step 8 — Local Governance (08)</H3>
+      <H3 id="s8">Step 8 — Local Governance</H3>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
         <li>STS Issuer Lambda + Function URL (IAM auth)</li>
         <li>cc-on-bedrock-limits DynamoDB</li>
@@ -120,10 +120,10 @@ bash tests/docker/test-devenv.sh
 bash tests/integration/test-e2e.sh`}
       </CodeBlock>
 
-      <Callout type="warn" title={t("Terraform parity 주의", "Terraform parity note")}>
+      <Callout type="tip" title={t("Terraform 기준", "Terraform canonical path")}>
         {t(
-          "현재 Terraform 모듈은 root main.tf에 network + security + ecs-devenv + dashboard 4개만 wired. usage-tracking / local-governance / ec2-devenv / waf 모듈은 존재하지만 root 통합은 follow-up. CDK / CloudFormation은 모두 사용 가능.",
-          "Terraform root currently wires only network + security + ecs-devenv + dashboard. The usage-tracking / local-governance / ec2-devenv / waf modules exist but root integration is follow-up work. CDK / CloudFormation are fully usable."
+          "현재 배포 기준은 Terraform root입니다. 변경 전 terraform fmt, validate, plan을 실행하세요.",
+          "The deployment source of truth is the Terraform root. Run terraform fmt, validate, and plan before applying changes."
         )}
       </Callout>
     </PageShell>

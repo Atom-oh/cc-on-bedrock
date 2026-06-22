@@ -1,11 +1,9 @@
 ###############################################################################
 # Usage Tracking Module
-# Equivalent to cdk/lib/03-usage-tracking-stack.ts
-#
 # Lambda packaging:
 #   We zip each *.py file from <lambda_src_dir> individually via archive_file.
 #   This works because every handler in this module is self-contained — the
-#   one cross-file dependency in cdk/lib/lambda/ (sts-issuer.py importing
+#   one cross-file dependency in lambda/ (sts-issuer.py importing
 #   role_factory.py) lives in the local-governance module, which uses a
 #   multi-source archive_file there.
 ###############################################################################
@@ -70,7 +68,7 @@ resource "aws_dynamodb_table" "usage" {
     kms_key_arn = var.kms_key_arn
   }
 
-  # CDK applies removalPolicy=RETAIN on the usage table; mirror that here so
+  # Usage history is retained so
   # `terraform destroy` cannot wipe historical Bedrock invocation records.
   lifecycle {
     prevent_destroy = true
@@ -303,7 +301,7 @@ resource "aws_dynamodb_table" "dept_mcp_config" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Lambda packaging — per-file archive_file, src tracked from cdk/lib/lambda
+# Lambda packaging — per-file archive_file from repo lambda/
 # ──────────────────────────────────────────────────────────────────────────────
 locals {
   lambda_files = {
@@ -490,8 +488,8 @@ resource "aws_iam_role_policy_attachment" "budget_check_basic" {
 
 data "aws_iam_policy_document" "budget_check_policy" {
   # Usage table is read-only — budget-check.py aggregates usage but never
-  # writes back to it. Matches CDK's `usageTable.grantReadData(budgetCheckLambda)`
-  # (cdk/lib/03-usage-tracking-stack.ts:184).
+  # writes back to it.
+  # Must stay aligned with the token-limit-enforcer and budget-check policies.
   statement {
     sid     = "UsageTableReadOnly"
     actions = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
@@ -626,9 +624,8 @@ data "aws_iam_policy_document" "ec2_idle_stop_policy" {
     resources = ["*"]
   }
   # Usage table is read-only — ec2-idle-stop.py queries usage to determine
-  # idleness but never mutates the table. Matches CDK's
-  # `usageTable.grantReadData(ec2IdleStopLambda)`
-  # (cdk/lib/03-usage-tracking-stack.ts:303).
+  # idleness but never mutates the table.
+  # Must stay aligned with the token-limit-enforcer and limit-reset policies.
   statement {
     sid     = "UsageTableReadOnly"
     actions = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
@@ -831,9 +828,7 @@ resource "aws_lambda_permission" "bedrock_audit" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Bedrock invocation logging — IAM role for Bedrock service + custom enable
-# (CDK uses AwsCustomResource; TF leaves a placeholder note. Apply via CLI after
-#  terraform apply, see commands below.)
+# Bedrock invocation logging — IAM role for Bedrock service + provider resource
 # ──────────────────────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "bedrock_logging_assume" {
   # Confused-deputy guard: only Bedrock principals running in THIS account
@@ -882,8 +877,7 @@ resource "aws_iam_role_policy" "bedrock_logging_policy" {
 # fallback: the proper resource keeps `terraform plan` drift detection alive
 # — if someone toggles logging in the console the next plan re-reconciles.
 #
-# Matches CDK's `AwsCustomResource` semantics: text/image/embedding payload
-# capture stays OFF (textDataDeliveryEnabled = false cuts CloudWatch Logs
+# Text/image/embedding payload capture stays OFF (textDataDeliveryEnabled = false cuts CloudWatch Logs
 # cost ~99% — only invocation metadata is recorded).
 resource "aws_bedrock_model_invocation_logging_configuration" "this" {
   logging_config {

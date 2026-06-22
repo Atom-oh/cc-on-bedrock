@@ -4,8 +4,9 @@
 # Required env:
 #   AWS_REGION                  (default ap-northeast-2)
 #   DASHBOARD_URL               https://dashboard.example.com
-#   CC_BEDROCK_TOKEN            CLI bearer token issued by the Dashboard
-#   TEST_USER_SUB               Cognito sub of the test user (also matches IAM role suffix)
+#   COGNITO_ACCESS_TOKEN        access token from the cc-bedrock-local Cognito public client
+#   TEST_USER_EMAIL             email of the test user (usage/limit USER# key)
+#   TEST_USER_SUBDOMAIN         subdomain of the test user (IAM role suffix)
 #   TEST_USER_DEPT              department of the test user (default: default)
 #
 # Optional:
@@ -13,7 +14,7 @@
 #   POLL_TIMEOUT_SECONDS        max seconds to poll for usage/deny propagation (default: 300)
 #
 # What it asserts:
-#   1. STS Issuer returns valid 8h creds
+#   1. STS Issuer returns valid 1h role-chained credentials
 #   2. Issued creds successfully call bedrock:ListFoundationModels
 #   3. usage record appears in DynamoDB cc-on-bedrock-usage within the polling window
 #   4. Setting a very small daily token limit and invoking a model causes the
@@ -25,8 +26,9 @@ trap 'echo "FAIL at line $LINENO"; exit 1' ERR
 
 AWS_REGION="${AWS_REGION:-ap-northeast-2}"
 DASHBOARD_URL="${DASHBOARD_URL:?must set DASHBOARD_URL}"
-CC_BEDROCK_TOKEN="${CC_BEDROCK_TOKEN:?must set CC_BEDROCK_TOKEN}"
-TEST_USER_SUB="${TEST_USER_SUB:?must set TEST_USER_SUB}"
+COGNITO_ACCESS_TOKEN="${COGNITO_ACCESS_TOKEN:?must set COGNITO_ACCESS_TOKEN}"
+TEST_USER_EMAIL="${TEST_USER_EMAIL:?must set TEST_USER_EMAIL}"
+TEST_USER_SUBDOMAIN="${TEST_USER_SUBDOMAIN:?must set TEST_USER_SUBDOMAIN}"
 TEST_USER_DEPT="${TEST_USER_DEPT:-default}"
 TEST_TOKEN_LIMIT="${TEST_TOKEN_LIMIT:-1000}"
 POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
@@ -35,8 +37,7 @@ LIMITS_TABLE="cc-on-bedrock-limits"
 USAGE_TABLE="cc-on-bedrock-usage"
 ROLE_PREFIX="cc-on-bedrock-local-user-"
 POLICY_NAME="cc-bedrock-local-token-deny"
-role_suffix="$(echo "$TEST_USER_SUB" | tr -c 'A-Za-z0-9_-' '-' | cut -c1-40)"
-ROLE_NAME="${ROLE_PREFIX}${role_suffix}"
+ROLE_NAME="${ROLE_PREFIX}${TEST_USER_SUBDOMAIN}"
 
 say() { printf '\n\033[1;36m===\033[0m %s\n' "$*"; }
 pass() { printf '\033[1;32m  PASS\033[0m %s\n' "$*"; }
@@ -45,7 +46,7 @@ fail() { printf '\033[1;31m  FAIL\033[0m %s\n' "$*"; exit 1; }
 # ─── 1. Refresh credentials via Dashboard ─────────────────
 say "1. POST /api/local/credentials"
 creds_json="$(curl -fsS -X POST \
-  -H "Authorization: Bearer ${CC_BEDROCK_TOKEN}" \
+  -H "Authorization: Bearer ${COGNITO_ACCESS_TOKEN}" \
   -H "Content-Type: application/json" \
   "${DASHBOARD_URL%/}/api/local/credentials" \
   --data '{}')"
@@ -63,9 +64,9 @@ AWS_ACCESS_KEY_ID="$ak" AWS_SECRET_ACCESS_KEY="$sk" AWS_SESSION_TOKEN="$tok" \
 pass "ListFoundationModels succeeded"
 
 # ─── 3. Install a tight token limit for the test user ─────
-say "3. install tight daily token limit (${TEST_TOKEN_LIMIT}) for USER#${TEST_USER_SUB}"
+say "3. install tight daily token limit (${TEST_TOKEN_LIMIT}) for USER#${TEST_USER_EMAIL}"
 aws dynamodb put-item --region "$AWS_REGION" --table-name "$LIMITS_TABLE" \
-  --item "{\"PK\":{\"S\":\"USER#${TEST_USER_SUB}\"},\"SK\":{\"S\":\"LIMIT#daily\"},\"max_normalized\":{\"N\":\"${TEST_TOKEN_LIMIT}\"},\"updatedAt\":{\"S\":\"$(date -u +%FT%TZ)\"}}" \
+  --item "{\"PK\":{\"S\":\"USER#${TEST_USER_EMAIL}\"},\"SK\":{\"S\":\"LIMIT#daily\"},\"subdomain\":{\"S\":\"${TEST_USER_SUBDOMAIN}\"},\"max_normalized\":{\"N\":\"${TEST_TOKEN_LIMIT}\"},\"updatedAt\":{\"S\":\"$(date -u +%FT%TZ)\"}}" \
   >/dev/null
 pass "limit installed"
 
