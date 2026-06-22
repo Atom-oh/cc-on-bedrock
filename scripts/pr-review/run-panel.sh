@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 패널 병렬 fan-out. 인자: <diff> <prompt> <workdir>
-# diff 는 각 CLI 의 stdin 으로 `< "$DIFF"` 직접 리다이렉트(파일이라 TTY 아님 → no-hang),
+# codex 는 diff 를 stdin(`< "$DIFF"`)으로 받고, kiro-cli 는 chat ARG 로 받는다(아래 KIRO_MSG).
 # timeout 백스톱 + 비대화형 플래그로 멈춤 방지. 슬롯이 비면 최대 PANEL_RETRIES 회 재시도
 # (gpt-5.5/bedrock-mantle 등 transient 흡수). 매 시도마다 $DIFF 를 다시 연다.
 set -uo pipefail
@@ -34,11 +34,16 @@ if command -v codex >/dev/null 2>&1; then
 else echo "[skip] codex (binary absent)" >&2; : > "$SLOT/codex.md"; fi
 
 # Kiro x3 — model:tag 를 한 배열에서 파생(호출/집계 동기화).
+# ⚠️ kiro-cli `chat` 는 메시지를 ARG 로 받는다 — codex 와 달리 stdin 을 읽지 않는다.
+# diff 를 stdin(`< "$DIFF"`)으로만 주면 kiro 패널 3종은 instruction 만 보고 diff 를
+# 못 받아 항상 "no findings" 가 된다(과거 PR 리뷰에서 kiro-opus/kimi/glm 전부 리뷰 불성립의 원인).
+# → prompt + diff 를 합쳐 chat ARG 로 전달한다.
+KIRO_MSG="$(printf '%s\n\n=== DIFF UNDER REVIEW (review this) ===\n%s\n' "$PROMPT" "$(cat "$DIFF")")"
 for entry in "${KIRO_MODELS[@]}"; do
   m="${entry%%:*}"; tag="${entry##*:}"
   if command -v kiro-cli >/dev/null 2>&1; then
     ( try_panel "$SLOT/$tag.md" "$SLOT/$tag.err" \
-        timeout "$T" kiro-cli chat "$PROMPT" --model "$m" \
+        timeout "$T" kiro-cli chat "$KIRO_MSG" --model "$m" \
         --no-interactive --trust-tools=read,grep --wrap never ) &
   else echo "[skip] $tag (binary absent)" >&2; : > "$SLOT/$tag.md"; fi
 done
