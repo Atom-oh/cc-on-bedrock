@@ -61,22 +61,26 @@ module "usage_tracking" {
 module "ecs_devenv" {
   source = "./modules/ecs-devenv"
   count  = local.devenv_enabled ? 1 : 0
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
 
-  vpc_id                  = module.network.vpc_id
-  vpc_cidr                = module.network.vpc_cidr
-  public_subnet_ids       = module.network.public_subnet_ids
-  private_subnet_ids      = module.network.private_subnet_ids
-  isolated_subnet_ids     = module.network.isolated_subnet_ids
-  kms_key_arn             = module.security.kms_key_arn
-  kms_key_id              = module.security.kms_key_id
-  devenv_certificate_arn  = module.security.devenv_certificate_arn
-  hosted_zone_id          = module.network.hosted_zone_id
-  domain_name             = var.domain_name
-  dev_subdomain           = var.dev_subdomain
-  cloudfront_secret_value = module.security.cloudfront_secret_value
-  ecs_host_instance_type  = var.ecs_host_instance_type
-  lambda_src_dir          = local.lambda_src_dir
-  web_acl_arn             = module.waf.web_acl_arn
+  vpc_id                            = module.network.vpc_id
+  vpc_cidr                          = module.network.vpc_cidr
+  public_subnet_ids                 = module.network.public_subnet_ids
+  private_subnet_ids                = module.network.private_subnet_ids
+  isolated_subnet_ids               = module.network.isolated_subnet_ids
+  kms_key_arn                       = module.security.kms_key_arn
+  kms_key_id                        = module.security.kms_key_id
+  devenv_certificate_arn            = module.security.devenv_certificate_arn
+  hosted_zone_id                    = module.network.hosted_zone_id
+  domain_name                       = var.domain_name
+  dev_subdomain                     = var.dev_subdomain
+  cloudfront_secret_value           = module.security.cloudfront_secret_value
+  nextauth_secret_ssm_parameter_arn = module.security.nextauth_secret_ssm_parameter_arn
+  ecs_host_instance_type            = var.ecs_host_instance_type
+  lambda_src_dir                    = local.lambda_src_dir
+  web_acl_arn                       = module.waf.web_acl_arn
 }
 
 # ---- 05 Dashboard ------------------------------------------------------------
@@ -96,6 +100,7 @@ module "dashboard" {
   hosted_zone_id                      = module.network.hosted_zone_id
   domain_name                         = var.domain_name
   cloudfront_secret_value             = module.security.cloudfront_secret_value
+  nextauth_secret                     = module.security.nextauth_secret_value
   instance_type                       = var.dashboard_instance_type
   instance_table_name                 = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : local.default_dev_env
   routing_table_name                  = local.devenv_enabled ? module.ecs_devenv[0].routing_table_name : local.default_dev_env

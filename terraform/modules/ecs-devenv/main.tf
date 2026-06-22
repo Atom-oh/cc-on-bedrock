@@ -588,6 +588,80 @@ resource "aws_ecs_service" "otel_collector" {
   depends_on = [aws_lb_listener.otel_collector]
 }
 
+# ---- DevEnv Lambda@Edge Session Validator -----------------------------------
+data "archive_file" "devenv_session_validator" {
+  type        = "zip"
+  output_path = "${path.module}/.build/devenv-session-validator.zip"
+
+  source {
+    filename = "index.js"
+    content = replace(
+      replace(
+        replace(
+          file("${var.lambda_src_dir}/devenv-session-validator/index.js"),
+          "__DEV_DOMAIN__",
+          "${var.dev_subdomain}.${var.domain_name}"
+        ),
+        "__DASHBOARD_URL__",
+        "https://cconbedrock-dashboard.${var.domain_name}"
+      ),
+      "__SSM_REGION__",
+      data.aws_region.current.name
+    )
+  }
+}
+
+data "aws_iam_policy_document" "edge_lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com", "edgelambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "devenv_session_validator" {
+  provider           = aws.us_east_1
+  name               = "cc-on-bedrock-devenv-session-validator-edge"
+  assume_role_policy = data.aws_iam_policy_document.edge_lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "devenv_session_validator_basic" {
+  provider   = aws.us_east_1
+  role       = aws_iam_role.devenv_session_validator.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+data "aws_iam_policy_document" "devenv_session_validator_ssm" {
+  statement {
+    sid       = "ReadNextAuthSecret"
+    actions   = ["ssm:GetParameter"]
+    resources = [var.nextauth_secret_ssm_parameter_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "devenv_session_validator_ssm" {
+  provider = aws.us_east_1
+  role     = aws_iam_role.devenv_session_validator.id
+  name     = "read-nextauth-secret"
+  policy   = data.aws_iam_policy_document.devenv_session_validator_ssm.json
+}
+
+resource "aws_lambda_function" "devenv_session_validator" {
+  provider         = aws.us_east_1
+  function_name    = "cc-on-bedrock-devenv-session-validator"
+  role             = aws_iam_role.devenv_session_validator.arn
+  runtime          = "nodejs20.x"
+  handler          = "index.handler"
+  filename         = data.archive_file.devenv_session_validator.output_path
+  source_code_hash = data.archive_file.devenv_session_validator.output_base64sha256
+  publish          = true
+  timeout          = 5
+  memory_size      = 128
+  description      = "NextAuth session validator for *.${var.dev_subdomain}.${var.domain_name}"
+}
+
 # ---- CloudFront + Route 53 wildcard -----------------------------------------
 resource "aws_cloudfront_distribution" "this" {
   comment = "CC-on-Bedrock DevEnv (*.dev domain)"
@@ -620,6 +694,12 @@ resource "aws_cloudfront_distribution" "this" {
 
     cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
     origin_request_policy_id = "216adef6-5c7f-47e4-b989-5492eafa07d3"
+
+    lambda_function_association {
+      event_type   = "viewer-request"
+      lambda_arn   = aws_lambda_function.devenv_session_validator.qualified_arn
+      include_body = false
+    }
   }
 
   restrictions {

@@ -58,6 +58,7 @@ SSM_PARAMS=(
   "/${PROJECT_PREFIX}/cognito/user-pool-id"
   "/${PROJECT_PREFIX}/cognito/client-id"
   "/${PROJECT_PREFIX}/cognito/client-secret"
+  "/${PROJECT_PREFIX}/nextauth-secret"
   "/${PROJECT_PREFIX}/devenv/ami-id/ubuntu"
 )
 

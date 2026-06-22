@@ -15,6 +15,7 @@ locals {
     DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
     INSTANCE_TABLE              = var.instance_table_name
     LAUNCH_TEMPLATE             = var.devenv_launch_template_name
+    NEXTAUTH_SECRET             = var.nextauth_secret
     NEXTAUTH_URL                = "https://${local.dashboard_domain}"
     OTEL_EXPORTER_OTLP_ENDPOINT = var.otel_collector_endpoint
     PRIVATE_SUBNET_IDS          = join(",", var.private_subnet_ids)

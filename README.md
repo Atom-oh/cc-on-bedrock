@@ -68,7 +68,8 @@ Important outputs include:
 ## Tests
 
 ```bash
-bash -n tools/cc-bedrock-local.sh tools/cc-otel-code-metrics.sh
+bash -n tools/cc-bedrock-local.sh
+bash -n tools/cc-otel-code-metrics.sh
 python3 -m pytest tests/unit/ scripts/__tests__/ -q
 bash tests/run-all.sh
 ```

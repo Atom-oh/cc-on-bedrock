@@ -212,6 +212,10 @@ exports.handler = async (event) => {
   const headers = request.headers;
   const host = (headers.host && headers.host[0].value) || '';
 
+  // Never trust a viewer-supplied auth header. The validator is the only
+  // component allowed to set X-Auth-User for nginx.
+  delete request.headers['x-auth-user'];
+
   // Pass through non-devenv requests (dashboard traffic)
   if (!host.endsWith(`.${DEV_DOMAIN}`)) return request;
 

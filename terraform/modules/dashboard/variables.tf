@@ -39,6 +39,11 @@ variable "cloudfront_secret_value" {
   sensitive = true
 }
 
+variable "nextauth_secret" {
+  type      = string
+  sensitive = true
+}
+
 variable "instance_type" {
   type    = string
   default = "t4g.xlarge"

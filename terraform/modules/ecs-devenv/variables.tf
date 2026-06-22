@@ -48,6 +48,11 @@ variable "cloudfront_secret_value" {
   sensitive = true
 }
 
+variable "nextauth_secret_ssm_parameter_arn" {
+  description = "SSM parameter ARN containing the NextAuth secret consumed by the DevEnv Lambda@Edge validator"
+  type        = string
+}
+
 variable "ecs_host_instance_type" {
   description = "Deprecated; the shared Nginx router runs on Fargate."
   type        = string

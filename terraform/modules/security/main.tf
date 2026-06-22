@@ -271,6 +271,18 @@ resource "aws_secretsmanager_secret_version" "cloudfront_secret" {
   secret_string = random_password.cloudfront_secret.result
 }
 
+resource "random_password" "nextauth_secret" {
+  length  = 64
+  special = false
+}
+
+resource "aws_ssm_parameter" "nextauth_secret" {
+  name        = "/cc-on-bedrock/nextauth-secret"
+  description = "NextAuth secret shared by the dashboard and DevEnv Lambda@Edge session validator"
+  type        = "String"
+  value       = random_password.nextauth_secret.result
+}
+
 # ---- IAM Roles ---------------------------------------------------------------
 
 # Bedrock policy document (shared)

@@ -39,6 +39,15 @@ output "cloudfront_secret_value" {
   sensitive = true
 }
 
+output "nextauth_secret_value" {
+  value     = random_password.nextauth_secret.result
+  sensitive = true
+}
+
+output "nextauth_secret_ssm_parameter_arn" {
+  value = aws_ssm_parameter.nextauth_secret.arn
+}
+
 output "dashboard_ec2_role_arn" {
   value = aws_iam_role.dashboard_ec2.arn
 }
