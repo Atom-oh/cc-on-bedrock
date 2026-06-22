@@ -84,6 +84,13 @@ module "dashboard" {
   domain_name                         = var.domain_name
   cloudfront_secret_value             = module.security.cloudfront_secret_value
   instance_type                       = var.dashboard_instance_type
+  instance_table_name                 = module.ec2_devenv.instance_table_name
+  routing_table_name                  = module.ecs_devenv.routing_table_name
+  devenv_launch_template_name         = module.ec2_devenv.launch_template_name
+  devenv_sg_open_id                   = module.ec2_devenv.sg_open_id
+  devenv_sg_restricted_id             = module.ec2_devenv.sg_restricted_id
+  devenv_sg_locked_id                 = module.ec2_devenv.sg_locked_id
+  otel_collector_endpoint             = module.ecs_devenv.otel_collector_endpoint
 }
 
 # ---- 06 WAF ------------------------------------------------------------------

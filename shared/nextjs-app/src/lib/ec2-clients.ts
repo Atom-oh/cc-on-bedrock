@@ -61,7 +61,6 @@ const ssmClient = new SSMClient({ region });
 const ddbClient = new DynamoDBClient({ region });
 const iamClient = new IAMClient({ region });
 const secretsClient = new SecretsManagerClient({ region });
-const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 
 const INSTANCE_TABLE = process.env.INSTANCE_TABLE ?? "cc-user-instances";
 const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
@@ -71,6 +70,54 @@ const HIBERNATE_ENABLED = (process.env.HIBERNATE_ENABLED ?? "false") === "true";
 const DASHBOARD_URL = process.env.NEXTAUTH_URL ?? process.env.DASHBOARD_URL ?? "";
 const OTEL_EXPORTER_OTLP_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? process.env.OTEL_COLLECTOR_ENDPOINT ?? "";
+
+function isAwsAccountId(value: string | undefined): value is string {
+  return /^[0-9]{12}$/.test(value ?? "");
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 1000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveAccountIdFromImds(): Promise<string | undefined> {
+  try {
+    const tokenResponse = await fetchWithTimeout("http://169.254.169.254/latest/api/token", {
+      method: "PUT",
+      headers: { "X-aws-ec2-metadata-token-ttl-seconds": "21600" },
+    });
+    if (!tokenResponse.ok) return undefined;
+    const token = await tokenResponse.text();
+    if (!token) return undefined;
+
+    const documentResponse = await fetchWithTimeout("http://169.254.169.254/latest/dynamic/instance-identity/document", {
+      headers: { "X-aws-ec2-metadata-token": token },
+    });
+    if (!documentResponse.ok) return undefined;
+    const document = await documentResponse.json() as { accountId?: string };
+    return isAwsAccountId(document.accountId) ? document.accountId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function resolveAwsAccountId(): Promise<string> {
+  const configured = process.env.AWS_ACCOUNT_ID?.trim();
+  if (configured) {
+    if (isAwsAccountId(configured)) return configured;
+    throw new Error("AWS_ACCOUNT_ID must be a 12-digit AWS account id");
+  }
+
+  const fromImds = await resolveAccountIdFromImds();
+  if (fromImds) return fromImds;
+
+  throw new Error("AWS_ACCOUNT_ID is required and EC2 IMDS account id is unavailable");
+}
 
 // DLP Security Group IDs (from Terraform outputs / env vars)
 const SG_MAP: Record<string, string> = {
@@ -1209,10 +1256,7 @@ export async function applyIamGrant(args: GrantArgs): Promise<{ attached: string
   // Symmetric with the request-time path (container-request): without the account id
   // the cross-account guard cannot run, so fail closed rather than silently skip it
   // (review MINOR).
-  const accountId = args.accountId ?? process.env.AWS_ACCOUNT_ID;
-  if (!accountId) {
-    throw new Error("grant re-validation requires AWS_ACCOUNT_ID (cross-account guard) — server misconfigured");
-  }
+  const accountId = args.accountId ?? await resolveAwsAccountId();
   const v = validateIamRequest(args.statements, {
     serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
     wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
@@ -1525,7 +1569,7 @@ async function ensureCodeserverPassword(subdomain: string): Promise<string> {
  * Grants InvokeGateway on the common gateway + department-specific gateway.
  * Called on every instance start to keep gateway ARNs current.
  */
-async function applyGatewayPolicy(roleName: string, department: string): Promise<void> {
+async function applyGatewayPolicy(roleName: string, department: string, accountId: string): Promise<void> {
   try {
     // Query DDB for department and common gateway IDs
     const { DynamoDBDocumentClient, GetCommand } = await import("@aws-sdk/lib-dynamodb");
@@ -1618,6 +1662,7 @@ async function runInstancesWithIamRetry(
 async function ensureUserInstanceProfile(subdomain: string, username: string, department: string): Promise<string> {
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
   const profileName = roleName;
+  const accountId = await resolveAwsAccountId();
 
   // Cost allocation tags for AWS Billing integration (ADR-011 canonical schema).
   // Same key set is emitted by sts-issuer.py for Local Governance role tags so CUR 2.0
@@ -1708,7 +1753,7 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
   }));
 
   // Apply AgentCore Gateway access policy (updates on every start to reflect dept changes)
-  await applyGatewayPolicy(roleName, department);
+  await applyGatewayPolicy(roleName, department, accountId);
 
   // Ensure instance profile exists AND has the role attached. Handles the orphan
   // case where a previous run created the profile but crashed before attaching the

@@ -43,3 +43,31 @@ variable "instance_type" {
   type    = string
   default = "t4g.xlarge"
 }
+
+variable "instance_table_name" {
+  type = string
+}
+
+variable "routing_table_name" {
+  type = string
+}
+
+variable "devenv_launch_template_name" {
+  type = string
+}
+
+variable "devenv_sg_open_id" {
+  type = string
+}
+
+variable "devenv_sg_restricted_id" {
+  type = string
+}
+
+variable "devenv_sg_locked_id" {
+  type = string
+}
+
+variable "otel_collector_endpoint" {
+  type = string
+}

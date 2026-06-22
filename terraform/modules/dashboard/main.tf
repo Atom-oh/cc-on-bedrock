@@ -4,9 +4,25 @@
 ###############################################################################
 
 data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
 
 locals {
   dashboard_domain = "cconbedrock-dashboard.${var.domain_name}"
+  runtime_env = {
+    AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
+    AWS_REGION                  = data.aws_region.current.name
+    DASHBOARD_URL               = "https://${local.dashboard_domain}"
+    INSTANCE_TABLE              = var.instance_table_name
+    LAUNCH_TEMPLATE             = var.devenv_launch_template_name
+    NEXTAUTH_URL                = "https://${local.dashboard_domain}"
+    OTEL_EXPORTER_OTLP_ENDPOINT = var.otel_collector_endpoint
+    PRIVATE_SUBNET_IDS          = join(",", var.private_subnet_ids)
+    ROUTING_TABLE               = var.routing_table_name
+    SG_DEVENV_LOCKED            = var.devenv_sg_locked_id
+    SG_DEVENV_OPEN              = var.devenv_sg_open_id
+    SG_DEVENV_RESTRICTED        = var.devenv_sg_restricted_id
+  }
+  runtime_env_file = join("\n", [for key, value in local.runtime_env : "${key}=${value}"])
 }
 
 # ---- Security Groups ---------------------------------------------------------
@@ -136,6 +152,10 @@ npm install -g pm2
 mkdir -p /opt/dashboard
 cd /opt/dashboard
 
+cat > /opt/dashboard/.env << 'ENVEOF'
+${local.runtime_env_file}
+ENVEOF
+
 cat > server.js << INNEREOF
 const http = require('http');
 const server = http.createServer((req, res) => {
@@ -150,6 +170,9 @@ const server = http.createServer((req, res) => {
 server.listen(3000, () => console.log('Dashboard running on port 3000'));
 INNEREOF
 
+set -a
+. /opt/dashboard/.env
+set +a
 pm2 start server.js --name dashboard
 pm2 startup
 pm2 save

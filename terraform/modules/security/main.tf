@@ -450,10 +450,17 @@ resource "aws_iam_role_policy_attachment" "dashboard_ssm" {
 data "aws_iam_policy_document" "dashboard_cognito" {
   statement {
     actions = [
+      "cognito-idp:AdminAddUserToGroup",
       "cognito-idp:AdminCreateUser",
       "cognito-idp:AdminDeleteUser",
+      "cognito-idp:AdminDisableUser",
+      "cognito-idp:AdminEnableUser",
       "cognito-idp:AdminGetUser",
+      "cognito-idp:AdminListGroupsForUser",
+      "cognito-idp:AdminSetUserPassword",
       "cognito-idp:AdminUpdateUserAttributes",
+      "cognito-idp:DescribeUserPoolClient",
+      "cognito-idp:ListGroups",
       "cognito-idp:ListUsers",
     ]
     resources = [aws_cognito_user_pool.this.arn]
@@ -464,6 +471,149 @@ resource "aws_iam_role_policy" "dashboard_cognito" {
   name   = "cognito-admin"
   role   = aws_iam_role.dashboard_ec2.id
   policy = data.aws_iam_policy_document.dashboard_cognito.json
+}
+
+data "aws_iam_policy_document" "dashboard_data_infra" {
+  statement {
+    sid = "SsmParameterRead"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+    ]
+    resources = ["arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/cc-on-bedrock/*"]
+  }
+
+  statement {
+    sid = "BedrockAccess"
+    actions = [
+      "bedrock:Converse",
+      "bedrock:ConverseStream",
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+    ]
+    resources = [
+      "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
+      "arn:aws:bedrock:*::foundation-model/*embed*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*embed*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+    ]
+  }
+
+  statement {
+    sid = "AgentCoreAccess"
+    actions = [
+      "bedrock-agentcore:CreateEvent",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:InvokeAgentRuntime",
+      "bedrock-agentcore:ListEvents",
+      "bedrock-agentcore:StopRuntimeSession",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "CloudWatchRead"
+    actions = [
+      "cloudwatch:GetMetricData",
+      "cloudwatch:GetMetricStatistics",
+      "cloudwatch:ListMetrics",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "SecurityDashboardRead"
+    actions = [
+      "cloudtrail:LookupEvents",
+      "ec2:DescribeSecurityGroups",
+      "route53resolver:GetFirewallDomainList",
+      "route53resolver:GetFirewallRuleGroup",
+      "route53resolver:ListFirewallDomainLists",
+      "route53resolver:ListFirewallDomains",
+      "route53resolver:ListFirewallRuleGroupAssociations",
+      "route53resolver:ListFirewallRules",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "DlpDnsFirewallManagement"
+    actions = [
+      "route53resolver:CreateFirewallDomainList",
+      "route53resolver:CreateFirewallRule",
+      "route53resolver:DeleteFirewallDomainList",
+      "route53resolver:DeleteFirewallRule",
+      "route53resolver:UpdateFirewallDomains",
+      "route53resolver:UpdateFirewallRule",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "SecretsManagerCodeserver"
+    actions = [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:PutSecretValue",
+      "secretsmanager:UpdateSecret",
+    ]
+    resources = ["arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/*"]
+  }
+
+  statement {
+    sid = "DynamoDBDashboardAccess"
+    actions = [
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-department-budgets",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dept-mcp-config",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dlp-domain-lists",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-mcp-catalog",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-approval-requests",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-approval-requests/index/*",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-cli-tokens",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-cli-tokens/index/*",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-limits",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-usage",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-usage/index/*",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-prompt-audit",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-routing-table",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-user-budgets",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-user-instances",
+    ]
+  }
+
+  statement {
+    sid = "KmsUse"
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+    ]
+    resources = [aws_kms_key.this.arn]
+  }
+
+  statement {
+    sid       = "LambdaInvoke"
+    actions   = ["lambda:InvokeFunction"]
+    resources = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:cc-on-bedrock-*"]
+  }
+}
+
+resource "aws_iam_role_policy" "dashboard_data_infra" {
+  name   = "dashboard-data-infra"
+  role   = aws_iam_role.dashboard_ec2.id
+  policy = data.aws_iam_policy_document.dashboard_data_infra.json
 }
 
 data "aws_iam_policy_document" "dashboard_ecs" {
@@ -484,6 +634,77 @@ resource "aws_iam_role_policy" "dashboard_ecs" {
   name   = "ecs-manage"
   role   = aws_iam_role.dashboard_ec2.id
   policy = data.aws_iam_policy_document.dashboard_ecs.json
+}
+
+data "aws_iam_policy_document" "dashboard_ec2_devenv" {
+  statement {
+    sid = "Ec2DevenvInstances"
+    actions = [
+      "ec2:CreateSnapshot",
+      "ec2:CreateTags",
+      "ec2:DeregisterImage",
+      "ec2:DescribeImages",
+      "ec2:DescribeInstances",
+      "ec2:DescribeSnapshots",
+      "ec2:DescribeVolumes",
+      "ec2:ModifyInstanceAttribute",
+      "ec2:ModifyNetworkInterfaceAttribute",
+      "ec2:ModifyVolume",
+      "ec2:RegisterImage",
+      "ec2:RunInstances",
+      "ec2:StartInstances",
+      "ec2:StopInstances",
+      "ec2:TerminateInstances",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "Ec2DevenvIamRoles"
+    actions = [
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:DeleteRolePolicy",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-task-*"]
+  }
+
+  statement {
+    sid = "Ec2DevenvInstanceProfiles"
+    actions = [
+      "iam:AddRoleToInstanceProfile",
+      "iam:CreateInstanceProfile",
+      "iam:GetInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/cc-on-bedrock-task-*"]
+  }
+
+  statement {
+    sid       = "Ec2DevenvPassRole"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-task-*"]
+  }
+
+  statement {
+    sid     = "SsmSendRunShellScript"
+    actions = ["ssm:SendCommand"]
+    resources = [
+      "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*",
+      "arn:aws:ssm:${data.aws_region.current.name}::document/AWS-RunShellScript",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "dashboard_ec2_devenv" {
+  name   = "dashboard-ec2-devenv"
+  role   = aws_iam_role.dashboard_ec2.id
+  policy = data.aws_iam_policy_document.dashboard_ec2_devenv.json
 }
 
 resource "aws_iam_instance_profile" "dashboard_ec2" {
