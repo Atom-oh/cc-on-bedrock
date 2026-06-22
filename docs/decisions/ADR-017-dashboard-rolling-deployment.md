@@ -38,7 +38,7 @@ Dashboard는 `CcOnBedrock-Dashboard` 스택의 ECS Ec2Service로 운영된다. E
 
 ## Changes
 
-- `cdk/lib/05-dashboard-stack.ts`
+- `terraform/modules/dashboard/main.tf`
   - ECS Ec2Service 정의에 `minHealthyPercent: 100`, `maxHealthyPercent: 200` 추가
   - `circuitBreaker: { rollback: true }` 추가
   - Task definition CPU `4096 → 2048`, memory `15360 → 7680`

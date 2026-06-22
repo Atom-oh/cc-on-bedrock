@@ -44,8 +44,8 @@ DevEnv을 **EC2-per-user** 아키텍처로 전환한다.
 ## Consequences
 
 ### 제거되는 것
-- `cdk/lib/lambda/ebs-lifecycle.py` (486줄) — snapshot/restore 전체
-- `cdk/lib/lambda/warm-stop.py`의 snapshot 관련 로직 (~400줄)
+- `lambda/ebs-lifecycle.py` (486줄) — snapshot/restore 전체
+- `lambda/warm-stop.py`의 snapshot 관련 로직 (~400줄)
 - `docker/devenv/scripts/entrypoint.sh`의 EBS symlink 로직 (~50줄)
 - `/usr/local.bak`, `.image-id` 버전 관리
 - DynamoDB `cc-user-volumes` 테이블
@@ -85,15 +85,15 @@ DevEnv을 **EC2-per-user** 아키텍처로 전환한다.
 |---------|---------|
 | EC2 인스턴스 관리 (start/stop/terminate) | `shared/nextjs-app/src/lib/ec2-clients.ts` |
 | AMI 빌드 파이프라인 | `scripts/build-ami.sh` (SSM 기반, Ubuntu 24.04 ARM64) |
-| Launch Template (gp3 30GB, encrypted, hibernation) | `cdk/lib/07-ec2-devenv-stack.ts` |
+| Launch Template (gp3 30GB, encrypted, hibernation) | `terraform/modules/ec2-devenv/main.tf` |
 | DynamoDB `cc-user-instances` | 동일 파일 — PK: subdomain → instanceId, status, tier |
-| Idle detection + auto-stop | `cdk/lib/lambda/ec2-idle-stop.py` + EventBridge 5분 주기 |
+| Idle detection + auto-stop | `lambda/ec2-idle-stop.py` + EventBridge 5분 주기 |
 | Nginx routing 연동 | `cc-routing-table` DynamoDB에 instance private IP 등록 |
 | EC2 Hibernation (ADR-010) | Feature flag `HIBERNATE_ENABLED`, ~5초 resume |
 | Per-user IAM Instance Profile | `ec2-clients.ts` — Bedrock 접근 + DLP 정책 |
 | Per-user Security Group | `ec2-clients.ts` — open/restricted/locked 정책별 규칙 |
 
 ### 제거된 ECS devenv 코드
-- `cdk/lib/lambda/ebs-lifecycle.py` — 삭제됨 (파일 제거)
-- `cdk/lib/lambda/warm-stop.py` — 삭제됨 (파일 제거)
+- `lambda/ebs-lifecycle.py` — 삭제됨 (파일 제거)
+- `lambda/warm-stop.py` — 삭제됨 (파일 제거)
 - ECS devenv task definition — Stack 04에서 Nginx/Dashboard만 잔존

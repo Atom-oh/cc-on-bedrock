@@ -69,7 +69,7 @@ perUserMonthlyBudget: 200    # auto-applied to each member with no override
 }
 ```
 
-### Lambda (`cdk/lib/lambda/budget-check.py`)
+### Lambda (`lambda/budget-check.py`)
 - `get_department_budgets()` returns `{dept: {monthlyBudget, perUserMonthlyBudget}}` dict (was: flat float)
 - New helpers: `_dept_total_budget()`, `_dept_per_user_default()`, `_effective_user_budget()`
 - `handler()` calls `_effective_user_budget()` for per-user check, replacing the `user_limit if > 0 else DAILY_BUDGET` two-tier fallback with the three-tier ADR-023 logic
@@ -135,14 +135,14 @@ The third approach is preferable because:
 - ADR-014: Local Governance Mode (normalized token enforcer — separate dimension)
 - ADR-015: Dollar Budget × Normalized Token Limit Integration (dept-deny mechanism)
 - ADR-021: Wildcard Claude-Family IAM (USD-first enforcement context)
-- Code: `cdk/lib/lambda/budget-check.py:125-185`, `shared/nextjs-app/src/app/api/admin/budgets/route.ts`, `shared/nextjs-app/src/app/admin/budgets/budget-management.tsx`
+- Code: `lambda/budget-check.py:125-185`, `shared/nextjs-app/src/app/api/admin/budgets/route.ts`, `shared/nextjs-app/src/app/admin/budgets/budget-management.tsx`
 
 ## Verification
 
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/lambda/budget-check.py
+  - path: lambda/budget-check.py
     must_contain:
       - "perUserMonthlyBudget"
   - path: shared/nextjs-app/src/app/api/admin/budgets/route.ts
@@ -156,7 +156,7 @@ files:
 semantic:
   - claim: "budget-check Lambda가 effective_user_budget(user, dept) 우선순위(user.monthlyBudget > dept.perUserMonthlyBudget > DAILY_BUDGET env)를 그대로 따른다"
     context_files:
-      - cdk/lib/lambda/budget-check.py
+      - lambda/budget-check.py
   - claim: "Dashboard admin/budgets UI가 perUserMonthlyBudget을 USD 단위로 표시/편집한다 (legacy 토큰 한도 필드 X)"
     context_files:
       - shared/nextjs-app/src/app/admin/budgets/budget-management.tsx

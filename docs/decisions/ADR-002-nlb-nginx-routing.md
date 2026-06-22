@@ -40,10 +40,10 @@ Nginx가 Host 헤더 기반으로 사용자 컨테이너에 라우팅.
 
 | 구성요소 | 구현 위치 |
 |---------|---------|
-| NLB (TCP passthrough) | `cdk/lib/04-ecs-devenv-stack.ts` — internet-facing, CloudFront prefix list 제한 |
+| NLB (TCP passthrough) | `terraform/modules/ecs-devenv/main.tf` — internet-facing, CloudFront prefix list 제한 |
 | Nginx ECS Fargate Service | 동일 파일 — 2 replicas, ARM64, Host 헤더 기반 라우팅 |
 | DynamoDB `cc-routing-table` | 동일 파일 — DynamoDB Streams (NEW_AND_OLD_IMAGES) |
-| Lambda `nginx-config-gen` | `cdk/lib/lambda/nginx-config-gen.py` — Stream 트리거, S3에 nginx.conf 업로드 |
+| Lambda `nginx-config-gen` | `lambda/nginx-config-gen.py` — Stream 트리거, S3에 nginx.conf 업로드 |
 | Per-user 3-port routing | Nginx upstream: code-server(8080), frontend(3000), API(8000) |
 
 ### 라우팅 경로

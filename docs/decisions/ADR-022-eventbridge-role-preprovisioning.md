@@ -77,7 +77,7 @@ provisioner:
 
 ### Implementation notes
 
-1. **Shared helper module** `cdk/lib/lambda/role_factory.py` factors trust policy / inline policy / `ensure_role()` out of `sts-issuer.py`. Both Lambdas import directly (filename without hyphen → Python-importable). Single source of truth for the per-user IAM contract.
+1. **Shared helper module** `lambda/role_factory.py` factors trust policy / inline policy / `ensure_role()` out of `sts-issuer.py`. Both Lambdas import directly (filename without hyphen → Python-importable). Single source of truth for the per-user IAM contract.
 
 2. **PII redaction handling.** CloudTrail replaces `requestParameters.userAttributes`, `responseElements.user.attributes`, and `responseElements.user.username` with the literal string `"HIDDEN_DUE_TO_SECURITY_REASONS"`. The Cognito `sub` is still exposed under `additionalEventData.sub` (AdminCreateUser) or `responseElements.userSub` (SignUp). The provisioner extracts `sub`, then re-fetches the full record via `AdminGetUser` to recover email + custom attrs.
 
@@ -129,11 +129,11 @@ provisioner:
 
 ## Files
 
-- `cdk/lib/lambda/role_factory.py` — NEW shared helpers
-- `cdk/lib/lambda/user-role-provisioner.py` — NEW Lambda (EventBridge + direct-invoke)
-- `cdk/lib/lambda/sts-issuer.py` — refactored to import role_factory; retry 4→6 attempts
-- `cdk/lib/02-security-stack.ts` — added `custom:dept_manager_sub` to user pool schema
-- `cdk/lib/08-local-governance-stack.ts` — provisioner Lambda + IAM perms + EventBridge rule
+- `lambda/role_factory.py` — NEW shared helpers
+- `lambda/user-role-provisioner.py` — NEW Lambda (EventBridge + direct-invoke)
+- `lambda/sts-issuer.py` — refactored to import role_factory; retry 4→6 attempts
+- `terraform/modules/security/main.tf` — added `custom:dept_manager_sub` to user pool schema
+- `terraform/modules/local-governance/main.tf` — provisioner Lambda + IAM perms + EventBridge rule
 - `cdk/bin/app.ts` — pass `securityStack.userPool` to Stack 08
 - `shared/nextjs-app/src/lib/ec2-clients.ts` — duplicate-tag fix + `runInstancesWithIamRetry`
 - `scripts/create-enterprise-test-data.sh` — Cognito-only; subdomain/managers no longer hardcoded
@@ -170,26 +170,26 @@ Local Governance probe (`cc login` as user07 = data-science manager):
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/lambda/user-role-provisioner.py
+  - path: lambda/user-role-provisioner.py
     must_contain:
       - "AdminCreateUser"
       - "SignUp"
       - "derive_subdomain"
       - "cc-on-bedrock-local-user-"
       - "cc-on-bedrock-task-"
-  - path: cdk/lib/lambda/role_factory.py
+  - path: lambda/role_factory.py
     must_exist: true
 
 # Tier 2: Semantic
 semantic:
   - claim: "user-role-provisioner Lambda가 EventBridge로 AdminCreateUser/SignUp 이벤트를 받아 Local Governance role + EC2 task role + instance profile을 미리 생성하여 first-login IAM propagation race를 제거한다"
     context_files:
-      - cdk/lib/lambda/user-role-provisioner.py
-      - cdk/lib/lambda/role_factory.py
+      - lambda/user-role-provisioner.py
+      - lambda/role_factory.py
   - claim: "Provisioner가 email local-part로부터 subdomain을 derive_subdomain()으로 표준화하고 collision detection을 수행한다"
     context_files:
-      - cdk/lib/lambda/user-role-provisioner.py
+      - lambda/user-role-provisioner.py
   - claim: "Cognito custom:subdomain 속성이 provisioner에 의해 single source of truth로 동기화된다"
     context_files:
-      - cdk/lib/lambda/user-role-provisioner.py
+      - lambda/user-role-provisioner.py
 ```

@@ -13,7 +13,7 @@ verification_required: true
 > Local Governance Mode 의 나머지 설계는 그대로 유효.
 
 ## Status
-Accepted (2026-05-12) — implemented in Stack 08 (`cdk/lib/08-local-governance-stack.ts`), referenced as binding dependency by ADR-015 and ADR-016
+Accepted (2026-05-12) — implemented in Stack 08 (`terraform/modules/local-governance/main.tf`), referenced as binding dependency by ADR-015 and ADR-016
 
 ## Context
 기존 CC-on-Bedrock은 EC2 per-user DevEnv(ADR-004)를 핵심으로 한다. 그러나 일부 조직은:
@@ -118,10 +118,10 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 ## Changes
 
 ### 새로 추가
-- **`cdk/lib/08-local-governance-stack.ts`** — STS Issuer Lambda, per-user role factory(MaxSessionDuration=1h), Application Inference Profile per dept, `cc-on-bedrock-limits` 테이블, `token-limit-enforcer` Lambda (DynamoDB Stream consumer)
-- **STS Issuer Lambda** (`cdk/lib/lambda/sts-issuer.py`) — Cognito ID 토큰 검증 → `sts:AssumeRole`(DurationSeconds=3600) → 1h 자격증명 반환 (role-chaining 한계, CLI 자동 갱신)
-- **Token Limit Enforcer Lambda** (`cdk/lib/lambda/token-limit-enforcer.py`) — DynamoDB Stream에서 usage 업데이트 수신 → 합산 normalized tokens 조회 → 한도 초과 시 user role에 Deny policy attach
-- **Limit Reset Lambda** (`cdk/lib/lambda/limit-reset.py`) — EventBridge cron(일/주/월) → Deny detach + 카운터 리셋
+- **`terraform/modules/local-governance/main.tf`** — STS Issuer Lambda, per-user role factory(MaxSessionDuration=1h), Application Inference Profile per dept, `cc-on-bedrock-limits` 테이블, `token-limit-enforcer` Lambda (DynamoDB Stream consumer)
+- **STS Issuer Lambda** (`lambda/sts-issuer.py`) — Cognito ID 토큰 검증 → `sts:AssumeRole`(DurationSeconds=3600) → 1h 자격증명 반환 (role-chaining 한계, CLI 자동 갱신)
+- **Token Limit Enforcer Lambda** (`lambda/token-limit-enforcer.py`) — DynamoDB Stream에서 usage 업데이트 수신 → 합산 normalized tokens 조회 → 한도 초과 시 user role에 Deny policy attach
+- **Limit Reset Lambda** (`lambda/limit-reset.py`) — EventBridge cron(일/주/월) → Deny detach + 카운터 리셋
 - **Dashboard 페이지** `shared/nextjs-app/app/local/page.tsx` — "Get Credentials" 버튼, `aws configure` 스니펫, 남은 토큰 게이지
 - **Dashboard 관리 페이지** `shared/nextjs-app/app/admin/limits/page.tsx` — 사용자/부서 normalized token 한도 CRUD
 - **CLI 도우미** `tools/cc-bedrock-local.sh` — 자격증명 갱신 + `claude` 실행 wrapper
@@ -193,22 +193,22 @@ Invocation Logging 자체가 1-3분 지연되므로 **이 방식의 최단 차�
 ```yaml
 # Tier 1: Static
 files:
-  - path: cdk/lib/08-local-governance-stack.ts
+  - path: terraform/modules/local-governance/main.tf
     must_contain:
-      - "cc-on-bedrock-sts-issuer"
-      - "cc-on-bedrock-limits"
+      - "sts-issuer"
+      - "${var.project_prefix}-limits"
       - "token-limit-enforcer"
       - "limit-reset"
-  - path: cdk/lib/lambda/sts-issuer.py
+  - path: lambda/sts-issuer.py
     must_contain:
       - "ensure_role"
       - "RoleSessionName"
       - "SESSION_DURATION_SECONDS"
-  - path: cdk/lib/lambda/token-limit-enforcer.py
+  - path: lambda/token-limit-enforcer.py
     must_exist: true
-  - path: cdk/lib/lambda/limit-reset.py
+  - path: lambda/limit-reset.py
     must_exist: true
-  - path: cdk/lib/lambda/role_factory.py
+  - path: lambda/role_factory.py
     must_contain:
       - "cc-on-bedrock-local-user-"
       - "cc-on-bedrock-task-boundary"
@@ -217,17 +217,17 @@ files:
 semantic:
   - claim: "STS Issuer가 발급하는 자격증명의 만료 시간이 SESSION_DURATION_SECONDS env(현재 3600s = 1h, AWS role-chaining 한계로 ADR 본문의 8h가 아닌 1h)와 일치한다"
     context_files:
-      - cdk/lib/lambda/sts-issuer.py
-      - cdk/lib/08-local-governance-stack.ts
+      - lambda/sts-issuer.py
+      - terraform/modules/local-governance/main.tf
   - claim: "Per-user role 이름이 `cc-on-bedrock-local-user-{cognito_sub}` 패턴을 따르고 STS Issuer Lambda role만 trust policy의 Principal로 허용된다"
     context_files:
-      - cdk/lib/lambda/role_factory.py
+      - lambda/role_factory.py
   - claim: "token-limit-enforcer Lambda가 cc-on-bedrock-usage 테이블의 DynamoDB Stream을 consume하여 한도 초과시 user role에 Deny policy를 attach한다"
     context_files:
-      - cdk/lib/lambda/token-limit-enforcer.py
-      - cdk/lib/08-local-governance-stack.ts
+      - lambda/token-limit-enforcer.py
+      - terraform/modules/local-governance/main.tf
   - claim: "limit-reset Lambda가 EventBridge 일/주/월 cron으로 호출되어 카운터 리셋 + Deny policy detach를 수행한다"
     context_files:
-      - cdk/lib/lambda/limit-reset.py
-      - cdk/lib/08-local-governance-stack.ts
+      - lambda/limit-reset.py
+      - terraform/modules/local-governance/main.tf
 ```
