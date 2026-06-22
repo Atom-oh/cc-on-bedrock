@@ -87,6 +87,12 @@ variable "daily_budget_usd" {
   default     = 50
 }
 
+variable "governance_only" {
+  description = "Deploy Local Governance mode without EC2/ECS DevEnv infrastructure"
+  type        = bool
+  default     = false
+}
+
 # ---- Compute -----------------------------------------------------------------
 variable "ecs_host_instance_type" {
   type    = string

@@ -25,3 +25,7 @@ output "hosted_zone_id" {
 output "hosted_zone_name" {
   value = aws_route53_zone.this.name
 }
+
+output "dns_firewall_rule_group_id" {
+  value = aws_route53_resolver_firewall_rule_group.dns_firewall.id
+}

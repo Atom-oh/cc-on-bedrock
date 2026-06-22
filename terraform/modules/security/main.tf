@@ -532,6 +532,7 @@ data "aws_iam_policy_document" "dashboard_data_infra" {
       "route53resolver:ListFirewallDomainLists",
       "route53resolver:ListFirewallDomains",
       "route53resolver:ListFirewallRuleGroupAssociations",
+      "route53resolver:ListFirewallRuleGroups",
       "route53resolver:ListFirewallRules",
     ]
     resources = ["*"]

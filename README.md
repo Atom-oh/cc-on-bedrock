@@ -31,7 +31,7 @@ docs/               ADRs, runbooks, specs, plans
 Install the governed CLI:
 
 ```bash
-curl -fsSL https://dashboard.example.com/api/install | bash
+curl -fsSL "$(terraform -chdir=terraform output -raw dashboard_url)/api/install" | bash
 ```
 
 Then run:
@@ -53,6 +53,9 @@ terraform -chdir=terraform validate
 terraform -chdir=terraform plan
 ```
 
+For Local Governance-only deployments without EC2/ECS DevEnv infrastructure, use
+`governance_only = true` in a separate state/workspace.
+
 Important outputs include:
 
 - `cognito_cli_public_client_id`
@@ -60,6 +63,7 @@ Important outputs include:
 - `otel_collector_endpoint`
 - `sts_issuer_function_url`
 - `devenv_nlb_dns`
+- `dns_firewall_rule_group_id`
 
 ## Tests
 

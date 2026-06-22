@@ -7,6 +7,12 @@ data "aws_region" "current" {}
 
 locals {
   azs = ["${data.aws_region.current.name}a", "${data.aws_region.current.name}c"]
+  dns_firewall_managed_domain_lists = {
+    malware          = { id = "rslvr-fdl-6301b5257e0c4210", priority = 100 }
+    botnet           = { id = "rslvr-fdl-e8d1e969ad484741", priority = 200 }
+    guardduty        = { id = "rslvr-fdl-19615996f5c5490f", priority = 300 }
+    aggregate_threat = { id = "rslvr-fdl-1997a3cdd61a4f2a", priority = 400 }
+  }
 }
 
 # ---- VPC ---------------------------------------------------------------------
@@ -222,4 +228,34 @@ resource "aws_vpc_endpoint" "s3" {
 # ---- Route 53 Private Hosted Zone -------------------------------------------
 resource "aws_route53_zone" "this" {
   name = var.domain_name
+}
+
+# ---- Route 53 Resolver DNS Firewall -----------------------------------------
+# Managed threat lists are region-specific IDs. These IDs match ap-northeast-2,
+# the deployment region supported by this Terraform root today, and preserve the
+# CDK-era DLP security layer for restricted/locked DevEnv tiers.
+resource "aws_route53_resolver_firewall_rule_group" "dns_firewall" {
+  name = "cc-on-bedrock-dns-firewall"
+
+  tags = { Name = "cc-on-bedrock-dns-firewall" }
+}
+
+resource "aws_route53_resolver_firewall_rule" "managed_threat" {
+  for_each = local.dns_firewall_managed_domain_lists
+
+  name                    = "cc-on-bedrock-${each.key}"
+  action                  = "BLOCK"
+  block_response          = "NXDOMAIN"
+  firewall_domain_list_id = each.value.id
+  firewall_rule_group_id  = aws_route53_resolver_firewall_rule_group.dns_firewall.id
+  priority                = each.value.priority
+}
+
+resource "aws_route53_resolver_firewall_rule_group_association" "dns_firewall" {
+  name                   = "cc-on-bedrock-dns-firewall"
+  firewall_rule_group_id = aws_route53_resolver_firewall_rule_group.dns_firewall.id
+  priority               = 101
+  vpc_id                 = aws_vpc.this.id
+
+  tags = { Name = "cc-on-bedrock-dns-firewall" }
 }

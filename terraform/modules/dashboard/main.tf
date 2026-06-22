@@ -12,6 +12,7 @@ locals {
     AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
     AWS_REGION                  = data.aws_region.current.name
     DASHBOARD_URL               = "https://${local.dashboard_domain}"
+    DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
     INSTANCE_TABLE              = var.instance_table_name
     LAUNCH_TEMPLATE             = var.devenv_launch_template_name
     NEXTAUTH_URL                = "https://${local.dashboard_domain}"
@@ -21,6 +22,7 @@ locals {
     SG_DEVENV_LOCKED            = var.devenv_sg_locked_id
     SG_DEVENV_OPEN              = var.devenv_sg_open_id
     SG_DEVENV_RESTRICTED        = var.devenv_sg_restricted_id
+    VPC_ID                      = var.vpc_id
   }
   runtime_env_file = join("\n", [for key, value in local.runtime_env : "${key}=${value}"])
 }

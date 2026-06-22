@@ -26,3 +26,4 @@ dashboard_instance_type = "t4g.xlarge"
 devenv_instance_type    = "t4g.large"
 ecs_cluster_name        = "cc-on-bedrock-devenv"
 daily_budget_usd        = 50
+governance_only         = false

@@ -3,7 +3,19 @@
 ###############################################################################
 
 locals {
-  lambda_src_dir = abspath("${path.module}/../lambda")
+  lambda_src_dir  = abspath("${path.module}/../lambda")
+  devenv_enabled  = !var.governance_only
+  default_dev_env = ""
+}
+
+moved {
+  from = module.ecs_devenv
+  to   = module.ecs_devenv[0]
+}
+
+moved {
+  from = module.ec2_devenv
+  to   = module.ec2_devenv[0]
 }
 
 # ---- 01 Network -------------------------------------------------------------
@@ -48,6 +60,7 @@ module "usage_tracking" {
 # ---- 04 ECS Nginx Dev Environment -------------------------------------------
 module "ecs_devenv" {
   source = "./modules/ecs-devenv"
+  count  = local.devenv_enabled ? 1 : 0
 
   vpc_id                  = module.network.vpc_id
   vpc_cidr                = module.network.vpc_cidr
@@ -84,13 +97,14 @@ module "dashboard" {
   domain_name                         = var.domain_name
   cloudfront_secret_value             = module.security.cloudfront_secret_value
   instance_type                       = var.dashboard_instance_type
-  instance_table_name                 = module.ec2_devenv.instance_table_name
-  routing_table_name                  = module.ecs_devenv.routing_table_name
-  devenv_launch_template_name         = module.ec2_devenv.launch_template_name
-  devenv_sg_open_id                   = module.ec2_devenv.sg_open_id
-  devenv_sg_restricted_id             = module.ec2_devenv.sg_restricted_id
-  devenv_sg_locked_id                 = module.ec2_devenv.sg_locked_id
-  otel_collector_endpoint             = module.ecs_devenv.otel_collector_endpoint
+  instance_table_name                 = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : local.default_dev_env
+  routing_table_name                  = local.devenv_enabled ? module.ecs_devenv[0].routing_table_name : local.default_dev_env
+  devenv_launch_template_name         = local.devenv_enabled ? module.ec2_devenv[0].launch_template_name : local.default_dev_env
+  devenv_sg_open_id                   = local.devenv_enabled ? module.ec2_devenv[0].sg_open_id : local.default_dev_env
+  devenv_sg_restricted_id             = local.devenv_enabled ? module.ec2_devenv[0].sg_restricted_id : local.default_dev_env
+  devenv_sg_locked_id                 = local.devenv_enabled ? module.ec2_devenv[0].sg_locked_id : local.default_dev_env
+  otel_collector_endpoint             = local.devenv_enabled ? module.ecs_devenv[0].otel_collector_endpoint : local.default_dev_env
+  dns_firewall_rule_group_id          = module.network.dns_firewall_rule_group_id
 }
 
 # ---- 06 WAF ------------------------------------------------------------------
@@ -104,13 +118,14 @@ module "waf" {
 # ---- 07 EC2 Dev Environment (ADR-004 per-user EC2 + DLP SGs) ------------------
 module "ec2_devenv" {
   source = "./modules/ec2-devenv"
+  count  = local.devenv_enabled ? 1 : 0
 
   vpc_id                       = module.network.vpc_id
   vpc_cidr                     = module.network.vpc_cidr
   kms_key_arn                  = module.security.kms_key_arn
   devenv_instance_type         = var.devenv_instance_type
   task_permission_boundary_arn = module.security.task_permission_boundary_arn
-  nginx_security_group_id      = module.ecs_devenv.nginx_security_group_id
+  nginx_security_group_id      = local.devenv_enabled ? module.ecs_devenv[0].nginx_security_group_id : local.default_dev_env
 }
 
 # ---- 08 Local Governance -----------------------------------------------------
