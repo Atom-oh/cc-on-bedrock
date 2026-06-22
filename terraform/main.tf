@@ -100,6 +100,7 @@ module "dashboard" {
   hosted_zone_id                      = module.network.hosted_zone_id
   domain_name                         = var.domain_name
   cloudfront_secret_value             = module.security.cloudfront_secret_value
+  cognito_cli_public_client_id        = module.security.cli_public_client_id
   nextauth_secret                     = module.security.nextauth_secret_value
   instance_type                       = var.dashboard_instance_type
   instance_table_name                 = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : local.default_dev_env

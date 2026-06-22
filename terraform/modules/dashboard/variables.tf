@@ -39,6 +39,10 @@ variable "cloudfront_secret_value" {
   sensitive = true
 }
 
+variable "cognito_cli_public_client_id" {
+  type = string
+}
+
 variable "nextauth_secret" {
   type      = string
   sensitive = true

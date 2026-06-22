@@ -11,6 +11,7 @@ locals {
   runtime_env = {
     AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
     AWS_REGION                  = data.aws_region.current.name
+    COGNITO_CLI_CLIENT_ID       = var.cognito_cli_public_client_id
     DASHBOARD_URL               = "https://${local.dashboard_domain}"
     DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
     INSTANCE_TABLE              = var.instance_table_name

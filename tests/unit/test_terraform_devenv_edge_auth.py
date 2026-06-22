@@ -43,3 +43,27 @@ def test_scripts_do_not_reference_removed_cdk_entrypoints():
                 offenders.append(f"{path.relative_to(REPO)} contains {pattern!r}")
 
     assert offenders == []
+
+
+def test_readme_documented_terraform_contracts_exist():
+    variables_tf = (REPO / "terraform/variables.tf").read_text()
+    outputs_tf = (REPO / "terraform/outputs.tf").read_text()
+    security_tf = (REPO / "terraform/modules/security/main.tf").read_text()
+    dashboard_tf = (REPO / "terraform/modules/dashboard/main.tf").read_text()
+    root_tf = (REPO / "terraform/main.tf").read_text()
+
+    assert 'variable "governance_only"' in variables_tf
+    for output_name in [
+        "cognito_cli_public_client_id",
+        "routing_table_name",
+        "otel_collector_endpoint",
+        "sts_issuer_function_url",
+        "devenv_nlb_dns",
+        "dns_firewall_rule_group_id",
+    ]:
+        assert f'output "{output_name}"' in outputs_tf
+
+    assert 'resource "aws_cognito_user_pool_client" "cli_public"' in security_tf
+    assert "generate_secret = false" in security_tf
+    assert "COGNITO_CLI_CLIENT_ID" in dashboard_tf
+    assert re.search(r"cognito_cli_public_client_id\s+=\s+module\.security\.cli_public_client_id", root_tf)
