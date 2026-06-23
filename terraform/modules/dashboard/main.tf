@@ -7,7 +7,7 @@ data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  dashboard_domain = "cconbedrock-dashboard.${var.domain_name}"
+  dashboard_domain = "${var.dashboard_subdomain}.${var.domain_name}"
   runtime_env = {
     AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
     AWS_REGION                  = data.aws_region.current.name
@@ -232,11 +232,12 @@ resource "aws_route53_record" "cloudfront_cert_validation" {
     }
   }
 
-  zone_id = var.hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  records = [each.value.record]
-  ttl     = 300
+  zone_id         = var.hosted_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 300
+  allow_overwrite = true
 }
 
 resource "aws_acm_certificate_validation" "cloudfront" {
@@ -297,9 +298,10 @@ resource "aws_cloudfront_distribution" "this" {
 
 # ---- Route 53 Record ---------------------------------------------------------
 resource "aws_route53_record" "dashboard" {
-  zone_id = var.hosted_zone_id
-  name    = local.dashboard_domain
-  type    = "A"
+  zone_id         = var.hosted_zone_id
+  name            = local.dashboard_domain
+  type            = "A"
+  allow_overwrite = true
 
   alias {
     name                   = aws_cloudfront_distribution.this.domain_name

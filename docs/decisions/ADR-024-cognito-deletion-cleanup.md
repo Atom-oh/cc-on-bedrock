@@ -163,9 +163,9 @@ list, add to `user`. The seed script already adds explicitly → no-op there.
 
 ## Files
 
-- `cdk/lib/lambda/user-role-provisioner.py` — `_deprovision_user`,
+- `lambda/user-role-provisioner.py` — `_deprovision_user`,
   `_ensure_default_group`, and EventBridge `AdminDeleteUser` dispatch.
-- `cdk/lib/08-local-governance-stack.ts` — extended EventBridge rule + IAM
+- `terraform/modules/local-governance/main.tf` — extended EventBridge rule + IAM
   perms (delete-side IAM, DDB Delete/Query, SecretsManager Delete,
   EC2 Describe/Terminate, additional Cognito read/write).
 - `shared/nextjs-app/src/app/api/users/route.ts` — `permanent` returns 403.
@@ -206,26 +206,26 @@ curl -X DELETE 'https://<dashboard>/api/users?username=foo&action=permanent' \
 
 ```yaml
 # Tier 1: Static
+# NOTE (ADR-033): the AdminDeleteUser EventBridge rule + DLQ wiring is the deferred
+# UserRoleProvisioner TF port (terraform/CLAUDE.md parity gap); the deprovision LOGIC is
+# verified in the handler below.
 files:
-  - path: cdk/lib/lambda/user-role-provisioner.py
+  - path: lambda/user-role-provisioner.py
     must_contain:
       - "AdminDeleteUser"
       - "_deprovision_user"
       - "_safe_delete_role"
       - "_terminate_user_instances"
-  - path: cdk/lib/08-local-governance-stack.ts
-    must_contain:
-      - "AdminDeleteUser"
 
 # Tier 2: Semantic
 semantic:
   - claim: "AdminDeleteUser EventBridge 이벤트 수신 시 provisioner가 _deprovision_user로 IAM role + instance profile + DDB rows + Secrets + EC2 instance를 모두 정리한다"
     context_files:
-      - cdk/lib/lambda/user-role-provisioner.py
+      - lambda/user-role-provisioner.py
   - claim: "local-user role의 username 태그가 subdomain 복구에 필요하므로 EC2-side cleanup 이전에 삭제되지 않으며, 모든 step 성공 시에만 마지막에 삭제된다"
     context_files:
-      - cdk/lib/lambda/user-role-provisioner.py
+      - lambda/user-role-provisioner.py
   - claim: "Partial failure 시 RuntimeError를 raise하여 EventBridge 재시도가 발생하고 local-role은 보존된다 (재시도가 username 태그를 통해 subdomain 복구 가능)"
     context_files:
-      - cdk/lib/lambda/user-role-provisioner.py
+      - lambda/user-role-provisioner.py
 ```

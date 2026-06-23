@@ -1,0 +1,47 @@
+# ADOT (AWS Distro for OpenTelemetry) Collector config — central push endpoint for
+# Claude Code productivity metrics on Bedrock (Phase 1).
+#
+# Topology: Claude Code (EC2/ECS devenv, later Local PC) --OTLP/gRPC--> this collector
+#           --awss3--> cc-on-bedrock-otel-metrics-raw --S3 event--> otel-metrics-rollup Lambda.
+#
+# Metrics only. Claude Code metrics are counters (LOC, commits, sessions, tokens, cost) and
+# carry NO prompt/text/image content (verified in the Phase-0 spike), so no redaction
+# processor is needed. Bucket + region are injected via container env.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  # Claude Code may export cumulative temporality; convert to delta so the rollup
+  # Lambda can sum batches without double-counting.
+  cumulativetodelta: {}
+  batch:
+    timeout: 30s
+    send_batch_size: 1000
+
+exporters:
+  awss3:
+    s3uploader:
+      region: ${env:AWS_REGION}
+      s3_bucket: ${env:OTEL_S3_BUCKET}
+      s3_prefix: otlp-metrics
+      file_prefix: metrics
+    marshaler: otlp_json
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, cumulativetodelta, batch]
+      exporters: [awss3]

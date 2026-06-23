@@ -182,6 +182,100 @@ run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-common.sh"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-claude-code.sh"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-kiro.sh"
 
+# ADR-032: bake the persistent /home/coder data-volume mount/migration unit into the AMI.
+# Single idempotent, fail-safe routine (mirrors src/lib/data-volume-userdata.ts): resolves
+# the device by EBS volume-id (NVMe serial) when /etc/cc-data-expected-volume is present
+# (reattach), else discovers the single non-root disk (born-attached first boot). Never
+# bricks boot (fstab nofail), never reformats a volume that has data (blkid guard), and
+# moves the original /home/coder aside ONLY after a verified rsync copy.
+echo "Installing cc-data-migrate (ADR-032)..."
+DATA_VOL_SCRIPT='#!/bin/bash
+# ADR-032 cc-data-migrate (baked) — idempotent, fail-safe. Exits 0 on any trouble.
+set -u
+LABEL=CCDATA
+MOUNT=/home/coder
+MARKER=/home/coder/.cc-data-volume
+TMP=/mnt/ccdata
+EXPECT_VOL=$(cat /etc/cc-data-expected-volume 2>/dev/null || true)
+if mountpoint -q "$MOUNT" && [ -f "$MARKER" ]; then echo "cc-data: already on data volume"; exit 0; fi
+DEV=""
+ROOT_DEV=$(findmnt -no SOURCE / 2>/dev/null | sed "s/p\{0,1\}[0-9]*$//")
+for i in $(seq 1 60); do
+  if [ -n "$EXPECT_VOL" ]; then
+    # Reattach: wait ONLY for the expected volume by id. No generic fallback here — picking the
+    # first non-root disk could mkfs an unrelated volume before the expected one attaches.
+    SER=$(echo "$EXPECT_VOL" | tr -d "-")
+    [ -e "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$SER" ] && DEV=$(readlink -f "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$SER")
+  else
+    # Born-attached first boot: no expected id known — take the single non-root data disk.
+    for d in /dev/nvme*n1; do
+      [ -b "$d" ] || continue
+      [ "$d" = "$ROOT_DEV" ] && continue
+      DEV="$d"; break
+    done
+  fi
+  [ -b "$DEV" ] && break
+  sleep 2
+done
+if [ ! -b "$DEV" ]; then echo "cc-data: no data volume after wait — fail-safe, keeping root $MOUNT"; exit 0; fi
+if ! blkid -L "$LABEL" >/dev/null 2>&1; then
+  if blkid "$DEV" >/dev/null 2>&1; then echo "cc-data: $DEV has unexpected fs — fail-safe abort"; exit 0; fi
+  mkfs.ext4 -L "$LABEL" "$DEV" || { echo "cc-data: mkfs failed — fail-safe"; exit 0; }
+fi
+mkdir -p "$TMP"
+mount "$DEV" "$TMP" 2>/dev/null || { echo "cc-data: temp mount of $DEV failed — fail-safe"; exit 0; }
+if [ ! -f "$TMP/.cc-data-volume" ]; then
+  [ -d "$MOUNT" ] && { rsync -aXH --numeric-ids "$MOUNT"/ "$TMP"/ || { umount "$TMP"; echo "cc-data: rsync failed — fail-safe"; exit 0; }; }
+  touch "$TMP/.cc-data-volume"; sync; umount "$TMP"
+  mountpoint -q "$MOUNT" && { umount "$MOUNT" 2>/dev/null || true; }
+  [ -d "$MOUNT" ] && [ ! -L "$MOUNT" ] && [ ! -f "$MARKER" ] && { mv "$MOUNT" /home/coder.old-root 2>/dev/null || true; }
+  mkdir -p "$MOUNT"
+else
+  umount "$TMP"
+fi
+grep -q "LABEL=$LABEL" /etc/fstab 2>/dev/null || echo "LABEL=CCDATA /home/coder ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" >> /etc/fstab
+mount "$DEV" "$MOUNT" 2>/dev/null || mount "$MOUNT" || { echo "cc-data: final mount of $DEV failed — fail-safe"; exit 0; }
+resize2fs "$DEV" 2>/dev/null || true
+chown coder:coder "$MOUNT" 2>/dev/null || true
+echo "cc-data: $MOUNT on persistent data volume"
+exit 0'
+DATA_VOL_B64=$(printf '%s' "$DATA_VOL_SCRIPT" | base64 | tr -d '\n')
+DATA_VOL_INSTALL="#!/bin/bash
+mkdir -p /opt/cc-on-bedrock
+echo $DATA_VOL_B64 | base64 -d > /opt/cc-on-bedrock/cc-data-migrate.sh
+chmod 0755 /opt/cc-on-bedrock/cc-data-migrate.sh
+cat > /etc/systemd/system/cc-data-migrate.service <<'CCUNIT'
+[Unit]
+Description=ADR-032 mount/migrate persistent /home/coder data volume
+DefaultDependencies=no
+After=cloud-init.target
+Before=code-server.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/cc-on-bedrock/cc-data-migrate.sh
+[Install]
+WantedBy=multi-user.target
+CCUNIT
+systemctl daemon-reload
+systemctl enable cc-data-migrate.service"
+COMMAND_ID=$(aws ssm send-command \
+  --instance-ids "$INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters "{\"commands\":[$(echo "$DATA_VOL_INSTALL" | jq -Rs .)]}" \
+  --timeout-seconds 300 \
+  --query 'Command.CommandId' \
+  --output text \
+  --region "$REGION")
+aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
+# Verify the install actually succeeded — never publish an AMI missing the migration unit.
+DV_STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query 'Status' --output text --region "$REGION" 2>/dev/null || echo "Unknown")
+if [ "$DV_STATUS" != "Success" ]; then
+  echo "ERROR: cc-data-migrate install did not succeed (status=$DV_STATUS) — aborting AMI build" >&2
+  exit 1
+fi
+echo "  cc-data-migrate installed (status=$DV_STATUS)"
+
 # OS-specific EC2 setup (SSM agent, CWAgent, code-server, hibernation)
 echo "Running EC2-specific setup ($OS_TYPE)..."
 
@@ -205,6 +299,10 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
       "# EC2 Hibernation agent (ADR-010)",
       "apt-get update -qq && apt-get install -y ec2-hibinit-agent",
       "echo GRUB_CMDLINE_LINUX_DEFAULT=\\\"nokaslr\\\" > /etc/default/grub.d/99-hibernation.cfg",
+      "# Disable Ubuntu cloud-image initrdless boot (GRUB_FORCE_PARTUUID): it intermittently",
+      "# hangs at \\\"attempting initrdless boot\\\" on Graviton (esp. on stop/start), bricking the devenv.",
+      "echo GRUB_DISABLE_INITRDLESS_BOOT=true > /etc/default/grub.d/98-disable-initrdless.cfg",
+      "update-initramfs -u || true",
       "update-grub",
       "# Cleanup",
       "apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*"
@@ -307,7 +405,7 @@ COMMAND_ID=$(aws ssm send-command \
     "",
     "[Service]",
     "Type=oneshot",
-    "ExecStart=/bin/bash -c 'systemctl restart amazon-ssm-agent; systemctl restart amazon-cloudwatch-agent 2>/dev/null; systemctl restart code-server 2>/dev/null; logger -t hibernate-resume agents-restarted'",
+    "ExecStart=/bin/bash -c \"systemctl restart amazon-ssm-agent; systemctl restart amazon-cloudwatch-agent 2>/dev/null; systemctl restart code-server 2>/dev/null; logger -t hibernate-resume agents-restarted\"",
     "",
     "[Install]",
     "WantedBy=hibernate.target",

@@ -16,10 +16,14 @@ cdk/cdk.context.json
 cdk/node_modules/
 
 # Terraform
+terraform/terraform.tfvars
 terraform/.terraform/
+terraform/**/.terraform/
 terraform/*.tfstate*
+terraform/*.tfstate.*
 terraform/.terraform.lock.hcl
 terraform/modules/*/.build/
+terraform/**/.build/
 
 # IDE
 .vscode/

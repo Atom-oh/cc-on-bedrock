@@ -7,7 +7,7 @@ verification_required: false
 # ADR-016: Separate CloudFront Distributions per Concern
 
 ## Status
-Accepted (2026-05-12) — supersedes [ADR-013](ADR-013-unified-cloudfront-auth.md). Split implemented (DevenvCf in Stack 04, DashboardCf in Stack 05); `cdk/lib/lambda/devenv-origin-router/` archived per Migration Plan Step 4.
+Accepted (2026-05-12) — supersedes [ADR-013](ADR-013-unified-cloudfront-auth.md). Split implemented (DevenvCf in Stack 04, DashboardCf in Stack 05); `lambda/devenv-origin-router/` archived per Migration Plan Step 4.
 
 > **As-built deviation (2026-06-10):** the "shared session-validator Lambda@Edge on both distributions" design below was **not** implemented as written. The dashboard CloudFront authenticates via NextAuth middleware instead of an edge validator, so the validator runs only on the DevEnv CF and the SSM-sharing mechanism was dropped. See the [Addendum](#addendum-2026-06-10--as-built-edge-auth-model) for the actual model.
 

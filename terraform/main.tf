@@ -37,9 +37,10 @@ module "network" {
 module "security" {
   source = "./modules/security"
 
-  domain_name    = var.domain_name
-  dev_subdomain  = var.dev_subdomain
-  hosted_zone_id = module.network.hosted_zone_id
+  domain_name         = var.domain_name
+  dev_subdomain       = var.dev_subdomain
+  hosted_zone_id      = module.network.hosted_zone_id
+  dashboard_subdomain = var.dashboard_subdomain
 }
 
 # ---- 03 Usage Tracking -------------------------------------------------------
@@ -103,6 +104,7 @@ module "dashboard" {
   cognito_cli_public_client_id        = module.security.cli_public_client_id
   nextauth_secret                     = module.security.nextauth_secret_value
   instance_type                       = var.dashboard_instance_type
+  dashboard_subdomain                 = var.dashboard_subdomain
   instance_table_name                 = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : local.default_dev_env
   routing_table_name                  = local.devenv_enabled ? module.ecs_devenv[0].routing_table_name : local.default_dev_env
   devenv_launch_template_name         = local.devenv_enabled ? module.ec2_devenv[0].launch_template_name : local.default_dev_env

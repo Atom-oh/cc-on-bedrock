@@ -119,9 +119,9 @@ EventBridge (5분 주기) → budget-check Lambda
 
 | 구성요소 | 구현 위치 |
 |---------|---------|
-| `cc-department-budgets` 테이블 | `cdk/lib/03-usage-tracking-stack.ts` |
+| `cc-department-budgets` 테이블 | `terraform/modules/usage-tracking/main.tf` |
 | `cc-user-budgets` 테이블 | 동일 파일 |
-| Budget Lambda (508줄) | `cdk/lib/lambda/budget-check.py` — 개인 일일 + 부서 월간 검사 |
+| Budget Lambda (508줄) | `lambda/budget-check.py` — 개인 일일 + 부서 월간 검사 |
 | EventBridge 5분 스케줄 | `03-usage-tracking-stack.ts` — `cc-on-bedrock-budget-check-schedule` |
 | IAM Deny 부착/해제 | `budget-check.py` — `cc-bedrock-user-daily-deny` (개인), `cc-bedrock-dept-budget-deny` (부서) — canonical 이름 (xref ADR-015). 구 `BudgetExceededDeny`/`DeptBudgetExceededDeny`는 legacy delete-only |
 | Admin API (GET/PUT) | `src/app/api/admin/budgets/route.ts` — 부서/개인 예산 설정 |
@@ -131,7 +131,7 @@ EventBridge (5분 주기) → budget-check Lambda
 ## References
 
 - Design Spec: `docs/superpowers/specs/2026-04-08-ec2-only-dept-budget-approval-design.md` §3
-- Budget Lambda: `cdk/lib/lambda/budget-check.py`
+- Budget Lambda: `lambda/budget-check.py`
 - Budget API: `shared/nextjs-app/src/app/api/admin/budgets/route.ts`
 - Per-user role: [ADR-004](ADR-004-ec2-per-user-devenv.md), [ADR-005](ADR-005-security-policy-access-control.md)
-- Usage Tracking: `cdk/lib/lambda/bedrock-usage-tracker.py`
+- Usage Tracking: `lambda/bedrock-usage-tracker.py`

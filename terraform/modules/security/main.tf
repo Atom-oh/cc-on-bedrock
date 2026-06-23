@@ -7,7 +7,7 @@ data "aws_region" "current" {}
 
 locals {
   dev_domain       = "*.${var.dev_subdomain}.${var.domain_name}"
-  dashboard_domain = "cconbedrock-dashboard.${var.domain_name}"
+  dashboard_domain = "${var.dashboard_subdomain}.${var.domain_name}"
 }
 
 # ---- KMS Encryption Key -----------------------------------------------------

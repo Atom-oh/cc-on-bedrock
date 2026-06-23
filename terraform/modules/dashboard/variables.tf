@@ -53,6 +53,12 @@ variable "instance_type" {
   default = "t4g.xlarge"
 }
 
+variable "dashboard_subdomain" {
+  description = "Dashboard subdomain label"
+  type        = string
+  default     = "cconbedrock-dashboard"
+}
+
 variable "instance_table_name" {
   type = string
 }
@@ -78,7 +84,9 @@ variable "devenv_sg_locked_id" {
 }
 
 variable "otel_collector_endpoint" {
-  type = string
+  description = "Internal OTLP endpoint; empty = telemetry off"
+  type        = string
+  default     = ""
 }
 
 variable "dns_firewall_rule_group_id" {

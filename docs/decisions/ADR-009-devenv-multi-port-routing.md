@@ -32,9 +32,9 @@ CloudFront (*.dev.atomai.click)
 
 | 파일 | 역할 |
 |------|------|
-| `cdk/lib/04-ecs-devenv-stack.ts` | CloudFront, NLB, Nginx ECS, DynamoDB routing, Lambda@Edge |
-| `cdk/lib/lambda/nginx-config-gen.py` | DynamoDB Stream → nginx.conf 생성 → S3 업로드 |
-| `cdk/lib/lambda/devenv-session-validator/index.js` | NextAuth session cookie validation + subdomain 검증 |
+| `terraform/modules/ecs-devenv/main.tf` | CloudFront, NLB, Nginx ECS, DynamoDB routing, Lambda@Edge |
+| `lambda/nginx-config-gen.py` | DynamoDB Stream → nginx.conf 생성 → S3 업로드 |
+| `lambda/devenv-session-validator/index.js` | NextAuth session cookie validation + subdomain 검증 |
 | `shared/nextjs-app/src/lib/ec2-clients.ts` | EC2 UserData, `registerRoute(subdomain, privateIp)` |
 | `docker/nginx/reload.sh` | S3 nginx.conf 폴링 (5초) + hot-reload |
 
@@ -368,6 +368,6 @@ API:      https://admin.dev.atomai.click/api/
 ## References
 - [ADR-002: NLB+Nginx Routing](ADR-002-nlb-nginx-routing.md) — ALB 100 rule 제한 → NLB+Nginx 결정
 - [ADR-012: DevEnv Cognito Auth](ADR-012-devenv-cognito-auth.md) — Lambda@Edge + Nginx defense-in-depth
-- `cdk/lib/lambda/nginx-config-gen.py` — 현재 Nginx config 생성 로직
-- `cdk/lib/04-ecs-devenv-stack.ts` — CloudFront + NLB + Nginx ECS 정의
+- `lambda/nginx-config-gen.py` — 현재 Nginx config 생성 로직
+- `terraform/modules/ecs-devenv/main.tf` — CloudFront + NLB + Nginx ECS 정의
 - code-server docs: `--base-path` 옵션 제한사항

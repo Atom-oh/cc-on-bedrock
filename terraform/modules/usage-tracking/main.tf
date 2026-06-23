@@ -48,12 +48,28 @@ resource "aws_dynamodb_table" "usage" {
     name = "date"
     type = "S"
   }
+  # Phase 1 (OTel): DAU/WAU/MAU unique-user-over-window counting.
+  attribute {
+    name = "gsi_day_pk"
+    type = "S"
+  }
+  attribute {
+    name = "gsi_day_sk"
+    type = "S"
+  }
 
   global_secondary_index {
     name            = "dept-date-index"
     hash_key        = "PK"
     range_key       = "date"
     projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "day-user-index"
+    hash_key        = "gsi_day_pk"
+    range_key       = "gsi_day_sk"
+    projection_type = "KEYS_ONLY"
   }
 
   ttl {
@@ -1037,5 +1053,320 @@ resource "aws_lambda_event_source_mapping" "dept_mcp_to_gateway_mgr" {
     on_failure {
       destination_arn = aws_sqs_queue.gateway_manager_dlq.arn
     }
+  }
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# Phase 1 — OTel productivity monitoring pipeline (ported from CDK Stack 03)
+# ════════════════════════════════════════════════════════════════════════════
+
+# ---- S3 buffer for raw OTLP batches (collector writes; rollup Lambda reads) --
+resource "aws_s3_bucket" "otel_raw" {
+  bucket = "cc-on-bedrock-otel-metrics-raw-${local.account_id}"
+  lifecycle {
+    prevent_destroy = true
+  }
+  tags = { Name = "cc-on-bedrock-otel-metrics-raw" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "otel_raw" {
+  bucket = aws_s3_bucket.otel_raw.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = var.kms_key_arn
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "otel_raw" {
+  bucket                  = aws_s3_bucket.otel_raw.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "otel_raw_ssl" {
+  bucket = aws_s3_bucket.otel_raw.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.otel_raw.arn, "${aws_s3_bucket.otel_raw.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "otel_raw" {
+  bucket = aws_s3_bucket.otel_raw.id
+  rule {
+    id     = "expire-raw-batches"
+    status = "Enabled"
+    filter { prefix = "otlp-metrics/" }
+    expiration { days = 30 }
+  }
+}
+
+# ---- otel-metrics-rollup Lambda (multi-source: imports otel_rollup.py) -------
+data "archive_file" "otel_rollup" {
+  type        = "zip"
+  output_path = "${path.module}/.build/otel-metrics-rollup.zip"
+  source {
+    content  = file("${var.lambda_src_dir}/otel-metrics-rollup.py")
+    filename = "otel-metrics-rollup.py"
+  }
+  source {
+    content  = file("${var.lambda_src_dir}/otel_rollup.py")
+    filename = "otel_rollup.py"
+  }
+}
+
+resource "aws_iam_role" "otel_rollup" {
+  name               = "cc-on-bedrock-otel-metrics-rollup"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "otel_rollup_basic" {
+  role       = aws_iam_role.otel_rollup.name
+  policy_arn = local.lambda_basic_managed_policy
+}
+
+resource "aws_iam_role_policy" "otel_rollup" {
+  name = "rollup"
+  role = aws_iam_role.otel_rollup.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "UsageTableRW"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchWriteItem"]
+        Resource = [aws_dynamodb_table.usage.arn, "${aws_dynamodb_table.usage.arn}/index/*"]
+      },
+      {
+        Sid      = "RawBucketRead"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:ListBucket"]
+        Resource = [aws_s3_bucket.otel_raw.arn, "${aws_s3_bucket.otel_raw.arn}/*"]
+      },
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "otel_rollup" {
+  name              = "/aws/lambda/cc-on-bedrock-otel-metrics-rollup"
+  retention_in_days = 30
+}
+
+resource "aws_lambda_function" "otel_rollup" {
+  function_name    = "cc-on-bedrock-otel-metrics-rollup"
+  runtime          = "python3.12"
+  handler          = "otel-metrics-rollup.handler"
+  filename         = data.archive_file.otel_rollup.output_path
+  source_code_hash = data.archive_file.otel_rollup.output_base64sha256
+  role             = aws_iam_role.otel_rollup.arn
+  timeout          = 60
+  memory_size      = 256
+  environment {
+    variables = { USAGE_TABLE_NAME = aws_dynamodb_table.usage.name }
+  }
+  depends_on = [aws_cloudwatch_log_group.otel_rollup]
+}
+
+resource "aws_lambda_permission" "otel_rollup_s3" {
+  statement_id  = "AllowS3Invoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.otel_rollup.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.otel_raw.arn
+}
+
+resource "aws_s3_bucket_notification" "otel_raw" {
+  bucket = aws_s3_bucket.otel_raw.id
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.otel_rollup.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "otlp-metrics/"
+  }
+  depends_on = [aws_lambda_permission.otel_rollup_s3]
+}
+
+# ---- OTel Collector Fargate service + internal NLB:4317 ---------------------
+locals {
+  otel_collector_image = "${local.account_id}.dkr.ecr.${local.region}.amazonaws.com/cc-on-bedrock/otel-collector:latest"
+}
+
+resource "aws_ecs_cluster" "otel" {
+  name = "cc-on-bedrock-otel"
+}
+
+resource "aws_security_group" "otel_collector" {
+  name        = "cc-on-bedrock-otel-collector"
+  description = "OTLP gRPC from VPC devenvs only"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "OTLP gRPC from VPC devenvs"
+    from_port   = 4317
+    to_port     = 4317
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_lb" "otel" {
+  name               = "cc-on-bedrock-otel"
+  internal           = true
+  load_balancer_type = "network"
+  subnets            = var.private_subnet_ids
+}
+
+resource "aws_lb_target_group" "otel" {
+  name        = "cc-on-bedrock-otel-4317"
+  port        = 4317
+  protocol    = "TCP"
+  target_type = "ip"
+  vpc_id      = var.vpc_id
+}
+
+resource "aws_lb_listener" "otel" {
+  load_balancer_arn = aws_lb.otel.arn
+  port              = 4317
+  protocol          = "TCP"
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.otel.arn
+  }
+}
+
+data "aws_iam_policy_document" "ecs_task_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "otel_task_exec" {
+  name               = "cc-on-bedrock-otel-task-exec"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "otel_task_exec" {
+  role       = aws_iam_role.otel_task_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role" "otel_task" {
+  name               = "cc-on-bedrock-otel-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
+}
+
+resource "aws_iam_role_policy" "otel_task_s3put" {
+  name = "s3-put-raw"
+  role = aws_iam_role.otel_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "PutRawBatches"
+      Effect   = "Allow"
+      Action   = ["s3:PutObject"]
+      Resource = ["${aws_s3_bucket.otel_raw.arn}/*"]
+    }]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "otel_collector" {
+  name              = "/ecs/cc-on-bedrock-otel-collector"
+  retention_in_days = 30
+}
+
+resource "aws_ecs_task_definition" "otel_collector" {
+  family                   = "cc-on-bedrock-otel-collector"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.otel_task_exec.arn
+  task_role_arn            = aws_iam_role.otel_task.arn
+
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+
+  container_definitions = jsonencode([{
+    name         = "otel-collector"
+    image        = local.otel_collector_image
+    essential    = true
+    portMappings = [{ containerPort = 4317, protocol = "tcp" }]
+    environment = [
+      { name = "OTEL_S3_BUCKET", value = aws_s3_bucket.otel_raw.id },
+      { name = "AWS_REGION", value = local.region },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.otel_collector.name
+        "awslogs-region"        = local.region
+        "awslogs-stream-prefix" = "otel"
+      }
+    }
+  }])
+}
+
+resource "aws_ecs_service" "otel_collector" {
+  name            = "cc-on-bedrock-otel-collector"
+  cluster         = aws_ecs_cluster.otel.id
+  task_definition = aws_ecs_task_definition.otel_collector.arn
+  desired_count   = 2
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets         = var.private_subnet_ids
+    security_groups = [aws_security_group.otel_collector.id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.otel.arn
+    container_name   = "otel-collector"
+    container_port   = 4317
+  }
+
+  depends_on = [aws_lb_listener.otel]
+}
+
+resource "aws_appautoscaling_target" "otel_collector" {
+  max_capacity       = 6
+  min_capacity       = 2
+  resource_id        = "service/${aws_ecs_cluster.otel.name}/${aws_ecs_service.otel_collector.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "otel_collector_cpu" {
+  name               = "CollectorCpuScaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.otel_collector.resource_id
+  scalable_dimension = aws_appautoscaling_target.otel_collector.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.otel_collector.service_namespace
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value = 60
   }
 }

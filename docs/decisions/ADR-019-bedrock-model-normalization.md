@@ -83,11 +83,11 @@ ADR-014 `token-limit-enforcer.py`의 `_model_family()`도 같은 short form을 �
 
 ## Changes
 
-- `cdk/lib/lambda/bedrock-usage-tracker.py`
+- `lambda/bedrock-usage-tracker.py`
   - `normalize_model(model_id: str) -> str` 함수 신설 (line 190-)
   - `process_invocation_log()`, `process_cloudtrail_event()` 모두 DynamoDB write 전에 호출
   - `get_model_pricing()`은 정규화된 short form 기준 partial-match
-- `cdk/lib/lambda/token-limit-enforcer.py` (ADR-014)
+- `lambda/token-limit-enforcer.py` (ADR-014)
   - `_model_family()`가 normalize된 model 문자열을 입력으로 가정
 
 ## Consequences
@@ -112,6 +112,6 @@ ADR-014 `token-limit-enforcer.py`의 `_model_family()`도 같은 short form을 �
 - Bedrock의 새로운 model family/버전 출시 시 PRICING 자동 갱신 — 수동 PR 유지
 
 ## References
-- `cdk/lib/lambda/bedrock-usage-tracker.py:190-226` (normalize_model)
+- `lambda/bedrock-usage-tracker.py:190-226` (normalize_model)
 - ADR-011: Bedrock IAM Cost Allocation (정규화된 model이 IAM tag와 함께 cost attribute 기여)
 - ADR-014: Local Governance Mode (model family 기반 normalized token 가중치)

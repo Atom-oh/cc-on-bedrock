@@ -50,9 +50,9 @@ cc-on-bedrock은 현재 **Cognito 네이티브 사용자만** 지원한다:
 ```
 
 **핵심 파일:**
-- CDK: `cdk/lib/02-security-stack.ts` — Cognito User Pool, Clients, Groups
+- CDK: `terraform/modules/security/main.tf` — Cognito User Pool, Clients, Groups
 - Auth: `shared/nextjs-app/src/lib/auth.ts` — NextAuth CognitoProvider + CredentialsProvider
-- Edge: `cdk/lib/lambda/devenv-auth-edge/index.js` — Lambda@Edge OAuth
+- Edge: `lambda/devenv-auth-edge/index.js` — Lambda@Edge OAuth
 - Config: `cdk/config/default.ts` — `CcOnBedrockConfig` interface
 
 ## Decision
@@ -202,7 +202,7 @@ Federated 사용자 첫 로그인
 |------|------|
 | `shared/nextjs-app/src/lib/auth.ts` | CognitoProvider OAuth callback이 federated 토큰을 동일하게 처리. `profile["custom:subdomain"]` 등 이미 매핑됨 |
 | `shared/nextjs-app/src/middleware.ts` | `token.groups.includes("admin")` — auth source 무관 |
-| `cdk/lib/lambda/devenv-session-validator/index.js` | Federation redirect는 Dashboard NextAuth 로그인(Cognito Hosted UI → IdP)을 거쳐 NextAuth 세션 쿠키를 발급. Lambda@Edge는 Cognito 토큰이 아니라 이 NextAuth 세션 쿠키를 검증하므로 auth source(native/federated)와 무관 |
+| `lambda/devenv-session-validator/index.js` | Federation redirect는 Dashboard NextAuth 로그인(Cognito Hosted UI → IdP)을 거쳐 NextAuth 세션 쿠키를 발급. Lambda@Edge는 Cognito 토큰이 아니라 이 NextAuth 세션 쿠키를 검증하므로 auth source(native/federated)와 무관 |
 | DynamoDB 테이블, EC2, Nginx routing | Identity-agnostic — subdomain 기반 |
 
 #### 변경 필요
@@ -210,7 +210,7 @@ Federated 사용자 첫 로그인
 | 파일 | 변경 내용 |
 |------|-----------|
 | `cdk/config/default.ts` | `federation?` config 인터페이스 추가 |
-| `cdk/lib/02-security-stack.ts` | IdP 리소스, Lambda 트리거 3개, Client `supportedIdentityProviders` |
+| `terraform/modules/security/main.tf` | IdP 리소스, Lambda 트리거 3개, Client `supportedIdentityProviders` |
 | `shared/nextjs-app/src/app/login/page.tsx` | "SSO로 로그인" 버튼 추가 |
 | `shared/nextjs-app/src/lib/aws-clients.ts` | `EXTERNAL_PROVIDER` 사용자 표시 처리 |
 
@@ -242,7 +242,7 @@ Sign-on URL:   https://{cognitoDomainPrefix}.auth.{region}.amazoncognito.com/sam
 
 **CDK 구현:**
 ```typescript
-// cdk/lib/02-security-stack.ts
+// terraform/modules/security/main.tf
 const azureAd = new cognito.UserPoolIdentityProviderSaml(this, 'AzureAD', {
   userPool: this.userPool,
   name: 'AzureAD',
@@ -610,7 +610,7 @@ export interface CcOnBedrockConfig {
 }
 ```
 
-### Security Stack 변경 (`cdk/lib/02-security-stack.ts`)
+### Security Stack 변경 (`terraform/modules/security/main.tf`)
 
 1. IdP 리소스 생성 (config.federation 기반 조건부)
 2. Lambda 트리거 3개 생성 + IAM 권한
