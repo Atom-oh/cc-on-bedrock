@@ -1,12 +1,14 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-06-19
 verification_required: true
 ---
 
 # ADR-033: IaC 단일화 — CDK 폐기, Terraform으로 완전 이관
 
-## Status: Proposed
+## Status: Accepted
+
+_Accepted 2026-06-22: CDK·CloudFormation 삭제 완료, Terraform 단일 IaC로 dev 배포(241 리소스, #80). ADR-032 Phase B AMI(cc-data-migrate) 빌드 완료._
 
 ## Date: 2026-06-19
 

@@ -1,12 +1,14 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-06-19
 verification_required: true
 ---
 
 # ADR-032: per-user 영속 데이터 EBS 분리 (ephemeral OS root ↔ persistent /home/coder)
 
-## Status: Proposed
+## Status: Accepted
+
+_Accepted 2026-06-22: 코드 머지(#80) + Phase B AMI(cc-data-migrate) 빌드·SSM ami-id 갱신 완료. verification_required 유지 — born-attached `/home/coder` 마운트 라이브 검증은 대시보드 실앱 배포와 함께._
 
 ## Date: 2026-06-19
 
