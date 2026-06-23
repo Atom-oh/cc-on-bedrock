@@ -74,7 +74,7 @@ DevEnv은 per-user EC2 인스턴스로 프로비저닝됩니다(ADR-002). 진행
 ## 아키텍처
 
 ### Q: Nginx 동적 라우팅은 어떻게 작동하나요?
-DynamoDB `cc-routing-table`에 `{subdomain: privateIp}` 매핑을 저장합니다. DynamoDB Streams → Lambda가 Nginx 설정을 재생성하여 S3에 업로드. Nginx Fargate Service가 주기적으로 설정을 pull합니다. → [ADR-002](decisions/ADR-002-nlb-nginx-routing.md)
+DynamoDB `cc-routing-table`에 `{subdomain: privateIp}` 매핑을 저장합니다. DynamoDB Streams → Lambda가 Nginx 설정을 재생성하여 S3에 업로드. Nginx Fargate Service가 주기적으로 설정을 pull합니다. → [ADR-003](decisions/ADR-003-access-topology-routing.md)
 
 ### Q: Per-user IAM Role은 왜 필요한가요?
 각 사용자 컨테이너에 개별 IAM Role을 부여하여:

@@ -30,7 +30,7 @@ graph LR
   BR -. invocation logs .-> AGG[Inference Profile + Invocation Log → DynamoDB]
 ```
 
-> 2 CloudFront distributions (ADR-016): devenv(→NLB→nginx) and dashboard(→ALB), 분리.
+> 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx) and dashboard(→ALB), 분리.
 
 ## Canonical decisions (the 9 pillars)
 
@@ -48,20 +48,20 @@ graph LR
    Profile**; they do **not** share one literal IAM role (share policy shape, permission boundary,
    tags, inference-profile attribution).
 6. **DevEnv compute & storage.** Per-user EC2; OS = **Ubuntu** or **Amazon Linux 2023**. **2-volume
-   model (ADR-032):** ephemeral OS root EBS (`DeleteOnTermination=true`, replaceable via new AMI) +
+   model (ADR-002):** ephemeral OS root EBS (`DeleteOnTermination=true`, replaceable via new AMI) +
    **persistent data EBS** for `/home/coder` (GP3, `DeleteOnTermination=false`, subdomain-tagged,
    reattached across rebuild/OS-switch). Idle instances Stop/Hibernate and resume with state intact.
 7. **Self-service IAM.** UI requests for extra IAM permissions require **admin approval**, bounded by
    a permission boundary authored in Terraform (boundary X = AllowInAccount; the DenyEscalation
-   63-action floor's full TF port is a **follow-up** tracked by ADR-007/ADR-034 — not yet complete).
+   63-action floor's full TF port is a **follow-up** tracked by ADR-007 — not yet complete).
 8. **Budget enforcement.** Per-department and per-user budgets/limits ($ + normalized token);
    **EventBridge** drives IAM deny-policy updates.
 9. **Path/port routing.** code-server reached by path (`?folder=`), stays on port **8080** (reserved);
    extra user ports mapped path→port via nginx. Custom ports must not use 8080/well-known.
 
 ## IaC
-- **Terraform is the only IaC.** CDK/CloudFormation removed (ADR-033). Lambda handlers in `lambda/`
-  (Terraform packages them). Policies incl. permission boundary authored in Terraform (ADR-034).
+- **Terraform is the only IaC.** CDK/CloudFormation removed (ADR-001). Lambda handlers in `lambda/`
+  (Terraform packages them). Policies incl. permission boundary authored in Terraform (ADR-007).
 
 ## Key paths
 ```text
