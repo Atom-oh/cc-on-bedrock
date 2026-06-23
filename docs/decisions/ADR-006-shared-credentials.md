@@ -15,7 +15,7 @@ Accepted (2026-06-23). Consolidates ADR-014, ADR-029.
 
 ## Context / 배경
 
-CC-on-Bedrock은 두 접근 경로를 갖는다 — per-user **EC2 DevEnv**(ADR-004 / SSOT §6)와
+CC-on-Bedrock은 두 접근 경로를 갖는다 — per-user **EC2 DevEnv**(ADR-002 / SSOT §6)와
 **Local Mode**(`governanceOnly`, BASELINE §2 GATED). 두 경로 모두 회사 자격으로 Bedrock을
 호출하되 사용량·예산·IAM 권한이 중앙에서 거버넌스되어야 한다. 핵심 질문: **두 경로의 자격증명을
 어떻게 통일해 한 축으로 귀속·통제하는가.**

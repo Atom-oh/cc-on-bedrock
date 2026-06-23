@@ -13,7 +13,7 @@ Accepted (2026-06-23)
 
 ## Context
 
-per-user EC2 DevEnv(ADR-004)와 Local Mode(ADR-014)에서 각 사용자는 독립 IAM 역할
+per-user EC2 DevEnv(ADR-002)와 Local Mode(ADR-006)에서 각 사용자는 독립 IAM 역할
 (`cc-on-bedrock-task-{subdomain}` / `cc-on-bedrock-local-user-*`)을 갖는다. 4000-user
 플랫폼에서 (a) 네트워크/데이터 유출(DLP) 차별화, (b) 기본 Bedrock 외 추가 AWS 권한 셀프서비스,
 (c) 감사 추적 가능한 변경 통제, (d) "승인했는데 효력 0"(silent-deny) 제거, (e) 새 Claude 버전·

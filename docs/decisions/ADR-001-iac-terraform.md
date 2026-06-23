@@ -28,7 +28,7 @@ Architecture detail is owned by `../architecture.md` (SSOT) — not re-derived h
 - **Lambda**: 런타임 코드는 repo root `lambda/*.py`에 IaC-무관 자산으로 유지하고, Terraform이 `archive_file`로 직접 패키징·배포한다 (디렉터리명 `lambda`는 역사적 잔재, 개명 안 함).
   Lambda handler source stays in `lambda/`; Terraform packages it via `archive_file`.
 - **State**: S3 backend (`cc-on-bedrock-tfstate-{account}`).
-- **Permission boundary 및 정책**: Terraform에서 정본으로 작성 (boundary X = AllowInAccount + DenyEscalation — 상세는 007 참조).
+- **Permission boundary 및 정책**: Terraform에서 정본으로 작성 (boundary X = AllowInAccount (+ DenyEscalation floor — TF 완전 포팅은 follow-up, 상세·현행강도는 007 참조)).
   Policies, including the permission boundary, are authored in Terraform (see 007).
 - Next.js 대시보드 앱(`shared/nextjs-app`)·AMI 빌드(`scripts/build-ami.sh`)도 IaC-무관 자산으로 유지된다.
 

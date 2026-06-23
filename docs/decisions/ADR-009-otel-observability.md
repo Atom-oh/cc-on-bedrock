@@ -30,7 +30,7 @@ Amazon Bedrock exposes none of Anthropic's first-party Analytics/Admin/Complianc
 
 - **Emit (EC2 60s push).** EC2 DevEnv는 60초 systemd timer로 코드활동 메트릭(repo count, total/last-minute commits, tracked LoC, review markers)을 OTLP HTTP로 Collector에 보낸다 (`tools/cc-otel-code-metrics.sh`). 추가로 Claude Code 클라이언트 OTel(`CLAUDE_CODE_ENABLE_TELEMETRY=1`, sessions/LOC/acceptance 등)도 같은 Collector로 흐른다.
 - **Pipeline = Option A (Collector → DynamoDB).** Managed Prometheus/Grafana(B)나 CloudWatch metrics/EMF(C)가 아닌, Collector → durable buffer → rollup → DynamoDB를 택한다. 멀티모델 패널(Claude+Codex+Gemini)이 A에 합의.
-- **Identity = email canonical key (005/ADR-031).** rollup은 **일 단위 집계 + presence 레코드만** 기록(원시 datapoint 비영속). PK `USER#{email}`. department는 기존 추적기(EC2 tag/Cognito attribute) 로직 재사용. EC2/ECS에서는 Collector가 신뢰 가능한 source로 `enduser.id`를 **덮어쓴다**; Local Governance(ADR-014/006)는 자기보고 신뢰경계로 문서화하고 rollup이 Bedrock invocation log와 cross-check해 불일치를 flag한다.
+- **Identity = email canonical key (005/ADR-031).** rollup은 **일 단위 집계 + presence 레코드만** 기록(원시 datapoint 비영속). PK `USER#{email}`. department는 기존 추적기(EC2 tag/Cognito attribute) 로직 재사용. EC2/ECS에서는 Collector가 신뢰 가능한 source로 `enduser.id`를 **덮어쓴다**; Local Governance(ADR-006)는 자기보고 신뢰경계로 문서화하고 rollup이 Bedrock invocation log와 cross-check해 불일치를 flag한다.
 - **Privacy.** 프롬프트/텍스트/이미지 내용은 절대 로깅하지 않는다 — 메트릭은 counter만 운반. 고비용 CloudWatch Logs 싱크 회피.
 - **Authoritative cost stays 005.** 비용 attribution(per-skill/agent/model)은 OTel 기반 **근사치(Attributed)**이며, 권위 있는 청구 수치는 005의 Bedrock invocation-log 파이프라인(Billed)이 계속 보유한다.
 
