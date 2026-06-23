@@ -32,24 +32,24 @@ const cards: Card[] = [
     href: "/intro",
     icon: Sparkles,
     audience: ["all"],
-    ko: { title: "소개", desc: "두 가지 배포 모드(EC2 / Local), 주요 특징, 모델 라인업, 8 스택 구조." },
-    en: { title: "Introduction", desc: "Two modes (EC2 / Local), key features, Bedrock model lineup, 8-stack layout." },
+    ko: { title: "소개", desc: "두 가지 배포 모드(EC2 / Local), 주요 특징, 모델 라인업, Terraform 모듈 구조." },
+    en: { title: "Introduction", desc: "Two modes (EC2 / Local), key features, Bedrock model lineup, Terraform module layout." },
     color: "from-accent-cyan/30 to-accent-cyan/5",
   },
   {
     href: "/architecture",
     icon: Layers,
     audience: ["operator"],
-    ko: { title: "아키텍처", desc: "8 CDK 스택 매핑, EC2-per-user 아키텍처, Local Mode 흐름, Hybrid AI." },
-    en: { title: "Architecture", desc: "8-stack layout, EC2-per-user architecture, Local Mode flow, Hybrid AI." },
+    ko: { title: "아키텍처", desc: "Terraform 모듈, EC2-per-user 아키텍처, Local Mode 흐름, Hybrid AI." },
+    en: { title: "Architecture", desc: "Terraform modules, EC2-per-user architecture, Local Mode flow, Hybrid AI." },
     color: "from-accent-purple/30 to-accent-purple/5",
   },
   {
     href: "/deployment",
     icon: Cloud,
     audience: ["operator"],
-    ko: { title: "배포 가이드", desc: "8단계 CDK/Terraform/CloudFormation 배포, governanceOnly 옵션, 검증 절차." },
-    en: { title: "Deployment", desc: "8-step CDK/Terraform/CloudFormation deployment, governanceOnly option, verification." },
+    ko: { title: "배포 가이드", desc: "Terraform init/plan/apply, AMI/이미지 준비, 검증 절차." },
+    en: { title: "Deployment", desc: "Terraform init/plan/apply, AMI/image preparation, verification." },
     color: "from-accent-green/30 to-accent-green/5",
   },
   {
@@ -103,9 +103,9 @@ const cards: Card[] = [
 ];
 
 const stats: { value: string; ko: string; en: string }[] = [
-  { value: "8", ko: "CDK 스택", en: "CDK Stacks" },
+  { value: "8", ko: "Terraform 모듈", en: "Terraform modules" },
   { value: "4", ko: "Bedrock 모델", en: "Bedrock models" },
-  { value: "3", ko: "IaC 도구", en: "IaC Tools" },
+  { value: "1", ko: "IaC 도구", en: "IaC tool" },
   { value: "2", ko: "배포 모드", en: "Deploy modes" },
 ];
 
@@ -139,8 +139,8 @@ export default function HomePage() {
         </h1>
         <p className="text-base lg:text-lg text-gray-400 leading-relaxed max-w-3xl mb-6">
           {t(
-            "EC2-per-user DevEnv 와 Local Governance 모드를 모두 지원하는 엔터프라이즈 플랫폼. CDK / Terraform / CloudFormation 세 IaC 도구로 동일 인프라를 배포할 수 있고, 사용자별 IAM 사전 프로비저닝부터 normalized 토큰 한도까지 풀 라이프사이클 거버넌스를 제공합니다.",
-            "Enterprise platform supporting both EC2-per-user DevEnv and Local Governance modes. Deploy the same infrastructure via CDK, Terraform, or CloudFormation, with full-lifecycle governance from per-user IAM pre-provisioning to normalized token limits."
+            "EC2-per-user DevEnv 와 Local Governance 모드를 모두 지원하는 엔터프라이즈 플랫폼. 인프라는 Terraform으로 배포하며, 사용자별 IAM 사전 프로비저닝부터 normalized 토큰 한도까지 풀 라이프사이클 거버넌스를 제공합니다.",
+            "Enterprise platform supporting both EC2-per-user DevEnv and Local Governance modes. Infrastructure is deployed with Terraform, with full-lifecycle governance from per-user IAM pre-provisioning to normalized token limits."
           )}
         </p>
         <div className="flex flex-wrap gap-3">

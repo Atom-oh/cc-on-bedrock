@@ -21,8 +21,8 @@ const sections = [
     icon: Layers,
     title: { ko: "아키텍처", en: "Architecture" },
     desc: {
-      ko: "EC2-per-user 아키텍처, 7개 CDK 스택, 트래픽 흐름, 네트워크 구성을 상세히 설명합니다.",
-      en: "EC2-per-user architecture, 7 CDK stacks, traffic flow, and network topology in detail.",
+      ko: "Terraform 기반 EC2-per-user 아키텍처, 트래픽 흐름, 네트워크 구성을 상세히 설명합니다.",
+      en: "Terraform-based EC2-per-user architecture, traffic flow, and network topology in detail.",
     },
     color: "from-blue-500 to-cyan-500",
   },
@@ -31,8 +31,8 @@ const sections = [
     icon: Rocket,
     title: { ko: "시작하기", en: "Getting Started" },
     desc: {
-      ko: "사전 요구사항부터 Docker 빌드, CDK/Terraform/CloudFormation 배포까지 단계별 가이드.",
-      en: "Step-by-step from prerequisites, Docker build, to CDK/Terraform/CloudFormation deployment.",
+      ko: "사전 요구사항부터 Docker 빌드, Terraform 배포까지 단계별 가이드.",
+      en: "Step-by-step from prerequisites, Docker build, to Terraform deployment.",
     },
     color: "from-emerald-500 to-green-500",
   },
@@ -91,8 +91,8 @@ const sections = [
 const highlights = [
   {
     icon: Cloud,
-    value: "7",
-    label: { ko: "CDK 스택", en: "CDK Stacks" },
+    value: "TF",
+    label: { ko: "단일 IaC", en: "Single IaC" },
   },
   {
     icon: Terminal,
@@ -101,8 +101,8 @@ const highlights = [
   },
   {
     icon: BarChart3,
-    value: "3",
-    label: { ko: "IaC 도구 지원", en: "IaC Tools Supported" },
+    value: "60s",
+    label: { ko: "OTEL 수집", en: "OTEL Cadence" },
   },
   {
     icon: Shield,
@@ -129,8 +129,8 @@ export default function DocsPage() {
           </h1>
           <p className="text-lg text-gray-400 max-w-2xl leading-relaxed">
             {locale === "ko"
-              ? "AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼. EC2-per-user 아키텍처로 4,000명 이상의 동시 사용자를 지원하며, 3가지 IaC 도구(CDK, Terraform, CloudFormation)로 배포할 수 있습니다."
-              : "Multi-user Claude Code development environment platform on AWS Bedrock. EC2-per-user architecture supports 4,000+ concurrent users, deployable via CDK, Terraform, or CloudFormation."}
+              ? "AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼. EC2-per-user 아키텍처와 Local Mode를 Terraform으로 배포하고, Bedrock 사용량과 EC2 코드 활동을 중앙에서 관측합니다."
+              : "Multi-user Claude Code development environment platform on AWS Bedrock. Terraform deploys EC2-per-user and Local Mode paths, with centralized Bedrock usage and EC2 code activity observability."}
           </p>
         </div>
 
@@ -189,10 +189,10 @@ export default function DocsPage() {
         </h2>
         <div className="flex flex-wrap gap-2">
           {[
-            "AWS CDK v2", "Terraform", "CloudFormation", "Next.js 14",
-            "Tailwind CSS", "Amazon Cognito", "DynamoDB", "ECS (EC2)",
+            "Terraform", "Next.js 14",
+            "Tailwind CSS", "Amazon Cognito", "DynamoDB", "ECS Fargate",
             "CloudFront", "Lambda@Edge", "Bedrock Opus 4.6", "Bedrock Sonnet 4.6",
-            "code-server", "Claude Code", "Kiro", "EventBridge", "KMS",
+            "code-server", "Claude Code", "Kiro", "EventBridge", "KMS", "OpenTelemetry",
             "Route 53", "ARM64 (Graviton)",
           ].map((tech) => (
             <span

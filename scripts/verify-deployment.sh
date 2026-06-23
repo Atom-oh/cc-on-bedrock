@@ -17,7 +17,6 @@ fi
 
 DOMAIN="$1"; shift
 REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
-STACK_PREFIX="CcOnBedrock"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,12 +30,6 @@ pass() { PASS=$((PASS+1)); echo "  ✅ ${1:-OK}"; }
 fail() { FAIL=$((FAIL+1)); echo "  ❌ ${1:-FAIL}"; }
 warn() { WARN=$((WARN+1)); echo "  ⚠️  ${1:-WARNING}"; }
 check() { echo "  🔍 $1"; }
-
-get_cfn_output() {
-  aws cloudformation describe-stacks --stack-name "$1" --region "$REGION" \
-    --query "Stacks[0].Outputs[?contains(OutputKey,'$2')].OutputValue | [0]" \
-    --output text 2>/dev/null || echo ""
-}
 
 echo "================================================================="
 echo " CC-on-Bedrock Deployment Verification"
@@ -138,11 +131,17 @@ echo ""
 
 # 9. Secrets Manager
 echo "[Secrets Manager]"
-for SECRET in "cc-on-bedrock/cloudfront-secret" "cc-on-bedrock/nextauth-secret"; do
+for SECRET in "cc-on-bedrock/cloudfront-secret"; do
   check "Secret $SECRET"
   STATUS=$(aws secretsmanager describe-secret --secret-id "$SECRET" --region "$REGION" --query "Name" --output text 2>/dev/null || echo "NOT_FOUND")
   if [[ "$STATUS" != "NOT_FOUND" ]]; then pass; else fail "not found"; fi
 done
+echo ""
+
+echo "[SSM]"
+check "Parameter /cc-on-bedrock/nextauth-secret"
+NEXTAUTH_PARAM=$(aws ssm get-parameter --name "/cc-on-bedrock/nextauth-secret" --region "$REGION" --query "Parameter.Name" --output text 2>/dev/null || echo "NOT_FOUND")
+if [[ "$NEXTAUTH_PARAM" != "NOT_FOUND" ]]; then pass; else fail "nextauth parameter not found"; fi
 echo ""
 
 # 10. Bedrock

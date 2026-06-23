@@ -1,12 +1,24 @@
 ---
-status: Proposed
+status: Deferred
 verification_required: false
 ---
 
 # ADR-008: Enterprise SSO Federation (SAML / OIDC / Social)
 
 ## Status
-Proposed
+Deferred (2026-06-16)
+
+> **보류 결정 (2026-06-16):** 설계·CDK 가이드·Lambda 트리거 코드·IdP별 설정·리스크까지
+> 구현-준비 상태로 완성되었으나, **도입을 보류**한다.
+>
+> **사유:**
+> - 외부 IdP(Azure AD/Okta/KeyCloak/Google 등)의 실제 수요와 credential이 아직 확정되지 않음.
+> - IdP credential 없이는 federation 로그인 E2E 검증이 불가능 — 미검증 상태로 머지할 위험.
+> - 현행 admin 관리 모델(`selfSignUpEnabled: false`)로 당장의 운영 요구는 충족됨.
+>
+> **재개 조건(trigger):** 특정 IdP(예: 사내 Azure AD/Okta) 연동 요구가 확정되고 해당
+> credential을 Secrets Manager에 확보하면, 본 문서의 "향후 구현 시 체크리스트"부터 그대로
+> 구현을 재개한다. 본 문서는 그때까지 구현-준비 청사진으로 보존한다.
 
 ## Context
 

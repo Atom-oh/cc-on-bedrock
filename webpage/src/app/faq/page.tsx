@@ -12,19 +12,17 @@ export default function FaqPage() {
     >
       <H2 id="storage">{t("스토리지", "Storage")}</H2>
 
-      <H3>{t("EBS vs EFS — 어떤 것을 선택?", "EBS vs EFS — which one?")}</H3>
+      <H3>{t("스토리지는 무엇을 쓰나요?", "What storage is used?")}</H3>
       <Table
         columns={[
           { key: "item", label: t("항목", "Item") },
           { key: "ebs", label: "EBS" },
-          { key: "efs", label: "EFS" },
+          { key: "note", label: t("비고", "Note") },
         ]}
         rows={[
-          { item: t("성능", "Performance"), ebs: "gp3 3000 IOPS", efs: t("공유, 버스트", "Shared, burst") },
-          { item: t("격리", "Isolation"), ebs: t("사용자별 볼륨", "Per-user volume"), efs: "Access Point" },
-          { item: t("비용", "Cost"), ebs: t("$0.08/GB/월 (사용 시만)", "$0.08/GB/mo (when in use)"), efs: t("$0.30/GB/월 (상시)", "$0.30/GB/mo (always)") },
-          { item: t("확장", "Expand"), ebs: t("수동 신청 (40/60/100)", "Manual request (40/60/100)"), efs: t("자동", "Auto") },
-          { item: t("적합", "Best for"), ebs: t("대용량 빌드, ML", "Large build, ML"), efs: t("경량 개발, 빠른 시작", "Lightweight dev, fast start") },
+          { item: t("성능", "Performance"), ebs: "gp3", note: t("필요 시 IOPS/throughput 조정", "Tune IOPS/throughput when needed") },
+          { item: t("격리", "Isolation"), ebs: t("사용자별 볼륨", "Per-user volume"), note: t("Stop/Start 후 보존", "Preserved across Stop/Start") },
+          { item: t("확장", "Expand"), ebs: t("관리자 승인 기반 확장", "Admin-approved expansion"), note: "40/60/100 GB" },
         ]}
       />
 
@@ -49,8 +47,8 @@ export default function FaqPage() {
       <H3>{t("SAML / OIDC 연동 가능?", "SAML / OIDC support?")}</H3>
       <P>
         {t(
-          "Cognito는 SAML 2.0 / OIDC IdP 연동을 기본 지원 — Okta, Azure AD, Google Workspace 등 통합 가능. CDK 02-security-stack.ts에서 설정.",
-          "Cognito supports SAML 2.0 / OIDC IdPs out of the box — Okta, Azure AD, Google Workspace. Configure in CDK 02-security-stack.ts."
+          "Cognito는 SAML 2.0 / OIDC IdP 연동을 기본 지원 — Okta, Azure AD, Google Workspace 등 통합 가능. Terraform security module에서 설정합니다.",
+          "Cognito supports SAML 2.0 / OIDC IdPs out of the box — Okta, Azure AD, Google Workspace. Configure this in the Terraform security module."
         )}
       </P>
 
@@ -116,18 +114,21 @@ export default function FaqPage() {
       </ul>
 
       <H2 id="deploy">{t("배포 / 멀티 리전", "Deployment / multi-region")}</H2>
-      <H3>{t("CDK 배포 순서", "CDK deploy order")}</H3>
+      <H3>{t("Terraform 배포 순서", "Terraform deploy order")}</H3>
       <CodeBlock lang="bash">
-{`01-Network → 02-Security → 03-Usage Tracking → 04-ECS Dashboard 인프라
-            → 05-Dashboard → 06-WAF
-            → 07-EC2 DevEnv (governanceOnly=true 시 스킵)
-            → 08-Local Governance`}
+{`terraform -chdir=terraform init
+terraform -chdir=terraform fmt -recursive
+terraform -chdir=terraform validate
+terraform -chdir=terraform plan
+terraform -chdir=terraform apply`}
       </CodeBlock>
-      <P>{t("CDK는 의존성 그래프로 자동 순서 처리.", "CDK auto-orders via dependency graph.")}</P>
+      <P>{t("모듈 의존성은 Terraform graph가 처리합니다.", "Terraform graph handles module dependency order.")}</P>
 
       <H3>{t("다른 리전에 배포 가능?", "Deploy to another region?")}</H3>
       <CodeBlock lang="bash">
-{`npx cdk deploy --all -c region=us-west-2 -c vpcCidr=10.200.0.0/16`}
+{`terraform -chdir=terraform apply \\
+  -var='aws_region=us-west-2' \\
+  -var='vpc_cidr=10.200.0.0/16'`}
       </CodeBlock>
       <P>
         {t(
@@ -136,11 +137,10 @@ export default function FaqPage() {
         )}
       </P>
 
-      <H2 id="iac">{t("IaC 옵션", "IaC options")}</H2>
+      <H2 id="iac">{t("IaC 기준", "IaC source of truth")}</H2>
       <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5 mb-4">
-        <li><strong className="text-white">CDK (TypeScript)</strong> — {t("주 개발 도구, 8 스택 전체 지원", "Primary, all 8 stacks")}</li>
-        <li><strong className="text-white">Terraform (HCL)</strong> — {t("network / security / ecs-devenv / dashboard root 통합, usage-tracking / local-governance / ec2-devenv / waf 모듈 존재 (root wiring follow-up)", "network / security / ecs-devenv / dashboard wired in root; usage-tracking / local-governance / ec2-devenv / waf modules exist (root wiring is follow-up)")}</li>
-        <li><strong className="text-white">CloudFormation (YAML)</strong> — {t("코어 기능 지원", "Core features")}</li>
+        <li><strong className="text-white">Terraform (HCL)</strong> — {t("유일한 배포 기준", "the only deployment source of truth")}</li>
+        <li>{t("Lambda 소스는 repo root의 lambda/에서 패키징", "Lambda source is packaged from repo-root lambda/")}</li>
       </ul>
     </PageShell>
   );

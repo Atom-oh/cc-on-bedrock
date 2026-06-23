@@ -1,6 +1,6 @@
 ###############################################################################
 # WAF Module — CLOUDFRONT-scope WebACL (must live in us-east-1)
-# Equivalent to cdk/lib/06-waf-stack.ts
+# CloudFront-scope WAF module
 ###############################################################################
 
 resource "aws_wafv2_web_acl" "cloudfront" {

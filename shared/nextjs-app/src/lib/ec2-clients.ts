@@ -14,6 +14,7 @@ import {
   CreateTagsCommand,
   CreateSnapshotCommand,
   DescribeSnapshotsCommand,
+  DescribeImagesCommand,
   RegisterImageCommand,
   DeregisterImageCommand,
   ModifyInstanceAttributeCommand,
@@ -70,15 +71,65 @@ const ssmClient = new SSMClient({ region });
 const ddbClient = new DynamoDBClient({ region });
 const iamClient = new IAMClient({ region });
 const secretsClient = new SecretsManagerClient({ region });
-const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 
 const INSTANCE_TABLE = process.env.INSTANCE_TABLE ?? "cc-user-instances";
 const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
 const LAUNCH_TEMPLATE = process.env.LAUNCH_TEMPLATE ?? "cc-on-bedrock-devenv";
 const VPC_SUBNET_IDS = (process.env.PRIVATE_SUBNET_IDS ?? "").split(",").filter(Boolean);
 const HIBERNATE_ENABLED = (process.env.HIBERNATE_ENABLED ?? "false") === "true";
+const DASHBOARD_URL = process.env.NEXTAUTH_URL ?? process.env.DASHBOARD_URL ?? "";
+const OTEL_EXPORTER_OTLP_ENDPOINT =
+  process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? process.env.OTEL_COLLECTOR_ENDPOINT ?? "";
 
-// DLP Security Group IDs (from CDK outputs / env vars)
+function isAwsAccountId(value: string | undefined): value is string {
+  return /^[0-9]{12}$/.test(value ?? "");
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 1000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveAccountIdFromImds(): Promise<string | undefined> {
+  try {
+    const tokenResponse = await fetchWithTimeout("http://169.254.169.254/latest/api/token", {
+      method: "PUT",
+      headers: { "X-aws-ec2-metadata-token-ttl-seconds": "21600" },
+    });
+    if (!tokenResponse.ok) return undefined;
+    const token = await tokenResponse.text();
+    if (!token) return undefined;
+
+    const documentResponse = await fetchWithTimeout("http://169.254.169.254/latest/dynamic/instance-identity/document", {
+      headers: { "X-aws-ec2-metadata-token": token },
+    });
+    if (!documentResponse.ok) return undefined;
+    const document = await documentResponse.json() as { accountId?: string };
+    return isAwsAccountId(document.accountId) ? document.accountId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function resolveAwsAccountId(): Promise<string> {
+  const configured = process.env.AWS_ACCOUNT_ID?.trim();
+  if (configured) {
+    if (isAwsAccountId(configured)) return configured;
+    throw new Error("AWS_ACCOUNT_ID must be a 12-digit AWS account id");
+  }
+
+  const fromImds = await resolveAccountIdFromImds();
+  if (fromImds) return fromImds;
+
+  throw new Error("AWS_ACCOUNT_ID is required and EC2 IMDS account id is unavailable");
+}
+
+// DLP Security Group IDs (from Terraform outputs / env vars)
 const SG_MAP: Record<string, string> = {
   open: process.env.SG_DEVENV_OPEN ?? "",
   restricted: process.env.SG_DEVENV_RESTRICTED ?? "",
@@ -360,8 +411,24 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Per-user code-server password (Secrets Manager)
   const codeserverPassword = await ensureCodeserverPassword(input.subdomain);
 
+  // Resolve the AMI's actual root device name so the DeleteOnTermination override
+  // below targets the real root volume (ubuntu=/dev/sda1; al2023 may differ).
+  const amiDesc = await ec2Client.send(new DescribeImagesCommand({ ImageIds: [amiId!] }));
+  const rootDeviceName = amiDesc.Images?.[0]?.RootDeviceName ?? "/dev/sda1";
+
   const result = await runInstancesWithIamRetry({
     ImageId: amiId!,
+    // Preserve the per-user root volume on Terminate (not just Stop/Hibernate).
+    // Golden AMIs default the root device to DeleteOnTermination=true; without this
+    // override a Terminate destroys the user's workspace+system state. Mirrors the
+    // Launch Template and the snapshot-restore path (which bake false in).
+    BlockDeviceMappings: [
+      {
+        DeviceName: rootDeviceName,
+        Ebs: { DeleteOnTermination: false },  // size/snapshot inherited from the AMI
+      },
+      ...dataPlan.blockDeviceMappings,
+    ],
     IamInstanceProfile: { Name: instanceProfileName },
     InstanceType: tier.type as never,
     MetadataOptions: { HttpTokens: "required", HttpPutResponseHopLimit: 2 },
@@ -370,9 +437,6 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     MaxCount: 1,
     SubnetId: subnet,
     SecurityGroupIds: sg ? [sg] : undefined,
-    // ADR-032: born-attached persistent data volume (DeleteOnTermination=false) for new
-    // users; empty for reattach (the existing volume is attached after launch).
-    BlockDeviceMappings: dataPlan.blockDeviceMappings.length ? dataPlan.blockDeviceMappings : undefined,
     TagSpecifications: [
       {
         ResourceType: "instance",
@@ -409,6 +473,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     UserData: Buffer.from([
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${input.subdomain}" >> /etc/environment`,
+      `echo "DEPARTMENT=${input.department}" >> /etc/environment`,
       // ADR-032: on reattach, tell the baked cc-data-migrate unit exactly which volume id
       // to wait for (closes the attach race). Born-attached leaves this absent — the unit
       // then mounts/formats the single fresh data volume it discovers on first boot.
@@ -431,6 +496,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
+      ...(OTEL_EXPORTER_OTLP_ENDPOINT ? [
+        `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}" >> /etc/environment`,
+      ] : []),
       `# Allow coder to use package managers without password`,
       `cat > /etc/sudoers.d/coder << 'SUDOEOF'`,
       `coder ALL=(root) NOPASSWD: /usr/bin/code-server`,
@@ -480,6 +548,38 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"diskio":{"measurement":["read_bytes","write_bytes"],"resources":["*"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
+      ...(DASHBOARD_URL ? [
+        `# OTEL code activity metrics: commits, LoC, review markers (60s cadence)`,
+        `curl -fsSL "${DASHBOARD_URL.replace(/\/$/, "")}/api/install/otel" -o /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
+        `chmod +x /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
+        `if [ -x /usr/local/bin/cc-otel-code-metrics ] && [ -n "$OTEL_EXPORTER_OTLP_ENDPOINT" ]; then`,
+        `cat > /etc/systemd/system/cc-otel-code-metrics.service << 'OTELSVC'`,
+        `[Unit]`,
+        `Description=CC-on-Bedrock OTEL code activity metrics`,
+        `After=network-online.target`,
+        `Wants=network-online.target`,
+        `[Service]`,
+        `Type=oneshot`,
+        `User=coder`,
+        `EnvironmentFile=-/etc/environment`,
+        `Environment=WORKSPACE_ROOT=/home/coder/workspace`,
+        `ExecStart=/usr/local/bin/cc-otel-code-metrics`,
+        `OTELSVC`,
+        `cat > /etc/systemd/system/cc-otel-code-metrics.timer << 'OTELTIMER'`,
+        `[Unit]`,
+        `Description=Run CC-on-Bedrock OTEL code metrics every minute`,
+        `[Timer]`,
+        `OnBootSec=90s`,
+        `OnUnitActiveSec=60s`,
+        `AccuracySec=10s`,
+        `Persistent=true`,
+        `[Install]`,
+        `WantedBy=timers.target`,
+        `OTELTIMER`,
+        `systemctl daemon-reload`,
+        `systemctl enable --now cc-otel-code-metrics.timer`,
+        `fi`,
+      ] : []),
       `# Ensure ~/.claude is coder-owned before installing (cc-mcp-sync may have`,
       `# created it as root first — breaks the installer and Claude Code state)`,
       `mkdir -p /home/coder/.claude && chown -R coder:coder /home/coder/.claude`,
@@ -1359,10 +1459,7 @@ export async function applyIamGrant(args: GrantArgs): Promise<{ attached: string
   // Symmetric with the request-time path (container-request): without the account id
   // the cross-account guard cannot run, so fail closed rather than silently skip it
   // (review MINOR).
-  const accountId = args.accountId ?? process.env.AWS_ACCOUNT_ID;
-  if (!accountId) {
-    throw new Error("grant re-validation requires AWS_ACCOUNT_ID (cross-account guard) — server misconfigured");
-  }
+  const accountId = args.accountId ?? await resolveAwsAccountId();
   const v = validateIamRequest(args.statements, {
     serviceAllowlist: DEFAULT_SERVICE_ALLOWLIST,
     wildcardOkActions: DEFAULT_WILDCARD_OK_ACTIONS,
@@ -1677,7 +1774,7 @@ async function ensureCodeserverPassword(subdomain: string): Promise<string> {
  * Grants InvokeGateway on the common gateway + department-specific gateway.
  * Called on every instance start to keep gateway ARNs current.
  */
-async function applyGatewayPolicy(roleName: string, department: string): Promise<void> {
+async function applyGatewayPolicy(roleName: string, department: string, accountId: string): Promise<void> {
   try {
     // Query DDB for department and common gateway IDs
     const { DynamoDBDocumentClient, GetCommand } = await import("@aws-sdk/lib-dynamodb");
@@ -1770,6 +1867,7 @@ async function runInstancesWithIamRetry(
 async function ensureUserInstanceProfile(subdomain: string, username: string, department: string): Promise<string> {
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
   const profileName = roleName;
+  const accountId = await resolveAwsAccountId();
 
   // Cost allocation tags for AWS Billing integration (ADR-011 canonical schema).
   // Same key set is emitted by sts-issuer.py for Local Governance role tags so CUR 2.0
@@ -1831,8 +1929,8 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
           Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
           // ADR-021: wildcard Claude-family across all region prefixes
           // (anthropic./global./us./apac./eu./future). MUST mirror
-          // cdk/lib/lambda/user-role-provisioner.py:_ec2_task_inline_policy and
-          // cdk/lib/02-security-stack.ts task permission boundary — otherwise
+          // lambda/user-role-provisioner.py:_ec2_task_inline_policy and
+          // Terraform task permission boundary — otherwise
           // EC2-mode users get AccessDenied on `global.anthropic.claude-*`
           // direct InvokeModel.
           Resource: [
@@ -1860,7 +1958,7 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
   }));
 
   // Apply AgentCore Gateway access policy (updates on every start to reflect dept changes)
-  await applyGatewayPolicy(roleName, department);
+  await applyGatewayPolicy(roleName, department, accountId);
 
   // Ensure instance profile exists AND has the role attached. Handles the orphan
   // case where a previous run created the profile but crashed before attaching the

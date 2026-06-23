@@ -1,6 +1,6 @@
 ###############################################################################
 # EC2-per-user DevEnv Module (ADR-004)
-# Equivalent to cdk/lib/07-ec2-devenv-stack.ts
+# Per-user EC2 DevEnv infrastructure
 #
 # Each user gets a dedicated EC2 instance with persistent EBS root volume.
 # Dashboard API creates per-user IAM roles + Instance Profiles at runtime, then
@@ -37,13 +37,24 @@ resource "aws_security_group" "open" {
   vpc_id      = var.vpc_id
 
   dynamic "ingress" {
-    for_each = local.devenv_ports
+    for_each = var.nginx_security_group_id == "" ? local.devenv_ports : []
     content {
       description = "${ingress.value.desc} from VPC (via Nginx)"
       from_port   = ingress.value.port
       to_port     = ingress.value.port
       protocol    = "tcp"
       cidr_blocks = [var.vpc_cidr]
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = var.nginx_security_group_id != "" ? [1] : []
+    content {
+      description     = "Nginx to code-server and user custom ports"
+      from_port       = 1024
+      to_port         = 65535
+      protocol        = "tcp"
+      security_groups = [var.nginx_security_group_id]
     }
   }
 
@@ -63,13 +74,24 @@ resource "aws_security_group" "restricted" {
   vpc_id      = var.vpc_id
 
   dynamic "ingress" {
-    for_each = local.devenv_ports
+    for_each = var.nginx_security_group_id == "" ? local.devenv_ports : []
     content {
       description = "${ingress.value.desc} from VPC"
       from_port   = ingress.value.port
       to_port     = ingress.value.port
       protocol    = "tcp"
       cidr_blocks = [var.vpc_cidr]
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = var.nginx_security_group_id != "" ? [1] : []
+    content {
+      description     = "Nginx to code-server and user custom ports"
+      from_port       = 1024
+      to_port         = 65535
+      protocol        = "tcp"
+      security_groups = [var.nginx_security_group_id]
     }
   }
 
@@ -106,13 +128,24 @@ resource "aws_security_group" "locked" {
   vpc_id      = var.vpc_id
 
   dynamic "ingress" {
-    for_each = local.devenv_ports
+    for_each = var.nginx_security_group_id == "" ? local.devenv_ports : []
     content {
       description = "${ingress.value.desc} from VPC"
       from_port   = ingress.value.port
       to_port     = ingress.value.port
       protocol    = "tcp"
       cidr_blocks = [var.vpc_cidr]
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = var.nginx_security_group_id != "" ? [1] : []
+    content {
+      description     = "Nginx to code-server and user custom ports"
+      from_port       = 1024
+      to_port         = 65535
+      protocol        = "tcp"
+      security_groups = [var.nginx_security_group_id]
     }
   }
 
@@ -160,8 +193,7 @@ data "aws_iam_policy_document" "ec2_assume" {
 resource "aws_iam_role" "devenv_instance" {
   name               = "cc-on-bedrock-devenv-instance"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
-  # Empty string -> attribute omitted entirely. Matches CDK's optional
-  # taskPermissionBoundary semantics.
+  # Empty string -> attribute omitted entirely.
   permissions_boundary = var.task_permission_boundary_arn != "" ? var.task_permission_boundary_arn : null
 }
 

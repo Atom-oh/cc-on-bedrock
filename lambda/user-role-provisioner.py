@@ -226,8 +226,8 @@ def _ec2_task_inline_policy() -> dict:
                 ],
                 # ADR-021: wildcard Claude-family across all region prefixes
                 # (anthropic./global./us./apac./eu./future). MUST mirror
-                # role_factory.allowed_model_arns() and cdk/lib/02-security-stack.ts
-                # task permission boundary — otherwise EC2-mode users get
+                # role_factory.allowed_model_arns() and the Terraform task
+                # permission boundary — otherwise EC2-mode users get
                 # AccessDenied on `global.anthropic.claude-*` direct InvokeModel.
                 "Resource": [
                     "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
@@ -477,8 +477,8 @@ def _safe_delete_ddb_item(table: str, key: dict) -> str:
         ddb.delete_item(TableName=table, Key=key)
         return "deleted"
     except ClientError as e:
-        # `governanceOnly=true` mode skips Stack 04/07 → cc-user-instances,
-        # cc-user-volumes, cc-routing-table don't exist. DeleteItem on missing
+        # Local-only deployments may not create cc-user-instances,
+        # cc-user-volumes, or cc-routing-table. DeleteItem on a missing
         # table returns ResourceNotFoundException — that's "nothing to clean up
         # here", not an error worth retrying / DLQ'ing.
         code = e.response.get("Error", {}).get("Code", "")

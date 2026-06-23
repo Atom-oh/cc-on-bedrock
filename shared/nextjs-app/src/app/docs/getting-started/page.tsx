@@ -90,7 +90,7 @@ export default function GettingStartedPage() {
               {ko ? "시작하기" : "Getting Started"}
             </h1>
             <p className="text-sm text-gray-500">
-              {ko ? "배포 가이드 (CDK / Terraform / CloudFormation)" : "Deployment Guide (CDK / Terraform / CloudFormation)"}
+              {ko ? "Terraform 배포 가이드" : "Terraform Deployment Guide"}
             </p>
           </div>
         </div>
@@ -160,39 +160,8 @@ bash build.sh all devenv-al2023   # AL2023 only`}</CopyableCode>
         <Alert type="info">{ko ? "ARM64(Graviton) 기반 이미지입니다. x86 머신에서는 Docker Buildx가 필요합니다." : "These are ARM64 (Graviton) images. Docker Buildx is required on x86 machines."}</Alert>
       </StepCard>
 
-      {/* CDK Deployment */}
-      <SectionTitle id="cdk">{ko ? "3. CDK 배포 (권장)" : "3. CDK Deployment (Recommended)"}</SectionTitle>
-
-      <StepCard num={1} title={ko ? "의존성 설치 및 Bootstrap" : "Install Dependencies & Bootstrap"}>
-        <CopyableCode>{`cd cdk
-npm install
-cdk bootstrap aws://<ACCOUNT_ID>/ap-northeast-2`}</CopyableCode>
-      </StepCard>
-
-      <StepCard num={2} title={ko ? "설정 및 배포" : "Configure and Deploy"}>
-        <CopyableCode>{`# Option A: Context parameters
-cdk deploy --all \\
-  -c domainName=your-domain.com \\
-  -c devSubdomain=dev
-
-# Option B: Edit config/default.ts directly
-# Then:
-cdk deploy --all`}</CopyableCode>
-        <P>{ko ? "스택 배포 순서는 CDK가 의존성 기반으로 자동 관리합니다." : "CDK automatically manages stack deployment order based on dependencies."}</P>
-      </StepCard>
-
-      <StepCard num={3} title={ko ? "개별 스택 배포 (문제 발생 시)" : "Individual Stack Deployment (if needed)"}>
-        <CopyableCode>{`cdk deploy CcOnBedrock-Network
-cdk deploy CcOnBedrock-Security
-cdk deploy CcOnBedrock-UsageTracking
-cdk deploy CcOnBedrock-WAF
-cdk deploy CcOnBedrock-EcsDevenv
-cdk deploy CcOnBedrock-Dashboard
-cdk deploy CcOnBedrock-Ec2Devenv`}</CopyableCode>
-      </StepCard>
-
       {/* Terraform */}
-      <SectionTitle id="terraform">{ko ? "4. Terraform 배포 (대안)" : "4. Terraform Deployment (Alternative)"}</SectionTitle>
+      <SectionTitle id="terraform">{ko ? "3. Terraform 배포" : "3. Terraform Deployment"}</SectionTitle>
       <CopyableCode>{`cd terraform
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars: domain_name = "your-domain.com"
@@ -201,16 +170,8 @@ terraform init
 terraform plan
 terraform apply`}</CopyableCode>
 
-      {/* CloudFormation */}
-      <SectionTitle id="cloudformation">{ko ? "5. CloudFormation 배포 (대안)" : "5. CloudFormation Deployment (Alternative)"}</SectionTitle>
-      <CopyableCode>{`cd cloudformation
-# Edit params/default.json
-bash deploy.sh
-# Or with domain override:
-bash deploy.sh --domain your-domain.com`}</CopyableCode>
-
       {/* Post-deploy */}
-      <SectionTitle id="post-deploy">{ko ? "6. 배포 후 설정" : "6. Post-Deployment Setup"}</SectionTitle>
+      <SectionTitle id="post-deploy">{ko ? "4. 배포 후 설정" : "4. Post-Deployment Setup"}</SectionTitle>
 
       <StepCard num={1} title={ko ? "배포 검증" : "Verify Deployment"}>
         <CopyableCode>bash scripts/verify-deployment.sh your-domain.com</CopyableCode>
@@ -253,27 +214,20 @@ aws cognito-idp admin-add-user-to-group \\
 
       {/* Cleanup */}
       <SectionTitle id="cleanup">{ko ? "7. 리소스 삭제" : "7. Cleanup"}</SectionTitle>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="rounded-xl bg-[#0d1117] border border-white/5 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Terminal className="w-4 h-4 text-primary-400" />
-            <span className="text-xs font-bold text-white">CDK</span>
-          </div>
-          <code className="text-[11px] text-gray-400">cdk destroy --all</code>
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="rounded-xl bg-[#0d1117] border border-white/5 p-4">
           <div className="flex items-center gap-2 mb-2">
             <Terminal className="w-4 h-4 text-emerald-400" />
             <span className="text-xs font-bold text-white">Terraform</span>
           </div>
-          <code className="text-[11px] text-gray-400">terraform destroy</code>
+          <code className="text-[11px] text-gray-400">terraform -chdir=terraform destroy</code>
         </div>
         <div className="rounded-xl bg-[#0d1117] border border-white/5 p-4">
           <div className="flex items-center gap-2 mb-2">
             <Terminal className="w-4 h-4 text-amber-400" />
-            <span className="text-xs font-bold text-white">CloudFormation</span>
+            <span className="text-xs font-bold text-white">{ko ? "로컬 상태" : "Local State"}</span>
           </div>
-          <code className="text-[11px] text-gray-400">bash destroy.sh</code>
+          <code className="text-[11px] text-gray-400">rm -rf ~/.cc-bedrock</code>
         </div>
       </div>
     </div>

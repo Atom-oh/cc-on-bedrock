@@ -139,7 +139,7 @@ cc-bedrock-local logout       # 토큰 캐시 삭제`}
           { key: "act", label: t("동작", "Action") },
         ]}
         rows={[
-          { cmd: <Code>login</Code>, act: t("비밀번호 → Cognito → 8h STS + refresh token", "Password → Cognito → 8h STS + refresh") },
+          { cmd: <Code>login</Code>, act: t("비밀번호 → Cognito → 1h STS + refresh token", "Password → Cognito → 1h STS + refresh") },
           { cmd: <Code>refresh</Code>, act: t("캐시된 refresh token으로 silent 재발급", "Silent refresh with cached token") },
           { cmd: <Code>logout</Code>, act: t("refresh + state 캐시 삭제", "Clear refresh + state cache") },
           { cmd: <Code>status</Code>, act: t("남은 TTL + 활성 Deny / 한도 상태", "Remaining TTL + Deny / limit state") },

@@ -50,8 +50,8 @@ export default function IntroPage() {
       />
       <P>
         {t(
-          "두 모드는 같은 클러스터에 공존 가능. 인프라는 CDK(TypeScript) / Terraform(HCL) / CloudFormation(YAML) 세 IaC 도구로 동일하게 구현되어 있습니다.",
-          "Both modes can coexist. The infrastructure is implemented identically in CDK (TypeScript), Terraform (HCL), and CloudFormation (YAML)."
+          "두 모드는 같은 플랫폼에서 공존 가능. 인프라는 Terraform(HCL)을 기준으로 배포합니다.",
+          "Both modes can coexist on the same platform. Infrastructure is deployed from Terraform (HCL)."
         )}
       </P>
 
@@ -141,11 +141,10 @@ export default function IntroPage() {
         ]}
       />
       <CodeBlock title={t("배포 명령", "Deploy command")} lang="bash">
-{`# EC2 + Local 모드 모두 배포
-npx cdk deploy --all
-
-# Local Governance Mode 전용 (Stack 07 EC2 DevEnv 스킵)
-npx cdk deploy --all -c governanceOnly=true`}
+{`terraform -chdir=terraform init
+terraform -chdir=terraform validate
+terraform -chdir=terraform plan
+terraform -chdir=terraform apply`}
       </CodeBlock>
     </PageShell>
   );

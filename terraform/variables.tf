@@ -1,5 +1,5 @@
 ###############################################################################
-# Root variables - mirrors cdk/config/default.ts CcOnBedrockConfig
+# Root variables for the Terraform-only CC on Bedrock deployment
 ###############################################################################
 
 variable "aws_region" {
@@ -73,6 +73,24 @@ variable "opus_model_id" {
 variable "sonnet_model_id" {
   type    = string
   default = "global.anthropic.claude-sonnet-4-6[1m]"
+}
+
+variable "ecs_cluster_name" {
+  description = "ECS cluster name for the Nginx routing path"
+  type        = string
+  default     = "cc-on-bedrock-devenv"
+}
+
+variable "daily_budget_usd" {
+  description = "Default daily per-user budget used by the budget-check Lambda"
+  type        = number
+  default     = 50
+}
+
+variable "governance_only" {
+  description = "Deploy Local Governance mode without EC2/ECS DevEnv infrastructure"
+  type        = bool
+  default     = false
 }
 
 # ---- Compute -----------------------------------------------------------------

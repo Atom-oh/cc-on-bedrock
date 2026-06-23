@@ -1,5 +1,5 @@
 output "dashboard_url" {
-  value = "https://dashboard.${var.domain_name}"
+  value = "https://${local.dashboard_domain}"
 }
 
 output "cloudfront_domain" {

@@ -1,5 +1,5 @@
 # Copy this file to terraform.tfvars and customise.
-# Values below match the CDK defaults in cdk/config/default.ts.
+# Terraform is the canonical IaC surface.
 
 aws_region = "ap-northeast-2"
 
@@ -22,7 +22,8 @@ opus_model_id   = "global.anthropic.claude-opus-4-8[1m]"
 sonnet_model_id = "global.anthropic.claude-sonnet-4-6[1m]"
 
 # Compute
-litellm_instance_type   = "t4g.xlarge"
-ecs_host_instance_type  = "m7g.4xlarge"
 dashboard_instance_type = "t4g.xlarge"
-rds_instance_type       = "db.t4g.medium"
+devenv_instance_type    = "t4g.large"
+ecs_cluster_name        = "cc-on-bedrock-devenv"
+daily_budget_usd        = 50
+governance_only         = false

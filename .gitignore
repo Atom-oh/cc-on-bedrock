@@ -16,10 +16,14 @@ cdk/cdk.context.json
 cdk/node_modules/
 
 # Terraform
+terraform/terraform.tfvars
 terraform/.terraform/
+terraform/**/.terraform/
 terraform/*.tfstate*
+terraform/*.tfstate.*
 terraform/.terraform.lock.hcl
 terraform/modules/*/.build/
+terraform/**/.build/
 
 # IDE
 .vscode/
@@ -66,10 +70,8 @@ docusaurus-*.png
 # co-agent consensus session state (local only)
 .claude/co-agent-consensus/
 
-# Terraform local state / env / build artifacts
-terraform/terraform.tfvars
-terraform/.terraform/
-terraform/**/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/**/.build/
+# AI tooling local state (per-repo, personal)
+.headroom/
+.serena/
+.codex-log/
+**/.codex-log/

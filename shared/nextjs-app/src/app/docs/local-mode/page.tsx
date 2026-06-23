@@ -470,7 +470,7 @@ POST   /api/admin/limits/reset     — force-reset + detach Deny policy`}
           { item: ko ? "세션 지속성" : "Session", ec2: ko ? "Hibernation ~5s resume" : "Hibernation ~5s resume", local: ko ? "1h STS + 자동 refresh" : "1h STS + auto-refresh" },
           { item: ko ? "인프라 비용" : "Infra cost", ec2: ko ? "EC2 + EBS 시간당" : "EC2 + EBS hourly", local: "0" },
           { item: ko ? "거버넌스" : "Governance", ec2: ko ? "동일 (per-user IAM, normalized token, Deny)" : "Same", local: ko ? "동일" : "Same" },
-          { item: ko ? "배포 프로파일" : "Deploy", ec2: "cdk deploy --all", local: "cdk deploy --all -c governanceOnly=true" },
+          { item: ko ? "배포 기준" : "Deploy", ec2: "terraform -chdir=terraform apply", local: "/api/install | bash" },
         ]}
       />
       <P>

@@ -14,8 +14,8 @@ import time
 CATALOG_ITEMS = [
     {
         "id": "ecs-mcp",
-        "name": "ECS Container Tools",
-        "description": "Container status monitoring and EFS filesystem info",
+        "name": "DevEnv Runtime Tools",
+        "description": "EC2 DevEnv and nginx routing status monitoring",
         "category": "monitoring",
         "tier": "common",
         "lambdaHandler": "cc_ecs_mcp.lambda_handler",
@@ -27,7 +27,7 @@ CATALOG_ITEMS = [
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "cluster": {"type": "string", "description": "ECS cluster name (default: cc-on-bedrock-devenv)"}
+                        "cluster": {"type": "string", "description": "ECS cluster name for shared services (default: cc-on-bedrock-devenv)"}
                     },
                 },
             },
@@ -36,9 +36,7 @@ CATALOG_ITEMS = [
                 "description": "Get EFS file system info: size, mount targets, encryption",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "fileSystemId": {"type": "string", "description": "EFS file system ID"}
-                    },
+                    "properties": {},
                 },
             },
         ]),

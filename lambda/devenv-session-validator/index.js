@@ -11,13 +11,13 @@
  * simpler cookie-only validator — no OAuth flow, no JWKS, no token exchange.
  *
  * Config: NEXTAUTH_SECRET is stored in SSM Parameter Store and read on cold start.
- * Static values (__DEV_DOMAIN__, __DASHBOARD_URL__, __SSM_REGION__) are baked in at CDK synth time.
+ * Static values (__DEV_DOMAIN__, __DASHBOARD_URL__, __SSM_REGION__) are replaced at package time.
  */
 
 const crypto = require('crypto');
 const https = require('https');
 
-// Static config (replaced by sed at CDK synth time)
+// Static config (replaced by the packaging step)
 const DEV_DOMAIN = '__DEV_DOMAIN__';
 const DASHBOARD_LOGIN_URL = '__DASHBOARD_URL__/login';
 const SSM_REGION = '__SSM_REGION__';
@@ -211,6 +211,10 @@ exports.handler = async (event) => {
   const request = event.Records[0].cf.request;
   const headers = request.headers;
   const host = (headers.host && headers.host[0].value) || '';
+
+  // Never trust a viewer-supplied auth header. The validator is the only
+  // component allowed to set X-Auth-User for nginx.
+  delete request.headers['x-auth-user'];
 
   // Pass through non-devenv requests (dashboard traffic)
   if (!host.endsWith(`.${DEV_DOMAIN}`)) return request;

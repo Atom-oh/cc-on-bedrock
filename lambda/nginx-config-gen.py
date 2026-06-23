@@ -42,8 +42,8 @@ s3 = boto3.client("s3", region_name=REGION)
 import re
 import ipaddress
 
-# Empty default → RFC1918-private-only fail-safe (C1: avoid platform-wide outage if env unwired).
-# CDK wires the real VPC CIDR; when set, membership is enforced strictly.
+# Empty default -> RFC1918-private-only fail-safe (C1: avoid platform-wide outage if env unwired).
+# Terraform wires the real VPC CIDR; when set, membership is enforced strictly.
 VPC_CIDR = os.environ.get("VPC_CIDR", "")
 INSTANCE_TABLE = os.environ.get("INSTANCE_TABLE", "cc-user-instances")
 MAX_CUSTOM_ROUTES = 5

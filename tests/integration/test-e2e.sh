@@ -5,11 +5,10 @@
 # Validates:
 #   1. Docker image builds (if Docker available)
 #   2. Docker container tests
-#   3. CDK synth (TypeScript compilation + CloudFormation generation)
-#   4. Terraform validate
-#   5. CloudFormation template lint (cfn-lint if available)
-#   6. Next.js TypeScript check
-#   7. Shell script lint (shellcheck if available)
+#   3. Terraform validate
+#   4. Next.js TypeScript check
+#   5. Shell script lint (shellcheck if available)
+#   6. Project structure
 #
 # Usage:
 #   ./test-e2e.sh              # run all tests
@@ -140,41 +139,9 @@ if [[ "$ONLY_IAC" == false && "$SKIP_DOCKER" == false ]]; then
 fi
 
 # ===========================================================================
-# Phase 3: CDK Synth (TypeScript compilation + CloudFormation generation)
+# Phase 3: Terraform Validate
 # ===========================================================================
-section "Phase 3: CDK Validation"
-
-if command -v node &>/dev/null; then
-  CDK_DIR="${PROJECT_ROOT}/cdk"
-
-  if [[ -f "${CDK_DIR}/package.json" ]]; then
-    # Install dependencies if needed
-    if [[ ! -d "${CDK_DIR}/node_modules" ]]; then
-      echo "  Installing CDK dependencies..."
-      (cd "${CDK_DIR}" && npm install --silent) || true
-    fi
-
-    run_test "CDK TypeScript compilation (tsc)" \
-      bash -c "cd '${CDK_DIR}' && npx tsc --noEmit" || true
-
-    # Try CDK synth if cdk CLI is available
-    if command -v cdk &>/dev/null || [[ -x "${CDK_DIR}/node_modules/.bin/cdk" ]]; then
-      run_test "CDK synth (CloudFormation generation)" \
-        bash -c "cd '${CDK_DIR}' && npx cdk synth --quiet 2>&1 | head -20" || true
-    else
-      skip_test "CDK synth" "cdk CLI not available"
-    fi
-  else
-    skip_test "CDK validation" "cdk/package.json not found"
-  fi
-else
-  skip_test "CDK validation" "Node.js not installed"
-fi
-
-# ===========================================================================
-# Phase 4: Terraform Validate
-# ===========================================================================
-section "Phase 4: Terraform Validation"
+section "Phase 3: Terraform Validation"
 
 TF_DIR="${PROJECT_ROOT}/terraform"
 
@@ -197,52 +164,10 @@ else
 fi
 
 # ===========================================================================
-# Phase 5: CloudFormation Template Lint
-# ===========================================================================
-section "Phase 5: CloudFormation Validation"
-
-CFN_DIR="${PROJECT_ROOT}/cloudformation"
-
-# Check YAML syntax for all templates
-for template in "${CFN_DIR}"/*.yaml; do
-  [[ -f "$template" ]] || continue
-  tname=$(basename "$template")
-
-  if command -v python3 &>/dev/null; then
-    run_test "YAML syntax: ${tname}" \
-      python3 -c "import yaml; yaml.safe_load(open('${template}'))" || true
-  else
-    skip_test "YAML syntax: ${tname}" "python3 not available"
-  fi
-done
-
-# cfn-lint if available
-if command -v cfn-lint &>/dev/null; then
-  for template in "${CFN_DIR}"/*.yaml; do
-    [[ -f "$template" ]] || continue
-    tname=$(basename "$template")
-    run_test "cfn-lint: ${tname}" \
-      cfn-lint -t "$template" || true
-  done
-else
-  skip_test "cfn-lint validation" "cfn-lint not installed (pip install cfn-lint)"
-fi
-
-# Validate deploy.sh syntax
-if [[ -f "${CFN_DIR}/deploy.sh" ]]; then
-  run_test "deploy.sh bash syntax" \
-    bash -n "${CFN_DIR}/deploy.sh" || true
-fi
-if [[ -f "${CFN_DIR}/destroy.sh" ]]; then
-  run_test "destroy.sh bash syntax" \
-    bash -n "${CFN_DIR}/destroy.sh" || true
-fi
-
-# ===========================================================================
-# Phase 6: Next.js TypeScript Check
+# Phase 4: Next.js TypeScript Check
 # ===========================================================================
 if [[ "$ONLY_IAC" == false ]]; then
-  section "Phase 6: Next.js Dashboard Validation"
+  section "Phase 4: Next.js Dashboard Validation"
 
   NEXTJS_DIR="${PROJECT_ROOT}/shared/nextjs-app"
 
@@ -267,10 +192,10 @@ if [[ "$ONLY_IAC" == false ]]; then
 fi
 
 # ===========================================================================
-# Phase 7: Shell Script Lint
+# Phase 5: Shell Script Lint
 # ===========================================================================
 if [[ "$ONLY_IAC" == false ]]; then
-  section "Phase 7: Shell Script Lint"
+  section "Phase 5: Shell Script Lint"
 
   if command -v shellcheck &>/dev/null; then
     SHELL_SCRIPTS=(
@@ -278,13 +203,10 @@ if [[ "$ONLY_IAC" == false ]]; then
       "${PROJECT_ROOT}/docker/devenv/scripts/setup-common.sh"
       "${PROJECT_ROOT}/docker/devenv/scripts/setup-claude-code.sh"
       "${PROJECT_ROOT}/docker/devenv/scripts/setup-kiro.sh"
-      "${PROJECT_ROOT}/docker/devenv/scripts/idle-monitor.sh"
-      "${PROJECT_ROOT}/docker/litellm/scripts/entrypoint.sh"
       "${PROJECT_ROOT}/docker/build.sh"
-      "${PROJECT_ROOT}/scripts/create-ecr-repos.sh"
+      "${PROJECT_ROOT}/tools/cc-bedrock-local.sh"
+      "${PROJECT_ROOT}/tools/cc-otel-code-metrics.sh"
       "${PROJECT_ROOT}/scripts/verify-deployment.sh"
-      "${PROJECT_ROOT}/cloudformation/deploy.sh"
-      "${PROJECT_ROOT}/cloudformation/destroy.sh"
     )
 
     for script in "${SHELL_SCRIPTS[@]}"; do
@@ -299,9 +221,9 @@ if [[ "$ONLY_IAC" == false ]]; then
 fi
 
 # ===========================================================================
-# Phase 8: Project structure validation
+# Phase 6: Project structure validation
 # ===========================================================================
-section "Phase 8: Project Structure"
+section "Phase 6: Project Structure"
 
 run_test "docker/devenv/Dockerfile.ubuntu exists" \
   test -f "${PROJECT_ROOT}/docker/devenv/Dockerfile.ubuntu" || true
@@ -309,26 +231,17 @@ run_test "docker/devenv/Dockerfile.ubuntu exists" \
 run_test "docker/devenv/Dockerfile.al2023 exists" \
   test -f "${PROJECT_ROOT}/docker/devenv/Dockerfile.al2023" || true
 
-run_test "docker/litellm/Dockerfile exists" \
-  test -f "${PROJECT_ROOT}/docker/litellm/Dockerfile" || true
-
-run_test "cdk/bin/app.ts exists" \
-  test -f "${PROJECT_ROOT}/cdk/bin/app.ts" || true
-
 run_test "terraform/main.tf exists" \
   test -f "${PROJECT_ROOT}/terraform/main.tf" || true
 
-for i in 1 2 3 4 5; do
-  padded=$(printf "%02d" "$i")
-  run_test "cloudformation/${padded}-*.yaml exists" \
-    bash -c "ls '${PROJECT_ROOT}/cloudformation/${padded}-'*.yaml >/dev/null 2>&1" || true
-done
+run_test "lambda/nginx-config-gen.py exists" \
+  test -f "${PROJECT_ROOT}/lambda/nginx-config-gen.py" || true
+
+run_test "lambda/sts-issuer.py exists" \
+  test -f "${PROJECT_ROOT}/lambda/sts-issuer.py" || true
 
 run_test "shared/nextjs-app/package.json exists" \
   test -f "${PROJECT_ROOT}/shared/nextjs-app/package.json" || true
-
-run_test "scripts/create-ecr-repos.sh exists" \
-  test -f "${PROJECT_ROOT}/scripts/create-ecr-repos.sh" || true
 
 run_test "scripts/verify-deployment.sh exists" \
   test -f "${PROJECT_ROOT}/scripts/verify-deployment.sh" || true

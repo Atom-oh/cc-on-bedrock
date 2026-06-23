@@ -73,7 +73,7 @@ USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 20 --region "$REGIO
   --query "UserPools[?contains(Name, '${PROJECT_PREFIX}')].Id | [0]" --output text)
 
 if [ -z "$USER_POOL_ID" ] || [ "$USER_POOL_ID" = "None" ]; then
-  echo "ERROR: Cognito User Pool not found. Deploy CcOnBedrock-Security stack first (./03-deploy-base-stacks.sh)"
+  echo "ERROR: Cognito User Pool not found. Deploy Terraform first: terraform -chdir=terraform apply"
   exit 1
 fi
 echo "User Pool: $USER_POOL_ID"

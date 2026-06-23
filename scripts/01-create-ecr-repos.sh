@@ -64,4 +64,4 @@ done
 echo ""
 echo "ECR Registry: ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 echo ""
-echo "Next: ./02-cdk-bootstrap.sh"
+echo "Next: terraform -chdir=terraform plan"

@@ -17,7 +17,7 @@ fail()   { echo -e "  \033[31m[FAIL]\033[0m $1"; ERRORS=$((ERRORS + 1)); }
 
 header "1. Required CLI Tools"
 
-for cmd in aws node npm npx docker git jq; do
+for cmd in aws node npm npx docker git jq terraform; do
   if command -v "$cmd" &>/dev/null; then
     ver=$($cmd --version 2>&1 | head -1)
     ok "$cmd ($ver)"
@@ -25,13 +25,6 @@ for cmd in aws node npm npx docker git jq; do
     fail "$cmd not found"
   fi
 done
-
-# CDK check (npx or global)
-if npx cdk --version &>/dev/null 2>&1; then
-  ok "cdk ($(npx cdk --version 2>/dev/null))"
-else
-  fail "AWS CDK not installed. Run: npm install -g aws-cdk"
-fi
 
 header "2. AWS Credentials"
 
@@ -77,7 +70,7 @@ if [ "$HZ_COUNT" != "0" ]; then
     --query "HostedZones[?Name=='${DOMAIN_NAME}.'].Id" \
     --output text | sed 's|/hostedzone/||')
   ok "Hosted Zone: $DOMAIN_NAME ($HZ_ID)"
-  echo "    Use this in CDK: -c hostedZoneId=$HZ_ID"
+  echo "    Use this in terraform/terraform.tfvars: hosted_zone_id = \"$HZ_ID\""
 else
   warn "No Route 53 hosted zone for '$DOMAIN_NAME'. Create one or set DOMAIN_NAME env var"
 fi
@@ -107,13 +100,19 @@ else
   warn "Node.js $NODE_VER found, v${REQUIRED_MAJOR}+ recommended"
 fi
 
-header "8. CDK Dependencies"
+header "8. Terraform Configuration"
 
-CDK_DIR="$(cd "$(dirname "$0")/../cdk" && pwd)"
-if [ -d "$CDK_DIR/node_modules" ]; then
-  ok "CDK node_modules exists"
+TF_DIR="$(cd "$(dirname "$0")/../terraform" && pwd)"
+if [ -f "$TF_DIR/main.tf" ]; then
+  ok "Terraform root exists: $TF_DIR"
 else
-  warn "CDK dependencies not installed. Run: cd cdk && npm install"
+  fail "Terraform root not found: $TF_DIR"
+fi
+
+if [ -d "$TF_DIR/.terraform" ]; then
+  ok "Terraform providers initialized"
+else
+  warn "Terraform providers not initialized. Run: terraform -chdir=terraform init"
 fi
 
 header "Summary"
@@ -124,5 +123,5 @@ if [ "$ERRORS" -gt 0 ]; then
 elif [ "$WARNINGS" -gt 0 ]; then
   echo -e "\033[33m0 errors, $WARNINGS warning(s). Review warnings, but you can proceed.\033[0m"
 else
-  echo -e "\033[32mAll checks passed! Proceed to: ./01-create-ecr-repos.sh\033[0m"
+  echo -e "\033[32mAll checks passed! Proceed to: terraform -chdir=terraform init && terraform -chdir=terraform plan\033[0m"
 fi

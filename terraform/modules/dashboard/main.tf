@@ -1,9 +1,33 @@
 ###############################################################################
 # Dashboard Module - EC2 ASG, ALB, CloudFront
-# Equivalent to cdk/lib/05-dashboard-stack.ts
+# Dashboard hosting module
 ###############################################################################
 
 data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+locals {
+  dashboard_domain = "${var.dashboard_subdomain}.${var.domain_name}"
+  runtime_env = {
+    AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
+    AWS_REGION                  = data.aws_region.current.name
+    COGNITO_CLI_CLIENT_ID       = var.cognito_cli_public_client_id
+    DASHBOARD_URL               = "https://${local.dashboard_domain}"
+    DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
+    INSTANCE_TABLE              = var.instance_table_name
+    LAUNCH_TEMPLATE             = var.devenv_launch_template_name
+    NEXTAUTH_SECRET             = var.nextauth_secret
+    NEXTAUTH_URL                = "https://${local.dashboard_domain}"
+    OTEL_EXPORTER_OTLP_ENDPOINT = var.otel_collector_endpoint
+    PRIVATE_SUBNET_IDS          = join(",", var.private_subnet_ids)
+    ROUTING_TABLE               = var.routing_table_name
+    SG_DEVENV_LOCKED            = var.devenv_sg_locked_id
+    SG_DEVENV_OPEN              = var.devenv_sg_open_id
+    SG_DEVENV_RESTRICTED        = var.devenv_sg_restricted_id
+    VPC_ID                      = var.vpc_id
+  }
+  runtime_env_file = join("\n", [for key, value in local.runtime_env : "${key}=${value}"])
+}
 
 # ---- Security Groups ---------------------------------------------------------
 resource "aws_security_group" "alb" {
@@ -120,10 +144,6 @@ resource "aws_launch_template" "this" {
 #!/bin/bash
 set -euo pipefail
 
-# ADR-033/OTel: internal collector endpoint for the dashboard app to inject into
-# devenv launches (empty = telemetry off, fail-safe). Read by the Next.js app.
-echo "OTEL_COLLECTOR_ENDPOINT=${var.otel_collector_endpoint}" >> /etc/environment
-
 # Install Node.js 20
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
 yum install -y nodejs
@@ -135,6 +155,10 @@ npm install -g pm2
 # For now, create placeholder
 mkdir -p /opt/dashboard
 cd /opt/dashboard
+
+cat > /opt/dashboard/.env << 'ENVEOF'
+${local.runtime_env_file}
+ENVEOF
 
 cat > server.js << INNEREOF
 const http = require('http');
@@ -150,6 +174,9 @@ const server = http.createServer((req, res) => {
 server.listen(3000, () => console.log('Dashboard running on port 3000'));
 INNEREOF
 
+set -a
+. /opt/dashboard/.env
+set +a
 pm2 start server.js --name dashboard
 pm2 startup
 pm2 save
@@ -183,11 +210,47 @@ resource "aws_autoscaling_group" "this" {
   }
 }
 
+# ---- CloudFront Certificate --------------------------------------------------
+resource "aws_acm_certificate" "cloudfront" {
+  provider          = aws.us_east_1
+  domain_name       = local.dashboard_domain
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = { Name = "cc-on-bedrock-dashboard-cloudfront" }
+}
+
+resource "aws_route53_record" "cloudfront_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.cloudfront.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  zone_id         = var.hosted_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 300
+  allow_overwrite = true
+}
+
+resource "aws_acm_certificate_validation" "cloudfront" {
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.cloudfront.arn
+  validation_record_fqdns = [for r in aws_route53_record.cloudfront_cert_validation : r.fqdn]
+}
+
 # ---- CloudFront Distribution -------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
   comment = "CC-on-Bedrock Dashboard"
   enabled = true
-  aliases = ["${var.dashboard_subdomain}.${var.domain_name}"]
+  aliases = [local.dashboard_domain]
 
   origin {
     domain_name = aws_lb.this.dns_name
@@ -226,8 +289,8 @@ resource "aws_cloudfront_distribution" "this" {
 
   viewer_certificate {
     acm_certificate_arn      = aws_acm_certificate_validation.cloudfront.certificate_arn
-    ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
+    ssl_support_method       = "sni-only"
   }
 
   tags = { Name = "cc-dashboard-cloudfront" }
@@ -236,47 +299,13 @@ resource "aws_cloudfront_distribution" "this" {
 # ---- Route 53 Record ---------------------------------------------------------
 resource "aws_route53_record" "dashboard" {
   zone_id         = var.hosted_zone_id
-  name            = "${var.dashboard_subdomain}.${var.domain_name}"
+  name            = local.dashboard_domain
   type            = "A"
-  allow_overwrite = true # shared kept zone (ADR-033) — take over any stale record
+  allow_overwrite = true
 
   alias {
     name                   = aws_cloudfront_distribution.this.domain_name
     zone_id                = aws_cloudfront_distribution.this.hosted_zone_id
     evaluate_target_health = false
   }
-}
-
-# ---- CloudFront ACM cert (MUST be us-east-1) for the dashboard custom domain --
-# ADR-016/033: CloudFront only accepts us-east-1 certs. Covers cconbedrock-dashboard.<domain>.
-resource "aws_acm_certificate" "cloudfront" {
-  provider          = aws.us_east_1
-  domain_name       = "${var.dashboard_subdomain}.${var.domain_name}"
-  validation_method = "DNS"
-  lifecycle {
-    create_before_destroy = true
-  }
-  tags = { Name = "cc-dashboard-cloudfront" }
-}
-
-resource "aws_route53_record" "cloudfront_cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.cloudfront.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
-  zone_id         = var.hosted_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 300
-  allow_overwrite = true
-}
-
-resource "aws_acm_certificate_validation" "cloudfront" {
-  provider                = aws.us_east_1
-  certificate_arn         = aws_acm_certificate.cloudfront.arn
-  validation_record_fqdns = [for r in aws_route53_record.cloudfront_cert_validation : r.fqdn]
 }

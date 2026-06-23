@@ -1,18 +1,23 @@
 # Terraform Module
 
 ## Role
-Terraform HCL로 전체 인프라 배포. 4개 모듈.
+
+Terraform HCL is the canonical IaC for this repository.
 
 ## Key Files
-- `main.tf` - Root module, 모듈 호출 및 연결
-- `variables.tf` - 입력 변수 (CDK config와 동일)
-- `outputs.tf` - 주요 리소스 ID/ARN 출력
-- `providers.tf` - AWS provider (ap-northeast-2)
-- `terraform.tfvars.example` - 예제 변수 값
-- `modules/network/` - VPC, Subnets, NAT, VPC Endpoints, Route 53
-- `modules/security/` - Cognito (Hosted UI), ACM, KMS, Secrets Manager, IAM
-- `modules/ecs-devenv/` - ECS Cluster, NLB + Nginx Fargate, DynamoDB Routing Table, DLP SGs, Lambda (nginx-config-gen), EC2 DevEnv (Launch Template, per-user IAM)
-- `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront
+
+- `main.tf` - Root module wiring.
+- `variables.tf` - Root variables.
+- `outputs.tf` - Deployment outputs consumed by the dashboard and operators.
+- `providers.tf` - AWS providers, including `us-east-1` alias for CloudFront-scope WAF.
+- `modules/network/` - VPC, subnets, NAT, endpoints, Route 53.
+- `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM, permission boundary.
+- `modules/ecs-devenv/` - Shared Nginx router, NLB, routing table, config Lambda, OTEL Collector.
+- `modules/ec2-devenv/` - Per-user EC2 DevEnv launch template, EBS GP3, DLP security groups.
+- `modules/usage-tracking/` - Bedrock Invocation Logs, usage aggregation, budget checks.
+- `modules/local-governance/` - STS issuer, token-limit enforcer, limit reset.
+- `modules/dashboard/` - Dashboard hosting.
+- `modules/waf/` - CloudFront-scope WAF.
 
 ## Status (post-ADR-033 — Terraform is the sole IaC)
 - ✅ **All 8 modules wired into root `main.tf`** (network, security, ecs-devenv, dashboard, usage-tracking, local-governance, waf, ec2-devenv).
@@ -27,16 +32,19 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
   - `governanceOnly` 플래그 동등 변수.
 
 ## Commands
+
 ```bash
-cd terraform && terraform init                 # Initialize
-cd terraform && terraform validate             # Validate
-cd terraform && terraform fmt -recursive       # Format
-cd terraform && terraform plan                 # Preview changes
-cd terraform && terraform apply                # Deploy
+terraform -chdir=terraform init
+terraform -chdir=terraform fmt -recursive
+terraform -chdir=terraform validate
+terraform -chdir=terraform plan
+terraform -chdir=terraform apply
 ```
 
 ## Rules
-- `terraform fmt -recursive` 후 커밋
-- 모듈 간 의존성은 변수로 전달 (Terraform이 자동 의존성 그래프 구축)
-- `terraform.tfvars.example`을 `terraform.tfvars`로 복사 후 값 수정하여 사용
-- CDK와 동일한 인프라를 구현해야 함 — CDK에 새 리소스 추가 시 TF도 반영 필요
+
+- Do not add alternate deployment IaC equivalents.
+- Lambda packages must read from `../lambda` through the root `local.lambda_src_dir`.
+- Keep code-server on `8080`; nginx may route additional validated custom ports.
+- Keep EC2 and Local roles distinct, but aligned by shared policy boundary, tags, and inference-profile attribution.
+- Keep OTEL Collector output available through `otel_collector_endpoint`.

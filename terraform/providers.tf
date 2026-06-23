@@ -1,13 +1,7 @@
 terraform {
-  backend "s3" {
-    bucket       = "cc-on-bedrock-tfstate-180294183052"
-    key          = "cc-on-bedrock/terraform.tfstate"
-    region       = "ap-northeast-2"
-    encrypt      = true
-    use_lockfile = true
-  }
-
   required_version = ">= 1.5"
+
+  backend "s3" {}
 
   required_providers {
     aws = {
@@ -20,7 +14,7 @@ terraform {
     }
     archive = {
       source  = "hashicorp/archive"
-      version = "~> 2.0"
+      version = "~> 2.4"
     }
   }
 }
@@ -36,7 +30,6 @@ provider "aws" {
   }
 }
 
-# CLOUDFRONT-scope WAF must be created in us-east-1 (ADR-016).
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"

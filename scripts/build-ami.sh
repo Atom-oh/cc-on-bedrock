@@ -60,7 +60,7 @@ SUBNET_ID=$(aws ec2 describe-subnets \
   --region "$REGION" 2>/dev/null)
 if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
   SUBNET_ID=$(aws ec2 describe-subnets \
-    --filters "Name=tag:aws-cdk:subnet-type,Values=Private" \
+    --filters "Name=tag:Name,Values=*cc-on-bedrock*" "Name=map-public-ip-on-launch,Values=false" \
     --query 'Subnets[0].SubnetId' \
     --output text \
     --region "$REGION")

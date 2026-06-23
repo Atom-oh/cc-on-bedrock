@@ -245,16 +245,7 @@ export default function StorageTab({ user, container }: StorageTabProps) {
                   )}
                 </div>
               </>
-            ) : (
-              <>
-                {/* EFS: Usage only (no limit) */}
-                <div className="bg-[#0d1117] rounded-lg p-4">
-                  <p className="text-xs text-gray-500 mb-1">Current Usage</p>
-                  <p className="text-2xl font-bold text-gray-100">{formatBytes(diskUsage.used)}</p>
-                  <p className="text-xs text-green-400 mt-1">EFS — auto-scaling, no capacity limit</p>
-                </div>
-              </>
-            )}
+            ) : null}
           </div>
         ) : (
           <p className="text-sm text-gray-500">Unable to retrieve disk usage.</p>

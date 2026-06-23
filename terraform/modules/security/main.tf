@@ -1,6 +1,5 @@
 ###############################################################################
 # Security Module - Cognito, ACM, KMS, Secrets Manager, IAM
-# Equivalent to cdk/lib/02-security-stack.ts
 ###############################################################################
 
 data "aws_caller_identity" "current" {}
@@ -13,7 +12,7 @@ locals {
 
 # ---- KMS Encryption Key -----------------------------------------------------
 resource "aws_kms_key" "this" {
-  description         = "CC-on-Bedrock encryption key for EBS, RDS, EFS"
+  description         = "CC-on-Bedrock encryption key for EBS, DynamoDB, and service data"
   enable_key_rotation = true
 }
 
@@ -71,25 +70,27 @@ resource "aws_cognito_user_pool" "this" {
     string_attribute_constraints {}
   }
 
-  # ADR-022 / parity with CDK custom attributes
   schema {
     name                = "department"
     attribute_data_type = "String"
     mutable             = true
     string_attribute_constraints {}
   }
+
   schema {
     name                = "budget_exceeded"
     attribute_data_type = "String"
     mutable             = true
     string_attribute_constraints {}
   }
+
   schema {
     name                = "storage_type"
     attribute_data_type = "String"
     mutable             = true
     string_attribute_constraints {}
   }
+
   schema {
     name                = "dept_manager_sub"
     attribute_data_type = "String"
@@ -127,8 +128,34 @@ resource "aws_cognito_user_pool_client" "this" {
   allowed_oauth_flows_user_pool_client = true
   supported_identity_providers         = ["COGNITO"]
 
-  callback_urls = ["https://${var.dashboard_subdomain}.${var.domain_name}/api/auth/callback/cognito"]
-  logout_urls   = ["https://${var.dashboard_subdomain}.${var.domain_name}"]
+  callback_urls = ["https://${local.dashboard_domain}/api/auth/callback/cognito"]
+  logout_urls   = ["https://${local.dashboard_domain}"]
+}
+
+# Public app client for cc-bedrock-local USER_PASSWORD_AUTH.
+resource "aws_cognito_user_pool_client" "cli_public" {
+  name         = "cc-on-bedrock-cli-public"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  generate_secret = false
+
+  explicit_auth_flows = [
+    "ALLOW_USER_PASSWORD_AUTH",
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
+  ]
+
+  access_token_validity  = 1
+  id_token_validity      = 1
+  refresh_token_validity = 30
+
+  token_validity_units {
+    access_token  = "hours"
+    id_token      = "hours"
+    refresh_token = "days"
+  }
+
+  prevent_user_existence_errors = "ENABLED"
 }
 
 # Cognito Groups
@@ -192,12 +219,11 @@ resource "aws_route53_record" "devenv_cert_validation" {
     }
   }
 
-  zone_id         = var.hosted_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 300
-  allow_overwrite = true # shared kept zone (ADR-033)
+  zone_id = var.hosted_zone_id
+  name    = each.value.name
+  type    = each.value.type
+  records = [each.value.record]
+  ttl     = 300
 }
 
 resource "aws_acm_certificate_validation" "devenv" {
@@ -225,12 +251,11 @@ resource "aws_route53_record" "dashboard_cert_validation" {
     }
   }
 
-  zone_id         = var.hosted_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 300
-  allow_overwrite = true # shared kept zone (ADR-033)
+  zone_id = var.hosted_zone_id
+  name    = each.value.name
+  type    = each.value.type
+  records = [each.value.record]
+  ttl     = 300
 }
 
 resource "aws_acm_certificate_validation" "dashboard" {
@@ -253,6 +278,18 @@ resource "aws_secretsmanager_secret_version" "cloudfront_secret" {
   secret_string = random_password.cloudfront_secret.result
 }
 
+resource "random_password" "nextauth_secret" {
+  length  = 64
+  special = false
+}
+
+resource "aws_ssm_parameter" "nextauth_secret" {
+  name        = "/cc-on-bedrock/nextauth-secret"
+  description = "NextAuth secret shared by the dashboard and DevEnv Lambda@Edge session validator"
+  type        = "String"
+  value       = random_password.nextauth_secret.result
+}
+
 # ---- IAM Roles ---------------------------------------------------------------
 
 # Bedrock policy document (shared)
@@ -269,6 +306,147 @@ data "aws_iam_policy_document" "bedrock" {
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
     ]
   }
+}
+
+data "aws_iam_policy_document" "task_permission_boundary" {
+  statement {
+    sid     = "BedrockClaude"
+    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"]
+    resources = [
+      "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
+      "arn:aws:bedrock:*::foundation-model/*embed*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*embed*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+    ]
+  }
+
+  statement {
+    sid     = "S3Access"
+    actions = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+    resources = [
+      "arn:aws:s3:::cc-on-bedrock-user-data-${data.aws_caller_identity.current.account_id}",
+      "arn:aws:s3:::cc-on-bedrock-user-data-${data.aws_caller_identity.current.account_id}/*",
+      "arn:aws:s3:::cc-on-bedrock-deploy-${data.aws_caller_identity.current.account_id}",
+      "arn:aws:s3:::cc-on-bedrock-deploy-${data.aws_caller_identity.current.account_id}/*",
+    ]
+  }
+
+  statement {
+    sid       = "KmsDecrypt"
+    actions   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
+    resources = [aws_kms_key.this.arn]
+  }
+
+  statement {
+    sid       = "CloudWatchMetrics"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "CloudWatchLogs"
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:CreateLogGroup"]
+    resources = [
+      "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/cc-on-bedrock/*",
+    ]
+  }
+
+  statement {
+    sid       = "EcrAuth"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "EcrPull"
+    actions = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
+    resources = [
+      "arn:aws:ecr:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:repository/cc-on-bedrock/*",
+    ]
+  }
+
+  statement {
+    sid       = "SsmMessages"
+    actions   = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "SecretsRead"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      "arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/*",
+    ]
+  }
+
+  statement {
+    sid     = "AgentCoreGateway"
+    actions = ["bedrock-agentcore:InvokeGateway"]
+    resources = [
+      "arn:aws:bedrock-agentcore:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:gateway/*",
+    ]
+  }
+
+  statement {
+    sid       = "DynamoDbMcpConfig"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query"]
+    resources = ["arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dept-mcp-config"]
+  }
+
+  statement {
+    sid       = "AllowInAccount"
+    actions   = ["*"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  statement {
+    sid    = "DenyEscalation"
+    effect = "Deny"
+    actions = [
+      "iam:*", "organizations:*", "account:*",
+      "sso:*", "sso-directory:*", "identitystore:*",
+      "ram:*",
+      "lakeformation:GrantPermissions", "lakeformation:BatchGrantPermissions", "lakeformation:PutDataLakeSettings",
+      "sts:AssumeRole", "sts:AssumeRoleWithSAML", "sts:AssumeRoleWithWebIdentity",
+      "sts:GetFederationToken", "sts:GetSessionToken",
+      "kms:ScheduleKeyDeletion", "kms:DisableKey", "kms:PutKeyPolicy", "kms:CreateGrant",
+      "lambda:AddPermission", "lambda:RemovePermission", "lambda:AddLayerVersionPermission", "lambda:PutFunctionConcurrency",
+      "sns:AddPermission", "sns:RemovePermission", "sqs:AddPermission", "sqs:RemovePermission",
+      "s3:PutBucketPolicy", "s3:PutBucketAcl", "s3:PutAccountPublicAccessBlock", "s3:DeleteBucketPolicy",
+      "dynamodb:PutResourcePolicy", "dynamodb:DeleteResourcePolicy",
+      "secretsmanager:PutResourcePolicy", "secretsmanager:DeleteResourcePolicy",
+      "ecr:SetRepositoryPolicy", "ecr:PutRegistryPolicy", "ecr:DeleteRegistryPolicy",
+      "events:PutPermission", "glue:PutResourcePolicy", "ssm:ModifyDocumentPermission",
+      "backup:PutBackupVaultAccessPolicy", "backup:DeleteBackupVaultAccessPolicy",
+      "codebuild:UpdateProjectVisibility",
+      "logs:PutResourcePolicy", "logs:PutDestinationPolicy", "logs:DeleteResourcePolicy",
+      "elasticfilesystem:PutFileSystemPolicy", "elasticfilesystem:DeleteFileSystemPolicy",
+      "kinesis:PutResourcePolicy", "kinesis:DeleteResourcePolicy",
+      "codeartifact:PutDomainPermissionsPolicy", "codeartifact:PutRepositoryPermissionsPolicy",
+      "acm-pca:PutPolicy", "acm-pca:DeletePolicy",
+      "eks:CreateAccessEntry", "eks:AssociateAccessPolicy", "eks:UpdateAccessEntry",
+      "ec2:ModifySnapshotAttribute", "ec2:ModifyImageAttribute",
+      "ec2:ModifySecurityGroupRules", "ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress",
+    ]
+    resources = ["*"]
+  }
+}
+
+moved {
+  from = aws_iam_policy.task_boundary
+  to   = aws_iam_policy.task_permission_boundary
+}
+
+resource "aws_iam_policy" "task_permission_boundary" {
+  name        = "${var.project_prefix}-task-boundary"
+  description = "Permission boundary for governed EC2 and Local Bedrock roles"
+  policy      = data.aws_iam_policy_document.task_permission_boundary.json
 }
 
 # EC2 assume-role trust policy
@@ -296,10 +474,17 @@ resource "aws_iam_role_policy_attachment" "dashboard_ssm" {
 data "aws_iam_policy_document" "dashboard_cognito" {
   statement {
     actions = [
+      "cognito-idp:AdminAddUserToGroup",
       "cognito-idp:AdminCreateUser",
       "cognito-idp:AdminDeleteUser",
+      "cognito-idp:AdminDisableUser",
+      "cognito-idp:AdminEnableUser",
       "cognito-idp:AdminGetUser",
+      "cognito-idp:AdminListGroupsForUser",
+      "cognito-idp:AdminSetUserPassword",
       "cognito-idp:AdminUpdateUserAttributes",
+      "cognito-idp:DescribeUserPoolClient",
+      "cognito-idp:ListGroups",
       "cognito-idp:ListUsers",
     ]
     resources = [aws_cognito_user_pool.this.arn]
@@ -310,6 +495,150 @@ resource "aws_iam_role_policy" "dashboard_cognito" {
   name   = "cognito-admin"
   role   = aws_iam_role.dashboard_ec2.id
   policy = data.aws_iam_policy_document.dashboard_cognito.json
+}
+
+data "aws_iam_policy_document" "dashboard_data_infra" {
+  statement {
+    sid = "SsmParameterRead"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+    ]
+    resources = ["arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/cc-on-bedrock/*"]
+  }
+
+  statement {
+    sid = "BedrockAccess"
+    actions = [
+      "bedrock:Converse",
+      "bedrock:ConverseStream",
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+    ]
+    resources = [
+      "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
+      "arn:aws:bedrock:*::foundation-model/*embed*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*embed*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+    ]
+  }
+
+  statement {
+    sid = "AgentCoreAccess"
+    actions = [
+      "bedrock-agentcore:CreateEvent",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:InvokeAgentRuntime",
+      "bedrock-agentcore:ListEvents",
+      "bedrock-agentcore:StopRuntimeSession",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "CloudWatchRead"
+    actions = [
+      "cloudwatch:GetMetricData",
+      "cloudwatch:GetMetricStatistics",
+      "cloudwatch:ListMetrics",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "SecurityDashboardRead"
+    actions = [
+      "cloudtrail:LookupEvents",
+      "ec2:DescribeSecurityGroups",
+      "route53resolver:GetFirewallDomainList",
+      "route53resolver:GetFirewallRuleGroup",
+      "route53resolver:ListFirewallDomainLists",
+      "route53resolver:ListFirewallDomains",
+      "route53resolver:ListFirewallRuleGroupAssociations",
+      "route53resolver:ListFirewallRuleGroups",
+      "route53resolver:ListFirewallRules",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "DlpDnsFirewallManagement"
+    actions = [
+      "route53resolver:CreateFirewallDomainList",
+      "route53resolver:CreateFirewallRule",
+      "route53resolver:DeleteFirewallDomainList",
+      "route53resolver:DeleteFirewallRule",
+      "route53resolver:UpdateFirewallDomains",
+      "route53resolver:UpdateFirewallRule",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "SecretsManagerCodeserver"
+    actions = [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:PutSecretValue",
+      "secretsmanager:UpdateSecret",
+    ]
+    resources = ["arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/*"]
+  }
+
+  statement {
+    sid = "DynamoDBDashboardAccess"
+    actions = [
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-department-budgets",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dept-mcp-config",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dlp-domain-lists",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-mcp-catalog",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-approval-requests",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-approval-requests/index/*",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-cli-tokens",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-cli-tokens/index/*",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-limits",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-usage",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-usage/index/*",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-prompt-audit",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-routing-table",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-user-budgets",
+      "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-user-instances",
+    ]
+  }
+
+  statement {
+    sid = "KmsUse"
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+    ]
+    resources = [aws_kms_key.this.arn]
+  }
+
+  statement {
+    sid       = "LambdaInvoke"
+    actions   = ["lambda:InvokeFunction"]
+    resources = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:cc-on-bedrock-*"]
+  }
+}
+
+resource "aws_iam_role_policy" "dashboard_data_infra" {
+  name   = "dashboard-data-infra"
+  role   = aws_iam_role.dashboard_ec2.id
+  policy = data.aws_iam_policy_document.dashboard_data_infra.json
 }
 
 data "aws_iam_policy_document" "dashboard_ecs" {
@@ -332,279 +661,85 @@ resource "aws_iam_role_policy" "dashboard_ecs" {
   policy = data.aws_iam_policy_document.dashboard_ecs.json
 }
 
+data "aws_iam_policy_document" "dashboard_ec2_devenv" {
+  statement {
+    sid = "Ec2DevenvInstances"
+    actions = [
+      "ec2:CreateSnapshot",
+      "ec2:CreateTags",
+      "ec2:DeregisterImage",
+      "ec2:DescribeImages",
+      "ec2:DescribeInstances",
+      "ec2:DescribeSnapshots",
+      "ec2:DescribeVolumes",
+      "ec2:ModifyInstanceAttribute",
+      "ec2:ModifyNetworkInterfaceAttribute",
+      "ec2:ModifyVolume",
+      "ec2:RegisterImage",
+      "ec2:RunInstances",
+      "ec2:StartInstances",
+      "ec2:StopInstances",
+      "ec2:TerminateInstances",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "Ec2DevenvIamRoles"
+    actions = [
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:DeleteRolePolicy",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-task-*"]
+  }
+
+  statement {
+    sid = "Ec2DevenvInstanceProfiles"
+    actions = [
+      "iam:AddRoleToInstanceProfile",
+      "iam:CreateInstanceProfile",
+      "iam:GetInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/cc-on-bedrock-task-*"]
+  }
+
+  statement {
+    sid       = "Ec2DevenvPassRole"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-task-*"]
+  }
+
+  statement {
+    sid     = "SsmSendRunShellScript"
+    actions = ["ssm:SendCommand"]
+    resources = [
+      "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*",
+      "arn:aws:ssm:${data.aws_region.current.name}::document/AWS-RunShellScript",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "dashboard_ec2_devenv" {
+  name   = "dashboard-ec2-devenv"
+  role   = aws_iam_role.dashboard_ec2.id
+  policy = data.aws_iam_policy_document.dashboard_ec2_devenv.json
+}
+
 resource "aws_iam_instance_profile" "dashboard_ec2" {
   name = "cc-on-bedrock-dashboard-ec2"
   role = aws_iam_role.dashboard_ec2.name
 }
 
-# ---- ADR-026 Task Permission Boundary --------------------------------------
-# Ported from cdk/lib/02-security-stack.ts (TaskPermissionBoundary). The ceiling
-# for per-user task/local roles: boundary >= any role inline policy (else effective
-# perms = empty), and boundary >= the request-validator service allowlist (T6 CI check).
-resource "aws_iam_policy" "task_permission_boundary" {
-  name        = "${var.project_prefix}-task-boundary"
-  description = "ADR-026 permission boundary ceiling for per-user roles"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "BedrockClaude"
-        Effect = "Allow"
-        Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"]
-        Resource = [
-          "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
-          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
-          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
-        ]
-      },
-      {
-        Sid    = "S3Access"
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
-        Resource = [
-          "arn:aws:s3:::cc-on-bedrock-user-data-${data.aws_caller_identity.current.account_id}",
-          "arn:aws:s3:::cc-on-bedrock-user-data-${data.aws_caller_identity.current.account_id}/*",
-          "arn:aws:s3:::${var.project_prefix}-deploy-${data.aws_caller_identity.current.account_id}",
-          "arn:aws:s3:::${var.project_prefix}-deploy-${data.aws_caller_identity.current.account_id}/*",
-        ]
-      },
-      {
-        Sid      = "KmsDecrypt"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
-        Resource = [aws_kms_key.this.arn]
-      },
-      {
-        Sid      = "CloudWatchMetrics"
-        Effect   = "Allow"
-        Action   = ["cloudwatch:PutMetricData"]
-        Resource = ["*"]
-      },
-      {
-        Sid      = "CloudWatchLogs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:CreateLogGroup"]
-        Resource = ["arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/cc-on-bedrock/*"]
-      },
-      {
-        Sid      = "EcrAuth"
-        Effect   = "Allow"
-        Action   = ["ecr:GetAuthorizationToken"]
-        Resource = ["*"]
-      },
-      {
-        Sid      = "EcrPull"
-        Effect   = "Allow"
-        Action   = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
-        Resource = ["arn:aws:ecr:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:repository/cc-on-bedrock/*"]
-      },
-      {
-        Sid      = "SsmMessages"
-        Effect   = "Allow"
-        Action   = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"]
-        Resource = ["*"]
-      },
-      {
-        Sid      = "SecretsRead"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = ["arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/*"]
-      },
-      {
-        Sid      = "AgentCoreGateway"
-        Effect   = "Allow"
-        Action   = ["bedrock-agentcore:InvokeGateway"]
-        Resource = ["arn:aws:bedrock-agentcore:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:gateway/*"]
-      },
-      {
-        Sid      = "DynamoDbMcpConfig"
-        Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:Query"]
-        Resource = ["arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dept-mcp-config"]
-      },
-      {
-        Sid      = "GrantCeilingSqs"
-        Effect   = "Allow"
-        Action   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:ChangeMessageVisibility"]
-        Resource = ["arn:aws:sqs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"]
-      },
-      {
-        Sid      = "GrantCeilingSns"
-        Effect   = "Allow"
-        Action   = ["sns:Publish", "sns:Subscribe", "sns:Unsubscribe", "sns:GetTopicAttributes"]
-        Resource = ["arn:aws:sns:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"]
-      },
-      {
-        Sid    = "GrantCeilingDynamoDb"
-        Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem", "dynamodb:DescribeTable"]
-        Resource = [
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/*",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/*/index/*",
-        ]
-      },
-      {
-        Sid      = "GrantCeilingLambda"
-        Effect   = "Allow"
-        Action   = ["lambda:InvokeFunction", "lambda:GetFunction"]
-        Resource = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:*"]
-      },
-      {
-        Sid      = "GrantCeilingStepFunctions"
-        Effect   = "Allow"
-        Action   = ["states:StartExecution", "states:StopExecution", "states:DescribeExecution", "states:ListExecutions"]
-        Resource = ["arn:aws:states:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"]
-      },
-      {
-        Sid    = "GrantCeilingEks"
-        Effect = "Allow"
-        Action = ["eks:DescribeCluster", "eks:ListNodegroups", "eks:DescribeNodegroup"]
-        Resource = [
-          "arn:aws:eks:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:cluster/*",
-          "arn:aws:eks:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:nodegroup/*",
-        ]
-      },
-      {
-        Sid    = "GrantCeilingReadOnly"
-        Effect = "Allow"
-        Action = [
-          "eks:ListClusters", "sqs:ListQueues", "sns:ListTopics", "sns:ListSubscriptions",
-          "ec2:Describe*", "s3:ListAllMyBuckets", "states:ListStateMachines",
-          "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics",
-        ]
-        Resource = ["*"]
-      },
-    ]
-  })
-}
-
-# ---- Dashboard EC2 role: data-infra + EC2 devenv mgmt (ADR-032) -------------
-# Ported from cdk/lib/02-security-stack.ts DashboardDataInfraPolicy + DashboardEc2DevenvPolicy.
-resource "aws_iam_role_policy" "dashboard_data_infra" {
-  name = "data-infra"
-  role = aws_iam_role.dashboard_ec2.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "IamTaskRoleManagement"
-        Effect   = "Allow"
-        Action   = ["iam:CreateRole", "iam:GetRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:TagRole", "iam:DeleteRole"]
-        Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-task-*"]
-      },
-      {
-        Sid      = "SecretsManagerCodeserver"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret", "secretsmanager:GetSecretValue"]
-        Resource = ["arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:cc-on-bedrock/codeserver/*"]
-      },
-      {
-        Sid    = "DynamoDBAccess"
-        Effect = "Allow"
-        Action = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchGetItem"]
-        Resource = [
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.project_prefix}-usage",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.project_prefix}-usage/*",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-department-budgets",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-on-bedrock-approval-requests",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-user-budgets",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.project_prefix}-limits",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-dept-mcp-config",
-        ]
-      },
-      {
-        Sid      = "IamLocalUserRoleReset"
-        Effect   = "Allow"
-        Action   = ["iam:DeleteRolePolicy", "iam:GetRolePolicy"]
-        Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/cc-on-bedrock-local-user-*"]
-      },
-      {
-        Sid      = "RoutingTableAccess"
-        Effect   = "Allow"
-        Action   = ["dynamodb:PutItem", "dynamodb:DeleteItem"]
-        Resource = ["arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/cc-routing-table"]
-      },
-      {
-        Sid      = "EcsTaskDefRegistration"
-        Effect   = "Allow"
-        Action   = ["ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition", "ecs:DescribeClusters"]
-        Resource = ["*"]
-      },
-      {
-        Sid      = "LambdaInvoke"
-        Effect   = "Allow"
-        Action   = ["lambda:InvokeFunction"]
-        Resource = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:cc-on-bedrock-*"]
-      },
-      {
-        Sid      = "KmsDecrypt"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
-        Resource = [aws_kms_key.this.arn]
-      },
-    ]
-  })
-}
-
-resource "aws_iam_role_policy" "dashboard_ec2_devenv" {
-  name = "ec2-devenv"
-  role = aws_iam_role.dashboard_ec2.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "Ec2DevenvInstances"
-        Effect = "Allow"
-        Action = [
-          "ec2:RunInstances", "ec2:StartInstances", "ec2:StopInstances",
-          "ec2:TerminateInstances", "ec2:DescribeInstances", "ec2:CreateTags",
-          "ec2:ModifyInstanceAttribute", "ec2:ModifyNetworkInterfaceAttribute",
-          "ec2:DescribeVolumes", "ec2:DescribeSubnets",
-        ]
-        Resource = ["*"]
-      },
-      {
-        Sid       = "Ec2DataVolumeCreate"
-        Effect    = "Allow"
-        Action    = ["ec2:CreateVolume"]
-        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*"]
-        Condition = { StringEquals = { "aws:RequestTag/cc:project" = "cc-on-bedrock" } }
-      },
-      {
-        Sid       = "Ec2DataVolumeManage"
-        Effect    = "Allow"
-        Action    = ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:ModifyVolume"]
-        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*", "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*"]
-        Condition = { StringEquals = { "ec2:ResourceTag/cc:project" = "cc-on-bedrock" } }
-      },
-      {
-        Sid       = "Ec2DataVolumeDelete"
-        Effect    = "Allow"
-        Action    = ["ec2:DeleteVolume"]
-        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*"]
-        Condition = { StringEquals = { "ec2:ResourceTag/cc:role" = "data", "ec2:ResourceTag/cc:project" = "cc-on-bedrock" } }
-      },
-      {
-        Sid      = "Ec2DataVolumeSsmDocument"
-        Effect   = "Allow"
-        Action   = ["ssm:SendCommand"]
-        Resource = ["arn:aws:ssm:${data.aws_region.current.name}::document/AWS-RunShellScript"]
-      },
-      {
-        Sid       = "Ec2DataVolumeSsmTargets"
-        Effect    = "Allow"
-        Action    = ["ssm:SendCommand"]
-        Resource  = ["arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*"]
-        Condition = { StringEquals = { "ssm:resourceTag/cc:project" = "cc-on-bedrock" } }
-      },
-    ]
-  })
-}
-
 # ---- ADR-028 Cognito provisioner-trigger shim ------------------------------
-# Ported from cdk/lib/02-security-stack.ts CognitoProvisionerTrigger. Async-invokes
-# the UserRoleProvisioner (Stack 08 / local-governance module) by static name —
-# fail-open, so logins are unaffected if the provisioner is absent.
+# Async-invokes the UserRoleProvisioner by static name. The handler is fail-open
+# so logins continue if the provisioner is temporarily unavailable.
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
     actions = ["sts:AssumeRole"]

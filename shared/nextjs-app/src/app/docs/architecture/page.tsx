@@ -106,12 +106,12 @@ export default function ArchitecturePage() {
 4. EC2 Instance → code-server (password auth)
 5. Claude Code → Instance Profile → Bedrock VPC Endpoint`}</CodeBlock>
 
-      {/* CDK Stacks */}
-      <SectionTitle id="stacks">{ko ? "CDK 스택 구성" : "CDK Stack Architecture"}</SectionTitle>
+      {/* Terraform Modules */}
+      <SectionTitle id="stacks">{ko ? "Terraform 모듈 구성" : "Terraform Module Architecture"}</SectionTitle>
       <P>
         {ko
-          ? "7개의 CDK 스택으로 구성되며, 의존성 순서대로 배포됩니다. 각 스택은 독립적으로 업데이트 가능합니다."
-          : "Composed of 7 CDK stacks, deployed in dependency order. Each stack can be updated independently."}
+          ? "Terraform 루트 모듈이 네트워크, 보안, Nginx 라우터, EC2 DevEnv, 사용량 추적, Local Governance, WAF를 연결합니다."
+          : "The Terraform root module wires network, security, Nginx router, EC2 DevEnv, usage tracking, Local Governance, and WAF modules."}
       </P>
 
       <div className="grid grid-cols-1 gap-3 mb-6">
