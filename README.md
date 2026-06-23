@@ -53,8 +53,9 @@ terraform -chdir=terraform validate
 terraform -chdir=terraform plan
 ```
 
-For Local Governance-only deployments without EC2/ECS DevEnv infrastructure, use
-`governance_only = true` in a separate state/workspace.
+> **Local Governance-only mode is GATED — not yet wired.** The `governance_only`
+> Terraform variable is a planned follow-up (see `terraform/CLAUDE.md` and `BASELINE.md` §2);
+> until it lands, all modules deploy together. Do not pass `governance_only` yet.
 
 Important outputs include:
 
