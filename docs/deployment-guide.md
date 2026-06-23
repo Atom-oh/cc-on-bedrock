@@ -1,483 +1,327 @@
-# CC-on-Bedrock 배포 가이드
+# CC-on-Bedrock 배포 가이드 / Deployment Guide
 
-## 목차
+> **현행 진실(current truth)은 `docs/decisions/BASELINE.md` + `docs/architecture.md` 입니다.**
+> 이 가이드는 그 두 문서를 따르는 **운영 절차서**일 뿐, 아키텍처/결정의 정본이 아닙니다.
+> 충돌 시 BASELINE.md·architecture.md가 우선합니다.
+>
+> **IaC는 Terraform 단일** (ADR-033: CDK·CloudFormation 폐기, 2026-06).
+> 더 이상 `cdk deploy` / `bash deploy.sh` / stack-NN 이름 / LiteLLM / EFS·RDS 경로는 없습니다.
 
-1. [사전 준비](#1-사전-준비)
-2. [Docker 이미지 빌드](#2-docker-이미지-빌드)
-3. [인프라 배포](#3-인프라-배포)
-   - [CDK 배포](#31-cdk-배포)
-   - [Terraform 배포](#32-terraform-배포)
-   - [CloudFormation 배포](#33-cloudformation-배포)
-4. [배포 후 설정](#4-배포-후-설정)
-5. [대시보드 접속](#5-대시보드-접속)
-6. [사용자 생성 및 개발환경 시작](#6-사용자-생성-및-개발환경-시작)
-7. [문제 해결](#7-문제-해결)
+## 목차 / Table of Contents
+
+1. [사전 준비 (Prerequisites)](#1-사전-준비-prerequisites)
+2. [Docker 이미지 빌드 + ECR 푸시](#2-docker-이미지-빌드--ecr-푸시)
+3. [DevEnv AMI 빌드](#3-devenv-ami-빌드)
+4. [Terraform 인프라 배포](#4-terraform-인프라-배포)
+5. [배포 후 설정 (Post-Deploy)](#5-배포-후-설정-post-deploy)
+6. [대시보드 접속](#6-대시보드-접속)
+7. [사용자 생성 및 개발환경 시작](#7-사용자-생성-및-개발환경-시작)
+8. [문제 해결 (Troubleshooting)](#8-문제-해결-troubleshooting)
 
 ---
 
-## 1. 사전 준비
+## 1. 사전 준비 (Prerequisites)
 
-### 필수 요구사항
+### 필수 도구
 
 | 항목 | 최소 버전 | 설치 확인 |
 |------|-----------|-----------|
 | AWS 계정 | - | AWS Console 로그인 가능 |
 | AWS CLI v2 | 2.15+ | `aws --version` |
-| Docker | 24+ | `docker --version` |
+| Terraform | 1.5+ | `terraform --version` |
+| Docker (Buildx) | 24+ | `docker buildx version` |
 | Node.js | 20 LTS | `node --version` |
-| npm | 10+ | `npm --version` |
 | jq | 1.6+ | `jq --version` |
 | Git | 2.40+ | `git --version` |
 
-### IaC 도구별 추가 요구사항
-
-| 도구 | 최소 버전 | 설치 확인 |
-|------|-----------|-----------|
-| CDK | AWS CDK CLI 2.180+ | `cdk --version` |
-| Terraform | 1.5+ | `terraform --version` |
-| CloudFormation | (AWS CLI에 포함) | `aws cloudformation help` |
+> 빠른 점검: `bash scripts/00-check-prerequisites.sh` 로 위 도구/자격 증명을 한 번에 확인할 수 있습니다.
 
 ### AWS 계정 설정
 
-1. **IAM 권한**: 배포에 사용하는 IAM 사용자/역할에 `AdministratorAccess` 또는 동등한 권한이 필요합니다.
+1. **IAM 권한**: 배포 IAM 주체에 `AdministratorAccess` 또는 동등 권한이 필요합니다.
 
-2. **도메인**: Route 53에 호스팅된 도메인이 필요합니다.
-   - 기존 도메인이 없다면 Route 53에서 새 도메인을 등록하세요.
-   - 외부 도메인을 사용하는 경우 Route 53으로 네임서버를 위임하세요.
+2. **도메인 (Route 53)**: Route 53에 호스팅된 도메인이 필요합니다. 외부 도메인을 쓰면 네임서버를 Route 53으로 위임하세요. 호스팅 영역은 `module.network` 가 참조/관리합니다.
 
-3. **Bedrock 모델 접근**: `ap-northeast-2` (서울) 리전에서 다음 모델이 활성화되어 있어야 합니다.
-   - Claude Opus 4.6 (`global.anthropic.claude-opus-4-6-v1[1m]`)
-   - Claude Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6[1m]`)
-   - AWS Console > Bedrock > Model access에서 활성화
+3. **Bedrock 모델 접근** (`ap-northeast-2` 서울):
+   - Claude **Opus 4.8** — `global.anthropic.claude-opus-4-8[1m]`
+   - Claude **Sonnet 4.6** — `global.anthropic.claude-sonnet-4-6[1m]`
+   - AWS Console > Bedrock > Model access 에서 활성화.
 
-4. **서비스 쿼터 확인**:
+4. **Bedrock 사용량 메터링 전제 (ADR-011/019)**: 사용량은 **Application Inference Profile + Bedrock Invocation Log → DynamoDB** 경로로 집계됩니다 (CloudWatch 계정 전역 메트릭이 **아님**, LiteLLM 프록시도 **아님**). Invocation Log 대상 리소스(S3/DynamoDB 파이프라인)는 `modules/usage-tracking` 에서 생성됩니다.
+
+5. **서비스 쿼터**: ECS 호스트(`m7g.4xlarge`)와 per-user DevEnv(`t4g.large`)용 EC2 한도를 확인하세요.
    ```bash
-   # EC2 인스턴스 한도 (m7g.4xlarge 최소 3대 필요)
    aws service-quotas get-service-quota \
-     --service-code ec2 \
-     --quota-code L-3819A6DF \
-     --region ap-northeast-2
+     --service-code ec2 --quota-code L-3819A6DF --region ap-northeast-2
    ```
 
-5. **AWS CLI 프로파일 설정**:
+6. **CLI 자격 증명**:
    ```bash
-   aws configure
-   # 또는 SSO 사용 시
-   aws sso login --profile <profile-name>
-
-   # 확인
+   aws configure         # 또는: aws sso login --profile <profile>
    aws sts get-caller-identity
    ```
 
+### Terraform State (S3 backend)
+
+State는 S3 backend를 사용합니다 (`terraform/providers.tf`):
+
+```
+bucket: cc-on-bedrock-tfstate-<ACCOUNT_ID>
+key:    cc-on-bedrock/terraform.tfstate
+region: ap-northeast-2   (encrypt=true, use_lockfile=true)
+```
+
+최초 1회 backend 버킷을 만들어 둡니다 (계정 ID에 맞게 `providers.tf` 의 bucket 이름도 확인):
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws s3api create-bucket \
+  --bucket "cc-on-bedrock-tfstate-${ACCOUNT_ID}" \
+  --region ap-northeast-2 \
+  --create-bucket-configuration LocationConstraint=ap-northeast-2
+aws s3api put-bucket-versioning \
+  --bucket "cc-on-bedrock-tfstate-${ACCOUNT_ID}" \
+  --versioning-configuration Status=Enabled
+```
+
 ---
 
-## 2. Docker 이미지 빌드
+## 2. Docker 이미지 빌드 + ECR 푸시
 
-인프라를 배포하기 전에 Docker 이미지를 빌드하고 ECR에 푸시해야 합니다.
-
-### ECR 리포지토리 생성
+Terraform이 ECS task / 컨테이너를 참조하므로 **apply 전에** 이미지를 ECR에 올려야 합니다.
+대상 이미지: `cc-on-bedrock/devenv`, `cc-on-bedrock/dashboard`, `cc-on-bedrock/nginx`
+(추가로 OTel collector 이미지 — `docker/otel-collector/`).
 
 ```bash
 cd /path/to/cc-on-bedrock
 
-# ECR 리포지토리 생성
-bash scripts/create-ecr-repos.sh
+# ECR 리포지토리 생성 (재실행 안전)
+bash scripts/01-create-ecr-repos.sh
+
+# 모든 이미지 빌드 + ECR 푸시 (ARM64 / Graviton)
+cd docker && bash build.sh all all
+
+# 개별 빌드 예시
+#   bash build.sh all devenv-ubuntu
+#   bash build.sh all devenv-al2023
+#   bash build.sh all dashboard
+#   bash build.sh all nginx
 ```
 
-### 이미지 빌드 및 푸시
-
-```bash
-cd docker
-
-# 모든 이미지 빌드 + ECR 푸시
-bash build.sh all all
-
-# 또는 개별적으로:
-# LiteLLM 이미지만
-bash build.sh all litellm
-
-# Ubuntu devenv 이미지만
-bash build.sh all devenv-ubuntu
-
-# AL2023 devenv 이미지만
-bash build.sh all devenv-al2023
-```
-
-> **참고**: ARM64(Graviton) 기반 이미지입니다. x86 머신에서 빌드 시 Docker Buildx가 필요합니다.
-> ```bash
-> docker buildx create --use
-> docker buildx build --platform linux/arm64 ...
-> ```
+> ARM64(Graviton) 전용 이미지입니다. `docker/build.sh` 는 `docker buildx --platform linux/arm64` 를 사용합니다. x86 머신에서 빌드 시 buildx/QEMU가 필요합니다.
 
 ---
 
-## 3. 인프라 배포
+## 3. DevEnv AMI 빌드
 
-**3가지 IaC 도구 중 하나만 선택하여 배포합니다.** 동일한 아키텍처가 배포됩니다.
-
-### 3.1 CDK 배포
+per-user EC2 DevEnv (ADR-004)는 ECR 컨테이너가 아니라 **AMI 기반 EC2**로 실행됩니다.
+AMI를 빌드하고 그 ID를 SSM Parameter Store에 등록하면, DevEnv launch template이 이를 읽습니다.
 
 ```bash
-cd cdk
-
-# 의존성 설치
-npm install
-
-# CDK Bootstrap (계정/리전당 최초 1회)
-cdk bootstrap aws://<ACCOUNT_ID>/ap-northeast-2
-
-# 도메인 설정 (default.ts를 수정하거나 context로 전달)
-# 방법 1: config/default.ts 수정
-# 방법 2: context로 전달
-cdk deploy --all \
-  -c domainName=your-domain.com \
-  -c devSubdomain=dev
-
-# 스택 배포 순서는 자동으로 관리됩니다:
-# 1. CcOnBedrock-Network
-# 2. CcOnBedrock-Security
-# 3. CcOnBedrock-LiteLLM
-# 4. CcOnBedrock-EcsDevenv
-# 5. CcOnBedrock-Dashboard
+# Ubuntu / Amazon Linux 2023 AMI 빌드 (ARM64)
+bash scripts/build-ami.sh ubuntu
+bash scripts/build-ami.sh al2023
 ```
 
-**CDK 개별 스택 배포** (문제 발생 시):
-```bash
-cdk deploy CcOnBedrock-Network
-cdk deploy CcOnBedrock-Security
-cdk deploy CcOnBedrock-LiteLLM
-cdk deploy CcOnBedrock-EcsDevenv
-cdk deploy CcOnBedrock-Dashboard
+`build-ami.sh` 는 임시 EC2를 띄워 setup 스크립트를 실행하고, AMI를 생성한 뒤 SSM 파라미터에 AMI ID를 기록합니다:
+
+```
+/cc-on-bedrock/devenv/ami-id/ubuntu
+/cc-on-bedrock/devenv/ami-id/al2023
+/cc-on-bedrock/devenv/ami-id          (legacy alias)
 ```
 
-**CDK 제거**:
-```bash
-cdk destroy --all
-```
+> **저장소 모델 (ADR-032, 2-볼륨):** AMI에는 `cc-data-migrate` 부팅 유닛이 포함되어, 인스턴스에 **영속 데이터 EBS** (`/home/coder`, GP3, `DeleteOnTermination=false`, subdomain 태그)를 마운트/초기화합니다. **OS root EBS는 ephemeral** (`DeleteOnTermination=true`, 새 AMI로 교체 가능). Terminate 시에도 데이터 볼륨은 보존됩니다. EFS/RDS는 사용하지 않습니다.
 
-**Local Governance Mode 배포** (EC2 DevEnv 없이 거버넌스만, ADR-014):
-```bash
-# EC2/ECS DevEnv 스택을 skip하고 Local Governance Stack(08)을 배포
-cdk deploy --all \
-  -c domainName=your-domain.com \
-  -c governanceOnly=true
+---
 
-# 배포되는 스택:
-# 1. CcOnBedrock-Network
-# 2. CcOnBedrock-Security
-# 3. CcOnBedrock-UsageTracking  (DynamoDB Streams 활성화)
-# 4. CcOnBedrock-Dashboard
-# 5. CcOnBedrock-LocalGovernance  (STS Issuer + Token Limit Enforcer + Reset)
-# 6. CcOnBedrock-Waf
-
-# 사용자 온보딩은 docs/runbooks/local-governance-onboarding.md 참고
-```
-
-EC2 모드와 병행하려면 `governanceOnly` 플래그를 생략하면 됩니다. 두 모드는 같은 거버넌스 레이어(usage tracking, limits, dashboard)를 공유합니다.
-
-### 3.2 Terraform 배포
+## 4. Terraform 인프라 배포
 
 ```bash
 cd terraform
 
-# tfvars 파일 생성
+# tfvars 작성 — 최소 domain_name 변경
 cp terraform.tfvars.example terraform.tfvars
+# terraform.tfvars 편집:
+#   domain_name   = "your-domain.com"
+#   dev_subdomain = "dev"
+# (옵션) dashboard_subdomain, *_instance_type, subnet CIDR 등
 
-# terraform.tfvars 편집 - 도메인 변경 필수
-# domain_name = "your-domain.com"
-# dev_subdomain = "dev"
-
-# 초기화
-terraform init
-
-# 배포 계획 확인
+terraform init            # S3 backend 초기화
+terraform validate
 terraform plan
-
-# 배포 실행
-terraform apply
-# 확인 메시지에 'yes' 입력
+terraform apply           # 확인 메시지에 'yes'
 ```
 
-**Terraform 출력 확인**:
+`terraform/main.tf` 가 8개 모듈을 묶어 한 번에 배포합니다:
+
+| 모듈 | 역할 |
+|------|------|
+| `network` | VPC, Subnets(public/private/isolated), NAT, VPC Endpoints, Route 53 |
+| `security` | Cognito(Hosted UI), ACM, KMS, Secrets Manager, IAM, **task permission boundary (ADR-034)** |
+| `ecs-devenv` | ECS Cluster, NLB + nginx Fargate, routing DynamoDB, DLP SGs, nginx-config-gen Lambda |
+| `ec2-devenv` | per-user EC2 launch template + DLP SGs (ADR-004), permission-boundary 적용 |
+| `usage-tracking` | usage DynamoDB(+GSI/Stream), OTel collector(Fargate+NLB:4317), rollup Lambda |
+| `dashboard` | Dashboard EC2 ASG + ALB + CloudFront (us-east-1 ACM) |
+| `local-governance` | STS issuer / token-limit enforcer / reset (ADR-014) |
+| `waf` | CLOUDFRONT-scope WebACL (us-east-1) |
+
+> **Local Governance Mode (ADR-014):** EC2 DevEnv 없이 거버넌스 레이어만 띄우는 프로파일은 ADR-014에서 GATED 상태이며, `governanceOnly` 동등 Terraform 변수는 **아직 미구현(follow-up)** 입니다 (`terraform/CLAUDE.md` 참조). 현재는 전체 모듈이 함께 배포됩니다. 온보딩 절차는 `docs/runbooks/local-governance-onboarding.md` 를 참고하세요.
+
+출력 확인:
 ```bash
 terraform output
-# vpc_id, user_pool_id, ecs_cluster_name, dashboard_url 등
+# vpc_id, user_pool_id, user_pool_client_id, ecs_cluster_name,
+# dashboard_url, dashboard_cloudfront_domain, devenv_cloudfront_domain,
+# devenv_ecr_url, devenv_launch_template_id, devenv_sg_{open,restricted,locked}_id ...
 ```
 
-**Terraform 제거**:
+제거:
 ```bash
 terraform destroy
 ```
-
-### 3.3 CloudFormation 배포
-
-```bash
-cd cloudformation
-
-# 파라미터 파일 편집
-# params/default.json에서 DomainName 변경 필수
-
-# 배포 스크립트 실행
-bash deploy.sh
-
-# 또는 도메인만 오버라이드
-bash deploy.sh --domain your-domain.com
-
-# 또는 커스텀 파라미터 파일 사용
-cp params/default.json params/custom.json
-# params/custom.json 편집
-bash deploy.sh --params params/custom.json
-```
-
-**CloudFormation 제거**:
-```bash
-bash destroy.sh
-```
+> 영속 데이터 EBS는 `DeleteOnTermination=false` 라 인스턴스 종료로는 지워지지 않습니다. 완전 삭제 절차는 `docs/runbooks/full-teardown-redeploy.md` 를 따르세요.
 
 ---
 
-## 4. 배포 후 설정
+## 5. 배포 후 설정 (Post-Deploy)
 
-### 4.1 배포 검증
+### 5.1 Cognito 인증 + 관리자 계정
 
-```bash
-# 자동 검증 스크립트 실행
-bash scripts/verify-deployment.sh your-domain.com
-```
-
-### 4.2 DNS 전파 확인
-
-ACM 인증서 검증과 DNS 전파에 최대 30분이 소요될 수 있습니다.
+`scripts/04-setup-cognito-auth.sh` 가 User Pool Client 설정과 첫 admin 사용자/그룹 생성을 자동화합니다. 수동으로 할 경우:
 
 ```bash
-# DNS 확인
-dig dashboard.your-domain.com
-dig test.dev.your-domain.com
+USER_POOL_ID=$(cd terraform && terraform output -raw user_pool_id)
 
-# 인증서 상태 확인
-aws acm list-certificates --region ap-northeast-2
-aws acm list-certificates --region us-east-1
-```
-
-### 4.3 첫 번째 관리자 계정 생성
-
-```bash
-# Cognito User Pool ID 확인
-USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 10 \
-  --query "UserPools[?contains(Name, 'cc-on-bedrock')].Id" --output text)
-
-# 관리자 계정 생성
 aws cognito-idp admin-create-user \
   --user-pool-id "$USER_POOL_ID" \
   --username admin@your-company.com \
   --user-attributes \
     Name=email,Value=admin@your-company.com \
     Name=email_verified,Value=true \
-    Name=custom:subdomain,Value=admin \
-    Name=custom:container_os,Value=ubuntu \
-    Name=custom:resource_tier,Value=standard \
-    Name=custom:security_policy,Value=open \
+    Name="custom:subdomain",Value=admin \
+    Name="custom:department",Value=platform \
+    Name="custom:container_os",Value=ubuntu \
+    Name="custom:resource_tier",Value=power \
+    Name="custom:security_policy",Value=open \
   --temporary-password 'TempPass123!'
 
-# admin 그룹에 추가
 aws cognito-idp admin-add-user-to-group \
   --user-pool-id "$USER_POOL_ID" \
   --username admin@your-company.com \
   --group-name admin
 ```
 
-### 4.4 LiteLLM Virtual Key 생성
+> Cognito 자격 증명(client id/secret)은 SSM Parameter Store(`/cc-on-bedrock/cognito/*`)에 저장되며 DevEnv/Dashboard가 부팅 시 읽습니다. 사용량/한도의 canonical key는 **email** 입니다 (ADR-031).
+
+### 5.2 배포 검증
 
 ```bash
-# LiteLLM Master Key 확인
-MASTER_KEY=$(aws secretsmanager get-secret-value \
-  --secret-id cc-on-bedrock/litellm-master-key \
-  --query SecretString --output text)
+bash scripts/verify-deployment.sh your-domain.com
+# CloudFront, ECS(Dashboard+nginx), DynamoDB, Cognito, ECR, SSM,
+# Lambda, IAM, EC2 DevEnv AMI, Bedrock 접근을 점검
+```
 
-# LiteLLM Internal ALB DNS 확인 (CloudFormation 기준)
-LITELLM_ALB=$(aws cloudformation describe-stacks \
-  --stack-name cc-on-bedrock-litellm \
-  --query "Stacks[0].Outputs[?OutputKey=='InternalAlbDns'].OutputValue" --output text)
+### 5.3 DNS / ACM 전파 확인
 
-# Virtual Key는 Dashboard에서 사용자 생성 시 자동으로 생성됩니다.
-# 수동 생성이 필요한 경우 (같은 VPC 내의 EC2에서 실행):
-curl -X POST "http://${LITELLM_ALB}:4000/key/generate" \
-  -H "Authorization: Bearer ${MASTER_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "models": ["claude-opus-4-6", "claude-sonnet-4-6"],
-    "max_budget": 100,
-    "budget_duration": "30d",
-    "metadata": {"user": "admin"}
-  }'
+ACM 검증 + DNS 전파에 최대 30분이 걸릴 수 있습니다.
+
+```bash
+dig +short <dashboard_subdomain>.your-domain.com
+dig +short test.dev.your-domain.com
+aws acm list-certificates --region ap-northeast-2   # ALB/지역 인증서
+aws acm list-certificates --region us-east-1        # CloudFront 인증서 (ADR-016)
 ```
 
 ---
 
-## 5. 대시보드 접속
+## 6. 대시보드 접속
 
-1. 브라우저에서 `https://dashboard.your-domain.com` 접속
-2. Cognito 로그인 화면에서 관리자 계정으로 로그인
-3. 초기 비밀번호 변경 (최초 로그인 시)
-4. 대시보드 메인 페이지 표시
-
-### 대시보드 기능
+1. 브라우저에서 `terraform output dashboard_url` 의 주소로 접속
+2. Cognito Hosted UI에서 admin 계정 로그인
+3. 최초 로그인 시 임시 비밀번호 변경
+4. 대시보드 표시
 
 | 메뉴 | 설명 | 권한 |
 |------|------|------|
 | 홈 | 시스템 상태 개요 | 전체 |
-| Analytics | 토큰 사용량, 모델별 비용, 트렌드 차트 | 전체 |
-| Monitoring | LiteLLM 프록시 상태, ECS 컨테이너 리소스 | admin |
-| Admin | 사용자 CRUD, 컨테이너 관리, API 키 관리 | admin |
+| Analytics | 토큰 사용량/모델별 비용/트렌드 (Inference Profile + Invocation Log → DynamoDB 기반) | 전체 |
+| Monitoring | ECS/EC2 DevEnv 상태, OTel 코드활동 메트릭 | admin |
+| Admin | 사용자 CRUD, DevEnv 관리, 예산/한도 | admin |
 
 ---
 
-## 6. 사용자 생성 및 개발환경 시작
+## 7. 사용자 생성 및 개발환경 시작
 
 ### Dashboard에서 사용자 생성 (권장)
 
-1. Admin > Users 메뉴 이동
-2. "Add User" 클릭
-3. 정보 입력:
-   - 이메일: `user01@company.com`
-   - 서브도메인: `user01` (user01.dev.your-domain.com)
-   - OS: Ubuntu 또는 Amazon Linux 2023
-   - 리소스 등급: Light / Standard / Power
-   - 보안 정책: Open / Restricted / Locked
-4. "Create" 클릭
-   - Cognito 사용자 자동 생성
-   - LiteLLM Virtual Key 자동 생성
-   - ALB 리스너 규칙 자동 생성
+1. Admin > Users > "Add User"
+2. 입력: 이메일, 서브도메인(`user01` → `user01.dev.your-domain.com`), OS(Ubuntu/AL2023), 리소스 등급, 보안 정책
+3. "Create" — Cognito 사용자 생성 + 라우팅/IAM 프로비저닝이 따라옵니다 (ADR-022/028 경로).
 
 ### 개발환경 시작
 
-1. 사용자가 `https://dashboard.your-domain.com` 로그인
-2. "Start Dev Environment" 클릭
-3. ECS Task 시작 (약 2-3분 소요, ASG 스케일아웃 필요 시 5-10분)
-4. 상태가 "Ready"가 되면 `https://user01.dev.your-domain.com` 링크 제공
-5. 클릭하면 code-server (VS Code Web IDE) 접속
-6. Claude Code와 Kiro 사용 가능
+1. 사용자가 대시보드 로그인 후 "Start Dev Environment"
+2. per-user EC2가 시작되고, **영속 데이터 EBS(`/home/coder`)** 가 마운트됩니다 (ADR-032)
+3. 상태가 "Ready"가 되면 `https://user01.dev.your-domain.com` → code-server(VS Code Web)
+4. Claude Code / Kiro 사용 가능 (Bedrock 호출은 Application Inference Profile로 귀속)
 
-### 개발환경 중지
+### 개발환경 중지 / 보존
 
-- Dashboard에서 "Stop" 클릭, 또는
-- 2시간 비활동 후 자동 중지 (code-server idle detection)
-- EFS에 데이터 보존됨 (다음 시작 시 복원)
+- 대시보드 "Stop", 또는 유휴 시 자동 Stop/Hibernate (ADR-002)
+- 데이터는 **영속 데이터 EBS에 보존** — 재시작/OS 전환/AMI 교체에도 유지 (EFS 아님)
 
 ---
 
-## 7. 문제 해결
+## 8. 문제 해결 (Troubleshooting)
 
-### DNS 관련
+### Terraform apply 실패
+- ECR 이미지 / AMI(SSM 파라미터) 미존재 → 2·3장 선행. `terraform plan` 으로 drift 확인.
+- S3 backend 오류 → 1장의 backend 버킷·`providers.tf` bucket 이름·리전 확인.
 
-**증상**: `dashboard.your-domain.com` 접속 불가
+### DNS 접속 불가
 ```bash
-# DNS 전파 확인
-dig +short dashboard.your-domain.com
-
-# Route 53 레코드 확인
-aws route53 list-resource-record-sets --hosted-zone-id <ZONE_ID> \
-  --query "ResourceRecordSets[?contains(Name, 'dashboard')]"
+dig +short <dashboard_subdomain>.your-domain.com
+aws route53 list-resource-record-sets --hosted-zone-id "$(cd terraform && terraform output -raw hosted_zone_id)"
 ```
-- **해결**: DNS 전파에 최대 48시간 소요. CloudFront 배포 상태도 확인.
+DNS 전파 최대 48h. CloudFront 배포 상태도 확인.
 
-### ACM 인증서
-
-**증상**: CloudFront 배포 시 인증서 오류
+### ACM 인증서 (CloudFront)
 ```bash
-# 인증서 상태 확인 (us-east-1 필수)
 aws acm list-certificates --region us-east-1 \
-  --query "CertificateSummaryList[?contains(DomainName, 'your-domain')]"
+  --query "CertificateSummaryList[?contains(DomainName,'your-domain')]"
 ```
-- **해결**: DNS 검증 CNAME 레코드가 Route 53에 생성되었는지 확인. CDK/Terraform은 자동 생성하지만, CloudFormation은 수동 확인 필요할 수 있음.
+DNS 검증 CNAME가 Route 53에 생성됐는지 확인 (ADR-016: CloudFront는 us-east-1 인증서).
 
-### ECS Task 시작 실패
+### DevEnv EC2 시작 실패
+- AMI 미등록 → `bash scripts/build-ami.sh <os>` 후 SSM 파라미터 확인.
+- launch template/SG 확인: `terraform output devenv_launch_template_id`, `devenv_sg_*_id`.
+- IAM permission boundary(ADR-034) 관련은 `scripts/check-policyset-boundary.py` 로 점검.
 
-**증상**: 개발환경 시작 시 "Task failed to start"
-```bash
-# 최근 중지된 태스크 확인
-aws ecs list-tasks --cluster cc-on-bedrock --desired-status STOPPED --region ap-northeast-2
+### Bedrock 호출 오류
+- 모델 access 활성 여부(1장) 및 region(ap-northeast-2) 확인.
+- VPC Endpoint / Task Role IAM (boundary 내 grant, ADR-021/030) 확인.
 
-# 중지 원인 확인
-aws ecs describe-tasks --cluster cc-on-bedrock --tasks <TASK_ARN> \
-  --query "tasks[0].{stopCode:stopCode,stoppedReason:stoppedReason,containers:containers[*].{name:name,reason:reason,exitCode:exitCode}}"
-```
-- **원인 1**: ECR 이미지 없음 -> `docker/build.sh all all` 실행
-- **원인 2**: ASG 용량 부족 -> ASG max 값 확인
-- **원인 3**: IAM 권한 -> ECS Task Execution Role 확인
+### CloudFront 403
+- X-Custom-Secret 헤더 불일치. CloudFront Origin Custom Header ↔ ALB/NLB 리스너 규칙 헤더 값 일치 확인.
+- 값은 Secrets Manager(`module.security` 가 생성)에서 확인.
 
-### LiteLLM 연결 오류
-
-**증상**: Claude Code에서 "Connection refused" 또는 API 오류
-```bash
-# LiteLLM ALB 타겟 그룹 상태 확인
-aws elbv2 describe-target-groups --region ap-northeast-2 \
-  --query "TargetGroups[?contains(TargetGroupName, 'litellm')]"
-
-# LiteLLM EC2 로그 확인 (SSM 접속)
-aws ssm start-session --target <INSTANCE_ID>
-# 접속 후:
-sudo docker logs litellm
-```
-- **해결**: LiteLLM EC2 인스턴스 health check 확인, RDS 연결 확인, Valkey 연결 확인
-
-### RDS 연결 오류
-
-**증상**: LiteLLM이 데이터베이스에 연결하지 못함
-```bash
-# RDS 상태 확인
-aws rds describe-db-instances --region ap-northeast-2 \
-  --query "DBInstances[?contains(DBInstanceIdentifier, 'litellm')].{ID:DBInstanceIdentifier,Status:DBInstanceStatus,Endpoint:Endpoint.Address}"
-
-# Security Group 확인
-# LiteLLM SG -> RDS SG 인바운드 5432 포트 허용 필요
-```
-
-### CloudFront 403 오류
-
-**증상**: 브라우저에서 403 Forbidden
-- **원인**: X-Custom-Secret 헤더 불일치
-- **해결**:
-  ```bash
-  # Secrets Manager에서 값 확인
-  aws secretsmanager get-secret-value \
-    --secret-id cc-on-bedrock/cloudfront-secret \
-    --query SecretString --output text
-  ```
-  CloudFront Origin Custom Header와 ALB 리스너 규칙의 헤더 값이 일치하는지 확인
-
-### 비용 관련
-
-**증상**: 예상보다 높은 비용
-- VPC Endpoint 7개: ~$102/월 (각 $7.30/EP/AZ x 2 AZ)
-- NAT Gateway 2개: ~$90/월
-- 사용하지 않는 리소스 확인: `bash scripts/verify-deployment.sh your-domain.com`
-- ECS ASG가 min:0으로 설정되어 있는지 확인 (사용하지 않을 때 0대)
+### 비용
+- NAT Gateway / VPC Endpoint / ECS 호스트(`m7g.4xlarge`)가 상시 비용의 큰 부분.
+- 미사용 시 DevEnv 인스턴스가 Stop/Hibernate 되는지(ADR-002) 확인. `scripts/verify-deployment.sh` 로 리소스 점검.
 
 ---
 
-## 추가 참고사항
+## 부록: 참고 문서
 
-### Bedrock 모델 접근 경로
-
-| 경로 | 용도 | 추적 |
-|------|------|------|
-| Claude Code -> LiteLLM (Internal ALB) -> Bedrock | 기본 (Primary) | O (LiteLLM) |
-| boto3/SDK -> Task Role IAM -> Bedrock VPC Endpoint | 개발용 (Secondary) | X |
-| Claude Code -> Task Role IAM -> Bedrock | LiteLLM 장애 시 (Fallback) | X |
-
-### DLP 보안 정책
-
-| 정책 | 파일 다운로드 | 파일 업로드 | 클립보드 | 외부 네트워크 | 확장 설치 |
-|------|:---:|:---:|:---:|:---:|:---:|
-| open | O | O | O | 전체 허용 | O |
-| restricted | X | X | O | 화이트리스트만 | 사전 승인만 |
-| locked | X | X | X | 내부만 | X |
-
-### 리소스 등급
-
-| 등급 | vCPU | Memory | 용도 |
-|------|------|--------|------|
-| light | 1 | 4 GiB | 학습, 간단한 작업 |
-| standard | 2 | 8 GiB | 일반 개발 |
-| power | 4 | 12 GiB | 대규모 빌드, 복잡한 작업 |
+| 주제 | 위치 |
+|------|------|
+| 현행 결정 베이스라인 | `docs/decisions/BASELINE.md` |
+| 아키텍처 SSOT | `docs/architecture.md` |
+| IaC 단일화 결정 | `docs/decisions/ADR-033-cdk-to-terraform-migration.md` |
+| 2-볼륨 저장소 | `docs/decisions/ADR-032-persistent-data-ebs.md` |
+| permission boundary in TF | `docs/decisions/ADR-034-permission-boundary-in-terraform.md` |
+| Terraform 모듈 상세 | `terraform/CLAUDE.md` |
+| 완전 teardown + 재배포 | `docs/runbooks/full-teardown-redeploy.md` |
+| Local Governance 온보딩 | `docs/runbooks/local-governance-onboarding.md` |
+| 인스턴스 복구 | `docs/runbooks/instance-recovery.md` |
