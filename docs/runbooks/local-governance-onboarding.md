@@ -1,6 +1,6 @@
 # Runbook: Local Governance Mode Onboarding & Operations
 
-> Related: [ADR-014](../decisions/ADR-014-local-governance-mode.md), [plans/local-governance-mode.md](../plans/local-governance-mode.md)
+> Related: [ADR-006](../decisions/ADR-006-shared-credentials.md), [plans/local-governance-mode.md](../history/plans/local-governance-mode.md)
 
 ## Scope
 Local PC에서 Claude Code를 Bedrock에 직접 연결해 쓰는 사용자(Local Governance Mode)의 온보딩 및 일상 운영 절차.
