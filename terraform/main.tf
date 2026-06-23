@@ -41,6 +41,7 @@ module "security" {
   dev_subdomain       = var.dev_subdomain
   hosted_zone_id      = module.network.hosted_zone_id
   dashboard_subdomain = var.dashboard_subdomain
+  lambda_src_dir      = local.lambda_src_dir
 }
 
 # ---- 03 Usage Tracking -------------------------------------------------------
