@@ -1,0 +1,152 @@
+name: Weekly Golden AMI Build
+
+on:
+  schedule:
+    # Every Monday 03:00 KST (Sunday 18:00 UTC)
+    - cron: '0 18 * * 0'
+  workflow_dispatch:
+    inputs:
+      os_type:
+        description: 'OS to build (al2023 = default)'
+        required: false
+        default: 'al2023'
+        type: choice
+        options:
+          - al2023
+          - ubuntu
+          - both
+      instance_type:
+        description: 'Builder instance type'
+        required: false
+        default: 't4g.medium'
+      keep_count:
+        description: 'Number of AMIs to keep per OS (older ones pruned)'
+        required: false
+        default: '3'
+
+env:
+  AWS_REGION: ap-northeast-2
+  DEFAULT_OS: al2023
+  INSTANCE_TYPE: t4g.medium
+  KEEP_COUNT: 3
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    name: Build AMI (${{ github.event_name == 'schedule' && 'al2023' || inputs.os_type }})
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve build parameters
+        id: params
+        run: |
+          # Scheduled runs always build al2023 only
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "os_type=al2023" >> "$GITHUB_OUTPUT"
+            echo "instance_type=${{ env.INSTANCE_TYPE }}" >> "$GITHUB_OUTPUT"
+            echo "keep_count=${{ env.KEEP_COUNT }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "os_type=${{ inputs.os_type || env.DEFAULT_OS }}" >> "$GITHUB_OUTPUT"
+            echo "instance_type=${{ inputs.instance_type || env.INSTANCE_TYPE }}" >> "$GITHUB_OUTPUT"
+            echo "keep_count=${{ inputs.keep_count || env.KEEP_COUNT }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build AMI(s)
+        run: |
+          OS="${{ steps.params.outputs.os_type }}"
+          ITYPE="${{ steps.params.outputs.instance_type }}"
+          if [ "$OS" = "both" ]; then
+            bash scripts/07-build-ami.sh all "$ITYPE"
+          else
+            bash scripts/build-ami.sh "$OS" "$ITYPE"
+          fi
+
+      - name: Prune old AMIs (keep newest ${{ steps.params.outputs.keep_count }} per OS)
+        run: |
+          KEEP="${{ steps.params.outputs.keep_count }}"
+          OS="${{ steps.params.outputs.os_type }}"
+
+          prune_os() {
+            local os_type="$1"
+            # Get current SSM-referenced AMI so we never deregister it
+            CURRENT=$(aws ssm get-parameter \
+              --name "/cc-on-bedrock/devenv/ami-id/${os_type}" \
+              --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+            # List managed AMIs sorted oldest-first, skip the SSM-referenced one
+            AMIS=$(aws ec2 describe-images \
+              --owners self \
+              --filters \
+                "Name=tag:managed_by,Values=cc-on-bedrock" \
+                "Name=tag:os_type,Values=${os_type}" \
+                "Name=state,Values=available" \
+              --query 'sort_by(Images, &CreationDate)[].ImageId' \
+              --output text)
+
+            COUNT=$(echo "$AMIS" | wc -w)
+            DELETE_COUNT=$(( COUNT - KEEP ))
+
+            if [ "$DELETE_COUNT" -le 0 ]; then
+              echo "[$os_type] $COUNT AMIs — within keep limit ($KEEP), nothing to prune."
+              return
+            fi
+
+            echo "[$os_type] $COUNT AMIs — pruning $DELETE_COUNT oldest (keeping $KEEP)."
+            TO_DELETE=$(echo "$AMIS" | tr ' ' '\n' | head -n "$DELETE_COUNT")
+
+            for ami in $TO_DELETE; do
+              if [ "$ami" = "$CURRENT" ]; then
+                echo "  SKIP $ami — currently referenced in SSM."
+                continue
+              fi
+              # Collect snapshot IDs before deregistering
+              SNAPS=$(aws ec2 describe-images --image-ids "$ami" \
+                --query 'Images[].BlockDeviceMappings[].Ebs.SnapshotId' \
+                --output text 2>/dev/null || echo "")
+              echo "  Deregister $ami ..."
+              aws ec2 deregister-image --image-id "$ami"
+              for snap in $SNAPS; do
+                echo "  Delete snapshot $snap ..."
+                aws ec2 delete-snapshot --snapshot-id "$snap"
+              done
+            done
+          }
+
+          OS="${{ steps.params.outputs.os_type }}"
+          if [ "$OS" = "both" ]; then
+            prune_os al2023
+            prune_os ubuntu
+          else
+            prune_os "$OS"
+          fi
+
+      - name: Verify SSM parameters
+        run: |
+          OS="${{ steps.params.outputs.os_type }}"
+          verify_ssm() {
+            local os="$1"
+            AMI=$(aws ssm get-parameter \
+              --name "/cc-on-bedrock/devenv/ami-id/${os}" \
+              --query 'Parameter.Value' --output text)
+            echo "[${os}] SSM ami-id = $AMI"
+            aws ec2 describe-images --image-ids "$AMI" \
+              --query 'Images[].{ID:ImageId,Name:Name,State:State}' \
+              --output table
+          }
+          if [ "$OS" = "both" ]; then
+            verify_ssm al2023
+            verify_ssm ubuntu
+          else
+            verify_ssm "$OS"
+          fi

@@ -42,6 +42,11 @@ module "security" {
   hosted_zone_id      = module.network.hosted_zone_id
   dashboard_subdomain = var.dashboard_subdomain
   lambda_src_dir      = local.lambda_src_dir
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
 }
 
 # ---- 03 Usage Tracking -------------------------------------------------------

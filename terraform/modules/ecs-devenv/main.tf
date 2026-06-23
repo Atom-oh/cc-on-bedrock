@@ -708,8 +708,12 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
+  aliases = ["*.${var.dev_subdomain}.${var.domain_name}"]
+
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = var.devenv_certificate_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 
   tags = { Name = "cc-devenv-cloudfront" }

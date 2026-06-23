@@ -450,8 +450,8 @@ aws ssm put-parameter \
   --region "$REGION"
 echo "AMI ID stored in SSM: /cc-on-bedrock/devenv/ami-id/${OS_TYPE}"
 
-# Also update legacy parameter if ubuntu (backwards compatibility)
-if [ "$OS_TYPE" = "ubuntu" ]; then
+# Update legacy parameter for the default OS (al2023)
+if [ "$OS_TYPE" = "al2023" ]; then
   aws ssm put-parameter \
     --name "/cc-on-bedrock/devenv/ami-id" \
     --value "$AMI_ID" \

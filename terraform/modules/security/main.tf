@@ -2,6 +2,15 @@
 # Security Module - Cognito, ACM, KMS, Secrets Manager, IAM
 ###############################################################################
 
+terraform {
+  required_providers {
+    aws = {
+      source                = "hashicorp/aws"
+      configuration_aliases = [aws.us_east_1]
+    }
+  }
+}
+
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
@@ -200,6 +209,7 @@ resource "aws_dynamodb_table" "department_budgets" {
 
 # ---- ACM Certificates --------------------------------------------------------
 resource "aws_acm_certificate" "devenv" {
+  provider          = aws.us_east_1 # CloudFront requires us-east-1 certificates
   domain_name       = local.dev_domain
   validation_method = "DNS"
 
@@ -227,6 +237,7 @@ resource "aws_route53_record" "devenv_cert_validation" {
 }
 
 resource "aws_acm_certificate_validation" "devenv" {
+  provider                = aws.us_east_1
   certificate_arn         = aws_acm_certificate.devenv.arn
   validation_record_fqdns = [for r in aws_route53_record.devenv_cert_validation : r.fqdn]
 }
