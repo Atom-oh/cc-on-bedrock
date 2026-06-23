@@ -2,7 +2,7 @@ import os
 import sys
 import importlib
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "lambda"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("CLOUDFRONT_SECRET", "testsecret")
 os.environ.setdefault("DEV_DOMAIN", "dev.example.com")
 os.environ.setdefault("VPC_CIDR", "10.0.0.0/16")

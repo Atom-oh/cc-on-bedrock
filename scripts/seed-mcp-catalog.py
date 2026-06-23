@@ -22,13 +22,21 @@ CATALOG_ITEMS = [
         "lambdaFile": "cc_ecs_mcp.py",
         "toolSchema": json.dumps([
             {
-                "name": "get_devenv_status",
-                "description": "Get DevEnv status with user assignments, OS/tier distribution",
+                "name": "get_container_status",
+                "description": "Get all ECS container status with user assignments, OS/tier distribution",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "cluster": {"type": "string", "description": "ECS cluster name for shared services (default: cc-on-bedrock-devenv)"}
                     },
+                },
+            },
+            {
+                "name": "get_efs_info",
+                "description": "Get EFS file system info: size, mount targets, encryption",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
                 },
             },
         ]),

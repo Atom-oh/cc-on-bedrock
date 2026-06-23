@@ -5,6 +5,10 @@
 > all S3 data, per-user secrets, per-user IAM roles. Use only for an intentional
 > clean-slate redeploy. Created 2026-06-19 after a devenv EBS data-loss incident.
 
+> **Resource IDs below** (account, Cognito pool `ap-northeast-2_*`, hosted zone `Z…`, golden AMI `ami-…`)
+> are from the 2026-06-20 dev wipe. For another account/run derive them via `aws sts get-caller-identity`,
+> `terraform output`, or the console — do not copy the literals.
+
 ## Scope decision: **B = complete initialization**
 Destroy CFN stacks **and** manually delete all RETAIN orphans, then redeploy from scratch.
 
@@ -28,17 +32,20 @@ Destroy CFN stacks **and** manually delete all RETAIN orphans, then redeploy fro
 
 ## Phase 1 — Pre-destroy cleanup
 ```bash
-R="--region ap-northeast-2"
+REGION=ap-northeast-2; R="--region $REGION"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 # Instances already terminated. Verify none running:
 aws ec2 describe-instances $R --filters "Name=tag:managed_by,Values=cc-on-bedrock" \
   "Name=instance-state-name,Values=running,stopped" \
   --query 'Reservations[].Instances[].InstanceId' --output text
 ```
 
-## Phase 2 — Destroy CDK stacks (reverse order, --all handles it)
+## Phase 2 — Destroy stacks
+> This wipe predated ADR-033; the platform was still CDK-deployed, so teardown used `cdk destroy`.
+> Post-migration the only IaC is Terraform — a future teardown uses `cd terraform && terraform destroy`.
 ```bash
 cd cdk
-npx cdk destroy --all          # EC2 mode + LocalGovernance both deployed → --all covers all 7
+npx cdk destroy --all          # (pre-ADR-033) EC2 mode + LocalGovernance → --all covers all 7
 # RETAIN resources (DynamoDB, Cognito, S3, EC2 vol) will ORPHAN, not delete — handled in Phase 3.
 ```
 
@@ -62,8 +69,8 @@ aws cognito-idp delete-user-pool $R --user-pool-id ap-northeast-2_fOsHIoJ6b
 
 ### 3c. S3 buckets (empty, then delete)
 ```bash
-for b in cc-on-bedrock-cost-reports-180294183052 cc-on-bedrock-otel-metrics-raw-180294183052 \
-  cc-on-bedrock-user-data-180294183052 cc-on-bedrock-deploy-180294183052; do
+for b in cc-on-bedrock-cost-reports-${ACCOUNT_ID} cc-on-bedrock-otel-metrics-raw-${ACCOUNT_ID} \
+  cc-on-bedrock-user-data-${ACCOUNT_ID} cc-on-bedrock-deploy-${ACCOUNT_ID}; do
   aws s3 rm "s3://$b" --recursive
   aws s3api delete-bucket --bucket "$b" $R && echo "deleted $b"
 done
@@ -127,10 +134,10 @@ aws route53 list-resource-record-sets --hosted-zone-id Z01703432E9KT1G1FIRFM \
 # 1. Re-push Docker images (if ECR deleted in 3d)
 bash scripts/create-ecr-repos.sh
 cd docker && bash build.sh all all && cd ..
-# 2. Deploy all stacks
-cd cdk && npm install && npx cdk deploy --all && cd ..
+# 2. Deploy all infra — Terraform is the only IaC surface (ADR-033)
+cd terraform && terraform init && terraform apply && cd ..
 # 3. Re-upload dashboard standalone tar to the (recreated) deploy bucket
-#    s3://cc-on-bedrock-deploy-180294183052/dashboard-deploy.tar.gz
+#    s3://cc-on-bedrock-deploy-${ACCOUNT_ID}/dashboard-deploy.tar.gz
 # 4. Re-create Cognito users (admin first, then team) — pool is NEW (new pool id);
 #    SSM /cc-on-bedrock/cognito/* updated automatically by the deploy.
 ```

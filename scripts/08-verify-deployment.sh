@@ -66,7 +66,10 @@ for PARAM in "${SSM_PARAMS[@]}"; do
   VALUE=$(aws ssm get-parameter --name "$PARAM" --region "$REGION" \
     --query "Parameter.Value" --output text 2>/dev/null || echo "NOT_FOUND")
   if [ "$VALUE" != "NOT_FOUND" ]; then
-    DISPLAY="${VALUE:0:20}..."
+    case "$PARAM" in
+      *secret*) DISPLAY="set (hidden)" ;;   # never echo signing/client secrets to logs
+      *) DISPLAY="${VALUE:0:20}..." ;;
+    esac
     ok "$PARAM = $DISPLAY"
   else
     warn "$PARAM not set"
