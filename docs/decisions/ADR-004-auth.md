@@ -42,14 +42,14 @@ AdminDeleteUser → CloudTrail → EventBridge → user-role-provisioner → _de
    ├─ local-user 롤 태그(email/subdomain)에서 식별자 복구 → derive_subdomain (stateless)
    ├─ EC2 terminate (tag subdomain=… AND managed_by=cc-on-bedrock)
    ├─ task 롤 + instance profile 삭제 (cc-on-bedrock-task-{subdomain})
-   ├─ 데이터 EBS DeleteVolume (cc-user-instances의 dataVolumeId/dataVolumeAz로 식별(권위 정본=instances 테이블) → detach→available → 선택적 최종 snapshot → 삭제). AdminDeleteUser = ADR-002(admin 완전 삭제)의 "admin 완전 삭제" 경로이므로 데이터 볼륨도 삭제 (FAQ와 일치). **반드시 dataVolumeId가 담긴 DDB 행 삭제보다 먼저** 수행해 고아·재연결 가능 볼륨 방지
-   ├─ DDB 행 삭제 (cc-user-instances / cc-user-volumes / cc-routing-table) — 데이터 볼륨 삭제 후
+   ├─ DDB 행 삭제 (cc-user-instances / cc-user-volumes / cc-routing-table)
    ├─ codeserver Secret force-delete (cc-on-bedrock/codeserver/{subdomain})
    ├─ local-user 롤 삭제 (cc-on-bedrock-local-user-{subdomain})
    └─ limits 행 삭제 (PK=USER#{email})
 ```
 
 - 각 step은 멱등(NoSuchEntity/ResourceNotFound 흡수)하고, partial failure 시 RuntimeError로 EventBridge 재시도를 유발한다. local-user 롤은 식별자 복구원이므로 모든 step 성공 시에만 마지막에 삭제한다. 직접 호출 계약 `{"action":"deprovision","sub":"…"}`으로 수동 복구 가능.
+- **⚠️ 데이터 EBS는 자동 삭제하지 않는다 (as-built).** 현재 `_deprovision_user`는 `DeleteVolume`을 호출하지 않으며(코드에 없음), 데이터 볼륨은 `DeleteOnTermination=false`라 인스턴스 terminate 후 `available`로 남는다 — **수동 정리 대상**. ADR-002(2-volume) 설계상 "admin 완전 삭제 시 볼륨 삭제"는 **follow-up(미구현)**이다. (DDB의 `dataVolumeId`도 함께 지워지므로, 자동삭제 도입 시 행 삭제 *전에* 볼륨 id를 확보해야 함.)
 - 키 표기는 005(email canonical) 기준: 삭제 대상은 `cc-on-bedrock-local-user-{subdomain}` 롤·`USER#{email}` limits 행. cleanup은 롤 태그에서 식별자를 복구하므로 절차는 키 변경과 무관하게 유효하다.
 
 ### 대시보드 하드 삭제 차단 / Federation-safe delete

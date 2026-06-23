@@ -49,7 +49,7 @@ Email 기반 자동 파생입니다. `emailToSubdomain("atom.oh@example.com")` �
 2. Nginx 라우팅 테이블에서 제거
 3. Cognito `custom:subdomain` 초기화
 
-Cognito 계정은 유지됩니다. 데이터 EBS는 `DeleteOnTermination=false`이므로 인스턴스가 사라져도 `available`로 남고, 동일 subdomain으로 재할당하면 동일 데이터 볼륨이 그대로 재연결됩니다. 볼륨의 실제 삭제(`DeleteVolume`)는 admin "사용자 완전 삭제" 경로에서만 일어납니다(ADR-002 — admin 완전삭제 경로에서만 DeleteVolume).
+Cognito 계정은 유지됩니다. 데이터 EBS는 `DeleteOnTermination=false`이므로 인스턴스가 사라져도 `available`로 남고, 동일 subdomain으로 재할당하면 동일 데이터 볼륨이 그대로 재연결됩니다. **현재 데이터 볼륨은 자동 삭제되지 않습니다** — 사용자 삭제(deprovision)도 볼륨은 `available`로 남기므로(수동 정리 대상), 자동 `DeleteVolume`은 follow-up입니다(ADR-002 2-volume 설계 / ADR-004 deprovision 노트 참조).
 
 ---
 
