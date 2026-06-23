@@ -3,7 +3,7 @@
 - **Date:** 2026-06-14
 - **Status:** Draft (pending user review)
 - **Scope:** Areas 1 (productivity/engagement) + 3 (cost depth) of the 1P-dashboard parity effort
-- **Related:** ADR-029 (email canonical key), ADR-011 (Bedrock IAM cost allocation), ADR-014/015 (Local Governance, budget/token integration)
+- **Related:** ADR-031 (email canonical key), ADR-011 (Bedrock IAM cost allocation), ADR-014/015 (Local Governance, budget/token integration)
 
 ## 1. Problem & Motivation
 
@@ -42,7 +42,7 @@ commit. Findings:
      enduser.id: spike-test@example.com   department: platform-spike
      type: added   model: claude-haiku-4-5-20251001   value: 2
    ```
-   The `enduser.id` value is the same email used as the canonical key in ADR-029 →
+   The `enduser.id` value is the same email used as the canonical key in ADR-031 →
    productivity metrics join to the existing cost table with **zero transformation**.
 4. **Nuance:** datapoints repeat per export interval. The rollup must pin
    `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` and **sum deltas** (never
@@ -58,7 +58,7 @@ commit. Findings:
 - Engagement: DAU/WAU/MAU and adoption over time.
 - Cost depth: per-skill / per-agent / per-model cost attribution (area 3), joined to
   the existing authoritative cost table.
-- Reuse the existing Next.js dashboard + DynamoDB + ADR-029 email key.
+- Reuse the existing Next.js dashboard + DynamoDB + ADR-031 email key.
 - **Never log prompt/text/image content.** Metrics carry counters only.
 - Avoid CloudWatch Logs as a high-volume sink (cost).
 
@@ -112,7 +112,7 @@ Next.js dashboard  (new productivity/engagement pages + cost-join drill-downs)
 
 ## 5. Data Model (DynamoDB, alongside existing usage table)
 
-Daily productivity rollup (keyed by the ADR-029 email key):
+Daily productivity rollup (keyed by the ADR-031 email key):
 ```
 PK = USER#{email}     SK = PROD#{date}#{model}
   attrs: loc_added, loc_removed, commits, prs, sessions, active_seconds,
@@ -145,7 +145,7 @@ The dashboard never mixes them in one number; "Billed" is the budget-facing figu
 ## 7. Identity Injection Mechanism
 
 - **EC2/ECS DevEnv:** inject via the managed `settings.json` (`env` block) or the
-  launch wrapper, deriving `enduser.id` = the user's email (ADR-029) and `department`
+  launch wrapper, deriving `enduser.id` = the user's email (ADR-031) and `department`
   from the existing EC2 tag / Cognito attribute resolution already in
   `bedrock-usage-tracker.py`.
 - **Local Governance:** inject via the install script / managed settings pushed
