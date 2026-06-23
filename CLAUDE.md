@@ -8,14 +8,14 @@
 
 ## Overview
 CC-on-Bedrock: AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼.
-**Terraform(HCL)이 유일한 IaC** (ADR-033: CDK·CloudFormation 폐기, 2026-06). Lambda 소스는 `lambda/` (repo root), TF가 archive_file로 패키징. State는 S3 backend(`cc-on-bedrock-tfstate-{account}`).
+**Terraform(HCL)이 유일한 IaC** (ADR-001: CDK·CloudFormation 폐기, Terraform 단일). Lambda 소스는 `lambda/` (repo root), TF가 archive_file로 패키징. State는 S3 backend(`cc-on-bedrock-tfstate-{account}`).
 
 두 가지 배포 프로파일 지원:
 - **EC2 DevEnv 모드** (기본, ADR-004): per-user EC2에서 Claude Code 실행
-- **Local Governance Mode** (ADR-014, GATED): EC2 없이 거버넌스 레이어만 배포, 사용자가 로컬 PC에서 Bedrock 직접 호출. `governanceOnly` 동등 Terraform 변수는 **미구현(follow-up)** — 현재는 전체 모듈이 함께 배포됨 (`terraform/CLAUDE.md` 참조). 두 모드 공존 가능.
+- **Local Governance Mode** (ADR-006, GATED): EC2 없이 거버넌스 레이어만 배포, 사용자가 로컬 PC에서 Bedrock 직접 호출. `governanceOnly` 동등 Terraform 변수는 **미구현(follow-up)** — 현재는 전체 모듈이 함께 배포됨 (`terraform/CLAUDE.md` 참조). 두 모드 공존 가능.
 
 ## Tech Stack
-- **IaC:** Terraform >= 1.5 (HCL) 단일 정본 — S3 backend state (ADR-033/BASELINE §1)
+- **IaC:** Terraform >= 1.5 (HCL) 단일 정본 — S3 backend state (ADR-001/BASELINE §1)
 - **Container:** Docker (Ubuntu 24.04 / Amazon Linux 2023 ARM64)
 - **Frontend:** Next.js 14+ (App Router), Tailwind CSS, Recharts
 - **Auth:** Amazon Cognito + NextAuth.js
@@ -46,7 +46,7 @@ tests/             - Container integration tests, E2E tests
 - **Cognito 자격 증명**: SSM Parameter Store (`/cc-on-bedrock/cognito/client-id`, `/cc-on-bedrock/cognito/client-secret`)에서 UserData가 부팅 시 읽음
 - **Secret**: Secrets Manager에 저장, Terraform에서 `aws_secretsmanager_secret`/data source로 참조
 - **모듈 간 참조**: SSM Parameter Store 또는 Terraform module output/`data` source 사용 (cross-stack export 패턴 금지)
-- **IAM role은 Terraform에서 생성** — CLI로 수동 생성한 role은 `terraform import` 하거나 Terraform으로 재생성. permission boundary도 Terraform 정본 (ADR-034)
+- **IAM role은 Terraform에서 생성** — CLI로 수동 생성한 role은 `terraform import` 하거나 Terraform으로 재생성. permission boundary도 Terraform 정본 (ADR-007)
 - **Docker 이미지**: Dashboard → ECR push 후 ECS task definition 참조. DevEnv → AMI 기반 EC2 직접 실행
 - **환경변수 우선순위**: Terraform variable → SSM Parameter → Secrets Manager → 기본값
 

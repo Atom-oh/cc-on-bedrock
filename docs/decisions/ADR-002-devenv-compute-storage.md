@@ -92,11 +92,11 @@ files:
 semantic:
   - claim: "DevEnv instances boot with two EBS volumes — an ephemeral OS root (DeleteOnTermination=true) and a persistent subdomain-tagged /home/coder data volume (DeleteOnTermination=false) that is reattached across rebuild, AMI-swap, and OS-switch."
     context_files:
-      - docs/decisions/002-devenv-compute-storage.md
+      - docs/decisions/ADR-002-devenv-compute-storage.md
       - docs/architecture.md
   - claim: "Idle/explicit Stop prefers EC2 Hibernation (HIBERNATE_ENABLED flag) with graceful fallback to plain Stop; changeTier/switchOs force Hibernate=false."
     context_files:
-      - docs/decisions/002-devenv-compute-storage.md
+      - docs/decisions/ADR-002-devenv-compute-storage.md
 ```
 
 ## Consolidates

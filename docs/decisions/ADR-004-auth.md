@@ -23,9 +23,9 @@ The platform governs both the dashboard and per-user DevEnv identities through a
 
 ## Decision
 
-**Cognito User Pool + public client(NextAuth.js) 단일 인증, 사용자 삭제 시 다운스트림 cleanup을 프로비저닝과 대칭으로 수행한다.**
+**Cognito User Pool 단일 신원 + 클라이언트 2종(Dashboard = confidential/NextAuth.js, Local CLI = public/PKCE); 사용자 삭제 시 다운스트림 cleanup을 프로비저닝과 대칭으로 수행한다.**
 
-**Cognito User Pool + a public client driven by NextAuth.js; user deletion fans out downstream cleanup symmetrically to provisioning.**
+**One Cognito User Pool with two clients — Dashboard confidential (NextAuth.js) + Local CLI public (PKCE); user deletion fans out downstream cleanup symmetrically to provisioning.**
 
 ### 인증 모델 / Auth model
 
@@ -104,6 +104,7 @@ files:
   - path: shared/nextjs-app/src/app/api/users/route.ts
     must_contain:
       - "403"
+  - path: shared/nextjs-app/src/app/admin/user-management.tsx
     must_not_contain:
       - "handlePermanentDelete"
 

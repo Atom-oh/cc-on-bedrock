@@ -48,7 +48,8 @@ graph LR
    **persistent data EBS** for `/home/coder` (GP3, `DeleteOnTermination=false`, subdomain-tagged,
    reattached across rebuild/OS-switch). Idle instances Stop/Hibernate and resume with state intact.
 7. **Self-service IAM.** UI requests for extra IAM permissions require **admin approval**, bounded by
-   a permission boundary (boundary X = AllowInAccount + DenyEscalation, authored in Terraform — ADR-034).
+   a permission boundary authored in Terraform (boundary X = AllowInAccount; the DenyEscalation
+   63-action floor's full TF port is a **follow-up** tracked by ADR-007/ADR-034 — not yet complete).
 8. **Budget enforcement.** Per-department and per-user budgets/limits ($ + normalized token);
    **EventBridge** drives IAM deny-policy updates.
 9. **Path/port routing.** code-server reached by path (`?folder=`), stays on port **8080** (reserved);

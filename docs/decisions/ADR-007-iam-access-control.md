@@ -99,8 +99,12 @@ arn:aws:bedrock:*:{account}:inference-profile/*embed*
 
 `global.`/`us.`/`apac.`/`eu.` region prefix와 `[1m]` variant suffix, 미래 Claude 버전을 모두 흡수한다.
 Per-model spend control은 IAM 사전 차단이 아니라 **런타임 enforcer**(token-limit-enforcer ADR-014,
-budget-check ADR-015)가 한도 초과 시 Deny 정책을 동적 부착해 담당한다. non-Anthropic vendor 모델은
-의도적으로 미허용이며 `bedrock`은 검증기 allowlist 밖이라 셀프서비스로 추가할 수 없다.
+budget-check ADR-015)가 한도 초과 시 Deny 정책을 동적 부착해 담당한다. **scope 정정:** 허용 범위는
+Claude family + **embeddings(`*embed*` — `amazon.titan-embed` 등 non-Anthropic 임베딩 포함)**이며,
+`application-inference-profile/*`는 벤더 무관 와일드카드라 **계정 내 생성된 profile만 호출 가능하다는
+계정-신뢰 전제** 위에서 동작한다(임의 외부 profile 호출 아님). 임의 non-Anthropic **foundation-model
+직접 호출**은 검증기 allowlist 밖이라 셀프서비스로 추가할 수 없다. (즉 "non-Anthropic 전면 미허용"이
+아니라 embeddings 허용 + profile은 계정-신뢰 전제.)
 
 > **boundary X와의 관계(자주 제기되는 오해):** `AllowInAccount`(`Action:*`)는 §4의 Anthropic-only
 > Bedrock ceiling을 **완화하지 않는다**. boundary는 cap일 뿐 grant가 아니다 —

@@ -2,10 +2,10 @@
 
 ## EBS / Storage
 
-> DevEnv은 per-user EC2이며(ADR-004), 스토리지는 **2-볼륨 EBS 모델**입니다(ADR-032). ECS Task·EFS·snapshot/restore 방식은 더 이상 사용하지 않습니다.
+> DevEnv은 per-user EC2이며(ADR-002), 스토리지는 **2-볼륨 EBS 모델**입니다(ADR-002). ECS Task·EFS·snapshot/restore 방식은 더 이상 사용하지 않습니다.
 
 ### Q: per-user EC2의 스토리지 구조는 어떻게 되나요?
-인스턴스당 **EBS 볼륨 2개**로 분리됩니다(ADR-032):
+인스턴스당 **EBS 볼륨 2개**로 분리됩니다(ADR-002):
 - **Root EBS (ephemeral OS)** — AMI에서 옴(OS·시스템 패키지·code-server 바이너리). `DeleteOnTermination=true`. 언제든 새 AMI로 교체·재생성 가능하며 사용자 데이터를 담지 않습니다.
 - **Data EBS (persistent)** — `/home/coder` 전체(workspace + `.claude` + `.config` + dotfiles 등). `DeleteOnTermination=false`. **subdomain 태그로 식별**되어 재생성·AMI 교체·OS 전환을 가로질러 재연결됩니다.
 
@@ -19,7 +19,7 @@
 EBS 볼륨은 AZ 종속이므로, `dataVolumeAz`를 영속화하고 **재연결 launch를 그 AZ의 SubnetId로 핀**합니다. AZ 불일치(`InvalidVolume.ZoneMismatch`)는 fail-closed로 처리하며 임의로 새 볼륨을 만들지 않습니다. 신규 볼륨은 인스턴스가 뜬 AZ에 생성합니다. (snapshot/restore 기반 DR은 더 이상 사용하지 않습니다.)
 
 ### Q: EBS 용량을 늘리면 어떻게 되나요?
-확장 신청은 **데이터 볼륨**(`dataVolumeId`)만 `ModifyVolume` + 온라인 `resize2fs`로 키웁니다. OS root는 건드리지 않습니다(ADR-032 rule 7).
+확장 신청은 **데이터 볼륨**(`dataVolumeId`)만 `ModifyVolume` + 온라인 `resize2fs`로 키웁니다. OS root는 건드리지 않습니다(ADR-002 rule 7).
 
 ### Q: OS를 전환(`switchOs`)하면 데이터가 보존되나요?
 네. 옛 인스턴스에서 code-server 정지 → `/home/coder` unmount → 데이터 볼륨 detach → 옛 인스턴스 terminate → 데이터 볼륨 AZ에 핀해 타깃 OS AMI로 새 인스턴스 → reattach 순서로 진행하므로 데이터 무손실입니다. (옛 root-snapshot 의존 제거.)
@@ -49,17 +49,17 @@ Email 기반 자동 파생입니다. `emailToSubdomain("atom.oh@example.com")` �
 2. Nginx 라우팅 테이블에서 제거
 3. Cognito `custom:subdomain` 초기화
 
-Cognito 계정은 유지됩니다. 데이터 EBS는 `DeleteOnTermination=false`이므로 인스턴스가 사라져도 `available`로 남고, 동일 subdomain으로 재할당하면 동일 데이터 볼륨이 그대로 재연결됩니다. 볼륨의 실제 삭제(`DeleteVolume`)는 admin "사용자 완전 삭제" 경로에서만 일어납니다(ADR-032 rule 9).
+Cognito 계정은 유지됩니다. 데이터 EBS는 `DeleteOnTermination=false`이므로 인스턴스가 사라져도 `available`로 남고, 동일 subdomain으로 재할당하면 동일 데이터 볼륨이 그대로 재연결됩니다. 볼륨의 실제 삭제(`DeleteVolume`)는 admin "사용자 완전 삭제" 경로에서만 일어납니다(ADR-002 rule 9).
 
 ---
 
 ## 컨테이너 프로비저닝
 
 ### Q: DevEnv 프로비저닝은 어떻게 진행되나요?
-DevEnv은 per-user EC2 인스턴스로 프로비저닝됩니다(ADR-004). 진행상황은 Server-Sent Events로 실시간 스트리밍되며, 백엔드는 ECS RunTask가 아니라 EC2 `RunInstances` + 데이터 EBS 연결 기반입니다. 대략적인 흐름:
+DevEnv은 per-user EC2 인스턴스로 프로비저닝됩니다(ADR-002). 진행상황은 Server-Sent Events로 실시간 스트리밍되며, 백엔드는 ECS RunTask가 아니라 EC2 `RunInstances` + 데이터 EBS 연결 기반입니다. 대략적인 흐름:
 1. **IAM Instance Profile**: Per-user role 부여 (Permission Boundary 적용 — ADR-007)
-2. **Data EBS**: 신규 사용자는 born-attached(`RunInstances BlockDeviceMappings`에 데이터 볼륨 포함), 기존 사용자는 `dataVolumeId`/`dataVolumeAz` AZ에 핀해 `AttachVolume`으로 재연결 (ADR-032)
-3. **Instance Launch**: `RunInstances` (데이터 볼륨 AZ에 핀, hibernation 지원 — ADR-010)
+2. **Data EBS**: 신규 사용자는 born-attached(`RunInstances BlockDeviceMappings`에 데이터 볼륨 포함), 기존 사용자는 `dataVolumeId`/`dataVolumeAz` AZ에 핀해 `AttachVolume`으로 재연결 (ADR-002)
+3. **Instance Launch**: `RunInstances` (데이터 볼륨 AZ에 핀, hibernation 지원 — ADR-002)
 4. **Password Store**: Secrets Manager에 code-server 비밀번호
 5. **Route Register**: 인스턴스 private IP를 `cc-routing-table`에 등록(Nginx 동적 라우팅)
 6. **Health Check**: code-server HEALTHY 상태 확인
@@ -85,4 +85,4 @@ DynamoDB `cc-routing-table`에 `{subdomain: privateIp}` 매핑을 저장합니�
 `cc-on-bedrock-task-boundary` Permission Boundary가 최대 권한을 제한합니다.
 
 ### Q: 스토리지로 EFS를 선택할 수 있나요?
-아니요. 스토리지는 per-user gp3 **EBS 2-볼륨 모델**로 고정입니다(ADR-032). EFS·`storageType` 선택 옵션은 더 이상 존재하지 않습니다. IaC는 **Terraform 단일 정본**이며(ADR-001, CDK·CloudFormation 폐기), 별도의 `storageType` config는 없습니다. 데이터 격리는 사용자별 물리적 데이터 볼륨(subdomain 태그·AZ 핀, fail-closed 식별)으로 보장됩니다.
+아니요. 스토리지는 per-user gp3 **EBS 2-볼륨 모델**로 고정입니다(ADR-002). EFS·`storageType` 선택 옵션은 더 이상 존재하지 않습니다. IaC는 **Terraform 단일 정본**이며(ADR-001, CDK·CloudFormation 폐기), 별도의 `storageType` config는 없습니다. 데이터 격리는 사용자별 물리적 데이터 볼륨(subdomain 태그·AZ 핀, fail-closed 식별)으로 보장됩니다.
