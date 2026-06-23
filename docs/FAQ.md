@@ -5,7 +5,7 @@
 ### Q: ECS에서 기존 EBS 볼륨을 재연결할 수 있나요?
 **불가능합니다.** ECS managed EBS volume (`configuredAtLaunch: true`)은 매 `RunTask`마다 새 볼륨을 생성합니다. AWS API의 `managedEBSVolume`에 `volumeId` 파라미터가 없어 기존 볼륨을 지정할 수 없습니다. 데이터 복원은 `snapshotId`를 통해서만 가능합니다.
 
-기존 볼륨을 재사용하려면 ECS 외부에서 Lambda로 EC2 호스트에 직접 attach한 후 host volume mount해야 합니다. → [ADR-003](decisions/ADR-003-ebs-host-attach.md)
+기존 볼륨을 재사용하려면 ECS 외부에서 Lambda로 EC2 호스트에 직접 attach한 후 host volume mount해야 합니다. → [ADR-003](decisions/archive/ADR-003-ebs-host-attach.md)
 
 ### Q: 컨테이너 종료 시 EBS 볼륨은 어떻게 되나요?
 - **Phase 1 (현재)**: `deleteOnTermination: true`로 ECS가 볼륨 자동 삭제. Lambda가 비동기로 snapshot 생성. 다음 시작 시 snapshot에서 복원.

@@ -9,7 +9,7 @@
 > billing/governance 핵심 코드이므로 **반드시 리뷰 + 비프로덕션 테이블 backfill 리허설 + 스테이징**
 > 후 배포하세요. **자동 배포 금지.**
 
-ADR: [ADR-025](../decisions/ADR-025-usage-pipeline-canonical-identifier.md)
+ADR: [ADR-025](../decisions/archive/ADR-025-usage-pipeline-canonical-identifier.md)
 
 ## 무엇이 바뀌었나 (이 브랜치에 구현됨)
 사용량/한도 파이프라인의 PK 를 `USER#{subdomain}` → `USER#{sub}`(Cognito sub) 로 통일.

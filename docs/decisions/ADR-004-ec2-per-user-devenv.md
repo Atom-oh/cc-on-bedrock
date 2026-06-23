@@ -11,8 +11,8 @@ verification_required: false
 ## Date: 2026-04-03
 
 ## Supersedes
-- [ADR-001: EBS + S3 Storage Strategy](ADR-001-ebs-s3-storage-strategy.md) — EC2 root volume이 EBS 격리 + S3 sync를 대체
-- [ADR-003: EBS Host Attach](ADR-003-ebs-host-attach.md) — EC2-per-user로 ECS host attach 문제 자체 제거
+- [ADR-001: EBS + S3 Storage Strategy](archive/ADR-001-ebs-s3-storage-strategy.md) — EC2 root volume이 EBS 격리 + S3 sync를 대체
+- [ADR-003: EBS Host Attach](archive/ADR-003-ebs-host-attach.md) — EC2-per-user로 ECS host attach 문제 자체 제거
 
 ## Context
 

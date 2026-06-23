@@ -11,7 +11,7 @@ builds_on: ADR-026
 
 **Status:** Accepted (구현 완료, 배포 pending)
 **Date:** 2026-06-14
-**Supersedes:** [ADR-026 IAM 권한 신청/승인 — 서비스 천장 boundary](ADR-026-iam-permission-grant-boundary.md) (per-service `GrantCeiling*` 천장 모델)
+**Supersedes:** [ADR-026 IAM 권한 신청/승인 — 서비스 천장 boundary](archive/ADR-026-iam-permission-grant-boundary.md) (per-service `GrantCeiling*` 천장 모델)
 **Builds on:** ADR-026 · 관련 [ADR-020](ADR-020-runtime-iam-policy-upsert.md), [ADR-021](ADR-021-wildcard-claude-iam.md), [ADR-014](ADR-014-local-governance-mode.md)
 **Collaboration:** co-agent 멀티모델 패널(Codex gpt-5.5 · Gemini · AWS Access Analyzer) 리뷰, Claude chair 합성
 

@@ -6,7 +6,7 @@ verification_required: true
 # ADR-031: usage/limits canonical key = email, IAM role name = subdomain, Cognito sub eliminated (supersedes ADR-025)
 
 ## Status
-Accepted — **supersedes [ADR-025](ADR-025-usage-pipeline-canonical-identifier.md)** (canonical = Cognito sub).
+Accepted — **supersedes [ADR-025](archive/ADR-025-usage-pipeline-canonical-identifier.md)** (canonical = Cognito sub).
 
 ## Context
 ADR-025는 canonical 사용자 키를 Cognito sub(UUID)로 정했다. 운영 중 진단(2026-06-12) 결과:
