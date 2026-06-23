@@ -37,7 +37,7 @@ permissions:
 jobs:
   build:
     name: Build AMI (${{ github.event_name == 'schedule' && 'al2023' || inputs.os_type }})
-    runs-on: ubuntu-latest
+    runs-on: cc-bedrock-arm
 
     steps:
       - uses: actions/checkout@v4
