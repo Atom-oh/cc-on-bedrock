@@ -1,7 +1,7 @@
 # CC-on-Bedrock 결정 베이스라인 (BASELINE) / Decision Baseline
 
 > **이것이 결정의 단일 현행 진실(single source of truth)이다.** AI·사람 모두 여기부터 읽는다.
-> 아키텍처 상세는 `../architecture.md`(SSOT), 결정 근거는 같은 디렉토리의 통합 ADR(`0NN-*.md`),
+> 아키텍처 상세는 `../architecture.md`(SSOT), 결정 근거는 같은 디렉토리의 통합 ADR(`ADR-NNN-*.md`),
 > 옛 이력은 `archive/`·`../history/`(명시 요청 없이는 읽지 않는다 — git tag `adr-legacy-2026-06-23`로도 보존).
 > This is the single current-truth for decisions. Read this first.
 
@@ -57,7 +57,7 @@
 ## §3 결정 인덱스 (Decision Index)
 
 > 통합 ADR 11개 (옛 34개 → 통합). 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
-> **상태:** 클러스터 맵 확정. 통합 ADR 본문 작성 = Phase 2(진행 예정). 그 전까지 LEGACY 번호가 현행 ADR.
+> **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거).
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|

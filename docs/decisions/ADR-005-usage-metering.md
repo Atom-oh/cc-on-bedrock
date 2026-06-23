@@ -6,7 +6,7 @@ consolidates: [ADR-011, ADR-019, ADR-031, ADR-025]
 
 # 005: 사용량 집계 (Inference Profile + Invocation Log → DynamoDB · email canonical key)
 
-> 통합 ADR. 흡수: ADR-011(IAM cost allocation) · ADR-019(model-ID normalization) · ADR-031(email canonical key) · ~~ADR-025~~(superseded). 옛 본문 → git tag `adr-legacy-2026-06-22`, 매핑 `../history/ADR-MAPPING.md`.
+> 통합 ADR. 흡수: ADR-011(IAM cost allocation) · ADR-019(model-ID normalization) · ADR-031(email canonical key) · ~~ADR-025~~(superseded). 옛 본문 → git tag `adr-legacy-2026-06-23`, 매핑 `../history/ADR-MAPPING.md`.
 
 ## Status / 상태
 Accepted (2026-06-23). Supersedes archived ADR-025 (Cognito-sub canonical key).
@@ -66,7 +66,7 @@ EN — Per-user Bedrock usage must be metered near-real-time as the single input
 | ADR-031 | usage/limits canonical key = email | §2 (email 키, subdomain 롤명, sub 제거) |
 | ~~ADR-025~~ | canonical key = Cognito sub | **superseded** by ADR-031 (§2); archived |
 
-옛 본문은 트리에 없다 — git tag `adr-legacy-2026-06-22`로 보존, 매핑은 `../history/ADR-MAPPING.md`. SSOT = `../architecture.md` pillar 4·5. Index = `BASELINE.md` §3 row 005.
+옛 본문은 트리에 없다 — git tag `adr-legacy-2026-06-23`로 보존, 매핑은 `../history/ADR-MAPPING.md`. SSOT = `../architecture.md` pillar 4·5. Index = `BASELINE.md` §3 row 005.
 
 ## References
 - `../architecture.md` (SSOT pillars 4 Usage metering, 5 Shared credential model)

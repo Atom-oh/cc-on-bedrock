@@ -99,4 +99,4 @@ User Browser → CloudFront (dashboard) → ALB → Dashboard (ECS Ec2Service)
 - SSOT: `docs/architecture.md` (§Path/port routing, 2-CloudFront topology)
 - spec: `docs/superpowers/specs/2026-06-09-devenv-custom-port-exposure-design.md`
 - 보안리뷰: `docs/reviews/domain-port-review-2026-06-09.md` (B-H1, B-H3)
-- 구현: `cdk/lib/04-ecs-devenv-stack.ts`, `cdk/lib/05-dashboard-stack.ts`, `cdk/lib/lambda/nginx-config-gen.py`, `cdk/lib/lambda/devenv-session-validator/`, `docker/nginx/reload.sh`
+- 구현: `terraform/modules/ecs-devenv/`, `terraform/modules/dashboard/`, `lambda/nginx-config-gen.py`, `lambda/devenv-session-validator/`, `docker/nginx/reload.sh`

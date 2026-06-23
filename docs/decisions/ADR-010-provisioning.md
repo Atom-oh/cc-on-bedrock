@@ -39,7 +39,7 @@ AdminCreateUser / SignUp / AdminAddUserToGroup  (cognito-idp)
 EventBridge rule  →  user-role-provisioner Lambda
    ├─ derive_subdomain(email local-part)        →  custom:subdomain (007/005·031 규칙)
    ├─ ListUsersInGroup(dept-manager)+dept filter →  custom:dept_manager_sub
-   ├─ role_factory.ensure_role()                 →  cc-on-bedrock-local-user-{sub}
+   ├─ role_factory.ensure_role()                 →  cc-on-bedrock-local-user-{subdomain}
    └─ _ensure_ec2_task_role()                    →  cc-on-bedrock-task-{subdomain} + instance profile
 ```
 

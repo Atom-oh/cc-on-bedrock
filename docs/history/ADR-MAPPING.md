@@ -1,8 +1,8 @@
-# ADR Mapping — legacy ADR-NNN → consolidated 0NN
+# ADR Mapping — legacy ADR-NNN → consolidated ADR-NNN
 
 > The legacy ADRs (ADR-001..034) were consolidated into 11 baseline ADRs on 2026-06-23.
 > **Legacy bodies are NOT in the tree** — retrieve with `git show adr-legacy-2026-06-23:docs/decisions/ADR-NNN-<slug>.md`.
-> Current truth: `docs/decisions/BASELINE.md` + the consolidated `docs/decisions/0NN-*.md`.
+> Current truth: `docs/decisions/BASELINE.md` + the consolidated `docs/decisions/ADR-NNN-*.md`.
 > Brainstorming-misclassified items live (as bodies) under `docs/history/brainstorm/`.
 
 | Legacy ADR | → | Consolidated / disposition |
