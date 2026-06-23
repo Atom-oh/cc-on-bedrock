@@ -30,7 +30,7 @@ The platform governs both the dashboard and per-user DevEnv identities through a
 ### 인증 모델 / Auth model
 
 - 공통 Cognito User Pool을 신원 정본으로 두되 **클라이언트는 2종으로 분리**한다: (1) **Dashboard = confidential client** — NextAuth.js가 처리하며 **client secret 사용**(SSM `/cc-on-bedrock/cognito/client-secret`에 보관, 부팅 시 주입); (2) **Local CLI(`cc-bedrock-local`) = public client** — secret 없이 PKCE 코드 플로우(006). client-secret을 SSM에 정본으로 유지하는 이유는 (1) Dashboard confidential client 때문이다(CLAUDE.md와 일치).
-- DevEnv 접근 인가는 통합 CloudFront/NextAuth 경로로 처리한다(003). **레거시 Lambda@Edge 인증 람다·DevEnv 전용 UserPoolClient·HMAC 쿠키는 제거**됐다.
+- DevEnv 접근 인가는 통합 CloudFront/NextAuth 경로로 처리한다(003). **제거된 것은 레거시 HMAC 모델(ADR-012의 DevEnv 전용 UserPoolClient + HMAC 서명 쿠키 + 그 검증용 Lambda@Edge)뿐**이다. ⚠️ **`*.dev` 엣지 인증 자체를 폐지한 것이 아니다** — 현행 `*.dev` 엣지 인증 = **ADR-003의 NextAuth JWE `session-validator`(viewer-request Lambda@Edge)로 유지**된다. (제거 ≠ 엣지 인증 전면 해제)
 - Cognito 자격증명(client-id 등)은 SSM Parameter Store에서 부팅 시 주입한다(하드코딩 금지).
 
 ### 삭제 → 다운스트림 cleanup / Deletion handler

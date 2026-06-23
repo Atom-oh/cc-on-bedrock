@@ -40,6 +40,8 @@ User Browser → CloudFront (dashboard) → ALB → Dashboard (ECS Ec2Service)
 
 - **DevEnv CF**: `viewer-request` Lambda@Edge `session-validator` 가 NextAuth JWE 쿠키를 복호화하여
   subdomain 소유권을 검증 (per-user nginx origin 에 app-layer 세션 없음).
+  > 명시(004 cross-ref): 이 `session-validator`(NextAuth JWE)가 **현행 `*.dev` 엣지 인증**으로 **유지**된다.
+  > ADR-004가 "Lambda@Edge 인증 람다 제거"라 한 것은 **레거시 HMAC 모델(ADR-012의 DevEnv 전용 클라이언트+HMAC 쿠키)** 한정이며, 엣지 인증 자체를 없앤 게 아니다.
 - **Dashboard CF**: 엣지 함수 없음 — Dashboard 의 NextAuth 미들웨어가 매 요청 세션 집행.
 - **SSO 효과는 쿠키 도메인 `.{domain}` 으로 달성** — distribution 이 둘이어도 양쪽이 같은 세션을 본다.
   이로써 013 이 노린 "단일 로그인"은 유지하되 단일-CF 의 부작용(cert 깊이·stack 결합)은 제거. (016 Addendum)
