@@ -301,7 +301,7 @@ data "aws_iam_policy_document" "bedrock" {
   }
 }
 
-data "aws_iam_policy_document" "task_boundary" {
+data "aws_iam_policy_document" "task_permission_boundary" {
   statement {
     sid     = "BedrockClaude"
     actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"]
@@ -431,10 +431,15 @@ data "aws_iam_policy_document" "task_boundary" {
   }
 }
 
-resource "aws_iam_policy" "task_boundary" {
+moved {
+  from = aws_iam_policy.task_boundary
+  to   = aws_iam_policy.task_permission_boundary
+}
+
+resource "aws_iam_policy" "task_permission_boundary" {
   name        = "cc-on-bedrock-task-boundary"
   description = "Permission boundary for governed EC2 and Local Bedrock roles"
-  policy      = data.aws_iam_policy_document.task_boundary.json
+  policy      = data.aws_iam_policy_document.task_permission_boundary.json
 }
 
 # EC2 assume-role trust policy

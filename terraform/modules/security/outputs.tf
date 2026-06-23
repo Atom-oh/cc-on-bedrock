@@ -61,9 +61,9 @@ output "department_budgets_table_name" {
 }
 
 output "task_permission_boundary_arn" {
-  value = aws_iam_policy.task_boundary.arn
+  value = aws_iam_policy.task_permission_boundary.arn
 }
 
 output "task_permission_boundary_name" {
-  value = aws_iam_policy.task_boundary.name
+  value = aws_iam_policy.task_permission_boundary.name
 }
