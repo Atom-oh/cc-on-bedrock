@@ -137,7 +137,7 @@ IAM API의 idempotency에 의존해 drift가 다음 start에 self-heal되고, �
 - DLP 3단계로 못 덮는 중간 요구(예: HTTPS + 특정 IP만) 존재; per-tier DNS 화이트리스트는 별도 ADR 필요.
 
 보안 / Security
-- 최소권한은 boundary ARN 스코프가 아니라 **신청 검증(`Resource:*` 금지) + admin 승인 + DenyEscalation**에서 달성.
+- 최소권한은 boundary ARN 스코프가 아니라 **신청 검증(`Resource:*` 금지) + admin 승인**에서 주로 달성. **as-built 단서:** DenyEscalation 63-action floor의 TF 완전 포팅은 미완(follow-up, ADR-034)이라, 현행 boundary 강제는 **AllowInAccount + ADR-026 ceiling**이다(DenyEscalation 완비 후 강화).
 - 0.0.0.0/0 · Principal:"*" · 평문 시크릿 도입 없음. boundary 정책은 Terraform 정본.
 
 ## Consolidates

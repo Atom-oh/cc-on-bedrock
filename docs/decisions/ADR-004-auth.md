@@ -69,7 +69,7 @@ AdminDeleteUser → CloudTrail → EventBridge → user-role-provisioner → _de
 - 라이프사이클 대칭: 생성 fan-out = 삭제 fan-out. 수동 삭제도 고아 리소스 없이 안전.
 - Federation-safe: 대시보드가 federated 사용자를 실수로 하드 삭제 못 함.
 - Console 생성 사용자도 즉시 로그인(기본 그룹 자동 부여).
-- 인증 표면 단순화: Lambda@Edge·HMAC 쿠키·DevEnv 전용 클라이언트 제거.
+- 인증 표면 단순화: **레거시 HMAC 모델만 제거**(DevEnv 전용 UserPoolClient·HMAC 쿠키·그 검증용 Lambda@Edge). **현행 `*.dev` 엣지 인증인 NextAuth JWE `session-validator`(003)는 유지** — subdomain 소유권 검증이므로 제거 시 회귀.
 
 부정·위험 / Negative & risk
 - 프로비저너 Lambda blast radius 확대(IAM/DDB/Secrets/EC2 삭제 권한) — ARN prefix + `managed_by` 태그 조건으로 완화.

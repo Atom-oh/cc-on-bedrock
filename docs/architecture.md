@@ -22,7 +22,9 @@ graph LR
     U2[User Browser] --> CFa[CloudFront · dashboard] --> ALB --> DASH[Dashboard · ECS]
   end
   subgraph Local Mode
-    L[cc-bedrock-local CLI] --> CG[Cognito public client] --> API[Dashboard /api/local/credentials] --> STS[STS issuer] --> BR
+    L[cc-bedrock-local CLI] --> CG[Cognito public client] --> API[Dashboard /api/local/credentials] --> STS[STS issuer]
+    STS -. 1h creds .-> L
+    L --> BR
   end
   EC2 -. code-activity metrics /60s .-> OT[OTEL Collector]
   BR -. invocation logs .-> AGG[Inference Profile + Invocation Log → DynamoDB]
@@ -36,7 +38,9 @@ graph LR
    extension. Kiro is installed by default but uses IAM Identity Center licensing — **not** part of
    Cognito/Bedrock usage governance.
 2. **Two access paths.** EC2 Mode (CloudFront→NLB→nginx ECS→EC2) + Local Mode (`cc-bedrock-local`
-   → Cognito public client → Dashboard `/api/local/credentials` → STS issuer).
+   → Cognito public client → Dashboard `/api/local/credentials` → STS issuer; STS returns 1h creds,
+   the CLI calls Bedrock). The Local credential path works in a full deploy; the **GATED** label in
+   BASELINE §2 refers to the `governanceOnly` *deploy profile* (skips EC2), not the path itself.
 3. **Code-activity OTEL.** EC2 DevEnv pushes code-activity metrics to the OTEL Collector every 60s.
 4. **Usage metering.** Bedrock **Application Inference Profiles** + **Invocation Logs** → **DynamoDB**
    (not CloudWatch AWS/Bedrock account-wide metrics).

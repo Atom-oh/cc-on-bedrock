@@ -11,7 +11,7 @@ CC-on-Bedrock: AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫�
 **Terraform(HCL)이 유일한 IaC** (ADR-001: CDK·CloudFormation 폐기, Terraform 단일). Lambda 소스는 `lambda/` (repo root), TF가 archive_file로 패키징. State는 S3 backend(`cc-on-bedrock-tfstate-{account}`).
 
 두 가지 배포 프로파일 지원:
-- **EC2 DevEnv 모드** (기본, ADR-004): per-user EC2에서 Claude Code 실행
+- **EC2 DevEnv 모드** (기본, ADR-002): per-user EC2에서 Claude Code 실행
 - **Local Governance Mode** (ADR-006, GATED): EC2 없이 거버넌스 레이어만 배포, 사용자가 로컬 PC에서 Bedrock 직접 호출. `governanceOnly` 동등 Terraform 변수는 **미구현(follow-up)** — 현재는 전체 모듈이 함께 배포됨 (`terraform/CLAUDE.md` 참조). 두 모드 공존 가능.
 
 ## Tech Stack
