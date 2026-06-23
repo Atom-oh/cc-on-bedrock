@@ -26,7 +26,7 @@ ADR-030 §T3은 `cc-on-bedrock-task-boundary`(≈4000개 per-user 역할의 보�
 **`cc-on-bedrock-task-boundary`를 Terraform `security` 모듈에서 생성한다.**
 
 - `terraform/modules/security/main.tf` — `aws_iam_policy.task_permission_boundary` (name=`${var.project_prefix}-task-boundary`). ADR-026 service-ceiling statements를 포팅(BedrockClaude·S3·KMS·CW·ECR·SSM·Secrets·AgentCore·MCP-config + GrantCeiling*).
-- 소비: `terraform/main.tf`가 `module.security.task_permission_boundary_arn`을 **ec2-devenv·local-governance** 모듈에 전달해 per-user/Local 역할이 boundary와 함께 생성됨(빈 문자열 fallback 제거 → boundary 없는 역할 생성 경로 차단).
+- 소비: `terraform/main.tf`가 `module.security.task_permission_boundary_arn`(**항상 non-empty**)을 **ec2-devenv·local-governance** 모듈에 전달 → per-user/Local 역할이 boundary와 함께 생성됨. (ec2-devenv 모듈은 `task_permission_boundary_arn != "" ? ... : null` 방어적 fallback을 유지하나, root가 항상 실 ARN을 주입하므로 boundary 없는 역할은 생성되지 않는다. `arn==""`일 때 배포를 막는 `precondition` hardening은 후속으로 추적.)
 - 단일 출처는 이제 **CDK가 아니라 TF**다. ADR-030 §T3은 본 ADR로 대체된다.
 
 ### 미완(추적): ADR-030 boundary-X deny-floor의 TF 포팅

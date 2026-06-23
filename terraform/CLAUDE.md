@@ -16,7 +16,7 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
 
 ## Status (post-ADR-033 — Terraform is the sole IaC)
 - ✅ **All 8 modules wired into root `main.tf`** (network, security, ecs-devenv, dashboard, usage-tracking, local-governance, waf, ec2-devenv).
-- ✅ **task permission boundary `cc-on-bedrock-task-boundary` is now created in TF** (`modules/security`, `aws_iam_policy.task_permission_boundary`) and wired to ec2-devenv/local-governance via `task_permission_boundary_arn`. ADR-033 **supersedes ADR-030 §T3's "boundary is CDK-only"** stance (CDK is deleted; there is nowhere else to author it). NOTE: the ported policy is the ADR-026 ceiling — **porting ADR-030's boundary-X DenyEscalation floor refinement to the TF boundary is a follow-up**.
+- ✅ **task permission boundary `cc-on-bedrock-task-boundary` is now created in TF** (`modules/security`, `aws_iam_policy.task_permission_boundary`) and wired to ec2-devenv/local-governance via `task_permission_boundary_arn`. **[ADR-034](../docs/decisions/ADR-034-permission-boundary-in-terraform.md) supersedes ADR-030 §T3's "boundary is CDK-only"** stance (CDK deleted by ADR-033 → boundary authored in `modules/security`). NOTE: the ported policy is the ADR-026 ceiling — **porting ADR-030's boundary-X DenyEscalation floor refinement to the TF boundary is a follow-up**.
 - ✅ OTel pipeline, nginx-config-gen + routing table, cognito-provisioner-trigger ported.
 - ⚠️ **Remaining parity gaps (follow-up)**:
   - **Dashboard real-app deploy** — `modules/dashboard` user_data is a placeholder stub, not the real Next.js container.
