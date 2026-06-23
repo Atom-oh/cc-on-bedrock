@@ -19,7 +19,7 @@ done
 cat > "$WORK/synth-prompt.txt" <<PROMPT_EOF
 You are the CHAIR reviewing PR #${PR_NUMBER}: ${PR_TITLE}.
 이 repo 의 컨벤션은 루트의 CLAUDE.md / AGENTS.md (있으면)를 읽어 파악하라.
-아래는 패널(Codex, Kiro 모델들, Antigravity)의 독립 리뷰다.
+아래는 패널(Codex, Kiro 모델들)의 독립 리뷰다.
 패널: ${RESP}
 
 ONE 최종 리뷰를 종합하라:
