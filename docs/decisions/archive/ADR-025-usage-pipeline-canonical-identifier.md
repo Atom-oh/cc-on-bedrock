@@ -6,6 +6,9 @@ verification_required: false
 builds_on: ADR-014
 ---
 
+> **[ARCHIVED — SUPERSEDED, NOT CURRENT ARCHITECTURE]** Replaced by ADR-031. Do NOT use for current design. Current truth = `docs/decisions/BASELINE.md` + `docs/architecture.md`. Kept for history only.
+
+
 # ADR-025: 사용량/한도 파이프라인의 canonical 유저 식별자 = Cognito sub
 
 > **⚠ Superseded by [ADR-031](ADR-031-usage-email-canonical-key.md) (2026-06-13).** 운영 진단: sub 키는 (a) 트래커 EC2 경로의 `custom:subdomain` 필터가 Cognito 미지원 → 항상 실패 → `USER#{subdomain}` fallback으로 **동일인 분할 + 집행 우회**, (b) UUID라 가독성 0. ADR-031는 canonical 키를 **email**, 모든 IAM 롤명을 **subdomain**으로 전환하고 sub를 식별자에서 제거한다.

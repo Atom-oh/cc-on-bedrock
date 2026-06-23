@@ -1,5 +1,11 @@
 # Project Context
 
+## Source of Truth (read FIRST)
+- **Decisions / current truth:** `docs/decisions/BASELINE.md` — single current-truth index (North Star, invariants, frozen/gated, decision index). Read before reasoning about any architecture decision.
+- **Architecture detail (SSOT):** `docs/architecture.md`.
+- `docs/decisions/ADR-*.md` = decision log (detail). **`docs/decisions/archive/` and `docs/history/` are HISTORICAL — NOT current; do not read as present design unless explicitly asked.**
+- A new ADR or flag/status change MUST update `BASELINE.md` (§3/§2) in the same PR (anti-drift); do not reuse retired ADR numbers.
+
 ## Overview
 CC-on-Bedrock: AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼.
 **Terraform(HCL)이 유일한 IaC** (ADR-033: CDK·CloudFormation 폐기, 2026-06). Lambda 소스는 `lambda/` (repo root), TF가 archive_file로 패키징. State는 S3 backend(`cc-on-bedrock-tfstate-{account}`).

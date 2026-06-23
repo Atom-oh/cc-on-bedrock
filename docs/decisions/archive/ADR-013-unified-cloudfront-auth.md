@@ -5,6 +5,9 @@ verification_required: false
 superseded_by: ADR-016
 ---
 
+> **[ARCHIVED — SUPERSEDED, NOT CURRENT ARCHITECTURE]** Replaced by ADR-016. Do NOT use for current design. Current truth = `docs/decisions/BASELINE.md` + `docs/architecture.md`. Kept for history only.
+
+
 # ADR-013: Unified CloudFront + Single Auth Mechanism
 
 ## Status

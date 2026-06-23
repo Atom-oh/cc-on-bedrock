@@ -5,6 +5,9 @@ verification_required: false
 superseded_by: ADR-004
 ---
 
+> **[ARCHIVED — SUPERSEDED, NOT CURRENT ARCHITECTURE]** Replaced by ADR-004. Do NOT use for current design. Current truth = `docs/decisions/BASELINE.md` + `docs/architecture.md`. Kept for history only.
+
+
 # ADR-001: EFS에서 EBS + S3 동기화 스토리지 전략으로 전환
 
 ## Status

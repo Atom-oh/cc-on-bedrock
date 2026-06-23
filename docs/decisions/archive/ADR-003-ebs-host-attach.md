@@ -5,6 +5,9 @@ verification_required: false
 superseded_by: ADR-004
 ---
 
+> **[ARCHIVED — SUPERSEDED, NOT CURRENT ARCHITECTURE]** Replaced by ADR-004. Do NOT use for current design. Current truth = `docs/decisions/BASELINE.md` + `docs/architecture.md`. Kept for history only.
+
+
 # ADR-003: ECS Managed EBS에서 Host Attach 방식으로 전환
 
 ## Status

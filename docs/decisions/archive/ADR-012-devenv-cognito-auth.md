@@ -5,6 +5,9 @@ verification_required: false
 superseded_by: ADR-013
 ---
 
+> **[ARCHIVED — SUPERSEDED, NOT CURRENT ARCHITECTURE]** Replaced by ADR-013→ADR-016. Do NOT use for current design. Current truth = `docs/decisions/BASELINE.md` + `docs/architecture.md`. Kept for history only.
+
+
 # ADR-012: DevEnv Cognito Authentication via Lambda@Edge
 
 ## Status

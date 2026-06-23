@@ -6,6 +6,9 @@ verification_required: true
 builds_on: ADR-020
 ---
 
+> **[ARCHIVED — SUPERSEDED, NOT CURRENT ARCHITECTURE]** Replaced by ADR-030. Do NOT use for current design. Current truth = `docs/decisions/BASELINE.md` + `docs/architecture.md`. Kept for history only.
+
+
 # ADR-026: 사용자 IAM 권한 신청/승인 — 서비스 천장 boundary + admin 위임형 resource-specific 부여 (EC2/Local 양쪽)
 
 > **⚠️ Superseded by [ADR-030](ADR-030-tiered-iam-grant.md) (2026-06-14).** per-service `GrantCeiling*`
