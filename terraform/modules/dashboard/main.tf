@@ -9,9 +9,13 @@ data "aws_caller_identity" "current" {}
 locals {
   dashboard_domain = "${var.dashboard_subdomain}.${var.domain_name}"
   runtime_env = {
-    AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
-    AWS_REGION                  = data.aws_region.current.name
-    COGNITO_CLI_CLIENT_ID       = var.cognito_cli_public_client_id
+    AWS_ACCOUNT_ID        = data.aws_caller_identity.current.account_id
+    AWS_REGION            = data.aws_region.current.name
+    COGNITO_CLI_CLIENT_ID = var.cognito_cli_public_client_id
+    # Cross-subdomain SSO: session cookie must be shared between the dashboard
+    # (cconbedrock-dashboard.<domain>) and code-server (*.dev.<domain>) so the
+    # Lambda@Edge validator on *.dev sees the dashboard-issued session.
+    COOKIE_DOMAIN               = ".${var.domain_name}"
     DASHBOARD_URL               = "https://${local.dashboard_domain}"
     DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
     INSTANCE_TABLE              = var.instance_table_name
