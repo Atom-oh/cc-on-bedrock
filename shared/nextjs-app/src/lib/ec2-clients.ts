@@ -334,7 +334,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         privateIp: info.privateIp,
       });
 
-      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: effectivePolicy, containerOs: existing.containerOs ?? "ubuntu", status: "running" };
+      return { instanceId: existing.instanceId, ...info, subdomain: input.subdomain, username: input.username, securityPolicy: effectivePolicy, containerOs: existing.containerOs ?? "al2023", status: "running" };
     }
 
     if (desc && desc.status === "running") {
@@ -360,7 +360,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         privateIp: desc.privateIp,
         instanceType: desc.instanceType,
         securityPolicy: effectivePolicy,
-        containerOs: existing.containerOs ?? "ubuntu",
+        containerOs: existing.containerOs ?? "al2023",
       };
     }
   }
@@ -369,7 +369,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   console.log(`[EC2] Creating new instance for ${input.subdomain}`);
 
   // Get AMI ID from SSM (per-OS parameter with fallback)
-  const osType = input.containerOs ?? "ubuntu";
+  const osType = input.containerOs ?? "al2023";
   let amiId: string | undefined;
   try {
     const param = await ssmClient.send(new GetParameterCommand({
@@ -819,7 +819,7 @@ export async function switchOs(
   const record = await getUserInstance(subdomain);
   if (!record?.instanceId) throw new Error(`No instance found for ${subdomain}`);
 
-  const currentOs = record.containerOs ?? "ubuntu";
+  const currentOs = record.containerOs ?? "al2023";
   if (currentOs === newOs) throw new Error(`Instance is already running ${newOs}`);
 
   // 1. Get instance details for volume ID
@@ -958,7 +958,7 @@ export async function restoreFromSnapshot(
   const snapTags = Object.fromEntries((snapshot.Tags ?? []).map(t => [t.Key, t.Value]));
   if (snapTags.subdomain !== subdomain) throw new Error("Snapshot does not belong to this user");
 
-  const previousOs = snapTags.previousOs ?? "ubuntu";
+  const previousOs = snapTags.previousOs ?? "al2023";
 
   // 1. Stop/terminate current instance if exists
   const record = await getUserInstance(subdomain);
@@ -1225,7 +1225,7 @@ export async function listInstances(): Promise<InstanceInfo[]> {
       privateIp: ec2Info.privateIp,
       instanceType: ec2Info.instanceType,
       securityPolicy: r.securityPolicy ?? "restricted",
-      containerOs: r.containerOs ?? "ubuntu",
+      containerOs: r.containerOs ?? "al2023",
       launchTime: r.createdAt,
     };
   });
