@@ -3,6 +3,7 @@ status: Accepted
 date: 2026-06-14
 verification_required: true
 supersedes: ADR-026
+amended_by: ADR-034
 builds_on: ADR-026
 ---
 
@@ -73,7 +74,7 @@ per-service 천장 대신:
 ### 4. IaC 소유 (T3)
 boundary X 는 **CDK Stack 02 단일 정본**. 63-액션 deny 플로어를 TF/CFN 에 손으로 복제하면
 silent drift 위험(CI 불변식은 CDK synth 만 검증). TF/CFN 역할은 `task_permission_boundary_arn`
-(tfvars)로 ARN 만 소비. → `terraform/CLAUDE.md` 에 "의도적 CDK-only" 명시.
+(tfvars)로 ARN 만 소비. → **§T3의 "CDK-only" 입장은 [ADR-034](ADR-034-permission-boundary-in-terraform.md)로 대체됨** (CDK 폐기 후 boundary는 Terraform `security` 모듈에서 생성).
 
 ## DenyEscalation 플로어 구성 (T4 멀티모델 완전성 리뷰)
 
