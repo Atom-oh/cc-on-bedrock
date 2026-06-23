@@ -19,7 +19,7 @@
 EBS 볼륨은 AZ 종속이므로, `dataVolumeAz`를 영속화하고 **재연결 launch를 그 AZ의 SubnetId로 핀**합니다. AZ 불일치(`InvalidVolume.ZoneMismatch`)는 fail-closed로 처리하며 임의로 새 볼륨을 만들지 않습니다. 신규 볼륨은 인스턴스가 뜬 AZ에 생성합니다. (snapshot/restore 기반 DR은 더 이상 사용하지 않습니다.)
 
 ### Q: EBS 용량을 늘리면 어떻게 되나요?
-확장 신청은 **데이터 볼륨**(`dataVolumeId`)만 `ModifyVolume` + 온라인 `resize2fs`로 키웁니다. OS root는 건드리지 않습니다(ADR-002 rule 7).
+확장 신청은 **데이터 볼륨**(`dataVolumeId`)만 `ModifyVolume` + 온라인 `resize2fs`로 키웁니다. OS root는 건드리지 않습니다(ADR-002 — 데이터 볼륨만 resize, OS root 불변).
 
 ### Q: OS를 전환(`switchOs`)하면 데이터가 보존되나요?
 네. 옛 인스턴스에서 code-server 정지 → `/home/coder` unmount → 데이터 볼륨 detach → 옛 인스턴스 terminate → 데이터 볼륨 AZ에 핀해 타깃 OS AMI로 새 인스턴스 → reattach 순서로 진행하므로 데이터 무손실입니다. (옛 root-snapshot 의존 제거.)
@@ -49,7 +49,7 @@ Email 기반 자동 파생입니다. `emailToSubdomain("atom.oh@example.com")` �
 2. Nginx 라우팅 테이블에서 제거
 3. Cognito `custom:subdomain` 초기화
 
-Cognito 계정은 유지됩니다. 데이터 EBS는 `DeleteOnTermination=false`이므로 인스턴스가 사라져도 `available`로 남고, 동일 subdomain으로 재할당하면 동일 데이터 볼륨이 그대로 재연결됩니다. 볼륨의 실제 삭제(`DeleteVolume`)는 admin "사용자 완전 삭제" 경로에서만 일어납니다(ADR-002 rule 9).
+Cognito 계정은 유지됩니다. 데이터 EBS는 `DeleteOnTermination=false`이므로 인스턴스가 사라져도 `available`로 남고, 동일 subdomain으로 재할당하면 동일 데이터 볼륨이 그대로 재연결됩니다. 볼륨의 실제 삭제(`DeleteVolume`)는 admin "사용자 완전 삭제" 경로에서만 일어납니다(ADR-002 — admin 완전삭제 경로에서만 DeleteVolume).
 
 ---
 

@@ -114,4 +114,4 @@ After exiting Plan mode (`/plan`), before starting implementation:
 
 ### ADR Numbering
 Find the highest number in `docs/decisions/ADR-*.md` and increment by 1.
-Format: `ADR-NNN-concise-title.md`. 새 ADR/flag/status 변경은 **같은 PR에서 `BASELINE.md` (§3/§2)를 갱신**해야 하며(anti-drift), 폐기/통합된 ADR 번호는 재사용하지 않는다.
+Format: `ADR-NNN-concise-title.md`. 새 ADR/flag/status 변경은 **같은 PR에서 `BASELINE.md` (§3/§2)를 갱신**해야 하며(anti-drift), 폐기/통합된 ADR 번호는 재사용하지 않는다 (단 2026-06-23 BASELINE reset의 일회성 일괄 재번호는 예외 — legacy 번호는 git tag adr-legacy-2026-06-23 + ADR-MAPPING.md에 보존; 재사용 금지는 *이후* 신규 ADR에 적용).

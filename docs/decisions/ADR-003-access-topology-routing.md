@@ -1,5 +1,6 @@
 ---
 status: Accepted
+verification_required: false
 date: 2026-06-23
 consolidates: [ADR-002, ADR-009, ADR-016, ADR-027, ADR-013]
 ---

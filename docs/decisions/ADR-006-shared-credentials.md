@@ -1,5 +1,6 @@
 ---
 status: Accepted
+verification_required: false
 date: 2026-06-23
 consolidates: [ADR-014, ADR-029]
 ---
@@ -7,7 +8,7 @@ consolidates: [ADR-014, ADR-029]
 # 006: 공유 자격증명 (EC2·Local 동일 inference profile · STS issuer · credential_process 1h 갱신)
 
 > Consolidated ADR. 단일 현행 진실은 `../architecture.md`(SSOT)와 `BASELINE.md` §3 row 006.
-> 옛 본문은 git tag `adr-legacy-2026-06-23` 및 `history/ADR-MAPPING.md`로 보존.
+> 옛 본문은 git tag `adr-legacy-2026-06-23` 및 `../history/ADR-MAPPING.md`로 보존.
 
 ## Status / 상태
 Accepted (2026-06-23). Consolidates ADR-014, ADR-029.
@@ -104,7 +105,7 @@ Cognito refresh 30d ──(만료 시)──▶ 'cc-bedrock-local login' 1회
 
 ## Consolidates / 통합 출처
 이 ADR은 다음 LEGACY ADR을 통합한다. 옛 본문은 트리에 없고 git tag `adr-legacy-2026-06-23` 및
-`history/ADR-MAPPING.md`로 보존된다.
+`../history/ADR-MAPPING.md`로 보존된다.
 
 | Legacy | 제목 | 본 ADR 반영 |
 |---|---|---|

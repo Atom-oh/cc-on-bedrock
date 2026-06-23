@@ -1,5 +1,6 @@
 ---
 status: Accepted
+verification_required: false
 date: 2026-06-23
 consolidates: [ADR-011, ADR-019, ADR-031, ADR-025]
 ---
@@ -29,7 +30,7 @@ EN — Per-user Bedrock usage must be metered near-real-time as the single input
 
 ### 2. Canonical key = email (ADR-031; supersedes ADR-025 Cognito-sub)
 - usage·limits의 **canonical 키 = email** (`USER#{email}`, 소문자 정규화). 비즈니스/감사/한도 키.
-- **모든 IAM 롤 네이밍 = subdomain** (`cc-on-bedrock-task-{subdomain}`, `cc-on-bedrock-local-user-{subdomain}`). subdomain은 email local-part의 DNS/IAM-safe 정규화형(소문자, `[a-z0-9-]`, 3–30자)인 **파생 리소스명이지 제2의 신원이 아니다**. subdomain은 플랫폼 전역 유니크 — local-part 충돌 시 provisioner가 suffix(`-2`)로 disambiguate하고 Cognito `custom:subdomain`에 저장해 결정적 재사용.
+- **모든 IAM 롤 네이밍 = subdomain** (`cc-on-bedrock-task-{subdomain}`, `cc-on-bedrock-local-user-{subdomain}`). subdomain은 email local-part의 DNS/IAM-safe 정규화형(소문자, `[a-z0-9-]`, 3–30자)인 **파생 리소스명이지 제2의 신원이 아니다**. subdomain은 플랫폼 전역 유니크 — **신규 subdomain 할당 시** local-part가 겹치면 provisioner가 suffix(`-2`)로 disambiguate하고 Cognito `custom:subdomain`에 저장해 결정적 재사용한다(*신규 할당* 시나리오 — 아래 §의 "기존 role 소유권 충돌" 거부와 다른 경로).
 - **Cognito sub는 키도 행 속성도 아니다** — 식별자에서 완전 제거. 가독성 0(UUID)이라 부적합. email/subdomain은 writer가 인프라 태그(EC2 인스턴스 `username`/`cc:user`=email + `subdomain`; Local 롤 `email`·`subdomain` 태그)에서 직접 획득 — 쓰기 시점 Cognito 조회 불필요(깨진 `custom:subdomain` 필터 해석 제거).
 - enforcer/budget-check는 행의 `subdomain`에서 두 롤명을 모두 구성; subdomain 부재 시 fail-safe skip(오롤 Deny 금지). 충돌가드 소유권 식별자 = email로 통일.
 
@@ -52,7 +53,7 @@ EN — Per-user Bedrock usage must be metered near-real-time as the single input
 
 ### Negative
 - ADR-025 supersede 시 트래커·enforcer·budget-check·limits·리더·provisioner(롤명)·backfill 다중 변경(보안 민감). 배포된 Local 롤 삭제+재생성(IAM rename 불가), sts-issuer AssumeRole 타깃 전환 — dual-read + 배포 직후 backfill로 공백 0.
-- subdomain local-part 충돌은 provisioning에서 fail-safe 거부 → 충돌 사용자 수동 배정.
+- **기존 role이 다른 email 소유로 존재하는 충돌(role 소유권 충돌)**은 provisioning에서 fail-safe 거부(RuntimeError) → 수동 배정. (신규 할당의 auto-suffix `-2`와 **다른 시나리오** — §위 참조.)
 - 이메일 변경 시 재분할(조직상 재직 중 불변 전제; 변경 시 수동 reconcile).
 - 정규화는 silent·lossy — 새 family(`claude-opus-5`)나 vendor prefix 출시 시 rule 수동 갱신.
 - CUR 2.0 보조 채널 ~24h 지연 — 실시간 대시보드 부적합(커스텀 시스템이 그 역할).

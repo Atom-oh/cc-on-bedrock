@@ -42,7 +42,7 @@ AdminDeleteUser → CloudTrail → EventBridge → user-role-provisioner → _de
    ├─ local-user 롤 태그(email/subdomain)에서 식별자 복구 → derive_subdomain (stateless)
    ├─ EC2 terminate (tag subdomain=… AND managed_by=cc-on-bedrock)
    ├─ task 롤 + instance profile 삭제 (cc-on-bedrock-task-{subdomain})
-   ├─ 데이터 EBS DeleteVolume (cc-user-volumes의 dataVolumeId/dataVolumeAz로 식별 → detach→available → 선택적 최종 snapshot → 삭제). AdminDeleteUser = ADR-032 rule 9의 "admin 완전 삭제" 경로이므로 데이터 볼륨도 삭제 (FAQ와 일치). **반드시 dataVolumeId가 담긴 DDB 행 삭제보다 먼저** 수행해 고아·재연결 가능 볼륨 방지
+   ├─ 데이터 EBS DeleteVolume (cc-user-instances의 dataVolumeId/dataVolumeAz로 식별(권위 정본=instances 테이블) → detach→available → 선택적 최종 snapshot → 삭제). AdminDeleteUser = ADR-002(admin 완전 삭제)의 "admin 완전 삭제" 경로이므로 데이터 볼륨도 삭제 (FAQ와 일치). **반드시 dataVolumeId가 담긴 DDB 행 삭제보다 먼저** 수행해 고아·재연결 가능 볼륨 방지
    ├─ DDB 행 삭제 (cc-user-instances / cc-user-volumes / cc-routing-table) — 데이터 볼륨 삭제 후
    ├─ codeserver Secret force-delete (cc-on-bedrock/codeserver/{subdomain})
    ├─ local-user 롤 삭제 (cc-on-bedrock-local-user-{subdomain})
