@@ -15,7 +15,13 @@ export default async function UserPage() {
           Your instance status, usage, and workspace info
         </p>
       </div>
-      <UserPortal user={session.user} />
+      <UserPortal
+        user={session.user}
+        runtimeConfig={{
+          domainName: process.env.DOMAIN_NAME ?? "",
+          devSubdomain: process.env.DEV_SUBDOMAIN ?? "",
+        }}
+      />
     </div>
   );
 }

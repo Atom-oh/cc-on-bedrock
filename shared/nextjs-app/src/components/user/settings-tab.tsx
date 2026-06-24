@@ -12,9 +12,11 @@ import {
 interface SettingsTabProps {
   user: UserSession;
   container: ContainerInfo | null;
+  domainName: string;
+  devSubdomain: string;
 }
 
-export default function SettingsTab({ user, container }: SettingsTabProps) {
+export default function SettingsTab({ user, container, domainName, devSubdomain }: SettingsTabProps) {
   const [currentPassword, setCurrentPassword] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -36,8 +38,6 @@ export default function SettingsTab({ user, container }: SettingsTabProps) {
   const [routesPending, setRoutesPending] = useState(false);
   const [routesVersion, setRoutesVersion] = useState<number>(0);
 
-  const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
-  const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
   const codeServerUrl = user.subdomain
     ? `https://${user.subdomain}.${devSubdomain}.${domainName}`
     : null;

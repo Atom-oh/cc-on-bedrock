@@ -30,6 +30,47 @@ resource "aws_kms_alias" "this" {
   target_key_id = aws_kms_key.this.key_id
 }
 
+# ---- ECR Repository: dashboard image ----------------------------------------
+resource "aws_ecr_repository" "dashboard" {
+  name                 = "${var.project_prefix}/dashboard"
+  image_tag_mutability = "MUTABLE"
+  # Dashboard images are rebuildable artifacts. Allow full teardown/redeploy
+  # without requiring a manual ECR cleanup step.
+  force_delete = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = aws_kms_key.this.arn
+  }
+
+  lifecycle {
+    # The AWS provider can report KMS encryption drift for existing repositories;
+    # keep the repo managed while avoiding noisy replacement of image storage.
+    ignore_changes = [encryption_configuration]
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "dashboard" {
+  repository = aws_ecr_repository.dashboard.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 10 dashboard images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 10
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
 # ---- Cognito User Pool -------------------------------------------------------
 resource "aws_cognito_user_pool" "this" {
   name = "cc-on-bedrock-users"
@@ -670,6 +711,26 @@ resource "aws_iam_role_policy" "dashboard_ecs" {
   name   = "ecs-manage"
   role   = aws_iam_role.dashboard_ec2.id
   policy = data.aws_iam_policy_document.dashboard_ecs.json
+}
+
+# ECR pull so the dashboard EC2 can run the managed Next.js app image.
+data "aws_iam_policy_document" "dashboard_ecr" {
+  statement {
+    sid       = "EcrAuth"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "EcrPull"
+    actions   = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
+    resources = [aws_ecr_repository.dashboard.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "dashboard_ecr" {
+  name   = "ecr-pull"
+  role   = aws_iam_role.dashboard_ec2.id
+  policy = data.aws_iam_policy_document.dashboard_ecr.json
 }
 
 data "aws_iam_policy_document" "dashboard_ec2_devenv" {

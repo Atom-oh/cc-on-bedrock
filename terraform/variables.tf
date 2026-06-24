@@ -104,6 +104,16 @@ variable "dashboard_instance_type" {
   default = "t4g.xlarge"
 }
 
+variable "dashboard_image_tag" {
+  description = "Dashboard image tag deployed by the ASG launch template. Required; use an immutable build tag or commit SHA for deterministic rollouts."
+  type        = string
+
+  validation {
+    condition     = var.dashboard_image_tag != "latest" && can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$", var.dashboard_image_tag))
+    error_message = "dashboard_image_tag must be a valid immutable Docker tag and must not be 'latest'."
+  }
+}
+
 variable "devenv_instance_type" {
   description = "Per-user DevEnv EC2 instance type (ADR-004)"
   type        = string

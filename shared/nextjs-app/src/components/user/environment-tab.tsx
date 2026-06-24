@@ -19,6 +19,8 @@ interface EnvironmentTabProps {
   container: ContainerInfo | null;
   setContainer: (c: ContainerInfo | null) => void;
   fetchData: () => Promise<void>;
+  domainName: string;
+  devSubdomain: string;
 }
 
 interface UsageData {
@@ -32,7 +34,14 @@ interface DeptPolicy {
   allowedTiers: ("light" | "standard" | "power")[];
 }
 
-export default function EnvironmentTab({ user, container, setContainer, fetchData }: EnvironmentTabProps) {
+export default function EnvironmentTab({
+  user,
+  container,
+  setContainer,
+  fetchData,
+  domainName,
+  devSubdomain,
+}: EnvironmentTabProps) {
   const { t } = useI18n();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -58,9 +67,6 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
   const [requestStorage, setRequestStorage] = useState<"ebs" | "efs">("ebs");
   const [requestVolumeSize, setRequestVolumeSize] = useState(20);
   const [requestSubmitting, setRequestSubmitting] = useState(false);
-
-  const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
-  const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
 
   // Use Cognito-verified subdomain when available, fall back to JWT value during initial load
   const effectiveSubdomain = verifiedSubdomain !== undefined ? verifiedSubdomain : (user.subdomain ?? null);

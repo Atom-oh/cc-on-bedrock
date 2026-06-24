@@ -71,7 +71,7 @@
 | 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny | 006·015·023 |
 | 009 | OTel 관측 | EC2 코드활동 메트릭 60초 push → Collector, 생산성 모니터링 | (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
-| 011 | 대시보드 배포 | ECS rolling deployment + circuit breaker | 017 |
+| 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 

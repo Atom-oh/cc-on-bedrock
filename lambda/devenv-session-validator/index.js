@@ -23,6 +23,13 @@ const DASHBOARD_LOGIN_URL = '__DASHBOARD_URL__/login';
 const SSM_REGION = '__SSM_REGION__';
 const SSM_PARAM_NAME = '/cc-on-bedrock/nextauth-secret';
 
+// SSOT for the NextAuth cookie prefixes that MUST NOT be forwarded to user-controlled
+// *.dev origins. COOKIE_DOMAIN=.<domain> broadens the dashboard session cookie to all
+// subdomains, so the devenv path must strip these. Regression-tested (see
+// shared/nextjs-app .../devenv-session-validator.test.ts). Keep in sync with the
+// NextAuth cookie prefix in shared/nextjs-app/src/lib/auth.ts.
+const NEXTAUTH_COOKIE_PREFIXES = ['__Secure-next-auth.', 'next-auth.'];
+
 // Config cache (loaded from SSM on cold start)
 let encryptionKey = null;
 let configPromise = null;
@@ -181,6 +188,28 @@ function parseCookies(headers) {
   return cookies;
 }
 
+function stripNextAuthCookies(headers) {
+  if (!headers.cookie) return;
+  const stripped = [];
+  for (const entry of headers.cookie) {
+    const kept = entry.value
+      .split(';')
+      .map(pair => pair.trim())
+      .filter(pair => {
+        const name = pair.split('=')[0].trim();
+        return !NEXTAUTH_COOKIE_PREFIXES.some(prefix => name.startsWith(prefix));
+      });
+    if (kept.length > 0) {
+      stripped.push({ key: entry.key || 'Cookie', value: kept.join('; ') });
+    }
+  }
+  if (stripped.length > 0) {
+    headers.cookie = stripped;
+  } else {
+    delete headers.cookie;
+  }
+}
+
 // ─── Response Helpers ───
 
 function redirectToLogin(originalHost, request) {
@@ -207,6 +236,10 @@ function forbidden(message) {
 
 // ─── Handler ───
 
+// Exported for regression tests (Lambda ignores extra exports).
+exports.stripNextAuthCookies = stripNextAuthCookies;
+exports.NEXTAUTH_COOKIE_PREFIXES = NEXTAUTH_COOKIE_PREFIXES;
+
 exports.handler = async (event) => {
   const request = event.Records[0].cf.request;
   const headers = request.headers;
@@ -218,6 +251,11 @@ exports.handler = async (event) => {
 
   // Pass through non-devenv requests (dashboard traffic)
   if (!host.endsWith(`.${DEV_DOMAIN}`)) return request;
+
+  const cookies = parseCookies(headers);
+  // Validate with the dashboard session token, but never forward NextAuth
+  // cookies to per-user DevEnv origins where users control the server process.
+  stripNextAuthCookies(headers);
 
   // Health check bypass (NLB health checks)
   const uri = request.uri;
@@ -236,7 +274,6 @@ exports.handler = async (event) => {
   }
 
   // Read NextAuth session cookie
-  const cookies = parseCookies(headers);
   const sessionToken = cookies['__Secure-next-auth.session-token'] || cookies['next-auth.session-token'];
   if (!sessionToken) return redirectToLogin(host, request);
 

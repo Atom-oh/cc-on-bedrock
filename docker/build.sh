@@ -5,9 +5,16 @@ set -euo pipefail
 ACTION="${1:-build}"
 TARGET="${2:-all}"
 REGION="${AWS_REGION:-ap-northeast-2}"
+TAG="${IMAGE_TAG:-latest}"
+
+if { [ "$TARGET" = "all" ] || [ "$TARGET" = "dashboard" ]; } && { [ -z "${IMAGE_TAG:-}" ] || [ "$TAG" = "latest" ]; }; then
+  echo "ERROR: Dashboard image builds require IMAGE_TAG set to an immutable tag or commit SHA."
+  echo "Example: IMAGE_TAG=\$(git rev-parse --short HEAD) $0 all dashboard"
+  exit 1
+fi
+
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "000000000000")
 ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
-TAG="${IMAGE_TAG:-latest}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

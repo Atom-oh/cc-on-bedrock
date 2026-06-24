@@ -48,6 +48,10 @@ output "nextauth_secret_ssm_parameter_arn" {
   value = aws_ssm_parameter.nextauth_secret.arn
 }
 
+output "dashboard_ecr_repository_url" {
+  value = aws_ecr_repository.dashboard.repository_url
+}
+
 output "dashboard_ec2_role_arn" {
   value = aws_iam_role.dashboard_ec2.arn
 }
