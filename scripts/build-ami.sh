@@ -169,23 +169,26 @@ $(cat "$script_path")"
   # `aws ssm wait command-executed` gives up after ~100s (20×5s); the setup
   # scripts (node/python/code-server/claude/kiro) run far longer, so it would
   # return while still InProgress and be misread as a failure. Poll until a
-  # terminal status, up to the command's own 600s timeout.
-  local STATUS="Pending"
-  for _ in $(seq 1 90); do  # 90 × 8s = 720s > 600s command timeout
-    STATUS=$(aws ssm get-command-invocation \
+  # terminal status. NOTE: send-command's --timeout-seconds is the *delivery*
+  # timeout (time to start), not execution; AWS-RunShellScript can execute up to
+  # its 3600s default. Poll generously (1800s) so a slow-but-healthy build is not
+  # killed as a false negative, then fail explicitly if still non-terminal.
+  local cmd_status="Pending"
+  for _ in $(seq 1 225); do  # 225 × 8s = 1800s
+    cmd_status=$(aws ssm get-command-invocation \
       --command-id "$COMMAND_ID" \
       --instance-id "$INSTANCE_ID" \
       --query 'Status' \
       --output text \
       --region "$REGION" 2>/dev/null || echo "Pending")
-    case "$STATUS" in
+    case "$cmd_status" in
       Success|Failed|Cancelled|TimedOut) break ;;
     esac
     sleep 8
   done
 
-  if [ "$STATUS" != "Success" ]; then
-    echo "ERROR: $script_name failed (status: $STATUS)"
+  if [ "$cmd_status" != "Success" ]; then
+    echo "ERROR: $script_name failed (status: $cmd_status)"
     aws ssm get-command-invocation \
       --command-id "$COMMAND_ID" \
       --instance-id "$INSTANCE_ID" \
