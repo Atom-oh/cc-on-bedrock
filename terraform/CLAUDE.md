@@ -16,15 +16,15 @@ Terraform HCL is the canonical IaC for this repository.
 - `modules/ec2-devenv/` - Per-user EC2 DevEnv launch template, EBS GP3, DLP security groups.
 - `modules/usage-tracking/` - Bedrock Invocation Logs, usage aggregation, budget checks.
 - `modules/local-governance/` - STS issuer, token-limit enforcer, limit reset.
-- `modules/dashboard/` - Dashboard hosting.
+- `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront, and Docker runtime.
 - `modules/waf/` - CloudFront-scope WAF.
 
 ## Status (post-ADR-033 — Terraform is the sole IaC)
 - ✅ **All 8 modules wired into root `main.tf`** (network, security, ecs-devenv, dashboard, usage-tracking, local-governance, waf, ec2-devenv).
 - ✅ **task permission boundary `cc-on-bedrock-task-boundary` is now created in TF** (`modules/security`, `aws_iam_policy.task_permission_boundary`) and wired to ec2-devenv/local-governance via `task_permission_boundary_arn`. **[ADR-034](../docs/decisions/ADR-034-permission-boundary-in-terraform.md) supersedes ADR-030 §T3's "boundary is CDK-only"** stance (CDK deleted by ADR-033 → boundary authored in `modules/security`). NOTE: the ported policy is the ADR-026 ceiling — **porting ADR-030's boundary-X DenyEscalation floor refinement to the TF boundary is a follow-up**.
 - ✅ OTel pipeline, nginx-config-gen + routing table, cognito-provisioner-trigger ported.
+- ✅ Dashboard deploys the real Next.js standalone container on an EC2 ASG. The image is pulled from a Terraform-managed ECR repository; `dashboard_image_tag` is part of the launch template so immutable tag changes trigger instance refresh. `NEXTAUTH_SECRET` is read from SSM at boot.
 - ⚠️ **Remaining parity gaps (follow-up)**:
-  - **Dashboard real-app deploy** — `modules/dashboard` user_data is a placeholder stub, not the real Next.js container.
   - ADR-022 `UserRoleProvisioner` Lambda + EventBridge `cc-on-bedrock-cognito-user-created` rule + DLQ.
   - Route 53 Resolver **DNS Firewall** (DLP DNS layer).
   - ADR-016 CloudFront split — DevEnv CF (`*.dev.<domain>`, us-east-1 cert) separate from Dashboard CF.

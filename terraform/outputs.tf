@@ -71,6 +71,11 @@ output "dashboard_cloudfront_domain" {
   value       = module.dashboard.cloudfront_domain
 }
 
+output "dashboard_ecr_url" {
+  description = "Dashboard ECR repository URL"
+  value       = module.security.dashboard_ecr_repository_url
+}
+
 # EC2 DevEnv (ADR-004) — DLP security groups, consumed as SG_DEVENV_* env vars
 output "devenv_sg_open_id" {
   description = "DLP open-tier security group"

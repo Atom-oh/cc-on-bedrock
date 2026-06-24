@@ -108,6 +108,28 @@ function parseCookies(headers) {
   return cookies;
 }
 
+function stripNextAuthCookies(headers) {
+  if (!headers.cookie) return;
+  const stripped = [];
+  for (const entry of headers.cookie) {
+    const kept = entry.value
+      .split(';')
+      .map(pair => pair.trim())
+      .filter(pair => {
+        const name = pair.split('=')[0].trim();
+        return !name.startsWith('__Secure-next-auth.') && !name.startsWith('next-auth.');
+      });
+    if (kept.length > 0) {
+      stripped.push({ key: entry.key || 'Cookie', value: kept.join('; ') });
+    }
+  }
+  if (stripped.length > 0) {
+    headers.cookie = stripped;
+  } else {
+    delete headers.cookie;
+  }
+}
+
 // ─── Response Helpers ───
 
 function redirectToLogin(originalHost, request) {
@@ -146,6 +168,11 @@ exports.handler = async (event) => {
   // Pass through non-devenv requests (dashboard traffic)
   if (!host.endsWith(`.${DEV_DOMAIN}`)) return request;
 
+  const cookies = parseCookies(headers);
+  // Validate with the dashboard session token, but never forward NextAuth
+  // cookies to per-user DevEnv origins where users control the server process.
+  stripNextAuthCookies(headers);
+
   // Health check bypass (NLB health checks)
   const uri = request.uri;
   if (uri === '/health' || uri === '/nginx-status') return request;
@@ -163,7 +190,6 @@ exports.handler = async (event) => {
   }
 
   // Read NextAuth session cookie
-  const cookies = parseCookies(headers);
   const sessionToken = cookies['__Secure-next-auth.session-token'] || cookies['next-auth.session-token'];
   if (!sessionToken) return redirectToLogin(host, request);
 

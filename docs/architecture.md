@@ -4,7 +4,7 @@
 > ADRs in `docs/decisions/` are the *decision log* (why); the decision baseline is
 > `docs/decisions/BASELINE.md`. Anything under `docs/decisions/archive/` or `docs/history/`
 > is **historical / superseded — NOT current**.
-> Last reconciled: 2026-06-23 (Terraform-only; CDK/CFN removed).
+> Last reconciled: 2026-06-24 (Terraform-only; dashboard real-app deploy on EC2 ASG).
 
 ## What this is
 멀티유저 Claude Code 개발환경 플랫폼 on AWS Bedrock. 사용자는 per-user EC2 DevEnv(브라우저 IDE)
@@ -19,7 +19,7 @@ graph LR
     EC2 --> BR[(Amazon Bedrock)]
   end
   subgraph Dashboard
-    U2[User Browser] --> CFa[CloudFront · dashboard] --> ALB --> DASH[Dashboard · ECS]
+    U2[User Browser] --> CFa[CloudFront · dashboard] --> ALB --> DASH[Dashboard · EC2 ASG + Docker]
   end
   subgraph Local Mode
     L[cc-bedrock-local CLI] --> CG[Cognito public client] --> API[Dashboard /api/local/credentials] --> STS[STS issuer]
@@ -30,7 +30,10 @@ graph LR
   BR -. invocation logs .-> AGG[Inference Profile + Invocation Log → DynamoDB]
 ```
 
-> 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx) and dashboard(→ALB), 분리.
+> 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx) and dashboard(→ALB→EC2 ASG), 분리.
+> Dashboard runs the real Next.js standalone container from Terraform-managed ECR. `dashboard_image_tag`
+> is injected into the launch template for deterministic instance refresh. `NEXTAUTH_SECRET` is fetched
+> from SSM at boot, and DevEnv edge auth strips NextAuth cookies before forwarding to per-user origins.
 
 ## Canonical decisions (the 9 pillars)
 

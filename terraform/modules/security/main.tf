@@ -30,6 +30,26 @@ resource "aws_kms_alias" "this" {
   target_key_id = aws_kms_key.this.key_id
 }
 
+# ---- ECR Repository: dashboard image ----------------------------------------
+resource "aws_ecr_repository" "dashboard" {
+  name                 = "${var.project_prefix}/dashboard"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = aws_kms_key.this.arn
+  }
+
+  lifecycle {
+    ignore_changes = [encryption_configuration]
+  }
+}
+
 # ---- Cognito User Pool -------------------------------------------------------
 resource "aws_cognito_user_pool" "this" {
   name = "cc-on-bedrock-users"
@@ -672,7 +692,7 @@ resource "aws_iam_role_policy" "dashboard_ecs" {
   policy = data.aws_iam_policy_document.dashboard_ecs.json
 }
 
-# ECR pull so the dashboard EC2 can run the Next.js app image (cc-on-bedrock/dashboard).
+# ECR pull so the dashboard EC2 can run the managed Next.js app image.
 data "aws_iam_policy_document" "dashboard_ecr" {
   statement {
     sid       = "EcrAuth"
@@ -682,7 +702,7 @@ data "aws_iam_policy_document" "dashboard_ecr" {
   statement {
     sid       = "EcrPull"
     actions   = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
-    resources = ["arn:aws:ecr:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:repository/cc-on-bedrock/*"]
+    resources = [aws_ecr_repository.dashboard.arn]
   }
 }
 

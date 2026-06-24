@@ -104,6 +104,12 @@ variable "dashboard_instance_type" {
   default = "t4g.xlarge"
 }
 
+variable "dashboard_image_tag" {
+  description = "Dashboard image tag deployed by the ASG launch template. Use an immutable build tag or commit SHA for deterministic rollouts."
+  type        = string
+  default     = "latest"
+}
+
 variable "devenv_instance_type" {
   description = "Per-user DevEnv EC2 instance type (ADR-004)"
   type        = string

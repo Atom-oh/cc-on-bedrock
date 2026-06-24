@@ -32,6 +32,11 @@ variable "hosted_zone_id" {
 
 variable "domain_name" {
   type = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$", var.domain_name))
+    error_message = "domain_name must be a root DNS name such as example.com, without leading or trailing dots."
+  }
 }
 
 variable "cloudfront_secret_value" {
@@ -43,9 +48,38 @@ variable "cognito_cli_public_client_id" {
   type = string
 }
 
-variable "nextauth_secret" {
-  type      = string
-  sensitive = true
+variable "user_pool_id" {
+  type = string
+}
+
+variable "user_pool_client_id" {
+  type = string
+}
+
+variable "nextauth_secret_ssm_parameter_arn" {
+  type = string
+}
+
+variable "dev_subdomain" {
+  description = "Subdomain prefix for dev environments"
+  type        = string
+  default     = "dev"
+}
+
+variable "dashboard_ecr_repository_url" {
+  description = "Terraform-managed dashboard ECR repository URL"
+  type        = string
+}
+
+variable "dashboard_image_tag" {
+  description = "Dashboard image tag to deploy; set to an immutable build tag/commit SHA to trigger instance refresh."
+  type        = string
+  default     = "latest"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$", var.dashboard_image_tag))
+    error_message = "dashboard_image_tag must be a valid Docker tag."
+  }
 }
 
 variable "instance_type" {
@@ -57,6 +91,11 @@ variable "dashboard_subdomain" {
   description = "Dashboard subdomain label"
   type        = string
   default     = "cconbedrock-dashboard"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$", var.dashboard_subdomain))
+    error_message = "dashboard_subdomain must be a single DNS label."
+  }
 }
 
 variable "instance_table_name" {
