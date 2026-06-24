@@ -67,6 +67,16 @@ if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
 fi
 echo "Subnet: $SUBNET_ID"
 
+# The builder's SG must live in the SAME VPC as the chosen subnet — otherwise
+# run-instances fails. Derive the VPC from the subnet and scope SG lookups to it
+# (a region can hold multiple/stale cc-on-bedrock deployments).
+VPC_ID=$(aws ec2 describe-subnets \
+  --subnet-ids "$SUBNET_ID" \
+  --query 'Subnets[0].VpcId' \
+  --output text \
+  --region "$REGION")
+echo "VPC: $VPC_ID"
+
 # Find IAM instance profile (reuse existing devenv role)
 INSTANCE_PROFILE="cc-on-bedrock-devenv-builder"
 aws iam get-instance-profile --instance-profile-name "$INSTANCE_PROFILE" &>/dev/null || {
@@ -83,16 +93,20 @@ aws iam get-instance-profile --instance-profile-name "$INSTANCE_PROFILE" &>/dev/
 # a broad cc-on-bedrock tag match: that grabs the VPC-endpoint SG (no egress),
 # leaving the builder unable to register with SSM ("SSM agent not online").
 SG_ID=$(aws ec2 describe-security-groups \
-  --filters "Name=tag:Name,Values=cc-devenv-sg-open" \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=cc-devenv-sg-open" \
   --query 'SecurityGroups[0].GroupId' \
   --output text \
   --region "$REGION" 2>/dev/null)
 if [ -z "$SG_ID" ] || [ "$SG_ID" = "None" ]; then
   SG_ID=$(aws ec2 describe-security-groups \
-    --filters "Name=group-name,Values=cc-devenv-open-*" \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=cc-devenv-open-*" \
     --query 'SecurityGroups[0].GroupId' \
     --output text \
-    --region "$REGION")
+    --region "$REGION" 2>/dev/null)
+fi
+if [ -z "$SG_ID" ] || [ "$SG_ID" = "None" ]; then
+  echo "ERROR: no cc-devenv-sg-open security group found in $VPC_ID" >&2
+  exit 1
 fi
 echo "Security Group: $SG_ID"
 
