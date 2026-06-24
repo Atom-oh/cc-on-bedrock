@@ -672,6 +672,26 @@ resource "aws_iam_role_policy" "dashboard_ecs" {
   policy = data.aws_iam_policy_document.dashboard_ecs.json
 }
 
+# ECR pull so the dashboard EC2 can run the Next.js app image (cc-on-bedrock/dashboard).
+data "aws_iam_policy_document" "dashboard_ecr" {
+  statement {
+    sid       = "EcrAuth"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "EcrPull"
+    actions   = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
+    resources = ["arn:aws:ecr:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:repository/cc-on-bedrock/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "dashboard_ecr" {
+  name   = "ecr-pull"
+  role   = aws_iam_role.dashboard_ec2.id
+  policy = data.aws_iam_policy_document.dashboard_ecr.json
+}
+
 data "aws_iam_policy_document" "dashboard_ec2_devenv" {
   statement {
     sid = "Ec2DevenvInstances"

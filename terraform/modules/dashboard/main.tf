@@ -135,6 +135,14 @@ resource "aws_launch_template" "this" {
 
   vpc_security_group_ids = [aws_security_group.ec2.id]
 
+  # IMDSv2 required; hop limit 2 so the Docker container (one extra hop) can reach
+  # IMDS and assume the dashboard EC2 instance role for AWS SDK calls.
+  metadata_options {
+    http_tokens                 = "required"
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 2
+  }
+
   block_device_mappings {
     device_name = "/dev/xvda"
     ebs {
@@ -144,46 +152,39 @@ resource "aws_launch_template" "this" {
     }
   }
 
+  # Deploy the real Next.js dashboard: pull the standalone image from ECR and run
+  # it. Runtime config (NEXTAUTH_SECRET, COOKIE_DOMAIN=.<domain> for cross-subdomain
+  # SSO, OTEL endpoint, table/SG ids) is injected from local.runtime_env via
+  # --env-file. AWS creds come from the instance role (IMDS, hop limit 2 above).
   user_data = base64encode(<<-USERDATA
 #!/bin/bash
 set -euo pipefail
 
-# Install Node.js 20
-curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-yum install -y nodejs
+REGION="${data.aws_region.current.name}"
+ACCOUNT="${data.aws_caller_identity.current.account_id}"
+REGISTRY="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+IMAGE="$REGISTRY/cc-on-bedrock/dashboard:latest"
 
-# Install PM2
-npm install -g pm2
+# Docker (AL2023)
+dnf install -y docker
+systemctl enable --now docker
 
-# TODO: Deploy Next.js app from S3/CodeDeploy
-# For now, create placeholder
-mkdir -p /opt/dashboard
-cd /opt/dashboard
-
-cat > /opt/dashboard/.env << 'ENVEOF'
+# Runtime env written from TF runtime_env (COOKIE_DOMAIN, NEXTAUTH_SECRET, ...).
+# Next.js standalone server binds 0.0.0.0:3000.
+cat > /opt/dashboard.env << 'ENVEOF'
 ${local.runtime_env_file}
 ENVEOF
+{
+  echo "NODE_ENV=production"
+  echo "PORT=3000"
+  echo "HOSTNAME=0.0.0.0"
+} >> /opt/dashboard.env
 
-cat > server.js << INNEREOF
-const http = require('http');
-const server = http.createServer((req, res) => {
-  if (req.url === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>CC-on-Bedrock Dashboard</h1><p>Next.js app will be deployed here.</p>');
-  }
-});
-server.listen(3000, () => console.log('Dashboard running on port 3000'));
-INNEREOF
-
-set -a
-. /opt/dashboard/.env
-set +a
-pm2 start server.js --name dashboard
-pm2 startup
-pm2 save
+# ECR auth + pull + run
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+docker pull "$IMAGE"
+docker rm -f dashboard 2>/dev/null || true
+docker run -d --name dashboard --restart always -p 3000:3000 --env-file /opt/dashboard.env "$IMAGE"
 USERDATA
   )
 
@@ -205,6 +206,16 @@ resource "aws_autoscaling_group" "this" {
   launch_template {
     id      = aws_launch_template.this.id
     version = "$Latest"
+  }
+
+  # Roll instances when the launch template changes (new image / runtime env):
+  # bring up a fresh instance, wait for ELB health, then terminate the old one.
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 100
+      instance_warmup        = 180
+    }
   }
 
   tag {
