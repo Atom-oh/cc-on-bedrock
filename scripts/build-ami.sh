@@ -112,6 +112,16 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --region "$REGION")
 echo "Instance: $INSTANCE_ID"
 
+# Orphan guard: terminate the builder on ANY exit (set -e abort, failed AWS call,
+# interrupt). Normal success terminates it explicitly below; this trap makes the
+# terminate idempotent and ensures no instance is left running on a mid-build
+# failure path that the inline terminates don't cover.
+cleanup_builder() {
+  [ -n "${INSTANCE_ID:-}" ] && [ "$INSTANCE_ID" != "None" ] || return 0
+  aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION" >/dev/null 2>&1 || true
+}
+trap cleanup_builder EXIT
+
 echo "Waiting for instance to be running..."
 aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$REGION"
 
