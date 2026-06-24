@@ -16,6 +16,10 @@ const LOCAL_MODE_ENABLED =
 
 interface UserPortalProps {
   user: UserSession;
+  runtimeConfig: {
+    domainName: string;
+    devSubdomain: string;
+  };
 }
 
 const ALL_TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: React.ReactNode }[] = [
@@ -56,7 +60,7 @@ const ALL_TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: Re
 // Keeping ALL_TABS → TABS without filtering for now (local tab removed entirely).
 const TABS = ALL_TABS;
 
-export default function UserPortal({ user }: UserPortalProps) {
+export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<UserPortalTab>("environment");
   const [container, setContainer] = useState<ContainerInfo | null>(null);
@@ -192,6 +196,8 @@ export default function UserPortal({ user }: UserPortalProps) {
               container={container}
               setContainer={setContainer}
               fetchData={fetchContainerStatus}
+              domainName={runtimeConfig.domainName}
+              devSubdomain={runtimeConfig.devSubdomain}
             />
           </div>
         )}
@@ -202,7 +208,12 @@ export default function UserPortal({ user }: UserPortalProps) {
         )}
         {activeTab === "settings" && (
           <div role="tabpanel" id="tabpanel-settings" aria-labelledby="tab-settings">
-            <SettingsTab user={user} container={container} />
+            <SettingsTab
+              user={user}
+              container={container}
+              domainName={runtimeConfig.domainName}
+              devSubdomain={runtimeConfig.devSubdomain}
+            />
           </div>
         )}
       </div>

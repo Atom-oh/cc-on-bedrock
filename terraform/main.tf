@@ -106,9 +106,14 @@ module "dashboard" {
   dashboard_certificate_arn           = module.security.dashboard_certificate_arn
   hosted_zone_id                      = module.network.hosted_zone_id
   domain_name                         = var.domain_name
+  dev_subdomain                       = var.dev_subdomain
   cloudfront_secret_value             = module.security.cloudfront_secret_value
   cognito_cli_public_client_id        = module.security.cli_public_client_id
-  nextauth_secret                     = module.security.nextauth_secret_value
+  user_pool_id                        = module.security.user_pool_id
+  user_pool_client_id                 = module.security.user_pool_client_id
+  nextauth_secret_ssm_parameter_arn   = module.security.nextauth_secret_ssm_parameter_arn
+  dashboard_ecr_repository_url        = module.security.dashboard_ecr_repository_url
+  dashboard_image_tag                 = var.dashboard_image_tag
   instance_type                       = var.dashboard_instance_type
   dashboard_subdomain                 = var.dashboard_subdomain
   instance_table_name                 = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : local.default_dev_env

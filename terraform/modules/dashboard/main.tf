@@ -9,14 +9,21 @@ data "aws_caller_identity" "current" {}
 locals {
   dashboard_domain = "${var.dashboard_subdomain}.${var.domain_name}"
   runtime_env = {
-    AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
-    AWS_REGION                  = data.aws_region.current.name
-    COGNITO_CLI_CLIENT_ID       = var.cognito_cli_public_client_id
+    AWS_ACCOUNT_ID        = data.aws_caller_identity.current.account_id
+    AWS_REGION            = data.aws_region.current.name
+    COGNITO_CLI_CLIENT_ID = var.cognito_cli_public_client_id
+    COGNITO_CLIENT_ID     = var.user_pool_client_id
+    COGNITO_ISSUER        = "https://cognito-idp.${data.aws_region.current.name}.amazonaws.com/${var.user_pool_id}"
+    COGNITO_USER_POOL_ID  = var.user_pool_id
+    # DevEnv edge auth reads the dashboard session cookie, then strips NextAuth
+    # cookies before forwarding to user-controlled origins.
+    COOKIE_DOMAIN               = ".${var.domain_name}"
     DASHBOARD_URL               = "https://${local.dashboard_domain}"
+    DEV_SUBDOMAIN               = var.dev_subdomain
     DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
+    DOMAIN_NAME                 = var.domain_name
     INSTANCE_TABLE              = var.instance_table_name
     LAUNCH_TEMPLATE             = var.devenv_launch_template_name
-    NEXTAUTH_SECRET             = var.nextauth_secret
     NEXTAUTH_URL                = "https://${local.dashboard_domain}"
     OTEL_EXPORTER_OTLP_ENDPOINT = var.otel_collector_endpoint
     PRIVATE_SUBNET_IDS          = join(",", var.private_subnet_ids)
@@ -131,6 +138,14 @@ resource "aws_launch_template" "this" {
 
   vpc_security_group_ids = [aws_security_group.ec2.id]
 
+  # IMDSv2 required; hop limit 2 so the Docker container (one extra hop) can reach
+  # IMDS and assume the dashboard EC2 instance role for AWS SDK calls.
+  metadata_options {
+    http_tokens                 = "required"
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 2
+  }
+
   block_device_mappings {
     device_name = "/dev/xvda"
     ebs {
@@ -140,46 +155,60 @@ resource "aws_launch_template" "this" {
     }
   }
 
+  # Deploy the real Next.js dashboard from the Terraform-managed ECR repository.
+  # NEXTAUTH_SECRET is fetched from SSM at boot so it is not embedded in user_data
+  # or the launch template. AWS creds come from the instance role.
   user_data = base64encode(<<-USERDATA
 #!/bin/bash
 set -euo pipefail
 
-# Install Node.js 20
-curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-yum install -y nodejs
+REGION="${data.aws_region.current.name}"
+ACCOUNT="${data.aws_caller_identity.current.account_id}"
+REGISTRY="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+IMAGE="${var.dashboard_ecr_repository_url}:${var.dashboard_image_tag}"
+NEXTAUTH_SECRET_PARAM="${var.nextauth_secret_ssm_parameter_arn}"
 
-# Install PM2
-npm install -g pm2
+retry() {
+  local delay=5
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "$@"; then
+      return 0
+    fi
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+  "$@"
+}
 
-# TODO: Deploy Next.js app from S3/CodeDeploy
-# For now, create placeholder
-mkdir -p /opt/dashboard
-cd /opt/dashboard
+login_ecr() {
+  aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+}
 
-cat > /opt/dashboard/.env << 'ENVEOF'
+# Docker (AL2023)
+dnf install -y docker
+systemctl enable --now docker
+
+# Runtime env written from TF runtime_env. Secret values are fetched below.
+# Next.js standalone server binds 0.0.0.0:3000.
+umask 077
+cat > /opt/dashboard.env << 'ENVEOF'
 ${local.runtime_env_file}
 ENVEOF
+NEXTAUTH_SECRET="$(retry aws ssm get-parameter --name "$NEXTAUTH_SECRET_PARAM" --with-decryption --query 'Parameter.Value' --output text --region "$REGION")"
+{
+  echo "NODE_ENV=production"
+  echo "PORT=3000"
+  echo "HOSTNAME=0.0.0.0"
+  printf 'NEXTAUTH_SECRET=%s\n' "$NEXTAUTH_SECRET"
+} >> /opt/dashboard.env
+chmod 600 /opt/dashboard.env
 
-cat > server.js << INNEREOF
-const http = require('http');
-const server = http.createServer((req, res) => {
-  if (req.url === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>CC-on-Bedrock Dashboard</h1><p>Next.js app will be deployed here.</p>');
-  }
-});
-server.listen(3000, () => console.log('Dashboard running on port 3000'));
-INNEREOF
-
-set -a
-. /opt/dashboard/.env
-set +a
-pm2 start server.js --name dashboard
-pm2 startup
-pm2 save
+# ECR auth + pull + run
+retry login_ecr
+retry docker pull "$IMAGE"
+docker rm -f dashboard 2>/dev/null || true
+docker run -d --name dashboard --restart always --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 -p 3000:3000 --env-file /opt/dashboard.env "$IMAGE"
 USERDATA
   )
 
@@ -200,7 +229,17 @@ resource "aws_autoscaling_group" "this" {
 
   launch_template {
     id      = aws_launch_template.this.id
-    version = "$Latest"
+    version = aws_launch_template.this.latest_version
+  }
+
+  # Roll instances when the launch template changes (new image / runtime env):
+  # bring up a fresh instance, wait for ELB health, then terminate the old one.
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 100
+      instance_warmup        = 300
+    }
   }
 
   tag {
