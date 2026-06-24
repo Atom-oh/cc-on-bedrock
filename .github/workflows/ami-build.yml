@@ -26,12 +26,14 @@ on:
 
 env:
   AWS_REGION: ap-northeast-2
+  AWS_DEFAULT_REGION: ap-northeast-2
   DEFAULT_OS: al2023
   INSTANCE_TYPE: t4g.medium
   KEEP_COUNT: 3
 
+# No OIDC: the self-hosted cc-bedrock-arm runner carries the AMI-build IAM
+# permissions on its own role (IRSA/node), and the runner image bakes aws CLI.
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -41,20 +43,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install AWS CLI
-        run: |
-          if ! command -v aws &>/dev/null; then
-            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
-            cd /tmp && unzip -qo awscliv2.zip && sudo ./aws/install --update
-          fi
-          aws --version
 
       - name: Resolve build parameters
         id: params
