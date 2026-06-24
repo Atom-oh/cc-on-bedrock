@@ -26,27 +26,23 @@ on:
 
 env:
   AWS_REGION: ap-northeast-2
+  AWS_DEFAULT_REGION: ap-northeast-2
   DEFAULT_OS: al2023
   INSTANCE_TYPE: t4g.medium
   KEEP_COUNT: 3
 
+# No OIDC: the self-hosted cc-bedrock-arm runner carries the AMI-build IAM
+# permissions on its own role (IRSA/node), and the runner image bakes aws CLI.
 permissions:
-  id-token: write
   contents: read
 
 jobs:
   build:
     name: Build AMI (${{ github.event_name == 'schedule' && 'al2023' || inputs.os_type }})
-    runs-on: ubuntu-latest
+    runs-on: cc-bedrock-arm
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
-          aws-region: ${{ env.AWS_REGION }}
 
       - name: Resolve build parameters
         id: params
