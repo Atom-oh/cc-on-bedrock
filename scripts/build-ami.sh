@@ -67,6 +67,16 @@ if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
 fi
 echo "Subnet: $SUBNET_ID"
 
+# The builder's SG must live in the SAME VPC as the chosen subnet — otherwise
+# run-instances fails. Derive the VPC from the subnet and scope SG lookups to it
+# (a region can hold multiple/stale cc-on-bedrock deployments).
+VPC_ID=$(aws ec2 describe-subnets \
+  --subnet-ids "$SUBNET_ID" \
+  --query 'Subnets[0].VpcId' \
+  --output text \
+  --region "$REGION")
+echo "VPC: $VPC_ID"
+
 # Find IAM instance profile (reuse existing devenv role)
 INSTANCE_PROFILE="cc-on-bedrock-devenv-builder"
 aws iam get-instance-profile --instance-profile-name "$INSTANCE_PROFILE" &>/dev/null || {
@@ -77,18 +87,26 @@ aws iam get-instance-profile --instance-profile-name "$INSTANCE_PROFILE" &>/dev/
   sleep 10  # Wait for propagation
 }
 
-# Find security group (SSM only, no SSH)
+# Find the DevEnv "open" security group — an INSTANCE SG with egress so the
+# builder can reach the SSM VPC endpoints (443). Match the Terraform naming
+# (tag Name=cc-devenv-sg-open, group-name cc-devenv-open-*). Do NOT fall back to
+# a broad cc-on-bedrock tag match: that grabs the VPC-endpoint SG (no egress),
+# leaving the builder unable to register with SSM ("SSM agent not online").
 SG_ID=$(aws ec2 describe-security-groups \
-  --filters "Name=group-name,Values=*DevenvSgOpen*" \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=cc-devenv-sg-open" \
   --query 'SecurityGroups[0].GroupId' \
   --output text \
   --region "$REGION" 2>/dev/null)
 if [ -z "$SG_ID" ] || [ "$SG_ID" = "None" ]; then
   SG_ID=$(aws ec2 describe-security-groups \
-    --filters "Name=tag:Name,Values=*cc-on-bedrock*" \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=cc-devenv-open-*" \
     --query 'SecurityGroups[0].GroupId' \
     --output text \
-    --region "$REGION")
+    --region "$REGION" 2>/dev/null)
+fi
+if [ -z "$SG_ID" ] || [ "$SG_ID" = "None" ]; then
+  echo "ERROR: no cc-devenv-sg-open security group found in $VPC_ID" >&2
+  exit 1
 fi
 echo "Security Group: $SG_ID"
 
@@ -107,6 +125,16 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --output text \
   --region "$REGION")
 echo "Instance: $INSTANCE_ID"
+
+# Orphan guard: terminate the builder on ANY exit (set -e abort, failed AWS call,
+# interrupt). Normal success terminates it explicitly below; this trap makes the
+# terminate idempotent and ensures no instance is left running on a mid-build
+# failure path that the inline terminates don't cover.
+cleanup_builder() {
+  [ -n "${INSTANCE_ID:-}" ] && [ "$INSTANCE_ID" != "None" ] || return 0
+  aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION" >/dev/null 2>&1 || true
+}
+trap cleanup_builder EXIT
 
 echo "Waiting for instance to be running..."
 aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$REGION"
@@ -152,20 +180,31 @@ $(cat "$script_path")"
     --output text \
     --region "$REGION")
 
-  aws ssm wait command-executed \
-    --command-id "$COMMAND_ID" \
-    --instance-id "$INSTANCE_ID" \
-    --region "$REGION" 2>/dev/null || true
+  # `aws ssm wait command-executed` gives up after ~100s (20×5s); the setup
+  # scripts (node/python/code-server/claude/kiro) run far longer, so it would
+  # return while still InProgress and be misread as a failure. Poll until a
+  # terminal status. NOTE: send-command's --timeout-seconds is the *delivery*
+  # timeout (time to start), not execution; AWS-RunShellScript executes up to its
+  # executionTimeout (3600s default). Derive the poll ceiling from that execution
+  # limit (not the delivery timeout) so a slow-but-healthy build is never killed
+  # as a false negative; we only break on a terminal status, and fail explicitly
+  # below if the command is still non-terminal past the execution limit.
+  local cmd_status="Pending"
+  for _ in $(seq 1 450); do  # 450 × 8s = 3600s = AWS-RunShellScript executionTimeout
+    cmd_status=$(aws ssm get-command-invocation \
+      --command-id "$COMMAND_ID" \
+      --instance-id "$INSTANCE_ID" \
+      --query 'Status' \
+      --output text \
+      --region "$REGION" 2>/dev/null || echo "Pending")
+    case "$cmd_status" in
+      Success|Failed|Cancelled|TimedOut) break ;;
+    esac
+    sleep 8
+  done
 
-  STATUS=$(aws ssm get-command-invocation \
-    --command-id "$COMMAND_ID" \
-    --instance-id "$INSTANCE_ID" \
-    --query 'Status' \
-    --output text \
-    --region "$REGION")
-
-  if [ "$STATUS" != "Success" ]; then
-    echo "ERROR: $script_name failed (status: $STATUS)"
+  if [ "$cmd_status" != "Success" ]; then
+    echo "ERROR: $script_name failed (status: $cmd_status)"
     aws ssm get-command-invocation \
       --command-id "$COMMAND_ID" \
       --instance-id "$INSTANCE_ID" \
