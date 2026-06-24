@@ -170,11 +170,13 @@ $(cat "$script_path")"
   # scripts (node/python/code-server/claude/kiro) run far longer, so it would
   # return while still InProgress and be misread as a failure. Poll until a
   # terminal status. NOTE: send-command's --timeout-seconds is the *delivery*
-  # timeout (time to start), not execution; AWS-RunShellScript can execute up to
-  # its 3600s default. Poll generously (1800s) so a slow-but-healthy build is not
-  # killed as a false negative, then fail explicitly if still non-terminal.
+  # timeout (time to start), not execution; AWS-RunShellScript executes up to its
+  # executionTimeout (3600s default). Derive the poll ceiling from that execution
+  # limit (not the delivery timeout) so a slow-but-healthy build is never killed
+  # as a false negative; we only break on a terminal status, and fail explicitly
+  # below if the command is still non-terminal past the execution limit.
   local cmd_status="Pending"
-  for _ in $(seq 1 225); do  # 225 × 8s = 1800s
+  for _ in $(seq 1 450); do  # 450 × 8s = 3600s = AWS-RunShellScript executionTimeout
     cmd_status=$(aws ssm get-command-invocation \
       --command-id "$COMMAND_ID" \
       --instance-id "$INSTANCE_ID" \
