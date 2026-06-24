@@ -77,15 +77,19 @@ aws iam get-instance-profile --instance-profile-name "$INSTANCE_PROFILE" &>/dev/
   sleep 10  # Wait for propagation
 }
 
-# Find security group (SSM only, no SSH)
+# Find the DevEnv "open" security group — an INSTANCE SG with egress so the
+# builder can reach the SSM VPC endpoints (443). Match the Terraform naming
+# (tag Name=cc-devenv-sg-open, group-name cc-devenv-open-*). Do NOT fall back to
+# a broad cc-on-bedrock tag match: that grabs the VPC-endpoint SG (no egress),
+# leaving the builder unable to register with SSM ("SSM agent not online").
 SG_ID=$(aws ec2 describe-security-groups \
-  --filters "Name=group-name,Values=*DevenvSgOpen*" \
+  --filters "Name=tag:Name,Values=cc-devenv-sg-open" \
   --query 'SecurityGroups[0].GroupId' \
   --output text \
   --region "$REGION" 2>/dev/null)
 if [ -z "$SG_ID" ] || [ "$SG_ID" = "None" ]; then
   SG_ID=$(aws ec2 describe-security-groups \
-    --filters "Name=tag:Name,Values=*cc-on-bedrock*" \
+    --filters "Name=group-name,Values=cc-devenv-open-*" \
     --query 'SecurityGroups[0].GroupId' \
     --output text \
     --region "$REGION")
