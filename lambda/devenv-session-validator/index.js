@@ -23,6 +23,13 @@ const DASHBOARD_LOGIN_URL = '__DASHBOARD_URL__/login';
 const SSM_REGION = '__SSM_REGION__';
 const SSM_PARAM_NAME = '/cc-on-bedrock/nextauth-secret';
 
+// SSOT for the NextAuth cookie prefixes that MUST NOT be forwarded to user-controlled
+// *.dev origins. COOKIE_DOMAIN=.<domain> broadens the dashboard session cookie to all
+// subdomains, so the devenv path must strip these. Regression-tested (see
+// shared/nextjs-app .../devenv-session-validator.test.ts). Keep in sync with the
+// NextAuth cookie prefix in shared/nextjs-app/src/lib/auth.ts.
+const NEXTAUTH_COOKIE_PREFIXES = ['__Secure-next-auth.', 'next-auth.'];
+
 // Config cache (loaded from SSM on cold start)
 let encryptionKey = null;
 let configPromise = null;
@@ -190,7 +197,7 @@ function stripNextAuthCookies(headers) {
       .map(pair => pair.trim())
       .filter(pair => {
         const name = pair.split('=')[0].trim();
-        return !name.startsWith('__Secure-next-auth.') && !name.startsWith('next-auth.');
+        return !NEXTAUTH_COOKIE_PREFIXES.some(prefix => name.startsWith(prefix));
       });
     if (kept.length > 0) {
       stripped.push({ key: entry.key || 'Cookie', value: kept.join('; ') });
@@ -228,6 +235,10 @@ function forbidden(message) {
 }
 
 // ─── Handler ───
+
+// Exported for regression tests (Lambda ignores extra exports).
+exports.stripNextAuthCookies = stripNextAuthCookies;
+exports.NEXTAUTH_COOKIE_PREFIXES = NEXTAUTH_COOKIE_PREFIXES;
 
 exports.handler = async (event) => {
   const request = event.Records[0].cf.request;
