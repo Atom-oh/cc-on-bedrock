@@ -88,17 +88,26 @@ aws s3api put-bucket-versioning \
 
 ## 2. Docker 이미지 빌드 + ECR 푸시
 
-Terraform이 ECS task / 컨테이너를 참조하므로 **apply 전에** 이미지를 ECR에 올려야 합니다.
+Dashboard는 Terraform-managed ECR repo(`cc-on-bedrock/dashboard`)에서 이미지를 pull합니다.
+Fresh deploy에서는 repo를 먼저 만들고 이미지를 push한 뒤 전체 apply를 실행해야 합니다.
+`scripts/01-create-ecr-repos.sh`는 Terraform 충돌을 피하기 위해 dashboard repo를 만들지 않습니다.
+
 대상 이미지: `cc-on-bedrock/devenv`, `cc-on-bedrock/dashboard`, `cc-on-bedrock/nginx`
 (추가로 OTel collector 이미지 — `docker/otel-collector/`).
 
 ```bash
 cd /path/to/cc-on-bedrock
 
-# ECR 리포지토리 생성 (재실행 안전)
+# Non-Terraform ECR 리포지토리 생성 (devenv/nginx, 재실행 안전)
 bash scripts/01-create-ecr-repos.sh
 
+# Dashboard ECR repo bootstrap (fresh deploy 1회 또는 destroy 후 재배포)
+terraform -chdir=terraform apply -target=module.security.aws_ecr_repository.dashboard
+
 # 모든 이미지 빌드 + ECR 푸시 (ARM64 / Graviton)
+# Production rollout은 IMAGE_TAG를 commit SHA 등 immutable tag로 지정하고,
+# terraform.tfvars의 dashboard_image_tag도 같은 값으로 설정합니다.
+export IMAGE_TAG="$(git rev-parse --short HEAD)"
 cd docker && bash build.sh all all
 
 # 개별 빌드 예시

@@ -32,8 +32,9 @@ graph LR
 
 > 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx) and dashboard(→ALB→EC2 ASG), 분리.
 > Dashboard runs the real Next.js standalone container from Terraform-managed ECR. `dashboard_image_tag`
-> is injected into the launch template for deterministic instance refresh. `NEXTAUTH_SECRET` is fetched
-> from SSM at boot, and DevEnv edge auth strips NextAuth cookies before forwarding to per-user origins.
+> is injected into the launch template and pinned to the ASG for deterministic instance refresh.
+> `NEXTAUTH_SECRET` is fetched from SSM at boot, DevEnv edge auth strips NextAuth cookies before
+> forwarding to per-user origins, and dashboard ECR is bootstrapped before image push on fresh deploys.
 
 ## Canonical decisions (the 9 pillars)
 

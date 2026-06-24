@@ -2,8 +2,10 @@
 set -euo pipefail
 
 # CC-on-Bedrock: Create ECR Repositories
-# Creates required ECR repos with encryption and scan-on-push.
-# Safe to re-run (skips existing repos).
+# Creates non-Terraform ECR repos with encryption and scan-on-push.
+# Safe to re-run (skips existing repos). The dashboard repo is Terraform-owned;
+# bootstrap it with:
+#   terraform -chdir=terraform apply -target=module.security.aws_ecr_repository.dashboard
 #
 # Usage: ./01-create-ecr-repos.sh
 
@@ -12,13 +14,18 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
 REPOS=(
   "cc-on-bedrock/devenv"
-  "cc-on-bedrock/dashboard"
   "cc-on-bedrock/nginx"
+)
+
+TF_MANAGED_REPOS=(
+  "cc-on-bedrock/dashboard"
 )
 
 echo "=== Creating ECR Repositories ==="
 echo "Region: $REGION"
 echo "Account: $ACCOUNT_ID"
+echo ""
+echo "Terraform-managed repos skipped here: ${TF_MANAGED_REPOS[*]}"
 echo ""
 
 for REPO in "${REPOS[@]}"; do
@@ -64,4 +71,4 @@ done
 echo ""
 echo "ECR Registry: ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 echo ""
-echo "Next: terraform -chdir=terraform plan"
+echo "Next: terraform -chdir=terraform apply -target=module.security.aws_ecr_repository.dashboard"

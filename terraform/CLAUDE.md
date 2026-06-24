@@ -23,7 +23,7 @@ Terraform HCL is the canonical IaC for this repository.
 - ✅ **All 8 modules wired into root `main.tf`** (network, security, ecs-devenv, dashboard, usage-tracking, local-governance, waf, ec2-devenv).
 - ✅ **task permission boundary `cc-on-bedrock-task-boundary` is now created in TF** (`modules/security`, `aws_iam_policy.task_permission_boundary`) and wired to ec2-devenv/local-governance via `task_permission_boundary_arn`. **[ADR-034](../docs/decisions/ADR-034-permission-boundary-in-terraform.md) supersedes ADR-030 §T3's "boundary is CDK-only"** stance (CDK deleted by ADR-033 → boundary authored in `modules/security`). NOTE: the ported policy is the ADR-026 ceiling — **porting ADR-030's boundary-X DenyEscalation floor refinement to the TF boundary is a follow-up**.
 - ✅ OTel pipeline, nginx-config-gen + routing table, cognito-provisioner-trigger ported.
-- ✅ Dashboard deploys the real Next.js standalone container on an EC2 ASG. The image is pulled from a Terraform-managed ECR repository; `dashboard_image_tag` is part of the launch template so immutable tag changes trigger instance refresh. `NEXTAUTH_SECRET` is read from SSM at boot.
+- ✅ Dashboard deploys the real Next.js standalone container on an EC2 ASG. The image is pulled from a Terraform-managed ECR repository; `dashboard_image_tag` is part of the launch template and ASG version pin so immutable tag changes trigger instance refresh. `NEXTAUTH_SECRET` is read from SSM at boot.
 - ⚠️ **Remaining parity gaps (follow-up)**:
   - ADR-022 `UserRoleProvisioner` Lambda + EventBridge `cc-on-bedrock-cognito-user-created` rule + DLQ.
   - Route 53 Resolver **DNS Firewall** (DLP DNS layer).
@@ -39,6 +39,15 @@ terraform -chdir=terraform fmt -recursive
 terraform -chdir=terraform validate
 terraform -chdir=terraform plan
 terraform -chdir=terraform apply
+```
+
+Fresh dashboard bootstrap is two-phase because Terraform owns the dashboard ECR
+repository but Docker image publishing is outside Terraform:
+
+```bash
+terraform -chdir=terraform apply -target=module.security.aws_ecr_repository.dashboard
+IMAGE_TAG=$(git rev-parse --short HEAD) scripts/05-build-docker-images.sh dashboard
+terraform -chdir=terraform apply -var="dashboard_image_tag=$(git rev-parse --short HEAD)"
 ```
 
 ## Rules

@@ -5,10 +5,10 @@ Terraform-only deployment helpers, AMI build scripts, verification scripts, and 
 
 ## Deployment Guide
 - `00-check-prerequisites.sh` - 사전 조건 점검 (CLI tools, AWS credentials, Bedrock access, Route 53, Terraform)
-- `01-create-ecr-repos.sh` - ECR 리포지토리 생성 (devenv, dashboard, nginx) + lifecycle policy
+- `01-create-ecr-repos.sh` - Non-Terraform ECR 리포지토리 생성 (devenv, nginx) + lifecycle policy. Dashboard ECR is Terraform-owned.
 - Terraform root: `terraform -chdir=terraform init && terraform -chdir=terraform plan`
 - `04-setup-cognito-auth.sh` - Cognito 설정 (native/SAML/OIDC), admin 유저 생성, SSM 파라미터
-- `05-build-docker-images.sh` - ARM64 Docker 이미지 빌드 (devenv Ubuntu/AL2023 + dashboard)
+- `05-build-docker-images.sh` - ARM64 Docker 이미지 빌드 (devenv Ubuntu/AL2023 + dashboard). Dashboard push requires the Terraform-owned dashboard ECR repo to exist first.
 - `07-build-ami.sh` - AMI 빌드 wrapper (ubuntu/al2023/both), `build-ami.sh` 호출
 - `08-verify-deployment.sh` - 배포 후 인프라 검증
 

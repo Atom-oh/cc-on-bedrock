@@ -34,7 +34,9 @@ resource "aws_kms_alias" "this" {
 resource "aws_ecr_repository" "dashboard" {
   name                 = "${var.project_prefix}/dashboard"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  # Dashboard images are rebuildable artifacts. Allow full teardown/redeploy
+  # without requiring a manual ECR cleanup step.
+  force_delete = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -46,8 +48,27 @@ resource "aws_ecr_repository" "dashboard" {
   }
 
   lifecycle {
+    # The AWS provider can report KMS encryption drift for existing repositories;
+    # keep the repo managed while avoiding noisy replacement of image storage.
     ignore_changes = [encryption_configuration]
   }
+}
+
+resource "aws_ecr_lifecycle_policy" "dashboard" {
+  repository = aws_ecr_repository.dashboard.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 10 dashboard images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 10
+      }
+      action = { type = "expire" }
+    }]
+  })
 }
 
 # ---- Cognito User Pool -------------------------------------------------------

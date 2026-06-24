@@ -25,8 +25,6 @@ locals {
     INSTANCE_TABLE              = var.instance_table_name
     LAUNCH_TEMPLATE             = var.devenv_launch_template_name
     NEXTAUTH_URL                = "https://${local.dashboard_domain}"
-    NEXT_PUBLIC_DEV_SUBDOMAIN   = var.dev_subdomain
-    NEXT_PUBLIC_DOMAIN_NAME     = var.domain_name
     OTEL_EXPORTER_OTLP_ENDPOINT = var.otel_collector_endpoint
     PRIVATE_SUBNET_IDS          = join(",", var.private_subnet_ids)
     ROUTING_TABLE               = var.routing_table_name
@@ -231,7 +229,7 @@ resource "aws_autoscaling_group" "this" {
 
   launch_template {
     id      = aws_launch_template.this.id
-    version = "$Latest"
+    version = aws_launch_template.this.latest_version
   }
 
   # Roll instances when the launch template changes (new image / runtime env):
