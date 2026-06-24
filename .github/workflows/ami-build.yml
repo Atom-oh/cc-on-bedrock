@@ -48,6 +48,14 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Install AWS CLI
+        run: |
+          if ! command -v aws &>/dev/null; then
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+            cd /tmp && unzip -qo awscliv2.zip && sudo ./aws/install --update
+          fi
+          aws --version
+
       - name: Resolve build parameters
         id: params
         run: |
