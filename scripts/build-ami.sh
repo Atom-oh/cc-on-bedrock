@@ -156,17 +156,23 @@ $(cat "$script_path")"
     --output text \
     --region "$REGION")
 
-  aws ssm wait command-executed \
-    --command-id "$COMMAND_ID" \
-    --instance-id "$INSTANCE_ID" \
-    --region "$REGION" 2>/dev/null || true
-
-  STATUS=$(aws ssm get-command-invocation \
-    --command-id "$COMMAND_ID" \
-    --instance-id "$INSTANCE_ID" \
-    --query 'Status' \
-    --output text \
-    --region "$REGION")
+  # `aws ssm wait command-executed` gives up after ~100s (20×5s); the setup
+  # scripts (node/python/code-server/claude/kiro) run far longer, so it would
+  # return while still InProgress and be misread as a failure. Poll until a
+  # terminal status, up to the command's own 600s timeout.
+  local STATUS="Pending"
+  for _ in $(seq 1 90); do  # 90 × 8s = 720s > 600s command timeout
+    STATUS=$(aws ssm get-command-invocation \
+      --command-id "$COMMAND_ID" \
+      --instance-id "$INSTANCE_ID" \
+      --query 'Status' \
+      --output text \
+      --region "$REGION" 2>/dev/null || echo "Pending")
+    case "$STATUS" in
+      Success|Failed|Cancelled|TimedOut) break ;;
+    esac
+    sleep 8
+  done
 
   if [ "$STATUS" != "Success" ]; then
     echo "ERROR: $script_name failed (status: $STATUS)"
