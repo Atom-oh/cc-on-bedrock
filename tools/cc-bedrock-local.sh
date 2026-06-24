@@ -14,7 +14,8 @@
 #   logout        clear cached refresh token + state
 #   change-email  prompt new email (+ password) and persist to config
 #   status        remaining TTL + Deny / limit state
-#   claude [args] ensure session + apply model env from config, then exec 'claude'
+#   claude [args] ensure session + apply model env, emit lightweight OTEL if configured,
+#                 then run 'claude'
 #   set-model K=V (or K V) — update model env in config. Keys (aliases ok):
 #                 sonnet | opus | haiku | subagent | pin
 #                 (full: ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
@@ -51,6 +52,8 @@ COGNITO_CLIENT_ID="${COGNITO_CLIENT_ID:-}"
 EMAIL="${CC_BEDROCK_EMAIL:-${EMAIL:-}}"
 AWS_PROFILE_NAME="${AWS_PROFILE_NAME:-cc-bedrock}"
 AWS_REGION="${AWS_REGION:-ap-northeast-2}"
+OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-${OTEL_COLLECTOR_ENDPOINT:-}}"
+OTEL_HELPER="${OTEL_HELPER:-${HOME}/.local/bin/cc-otel-code-metrics}"
 
 # Model env — Bedrock inference profile IDs mapped to Claude Code's model slots.
 # Defaults: Sonnet 4.6 backs "Default"/"Sonnet" in the /model picker, real Opus 4.6
@@ -66,6 +69,31 @@ CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claud
 die() { echo "cc-bedrock-local: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 say() { echo "cc-bedrock-local: $*" >&2; }
+
+otel_prepare() {
+  [[ -x "${OTEL_HELPER}" ]] || return 0
+  export CC_DEPLOY_MODE=local
+  export USER_EMAIL="${EMAIL:-}"
+  export CC_DEPARTMENT="${CC_DEPARTMENT:-default}"
+  if [[ -n "${OTEL_EXPORTER_OTLP_ENDPOINT}" ]]; then
+    export OTEL_EXPORTER_OTLP_ENDPOINT
+  fi
+
+  mkdir -p "${CFG_DIR}/bin"
+  local real_git="/usr/bin/git"
+  if [[ ! -x "${real_git}" ]]; then
+    real_git="$(PATH="/usr/bin:/bin:/usr/local/bin:${PATH}" command -v git 2>/dev/null || true)"
+  fi
+  if [[ -n "${real_git}" ]]; then
+    "${OTEL_HELPER}" install-git-wrapper "${CFG_DIR}/bin/git" "${real_git}" >/dev/null 2>&1 || true
+    export PATH="${CFG_DIR}/bin:${PATH}"
+  fi
+}
+
+otel_emit() {
+  [[ -x "${OTEL_HELPER}" ]] || return 0
+  "${OTEL_HELPER}" "$@" >/dev/null 2>&1 || true
+}
 
 require_config() {
   [[ -n "${DASHBOARD_URL}" ]] || die "DASHBOARD_URL not set (edit ${CFG_FILE})"
@@ -471,6 +499,7 @@ do_claude() {
   export ANTHROPIC_DEFAULT_OPUS_MODEL
   export ANTHROPIC_DEFAULT_HAIKU_MODEL
   export CLAUDE_CODE_SUBAGENT_MODEL
+  otel_prepare
   # Only export ANTHROPIC_MODEL when explicitly pinned — otherwise the picker
   # would show "Custom" instead of "Default".
   if [[ -n "${ANTHROPIC_MODEL}" ]]; then
@@ -480,7 +509,33 @@ do_claude() {
   fi
   # Don't leak the deprecated var to claude (DEFAULT_HAIKU is the canonical knob).
   unset ANTHROPIC_SMALL_FAST_MODEL
-  exec claude --dangerously-skip-permissions "$@"
+
+  local start_e child hb_pid="" status duration
+  start_e="$(epoch_now)"
+  otel_emit session-start
+  claude --dangerously-skip-permissions "$@" &
+  child=$!
+  if [[ -x "${OTEL_HELPER}" ]]; then
+    (
+      while kill -0 "${child}" 2>/dev/null; do
+        sleep 300
+        kill -0 "${child}" 2>/dev/null || break
+        "${OTEL_HELPER}" heartbeat --force >/dev/null 2>&1 || true
+      done
+    ) &
+    hb_pid=$!
+  fi
+  set +e
+  wait "${child}"
+  status=$?
+  set -e
+  if [[ -n "${hb_pid}" ]]; then
+    kill "${hb_pid}" 2>/dev/null || true
+    wait "${hb_pid}" 2>/dev/null || true
+  fi
+  duration=$(( $(epoch_now) - start_e ))
+  otel_emit session-end "${duration}"
+  exit "${status}"
 }
 
 # ─── set-model (update config) ──────────────────────────────
@@ -571,6 +626,7 @@ COGNITO_CLIENT_ID  : ${COGNITO_CLIENT_ID:-(unset)}
 EMAIL              : ${EMAIL:-(unset)}
 AWS_PROFILE        : ${AWS_PROFILE_NAME}
 AWS_REGION         : ${AWS_REGION}
+OTEL endpoint      : ${OTEL_EXPORTER_OTLP_ENDPOINT:-(unset)}
 EOF
 }
 
@@ -587,6 +643,7 @@ Subcommands:
   change-email                prompt new email + password, update config, re-login
   status                      session state + limit/deny state
   claude [args]               ensure session + apply model env from config, exec claude
+                              emits lightweight OTEL session/git metrics when configured
   set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin)
   models                      show current model env + valid keys
   run -- <cmd> [args]         generic: ensure session, exec <cmd> (no claude env)

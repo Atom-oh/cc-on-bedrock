@@ -12,7 +12,7 @@ Governed multi-user development platform for Claude Code on Amazon Bedrock. The 
 - **IDE:** code-server on port `8080`; custom routes map path prefixes to additional user ports.
 - **Usage:** Bedrock Application Inference Profiles + Bedrock Invocation Logs -> Lambda -> DynamoDB.
 - **Limits:** Department and user budgets/limits attach or remove IAM deny policies through EventBridge/Lambda.
-- **Observability:** EC2 code activity metrics are emitted every minute to the OTEL Collector.
+- **Observability:** Lightweight Claude session heartbeat and git commit/push events are emitted to the OTEL Collector.
 
 ## Key Paths
 

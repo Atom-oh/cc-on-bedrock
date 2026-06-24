@@ -42,6 +42,7 @@ function installerScript(env: {
   cognitoRegion: string;
   cognitoUserPoolId: string;
   cognitoCliClientId: string;
+  localOtelEndpoint: string;
 }) {
   return `#!/usr/bin/env bash
 # cc-bedrock-local installer (ADR-014)
@@ -52,10 +53,12 @@ DASHBOARD_URL="${env.dashboardUrl}"
 COGNITO_REGION="${env.cognitoRegion}"
 COGNITO_USER_POOL_ID="${env.cognitoUserPoolId}"
 COGNITO_CLIENT_ID="${env.cognitoCliClientId}"
+LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT="${env.localOtelEndpoint}"
 
 CFG_DIR="\${HOME}/.config/cc-bedrock"
 BIN_DIR="\${HOME}/.local/bin"
 BIN_PATH="\${BIN_DIR}/cc-bedrock-local"
+OTEL_BIN_PATH="\${BIN_DIR}/cc-otel-code-metrics"
 
 mkdir -p "\${CFG_DIR}" "\${BIN_DIR}"
 chmod 700 "\${CFG_DIR}"
@@ -63,6 +66,7 @@ chmod 700 "\${CFG_DIR}"
 echo "[1/4] downloading cc-bedrock-local to \${BIN_PATH}"
 curl -fsSL "\${DASHBOARD_URL}/api/install/cli" -o "\${BIN_PATH}"
 chmod +x "\${BIN_PATH}"
+curl -fsSL "\${DASHBOARD_URL}/api/install/otel" -o "\${OTEL_BIN_PATH}" 2>/dev/null && chmod +x "\${OTEL_BIN_PATH}" || true
 
 echo "[2/4] writing config to \${CFG_DIR}/config"
 # Email is asked once at install. Stored in config so 'cc' only prompts password
@@ -95,6 +99,13 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]
 ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
 CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6
 EOF
+if [[ -n "\${LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT}" ]]; then
+  {
+    echo ""
+    echo "# Optional: public OTLP endpoint for lightweight local session/git telemetry."
+    echo "OTEL_EXPORTER_OTLP_ENDPOINT=\${LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT}"
+  } >> "\${CFG_DIR}/config"
+fi
 chmod 600 "\${CFG_DIR}/config"
 
 echo "[3/4] checking PATH"
@@ -191,6 +202,7 @@ export async function GET() {
       process.env.COGNITO_REGION ?? process.env.AWS_REGION ?? "ap-northeast-2",
     cognitoUserPoolId: process.env.COGNITO_USER_POOL_ID ?? "",
     cognitoCliClientId: process.env.COGNITO_CLI_CLIENT_ID ?? "",
+    localOtelEndpoint: process.env.LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT ?? "",
   });
   return new NextResponse(script, {
     headers: {

@@ -4,7 +4,7 @@
 > ADRs in `docs/decisions/` are the *decision log* (why); the decision baseline is
 > `docs/decisions/BASELINE.md`. Anything under `docs/decisions/archive/` or `docs/history/`
 > is **historical / superseded — NOT current**.
-> Last reconciled: 2026-06-24 (Terraform-only; dashboard real-app deploy on EC2 ASG).
+> Last reconciled: 2026-06-24 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry).
 
 ## What this is
 멀티유저 Claude Code 개발환경 플랫폼 on AWS Bedrock. 사용자는 per-user EC2 DevEnv(브라우저 IDE)
@@ -26,7 +26,7 @@ graph LR
     STS -. 1h creds .-> L
     L --> BR
   end
-  EC2 -. code-activity metrics /60s .-> OT[OTEL Collector]
+  EC2 -. lightweight session/git OTEL .-> OT[OTEL Collector]
   BR -. invocation logs .-> AGG[Inference Profile + Invocation Log → DynamoDB]
 ```
 
@@ -45,7 +45,9 @@ graph LR
    → Cognito public client → Dashboard `/api/local/credentials` → STS issuer; STS returns 1h creds,
    the CLI calls Bedrock). The Local credential path works in a full deploy; the **GATED** label in
    BASELINE §2 refers to the `governanceOnly` *deploy profile* (skips EC2), not the path itself.
-3. **Code-activity OTEL.** EC2 DevEnv pushes code-activity metrics to the OTEL Collector every 60s.
+3. **Code-activity OTEL.** EC2 DevEnv emits lightweight Claude session heartbeat and git
+   commit/push event metrics to the OTEL Collector. Bedrock token/cost metrics remain in the
+   usage pipeline.
 4. **Usage metering.** Bedrock **Application Inference Profiles** + **Invocation Logs** → **DynamoDB**
    (not CloudWatch AWS/Bedrock account-wide metrics).
 5. **Shared credential model.** EC2 and Local attribute usage through the **same Application Inference

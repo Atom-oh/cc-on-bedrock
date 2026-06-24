@@ -5,7 +5,7 @@ date: 2026-06-23
 consolidates: []
 ---
 
-# 009: OTel 코드활동 관측 (EC2 → Collector 60s push · 생산성 모니터링)
+# 009: OTel 코드활동 관측 (경량 session/git 이벤트 · 생산성 모니터링)
 
 ## Status
 
@@ -24,28 +24,27 @@ Amazon Bedrock exposes none of Anthropic's first-party Analytics/Admin/Complianc
 
 ## Decision
 
-**EC2 DevEnv는 코드활동 메트릭을 60초마다 OTEL Collector로 push한다. Collector → 집계(rollup) → DynamoDB 파이프라인으로 생산성/참여 지표를 산출하며, 키는 005/ADR-031과 동일한 email canonical key로 통일한다.**
+**EC2 DevEnv는 Claude session heartbeat와 git commit/push 같은 저비용 이벤트만 OTEL Collector로 보낸다. Bedrock token/cost는 005의 Invocation Log → DynamoDB 파이프라인을 계속 권위 source로 사용한다.**
 
-**EC2 DevEnv pushes code-activity metrics to an OTEL Collector every 60s; the Collector → aggregation → DynamoDB pipeline produces productivity/engagement metrics, keyed by the same email canonical key as 005 (ADR-031).**
+**EC2 DevEnv emits only low-cost Claude session heartbeat and git commit/push events to the OTEL Collector. Bedrock token/cost stays authoritative in the 005 Invocation Log → DynamoDB pipeline.**
 
-- **Emit (EC2 60s push).** EC2 DevEnv는 60초 systemd timer로 코드활동 메트릭(repo count, total/last-minute commits, tracked LoC, review markers)을 OTLP HTTP로 Collector에 보낸다 (`tools/cc-otel-code-metrics.sh`). 추가로 Claude Code 클라이언트 OTel(`CLAUDE_CODE_ENABLE_TELEMETRY=1`, sessions/LOC/acceptance 등)도 같은 Collector로 흐른다.
-- **Pipeline = Option A (Collector → DynamoDB).** Managed Prometheus/Grafana(B)나 CloudWatch metrics/EMF(C)가 아닌, Collector → durable buffer → rollup → DynamoDB를 택한다. 멀티모델 패널(Claude+Codex+Gemini)이 A에 합의.
-- **Identity = email canonical key (005/ADR-031).** rollup은 **일 단위 집계 + presence 레코드만** 기록(원시 datapoint 비영속). PK `USER#{email}`. department는 기존 추적기(EC2 tag/Cognito attribute) 로직 재사용. EC2/ECS에서는 Collector가 신뢰 가능한 source로 `enduser.id`를 **덮어쓴다**; Local Governance(ADR-006)는 자기보고 신뢰경계로 문서화하고 rollup이 Bedrock invocation log와 cross-check해 불일치를 flag한다.
+- **Emit (event-based).** `tools/cc-otel-code-metrics.sh`는 더 이상 전체 workspace를 매분 스캔하지 않는다. 얇은 `claude` wrapper가 session start/end를, 5분 systemd timer가 active heartbeat를, 얇은 `git` wrapper가 성공한 `commit`/`push`와 commit의 added/deleted line count만 OTLP HTTP로 보낸다.
+- **Pipeline = low-cardinality metrics first.** 운영 비용을 낮추기 위해 기본 dimension은 department/mode 중심으로 제한한다. prompt, file path, branch, commit SHA, raw email, session id는 metric dimension으로 쓰지 않는다.
+- **Identity.** 사용자 단위 분석은 기존 005 사용량 테이블(email canonical key)과 필요 시 별도 daily aggregate에서 처리한다. CloudWatch custom metric에는 raw user 식별자를 기본 포함하지 않는다.
 - **Privacy.** 프롬프트/텍스트/이미지 내용은 절대 로깅하지 않는다 — 메트릭은 counter만 운반. 고비용 CloudWatch Logs 싱크 회피.
 - **Authoritative cost stays 005.** 비용 attribution(per-skill/agent/model)은 OTel 기반 **근사치(Attributed)**이며, 권위 있는 청구 수치는 005의 Bedrock invocation-log 파이프라인(Billed)이 계속 보유한다.
 
-구체적 buffer(Firehose vs SQS), Collector 사이징, OTLP temporality(`delta` sum 고정 필요), ap-northeast-2 정확 단가는 Phase 1에서 확정하는 미해결 항목으로 남긴다.
+구체적 daily rollup 저장소(DynamoDB vs Timestream)와 사용자별 aggregate 확장은 후속 단계로 남긴다. 현재 기본 구현은 session/heartbeat/git 이벤트를 작고 싼 메트릭으로 유지한다.
 
 ## Consequences
 
 긍정 / Positive
-- Anthropic API 없이 Bedrock 위에서 생산성/참여(DAU/WAU/MAU, LOC, commits/PRs, acceptance) 가시성 확보. 기존 Next.js 대시보드·DynamoDB·email 키 재사용.
-- 원시 datapoint 비영속(일 rollup만) → WCU/스토리지 폭증 회피.
+- Anthropic API 없이 Bedrock 위에서 기본 참여 추세(session, active heartbeat, commit/push, lines changed) 가시성 확보.
+- 전체 repo scan 제거 → EC2 CPU/IO와 CloudWatch metric/cardinality 비용을 낮게 유지.
 
 부정·위험 / Negative & risk
-- Local PC `OTEL_RESOURCE_ATTRIBUTES`는 사용자 설정 가능 → identity tampering. 완화: EC2/ECS Collector 덮어쓰기 + Bedrock log cross-check + 불일치 flag. 제거가 아닌 **문서화된 신뢰경계**.
-- Collector ECS 서비스가 SPOF가 될 수 있어 durable buffer를 rollup 앞에 둔다(스파이크/Lambda 실패가 데이터 손실로 이어지지 않게).
-- OTLP delta temporality 미고정 시 last-value 오집계 위험 — Phase 1에서 검증.
+- Local PC telemetry is optional because the default Collector endpoint is internal. If a public OTLP endpoint is configured later, local identity remains self-reported and must not become an authoritative billing/control signal.
+- Git wrapper는 Claude/DevEnv PATH 안에서 관측되는 `git commit`/`git push`만 잡는다. GitHub webhook/PR/CI outcome 지표는 후속으로 붙인다.
 
 보안 / Security
 - 내용(prompt/text/image) 무로깅, counter-only. OTLP는 TLS·인증 엔드포인트.

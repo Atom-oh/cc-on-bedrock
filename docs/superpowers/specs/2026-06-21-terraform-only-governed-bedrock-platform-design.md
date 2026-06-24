@@ -18,7 +18,7 @@ Terraform is the only active IaC surface. CDK and CloudFormation are removed aft
 3. EC2 and Local do not share one literal IAM role. They share Bedrock policy shape, permission boundary, tags, and Bedrock Application Inference Profile attribution.
 4. Local Mode uses OAuth-like renewal through Cognito refresh tokens and AWS SDK `credential_process`. STS credentials stay 1h because role chaining is hard-capped by AWS.
 5. code-server stays on port `8080`; custom app routes must not claim that port.
-6. OTEL is a first-class implementation axis for EC2 code activity metrics. EC2 instances run a 60-second collector timer for commits, LoC, and review activity and push to an OTEL Collector endpoint.
+6. OTEL is a first-class implementation axis for lightweight EC2 productivity metrics. EC2 instances emit Claude session start/end, 5-minute active heartbeat, and successful git commit/push events to an OTEL Collector endpoint; token/cost remains in the Bedrock usage pipeline.
 7. Bedrock token usage is sourced from Bedrock Invocation Logs and Application Inference Profiles, aggregated into DynamoDB.
 
 ## Non-Goals
