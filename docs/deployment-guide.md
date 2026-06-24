@@ -107,6 +107,8 @@ terraform -chdir=terraform apply -target=module.security.aws_ecr_repository.dash
 # 모든 이미지 빌드 + ECR 푸시 (ARM64 / Graviton)
 # Production rollout은 IMAGE_TAG를 commit SHA 등 immutable tag로 지정하고,
 # terraform.tfvars의 dashboard_image_tag도 같은 값으로 설정합니다.
+# Terraform rejects dashboard_image_tag="latest" because ASG refresh depends on
+# the tag string changing.
 export IMAGE_TAG="$(git rev-parse --short HEAD)"
 cd docker && bash build.sh all all
 

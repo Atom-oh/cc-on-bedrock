@@ -74,11 +74,10 @@ variable "dashboard_ecr_repository_url" {
 variable "dashboard_image_tag" {
   description = "Dashboard image tag to deploy; set to an immutable build tag/commit SHA to trigger instance refresh."
   type        = string
-  default     = "latest"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$", var.dashboard_image_tag))
-    error_message = "dashboard_image_tag must be a valid Docker tag."
+    condition     = var.dashboard_image_tag != "latest" && can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$", var.dashboard_image_tag))
+    error_message = "dashboard_image_tag must be a valid immutable Docker tag and must not be 'latest'."
   }
 }
 

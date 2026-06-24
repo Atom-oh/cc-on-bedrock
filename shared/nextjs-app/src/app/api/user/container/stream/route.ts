@@ -9,8 +9,8 @@ import { unmarshall } from "@aws-sdk/util-dynamodb";
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const dynamodb = new DynamoDBClient({ region });
-const domainName = process.env.DOMAIN_NAME ?? "atomai.click";
-const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
+const domainName = process.env.DOMAIN_NAME ?? "";
+const devSubdomain = process.env.DEV_SUBDOMAIN ?? "";
 
 const VALID_TIERS = ["light", "standard", "power"] as const;
 type ResourceTier = (typeof VALID_TIERS)[number];

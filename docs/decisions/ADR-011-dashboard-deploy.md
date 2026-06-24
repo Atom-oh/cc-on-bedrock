@@ -60,8 +60,8 @@ Positive:
 Negative / risks:
 - ASG rollback semantics are coarser than ECS deployment circuit breakers; failed
   app boots rely on ALB health checks plus ASG instance refresh behavior.
-- `dashboard_image_tag = "latest"` remains the compatibility default, but
-  production rollouts should use immutable tags.
+- `dashboard_image_tag` is required and rejects `latest`; operators must publish
+  and pass an immutable tag for every dashboard rollout.
 - Fresh deploy is two-phase because Terraform owns the ECR repo while Docker
   image publishing happens outside Terraform.
 

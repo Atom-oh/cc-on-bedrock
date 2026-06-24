@@ -23,7 +23,7 @@ sonnet_model_id = "global.anthropic.claude-sonnet-4-6[1m]"
 
 # Compute
 dashboard_instance_type = "t4g.xlarge"
-dashboard_image_tag     = "latest" # Prefer an immutable build tag or commit SHA for rollouts.
+dashboard_image_tag     = "replace-with-commit-sha" # Required; must match the pushed dashboard image tag and must not be latest.
 devenv_instance_type    = "t4g.large"
 ecs_cluster_name        = "cc-on-bedrock-devenv"
 daily_budget_usd        = 50

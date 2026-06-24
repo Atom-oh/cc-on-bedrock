@@ -50,6 +50,9 @@ IMAGE_TAG=$(git rev-parse --short HEAD) scripts/05-build-docker-images.sh dashbo
 terraform -chdir=terraform apply -var="dashboard_image_tag=$(git rev-parse --short HEAD)"
 ```
 
+`dashboard_image_tag` is required and must not be `latest`; ASG instance refresh
+depends on the launch template tag string changing.
+
 ## Rules
 
 - Do not add alternate deployment IaC equivalents.

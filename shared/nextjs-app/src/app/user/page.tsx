@@ -18,8 +18,8 @@ export default async function UserPage() {
       <UserPortal
         user={session.user}
         runtimeConfig={{
-          domainName: process.env.DOMAIN_NAME ?? "atomai.click",
-          devSubdomain: process.env.DEV_SUBDOMAIN ?? "dev",
+          domainName: process.env.DOMAIN_NAME ?? "",
+          devSubdomain: process.env.DEV_SUBDOMAIN ?? "",
         }}
       />
     </div>
