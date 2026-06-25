@@ -510,29 +510,37 @@ do_claude() {
   # Don't leak the deprecated var to claude (DEFAULT_HAIKU is the canonical knob).
   unset ANTHROPIC_SMALL_FAST_MODEL
 
-  local start_e child hb_pid="" status duration
+  local start_e hb_pid="" status duration
   start_e="$(epoch_now)"
   otel_emit session-start
-  claude --dangerously-skip-permissions "$@" &
-  child=$!
+
+  # Heartbeat as a detached background child. Started BEFORE claude so claude can
+  # run in the FOREGROUND and keep the TTY/stdin — backgrounding the interactive
+  # TUI (claude … &) routes its stdin to /dev/null in this non-job-control shell
+  # and breaks key input (the headline regression). The trap cleans the heartbeat
+  # up on normal exit AND on Ctrl-C/term so it can't orphan.
+  hb_cleanup() {
+    [[ -n "${hb_pid}" ]] && kill "${hb_pid}" 2>/dev/null || true
+    hb_pid=""
+  }
   if [[ -x "${OTEL_HELPER}" ]]; then
     (
-      while kill -0 "${child}" 2>/dev/null; do
-        sleep 300
-        kill -0 "${child}" 2>/dev/null || break
+      while sleep 300; do
         "${OTEL_HELPER}" heartbeat --force >/dev/null 2>&1 || true
       done
     ) &
     hb_pid=$!
   fi
+  trap hb_cleanup EXIT INT TERM
+
+  # Foreground: claude owns the controlling TTY and reads real stdin.
   set +e
-  wait "${child}"
+  claude --dangerously-skip-permissions "$@"
   status=$?
   set -e
-  if [[ -n "${hb_pid}" ]]; then
-    kill "${hb_pid}" 2>/dev/null || true
-    wait "${hb_pid}" 2>/dev/null || true
-  fi
+
+  hb_cleanup
+  trap - EXIT INT TERM
   duration=$(( $(epoch_now) - start_e ))
   otel_emit session-end "${duration}"
   exit "${status}"
