@@ -286,8 +286,11 @@ chmod 0755 /opt/cc-on-bedrock/cc-data-migrate.sh
 cat > /etc/systemd/system/cc-data-migrate.service <<'CCUNIT'
 [Unit]
 Description=ADR-032 mount/migrate persistent /home/coder data volume
-DefaultDependencies=no
-After=cloud-init.target
+# NOTE: DefaultDependencies=no + After=cloud-init.target caused a systemd ordering
+# cycle that made systemd SKIP code-server.service (→ nginx 502). Keep default
+# dependencies and order after cloud-init.service / local-fs so the device is
+# present, but before code-server starts.
+After=cloud-init.service local-fs.target
 Before=code-server.service
 [Service]
 Type=oneshot

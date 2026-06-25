@@ -3,7 +3,7 @@
 # Replaces ALB listener rules (100 rule limit) with unlimited routing
 # CloudFront terminates TLS; Nginx listens on port 80 only
 
-FROM nginx:1.27-alpine
+FROM nginx:1.30.3-alpine
 
 # Install AWS CLI for S3 config sync
 RUN apk add --no-cache \
