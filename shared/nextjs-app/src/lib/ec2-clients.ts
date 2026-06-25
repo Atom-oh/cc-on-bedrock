@@ -78,8 +78,6 @@ const LAUNCH_TEMPLATE = process.env.LAUNCH_TEMPLATE ?? "cc-on-bedrock-devenv";
 const VPC_SUBNET_IDS = (process.env.PRIVATE_SUBNET_IDS ?? "").split(",").filter(Boolean);
 const HIBERNATE_ENABLED = (process.env.HIBERNATE_ENABLED ?? "false") === "true";
 const DASHBOARD_URL = process.env.NEXTAUTH_URL ?? process.env.DASHBOARD_URL ?? "";
-const OTEL_EXPORTER_OTLP_ENDPOINT =
-  process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? process.env.OTEL_COLLECTOR_ENDPOINT ?? "";
 
 function isAwsAccountId(value: string | undefined): value is string {
   return /^[0-9]{12}$/.test(value ?? "");
@@ -226,23 +224,88 @@ export interface InstanceInfo {
  * telemetry on an EC2/AMI devenv. EC2 devenvs run code-server natively (systemd), NOT the
  * container `entrypoint.sh`, so the OTel env must be written to /etc/environment here (which
  * the `claude` process inherits). Returns [] when no collector endpoint is configured, so
- * telemetry stays off fail-safe. `email` is the ADR-029 canonical key (= Cognito username).
+ * telemetry stays off fail-safe. Keep metric dimensions low-cardinality; user-level cost
+ * and token attribution stays in the Bedrock invocation-log pipeline.
  */
-function otelEnvUserData(email: string, department: string): string[] {
-  const ep = process.env.OTEL_COLLECTOR_ENDPOINT;
+function otelEnvUserData(_email: string, department: string): string[] {
+  const ep = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? process.env.OTEL_COLLECTOR_ENDPOINT;
   if (!ep) return [];
   const endpoint = /^https?:\/\//.test(ep) ? ep : `http://${ep}`;
   const dept = department || "default";
-  const attrs = email
-    ? `enduser.id=${email},department=${dept},deploy_mode=ec2`
-    : `department=${dept},deploy_mode=ec2`;
+  const attrs = [
+    "service.name=cc-on-bedrock-claude-code",
+    `cc.department=${dept}`,
+    "cc.mode=ec2",
+  ].join(",");
   return [
+    `echo "CC_DEPLOY_MODE=ec2" >> /etc/environment`,
     `echo "CLAUDE_CODE_ENABLE_TELEMETRY=1" >> /etc/environment`,
+    `echo "OTEL_SERVICE_NAME=cc-on-bedrock-claude-code" >> /etc/environment`,
     `echo "OTEL_METRICS_EXPORTER=otlp" >> /etc/environment`,
-    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=grpc" >> /etc/environment`,
+    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta" >> /etc/environment`,
     `echo "OTEL_RESOURCE_ATTRIBUTES=${attrs}" >> /etc/environment`,
+  ];
+}
+
+function otelToolsUserData(): string[] {
+  if (!DASHBOARD_URL) return [];
+  return [
+    `# Lightweight OTEL productivity metrics: Claude sessions, active heartbeat, git commit/push events`,
+    `curl -fsSL "${DASHBOARD_URL.replace(/\/$/, "")}/api/install/otel" -o /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
+    `chmod +x /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
+    `if [ -x /usr/local/bin/cc-otel-code-metrics ]; then`,
+    `  sudo -u coder mkdir -p /home/coder/.local/bin`,
+    `  # git wrapper lives ONLY on coder's PATH (~/.local/bin precedes /usr/bin for`,
+    `  # the coder user). Do NOT symlink it into /usr/local/bin — that sits ahead of`,
+    `  # /usr/bin in root/systemd PATH, so a root-context git call would execute a`,
+    `  # coder-writable script (local privilege escalation).`,
+    `  sudo -u coder /usr/local/bin/cc-otel-code-metrics install-git-wrapper /home/coder/.local/bin/git /usr/bin/git 2>/dev/null || true`,
+    `cat > /etc/systemd/system/cc-otel-code-metrics.service << 'OTELSVC'`,
+    `[Unit]`,
+    `Description=CC-on-Bedrock lightweight OTEL productivity heartbeat`,
+    `After=network-online.target`,
+    `Wants=network-online.target`,
+    `[Service]`,
+    `Type=oneshot`,
+    `User=coder`,
+    `EnvironmentFile=-/etc/environment`,
+    `ExecStart=/usr/local/bin/cc-otel-code-metrics heartbeat`,
+    `OTELSVC`,
+    `cat > /etc/systemd/system/cc-otel-code-metrics.timer << 'OTELTIMER'`,
+    `[Unit]`,
+    `Description=Run CC-on-Bedrock OTEL heartbeat every five minutes`,
+    `[Timer]`,
+    `OnBootSec=2min`,
+    `OnUnitActiveSec=5min`,
+    `AccuracySec=30s`,
+    `Persistent=true`,
+    `[Install]`,
+    `WantedBy=timers.target`,
+    `OTELTIMER`,
+    `  systemctl daemon-reload`,
+    `  systemctl enable --now cc-otel-code-metrics.timer`,
+    `fi`,
+  ];
+}
+
+function cliWrapperUserData(): string[] {
+  return [
+    `cat > /usr/local/sbin/cc-install-cli-wrappers << 'WRAPEOF'`,
+    `#!/usr/bin/env bash`,
+    `set -euo pipefail`,
+    `if [ -x /usr/local/bin/cc-otel-code-metrics ] && [ -x /home/coder/.local/bin/claude ]; then`,
+    `  /usr/local/bin/cc-otel-code-metrics install-claude-wrapper /usr/local/bin/claude /home/coder/.local/bin/claude 2>/dev/null || true`,
+    `elif [ -f /home/coder/.local/bin/claude ]; then`,
+    `  ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
+    `fi`,
+    `if [ -f /home/coder/.local/bin/kiro ]; then`,
+    `  ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
+    `fi`,
+    `WRAPEOF`,
+    `chmod +x /usr/local/sbin/cc-install-cli-wrappers`,
+    `/usr/local/sbin/cc-install-cli-wrappers`,
   ];
 }
 
@@ -480,13 +543,12 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       ...(dataPlan.expectedVolumeId
         ? [`echo "${dataPlan.expectedVolumeId}" > /etc/cc-data-expected-volume`]
         : []),
-      // Phase 1 (OTel productivity monitoring): per-user identity for OTEL_RESOURCE_ATTRIBUTES.
-      // username IS the email (ADR-029 canonical key); without these the entrypoint falls back
-      // to "unattributed" and per-user productivity rollups can't be keyed.
+      // Lightweight OTEL context. USER_EMAIL is available for future opt-in per-user rollups;
+      // default metrics stay low-cardinality (department/mode only).
       `echo "USER_EMAIL=${input.username}" >> /etc/environment`,
       `echo "USER_DEPARTMENT=${input.department}" >> /etc/environment`,
-      // Phase 1 (OTel): enable Claude Code telemetry via /etc/environment. No-op when
-      // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
+      // Enable Claude Code telemetry via /etc/environment. No-op when no OTEL endpoint is
+      // configured (telemetry stays off, fail-safe).
       ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
@@ -496,9 +558,6 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
-      ...(OTEL_EXPORTER_OTLP_ENDPOINT ? [
-        `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}" >> /etc/environment`,
-      ] : []),
       `# Allow coder to use package managers without password`,
       `cat > /etc/sudoers.d/coder << 'SUDOEOF'`,
       `coder ALL=(root) NOPASSWD: /usr/bin/code-server`,
@@ -548,46 +607,14 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"diskio":{"measurement":["read_bytes","write_bytes"],"resources":["*"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
-      ...(DASHBOARD_URL ? [
-        `# OTEL code activity metrics: commits, LoC, review markers (60s cadence)`,
-        `curl -fsSL "${DASHBOARD_URL.replace(/\/$/, "")}/api/install/otel" -o /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
-        `chmod +x /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
-        `if [ -x /usr/local/bin/cc-otel-code-metrics ] && [ -n "$OTEL_EXPORTER_OTLP_ENDPOINT" ]; then`,
-        `cat > /etc/systemd/system/cc-otel-code-metrics.service << 'OTELSVC'`,
-        `[Unit]`,
-        `Description=CC-on-Bedrock OTEL code activity metrics`,
-        `After=network-online.target`,
-        `Wants=network-online.target`,
-        `[Service]`,
-        `Type=oneshot`,
-        `User=coder`,
-        `EnvironmentFile=-/etc/environment`,
-        `Environment=WORKSPACE_ROOT=/home/coder/workspace`,
-        `ExecStart=/usr/local/bin/cc-otel-code-metrics`,
-        `OTELSVC`,
-        `cat > /etc/systemd/system/cc-otel-code-metrics.timer << 'OTELTIMER'`,
-        `[Unit]`,
-        `Description=Run CC-on-Bedrock OTEL code metrics every minute`,
-        `[Timer]`,
-        `OnBootSec=90s`,
-        `OnUnitActiveSec=60s`,
-        `AccuracySec=10s`,
-        `Persistent=true`,
-        `[Install]`,
-        `WantedBy=timers.target`,
-        `OTELTIMER`,
-        `systemctl daemon-reload`,
-        `systemctl enable --now cc-otel-code-metrics.timer`,
-        `fi`,
-      ] : []),
+      ...otelToolsUserData(),
       `# Ensure ~/.claude is coder-owned before installing (cc-mcp-sync may have`,
       `# created it as root first — breaks the installer and Claude Code state)`,
       `mkdir -p /home/coder/.claude && chown -R coder:coder /home/coder/.claude`,
       `# Upgrade Claude Code + Kiro CLI (first boot)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
-      `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
       `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>/dev/null || true`,
-      `[ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
+      ...cliWrapperUserData(),
       `# Auto-update Claude Code + Kiro on every boot (start/restart)`,
       `cat > /etc/systemd/system/cc-cli-update.service << 'SVCEOF'`,
       `[Unit]`,
@@ -601,7 +628,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
-      `ExecStartPost=+/bin/bash -c '[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; [ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro; true'`,
+      `ExecStartPost=+/usr/local/sbin/cc-install-cli-wrappers`,
       `TimeoutStartSec=120`,
       `[Install]`,
       `WantedBy=multi-user.target`,
@@ -1063,12 +1090,12 @@ export async function restoreFromSnapshot(
     UserData: Buffer.from([
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${subdomain}" >> /etc/environment`,
-      // Phase 1 (OTel productivity monitoring): per-user identity (username IS the email,
-      // ADR-029 key). Without these, metrics fall back to "unattributed".
+      // Lightweight OTEL context. USER_EMAIL is available for future opt-in per-user rollups;
+      // default metrics stay low-cardinality (department/mode only).
       `echo "USER_EMAIL=${record?.username ?? ""}" >> /etc/environment`,
       `echo "USER_DEPARTMENT=${record?.department ?? "default"}" >> /etc/environment`,
-      // Phase 1 (OTel): enable Claude Code telemetry via /etc/environment. No-op when
-      // OTEL_COLLECTOR_ENDPOINT is unset (telemetry stays off, fail-safe).
+      // Enable Claude Code telemetry via /etc/environment. No-op when no OTEL endpoint is
+      // configured (telemetry stays off, fail-safe).
       ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
@@ -1111,14 +1138,14 @@ export async function restoreFromSnapshot(
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"diskio":{"measurement":["read_bytes","write_bytes"],"resources":["*"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
+      ...otelToolsUserData(),
       `# Ensure ~/.claude is coder-owned before installing (cc-mcp-sync may have`,
       `# created it as root first — breaks the installer and Claude Code state)`,
       `mkdir -p /home/coder/.claude && chown -R coder:coder /home/coder/.claude`,
       `# Upgrade Claude Code + Kiro CLI (first boot)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
-      `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
       `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>/dev/null || true`,
-      `[ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
+      ...cliWrapperUserData(),
       `# Auto-update Claude Code + Kiro on every boot (start/restart)`,
       `cat > /etc/systemd/system/cc-cli-update.service << 'SVCEOF'`,
       `[Unit]`,
@@ -1132,7 +1159,7 @@ export async function restoreFromSnapshot(
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
-      `ExecStartPost=+/bin/bash -c '[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; [ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro; true'`,
+      `ExecStartPost=+/usr/local/sbin/cc-install-cli-wrappers`,
       `TimeoutStartSec=120`,
       `[Install]`,
       `WantedBy=multi-user.target`,
@@ -1728,8 +1755,8 @@ async function postStartSetup(instanceId: string): Promise<void> {
           `mkdir -p /home/coder/.claude && chown -R coder:coder /home/coder/.claude`,
           `# Upgrade Claude Code + Kiro CLI (as coder user, symlink to /usr/local/bin)`,
           `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1 || true`,
-          `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
           `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>&1 || true`,
+          `if [ -x /usr/local/sbin/cc-install-cli-wrappers ]; then /usr/local/sbin/cc-install-cli-wrappers; elif [ -x /usr/local/bin/cc-otel-code-metrics ] && [ -x /home/coder/.local/bin/claude ]; then /usr/local/bin/cc-otel-code-metrics install-claude-wrapper /usr/local/bin/claude /home/coder/.local/bin/claude 2>/dev/null || true; else [ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; fi`,
           `[ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
           `# Start CWAgent for memory/disk metrics`,
           `if command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,

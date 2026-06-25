@@ -69,7 +69,7 @@
 | 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신 | 014·029 |
 | 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude | 005·020·021·030·034 · ~~026~~ |
 | 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny | 006·015·023 |
-| 009 | OTel 관측 | EC2 코드활동 메트릭 60초 push → Collector, 생산성 모니터링 | (OTel 파이프라인) |
+| 009 | OTel 관측 | 경량 Claude session heartbeat + git commit/push 이벤트 → Collector, 비용은 사용량 파이프라인 유지 | (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
 
