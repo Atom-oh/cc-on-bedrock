@@ -227,13 +227,17 @@ export interface InstanceInfo {
  * telemetry stays off fail-safe. Keep metric dimensions low-cardinality; user-level cost
  * and token attribution stays in the Bedrock invocation-log pipeline.
  */
-function otelEnvUserData(_email: string, department: string): string[] {
+function otelEnvUserData(email: string, department: string): string[] {
   const ep = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? process.env.OTEL_COLLECTOR_ENDPOINT;
   if (!ep) return [];
   const endpoint = /^https?:\/\//.test(ep) ? ep : `http://${ep}`;
   const dept = department || "default";
+  // enduser.id is the ADR-029 canonical key the rollup aggregates by. Native user.email
+  // is OAuth-only (absent on Bedrock), so we stamp it from the provisioned email here
+  // (T0-confirmed it reaches both metrics resource attrs and every log event).
   const attrs = [
     "service.name=cc-on-bedrock-claude-code",
+    `enduser.id=${(email || "").toLowerCase()}`,
     `cc.department=${dept}`,
     "cc.mode=ec2",
   ].join(",");
@@ -242,6 +246,10 @@ function otelEnvUserData(_email: string, department: string): string[] {
     `echo "CLAUDE_CODE_ENABLE_TELEMETRY=1" >> /etc/environment`,
     `echo "OTEL_SERVICE_NAME=cc-on-bedrock-claude-code" >> /etc/environment`,
     `echo "OTEL_METRICS_EXPORTER=otlp" >> /etc/environment`,
+    // logs signal carries the tool_result/tool_decision events (skill/agent/tool usage);
+    // OTEL_LOG_TOOL_DETAILS=1 surfaces skill_name/subagent_type (DLP-scrubbed at collector).
+    `echo "OTEL_LOGS_EXPORTER=otlp" >> /etc/environment`,
+    `echo "OTEL_LOG_TOOL_DETAILS=1" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta" >> /etc/environment`,
@@ -250,44 +258,11 @@ function otelEnvUserData(_email: string, department: string): string[] {
 }
 
 function otelToolsUserData(): string[] {
-  if (!DASHBOARD_URL) return [];
-  return [
-    `# Lightweight OTEL productivity metrics: Claude sessions, active heartbeat, git commit/push events`,
-    `curl -fsSL "${DASHBOARD_URL.replace(/\/$/, "")}/api/install/otel" -o /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
-    `chmod +x /usr/local/bin/cc-otel-code-metrics 2>/dev/null || true`,
-    `if [ -x /usr/local/bin/cc-otel-code-metrics ]; then`,
-    `  sudo -u coder mkdir -p /home/coder/.local/bin`,
-    `  # git wrapper lives ONLY on coder's PATH (~/.local/bin precedes /usr/bin for`,
-    `  # the coder user). Do NOT symlink it into /usr/local/bin — that sits ahead of`,
-    `  # /usr/bin in root/systemd PATH, so a root-context git call would execute a`,
-    `  # coder-writable script (local privilege escalation).`,
-    `  sudo -u coder /usr/local/bin/cc-otel-code-metrics install-git-wrapper /home/coder/.local/bin/git /usr/bin/git 2>/dev/null || true`,
-    `cat > /etc/systemd/system/cc-otel-code-metrics.service << 'OTELSVC'`,
-    `[Unit]`,
-    `Description=CC-on-Bedrock lightweight OTEL productivity heartbeat`,
-    `After=network-online.target`,
-    `Wants=network-online.target`,
-    `[Service]`,
-    `Type=oneshot`,
-    `User=coder`,
-    `EnvironmentFile=-/etc/environment`,
-    `ExecStart=/usr/local/bin/cc-otel-code-metrics heartbeat`,
-    `OTELSVC`,
-    `cat > /etc/systemd/system/cc-otel-code-metrics.timer << 'OTELTIMER'`,
-    `[Unit]`,
-    `Description=Run CC-on-Bedrock OTEL heartbeat every five minutes`,
-    `[Timer]`,
-    `OnBootSec=2min`,
-    `OnUnitActiveSec=5min`,
-    `AccuracySec=30s`,
-    `Persistent=true`,
-    `[Install]`,
-    `WantedBy=timers.target`,
-    `OTELTIMER`,
-    `  systemctl daemon-reload`,
-    `  systemctl enable --now cc-otel-code-metrics.timer`,
-    `fi`,
-  ];
+  // Retired (P1): the #94 custom cc-otel-code-metrics shell emitter (claude/git wrappers +
+  // 5-min heartbeat) is superseded by native Claude Code OTEL (otelEnvUserData), which emits
+  // sessions/active-time/LOC/commits + tool_result events natively — and unlike the wrapper
+  // can see skill/agent/tool usage. No per-host emitter install needed.
+  return [];
 }
 
 function cliWrapperUserData(): string[] {
