@@ -3,8 +3,8 @@ name: Claude Code Review
 # Single-Claude review using the official anthropics/claude-code-action on Bedrock.
 # Security model matches pr-review.yml:
 # - pull_request_target runs with trusted token/secrets, so checkout only the trusted base SHA.
-# - PR changes are passed to Claude as a diff file, not checked out or executed.
-# - Claude is restricted to read-only tools for defense-in-depth against prompt injection in the diff.
+# - PR changes are filtered and passed to Claude as a diff file, not checked out or executed.
+# - Claude gets read-only tools plus a bounded `gh pr comment` command to publish review findings.
 # - Same-repo PR guard matches pr-review.yml; forks are skipped.
 
 on:
@@ -26,6 +26,7 @@ jobs:
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,23 +36,57 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr diff "$PR_NUMBER" > "$GITHUB_WORKSPACE/.ci-pr-diff.txt"
+        run: |
+          set -euo pipefail
+          gh pr diff "$PR_NUMBER" > /tmp/claude-pr-diff-raw.txt
+          awk '
+            /^diff --git/ {
+              path = substr($3, 3)
+              skip = (path ~ /(^|\/)package-lock\.json$/) ||
+                     (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
+                     (path ~ /(^|\/)yarn\.lock$/) ||
+                     (path ~ /(^|\/)node_modules\//) ||
+                     (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
+                     (path ~ /(^|\/)(dist|out|build)\//) ||
+                     (path ~ /\.terraform\.lock\.hcl$/)
+            }
+            !skip
+          ' /tmp/claude-pr-diff-raw.txt > /tmp/claude-pr-diff-filtered.txt
+          test -s /tmp/claude-pr-diff-filtered.txt
+          total_lines=$(wc -l < /tmp/claude-pr-diff-filtered.txt)
+          max_lines=3000
+          {
+            echo "Filtered PR diff for #${PR_NUMBER}. total_lines=${total_lines}; max_lines=${max_lines}."
+            if [ "$total_lines" -gt "$max_lines" ]; then
+              echo "WARNING: diff was truncated to the first ${max_lines} lines."
+            fi
+            echo
+            head -"$max_lines" /tmp/claude-pr-diff-filtered.txt
+          } > /tmp/claude-pr-diff.txt
 
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@521136812280ae7ef256e06045655b9da02793f0 # v1
         with:
           use_bedrock: "true"
-          claude_args: |
+          github_token: ${{ github.token }}
+          track_progress: "true"
+          claude_args: >
             --model us.anthropic.claude-opus-4-8
-            --allowedTools Read,Grep,Glob
+            --allowedTools "Read,Grep,Glob,Bash(gh pr comment:*)"
           prompt: |
-            You are reviewing a pull request for cc-on-bedrock. Its unified diff is in
-            `.ci-pr-diff.txt` in the current directory; read that file because it is the
-            change under review. The trusted repository base is checked out here for
-            context only. Read the base files touched by the diff before flagging missing
-            behavior. Do not run commands; you have read-only tools.
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are reviewing a pull request for cc-on-bedrock. Its filtered unified diff
+            is in `/tmp/claude-pr-diff.txt`; read that file because it is the change under
+            review. The trusted repository base is checked out here for context only. Read
+            the base files touched by the diff before flagging missing behavior.
 
             Project conventions: current architectural truth is `docs/decisions/BASELINE.md`
             plus `docs/architecture.md`; local module guidance lives in `CLAUDE.md` files.
             Review for bugs, security risks, logic errors, Terraform/IAM drift, Lambda
-            runtime issues, and convention violations. Post concise findings grouped
-            CRITICAL / MAJOR / MINOR. 한국어+영문 기술용어 혼용 가능.
+            runtime issues, and convention violations.
+
+            Post exactly one top-level PR comment using `gh pr comment`. Start it with
+            `<!-- claude-code-review -->`, then include concise findings grouped CRITICAL /
+            MAJOR / MINOR. If there are no findings, say so clearly. 한국어+영문 기술용어
+            혼용 가능.
