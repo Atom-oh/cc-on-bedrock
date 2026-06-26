@@ -45,9 +45,12 @@ graph LR
    → Cognito public client → Dashboard `/api/local/credentials` → STS issuer; STS returns 1h creds,
    the CLI calls Bedrock). The Local credential path works in a full deploy; the **GATED** label in
    BASELINE §2 refers to the `governanceOnly` *deploy profile* (skips EC2), not the path itself.
-3. **Code-activity OTEL.** EC2 DevEnv emits lightweight Claude session heartbeat and git
-   commit/push event metrics to the OTEL Collector. Bedrock token/cost metrics remain in the
-   usage pipeline.
+3. **Code-activity OTEL (native).** EC2 DevEnv enables native Claude Code OpenTelemetry
+   (`claude_code.*` metrics + `tool_result`/`tool_decision` events). The collector exports
+   both signals to S3 (logs DLP-scrubbed to skill/agent/tool counts, no content); a rollup
+   Lambda aggregates per-user (`enduser.id` email) daily KPIs into DynamoDB
+   (`PROD#`/`SKILL#`/`AGENT#`/`TOOL#`/`ACTIVE#`). Bedrock token/cost stays authoritative in
+   the 005 usage pipeline. (ADR-009; P1 rewrite 2026-06-26 — supersedes the custom emitter.)
 4. **Usage metering.** Bedrock **Application Inference Profiles** + **Invocation Logs** → **DynamoDB**
    (not CloudWatch AWS/Bedrock account-wide metrics).
 5. **Shared credential model.** EC2 and Local attribute usage through the **same Application Inference
