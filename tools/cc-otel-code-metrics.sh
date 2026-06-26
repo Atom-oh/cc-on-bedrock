@@ -35,7 +35,6 @@ emit_metrics() {
   local payload
   payload="$(
     python3 - "$@" <<'PY'
-import hashlib
 import json
 import os
 import socket
@@ -61,19 +60,17 @@ attrs = [
     {"key": "cc.department", "value": {"stringValue": department}},
 ]
 
-if os.environ.get("CC_OTEL_USER_DIMENSION") == "1":
-    raw_user = (
-        os.environ.get("USER_EMAIL")
-        or os.environ.get("EMAIL")
-        or os.environ.get("USER_SUBDOMAIN")
-        or os.environ.get("USER")
-        or ""
-    ).strip().lower()
-    if raw_user:
-        attrs.append({
-            "key": "cc.user_hash",
-            "value": {"stringValue": hashlib.sha256(raw_user.encode()).hexdigest()[:16]},
-        })
+raw_user = (
+    os.environ.get("USER_EMAIL")
+    or os.environ.get("EMAIL")
+    or os.environ.get("USER_SUBDOMAIN")
+    or os.environ.get("USER")
+    or ""
+).strip().lower()
+if raw_user:
+    # enduser.id flows only to the internal collector -> S3 -> rollup path
+    # (ADR-009: per-user aggregate is email-keyed; the CloudWatch path is removed).
+    attrs.append({"key": "enduser.id", "value": {"stringValue": raw_user}})
 
 metrics = []
 args = sys.argv[1:]
