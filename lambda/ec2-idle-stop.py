@@ -66,10 +66,13 @@ def check_idle() -> dict:
     """Check all running devenv instances for idle status."""
     instances = get_running_instances()
     if not instances:
-        return {"statusCode": 200, "body": {"checked": 0}}
+        result = {"checked": 0, "stopped": [], "warned": [], "skipped": []}
+        logger.info(f"Idle check result: {json.dumps(result)}")
+        return {"statusCode": 200, "body": result}
 
     stopped = []
     warned = []
+    skipped = []
 
     for inst in instances:
         instance_id = inst["InstanceId"]
@@ -80,10 +83,17 @@ def check_idle() -> dict:
         if launch_time:
             uptime_min = (datetime.now(timezone.utc) - launch_time).total_seconds() / 60
             if uptime_min < 10:
+                skipped.append({
+                    "instanceId": instance_id,
+                    "subdomain": subdomain,
+                    "reason": "launch_grace",
+                    "uptime_minutes": int(uptime_min),
+                })
                 continue
 
         # Check keep_alive_until
         if is_keep_alive_active(subdomain):
+            skipped.append({"instanceId": instance_id, "subdomain": subdomain, "reason": "keep_alive"})
             continue
 
         idle_minutes = get_idle_minutes(instance_id, subdomain)
@@ -100,7 +110,17 @@ def check_idle() -> dict:
             send_warning(subdomain, idle_minutes)
             warned.append({"instanceId": instance_id, "subdomain": subdomain, "idle_minutes": idle_minutes})
 
-    return {"statusCode": 200, "body": {"stopped": stopped, "warned": warned}}
+        else:
+            skipped.append({
+                "instanceId": instance_id,
+                "subdomain": subdomain,
+                "reason": "active",
+                "idle_minutes": idle_minutes,
+            })
+
+    result = {"checked": len(instances), "stopped": stopped, "warned": warned, "skipped": skipped}
+    logger.info(f"Idle check result: {json.dumps(result)}")
+    return {"statusCode": 200, "body": result}
 
 
 def schedule_shutdown() -> dict:
@@ -227,18 +247,53 @@ def get_idle_minutes(instance_id: str, subdomain: str, period_minutes: int = Non
     return cpu_idle_count * 5  # Each datapoint is 5 min
 
 
+def usage_lookup_keys(subdomain: str) -> list[str]:
+    """Return current and legacy usage-table user keys for a subdomain."""
+    keys = []
+    try:
+        item = table.get_item(Key={"user_id": subdomain}).get("Item", {})
+        username = (item.get("username") or "").strip().lower()
+        if username:
+            keys.append(username)
+    except Exception as e:
+        logger.warning(f"Instance-table lookup failed for {subdomain}: {e}")
+
+    legacy_key = (subdomain or "").strip().lower()
+    if legacy_key and legacy_key not in keys:
+        keys.append(legacy_key)
+    return keys
+
+
 def has_recent_token_usage(subdomain: str, minutes: int = 15) -> bool:
-    """Check Bedrock API usage in the last N minutes."""
+    """Check Bedrock API usage in the last N minutes.
+
+    ADR-031 keys usage rows by lowercased email and stores the subdomain as an
+    attribute. Query the email key first, then the legacy subdomain key.
+    """
     try:
         usage_table = dynamodb.Table(USAGE_TABLE)
-        cutoff = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat() + "Z"
-        resp = usage_table.query(
-            KeyConditionExpression="PK = :pk AND SK > :cutoff",
-            ExpressionAttributeValues={":pk": f"USER#{subdomain}", ":cutoff": cutoff},
-            Limit=1,
-        )
-        return len(resp.get("Items", [])) > 0
-    except Exception:
+        now = datetime.utcnow()
+        cutoff_dt = now - timedelta(minutes=minutes)
+        cutoff = cutoff_dt.isoformat()
+        dates = {now.date().isoformat(), cutoff_dt.date().isoformat()}
+
+        for user_key in usage_lookup_keys(subdomain):
+            for date_prefix in dates:
+                resp = usage_table.query(
+                    KeyConditionExpression="PK = :pk AND begins_with(SK, :date)",
+                    FilterExpression="updatedAt >= :cutoff",
+                    ExpressionAttributeValues={
+                        ":pk": f"USER#{user_key}",
+                        ":date": date_prefix,
+                        ":cutoff": cutoff,
+                    },
+                    Limit=1,
+                )
+                if resp.get("Items"):
+                    return True
+        return False
+    except Exception as e:
+        logger.warning(f"Usage lookup failed for {subdomain}: {e}")
         return True  # Fail safe
 
 

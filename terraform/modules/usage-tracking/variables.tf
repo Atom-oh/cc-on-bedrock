@@ -40,6 +40,18 @@ variable "department_budgets_table_name" {
   type        = string
 }
 
+variable "instance_table_name" {
+  description = "Per-user EC2 DevEnv instance table name, created by the ec2-devenv module"
+  type        = string
+  default     = "cc-user-instances"
+}
+
+variable "routing_table_name" {
+  description = "DevEnv nginx routing table name, created by the ecs-devenv module"
+  type        = string
+  default     = "cc-routing-table"
+}
+
 variable "lambda_src_dir" {
   description = "Absolute path to canonical Lambda source directory (repo lambda/)"
   type        = string
