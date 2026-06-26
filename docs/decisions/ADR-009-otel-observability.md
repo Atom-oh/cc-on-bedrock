@@ -26,25 +26,32 @@ Amazon Bedrock exposes none of Anthropic's first-party Analytics/Admin/Complianc
 
 **EC2 DevEnv는 Claude session heartbeat와 git commit/push 같은 저비용 이벤트만 OTEL Collector로 보낸다. Bedrock token/cost는 005의 Invocation Log → DynamoDB 파이프라인을 계속 권위 source로 사용한다.**
 
-**EC2 DevEnv emits only low-cost Claude session heartbeat and git commit/push events to the OTEL Collector. Bedrock token/cost stays authoritative in the 005 Invocation Log → DynamoDB pipeline.**
+**EC2 DevEnv enables native Claude Code OpenTelemetry (metrics + tool events). A collector exports both signals to S3; a rollup Lambda aggregates per-user daily usability KPIs into DynamoDB. Bedrock token/cost stays authoritative in the 005 Invocation Log → DynamoDB pipeline.**
 
-- **Emit (event-based).** `tools/cc-otel-code-metrics.sh`는 더 이상 전체 workspace를 매분 스캔하지 않는다. 얇은 `claude` wrapper가 session start/end를, 5분 systemd timer가 active heartbeat를, 얇은 `git` wrapper가 성공한 `commit`/`push`와 commit의 added/deleted line count만 OTLP HTTP로 보낸다.
-- **Pipeline = low-cardinality metrics first.** 운영 비용을 낮추기 위해 기본 dimension은 department/mode 중심으로 제한한다. prompt, file path, branch, commit SHA, raw email, session id는 metric dimension으로 쓰지 않는다.
-- **Identity.** 사용자 단위 분석은 기존 005 사용량 테이블(email canonical key)과 필요 시 별도 daily aggregate에서 처리한다. CloudWatch custom metric에는 raw user 식별자를 기본 포함하지 않는다.
-- **Privacy.** 프롬프트/텍스트/이미지 내용은 절대 로깅하지 않는다 — 메트릭은 counter만 운반. 고비용 CloudWatch Logs 싱크 회피.
-- **Authoritative cost stays 005.** 비용 attribution(per-skill/agent/model)은 OTel 기반 **근사치(Attributed)**이며, 권위 있는 청구 수치는 005의 Bedrock invocation-log 파이프라인(Billed)이 계속 보유한다.
+> **P1 rewrite (2026-06-26):** the original custom `cc-otel-code-metrics.sh` shell emitter
+> (claude/git wrappers + heartbeat) is **retired**. It could not see tool/skill/subagent
+> usage. We pivoted to **native Claude Code OTEL** (`claude_code.*` metrics + `tool_result`/
+> `tool_decision` log events), which is the only way to measure skill/agent usage on Bedrock
+> (no 1P Analytics API). T0 empirically confirmed the shape on Bedrock.
 
-구체적 daily rollup 저장소(DynamoDB vs Timestream)와 사용자별 aggregate 확장은 후속 단계로 남긴다. 현재 기본 구현은 session/heartbeat/git 이벤트를 작고 싼 메트릭으로 유지한다.
+- **Emit (native OTEL).** Devenvs set `CLAUDE_CODE_ENABLE_TELEMETRY=1` + `OTEL_METRICS_EXPORTER=otlp` + `OTEL_LOGS_EXPORTER=otlp` + `OTEL_LOG_TOOL_DETAILS=1`. Metrics give sessions/active-time/LOC/commits/PRs/edit-decisions; `tool_result`/`tool_decision` events give per-skill (`skill_name`) / per-agent (`subagent_type`) / per-tool usage.
+- **Pipeline.** Collector (otel-contrib) → `awss3` (metrics + logs prefixes) → S3 `otel_raw` → `otel-metrics-rollup` Lambda → DynamoDB `cc-on-bedrock-usage` (`PROD#`/`SKILL#`/`AGENT#`/`TOOL#`/`ACTIVE#`, per-user email-keyed daily ADD counters; `OTELOBJ#` TTL dedup).
+- **Identity.** `enduser.id` is stamped from the provisioned email via `OTEL_RESOURCE_ATTRIBUTES` (native `user.email` is OAuth-only / absent on Bedrock). ADR-029 canonical lowercased-email key; invalid → `unattributed`.
+- **Privacy / DLP (no-content).** `OTEL_LOG_TOOL_DETAILS=1` would log bash commands / file paths / prompts; the **collector logs pipeline scrubs** them — keeps only `tool_result`/`tool_decision`, lifts `skill_name`/`subagent_type` to top-level, deletes `tool_parameters`/`tool_input`/`prompt`/`response` before S3. No prompt/text/image content is ever persisted.
+- **Authoritative cost stays 005.** Per-skill/agent/model cost remains an OTel-based estimate; authoritative billing stays in the 005 invocation-log pipeline. The rollup writes no cost/token rows.
+
+후속(P2/P3): Productivity/Economic Score 계산·7일 트렌드·AI 진단(`/api/ai`)·대시보드 UI. 운영 follow-up: collector 통일(ecs-devenv awsemf collector 폐기 후 devenv 엔드포인트를 awss3 collector로 일원화).
 
 ## Consequences
 
 긍정 / Positive
-- Anthropic API 없이 Bedrock 위에서 기본 참여 추세(session, active heartbeat, commit/push, lines changed) 가시성 확보.
-- 전체 repo scan 제거 → EC2 CPU/IO와 CloudWatch metric/cardinality 비용을 낮게 유지.
+- Anthropic 1P Analytics API 없이 Bedrock 위에서 참조 대시보드급 KPI(session/active-time/LOC/commit/PR/edit-decision + **per-skill/per-agent/per-tool 사용량**) 가시성 확보.
+- 커스텀 wrapper/heartbeat 제거 → 설치 표면·드리프트 감소. 네이티브 OTEL이 정확도·tool 가시성 제공.
 
 부정·위험 / Negative & risk
 - Local PC telemetry is optional because the default Collector endpoint is internal. If a public OTLP endpoint is configured later, local identity remains self-reported and must not become an authoritative billing/control signal.
-- Git wrapper는 Claude/DevEnv PATH 안에서 관측되는 `git commit`/`git push`만 잡는다. GitHub webhook/PR/CI outcome 지표는 후속으로 붙인다.
+- 네이티브 `commit.count`/`lines_of_code.count`는 Claude Code가 관측한 활동 기준이라, 터미널에서 수동으로 친 git 커밋 일부는 포함되지 않을 수 있다(usability=Claude 사용 범위 기준으로 수용).
+- skill/agent 측정은 `OTEL_LOG_TOOL_DETAILS=1`에 의존하며, 민감필드는 **collector scrub**에 신뢰를 둔다(scrub 실패 시 content 유출 위험 → config 테스트로 보장).
 
 보안 / Security
 - 내용(prompt/text/image) 무로깅, counter-only. OTLP는 TLS·인증 엔드포인트.

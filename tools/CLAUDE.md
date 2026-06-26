@@ -5,7 +5,7 @@ End-user CLI helpers and operational prompts. The most important artifact is `cc
 
 ## Key Files
 - `cc-bedrock-local.sh` — Local Governance Mode CLI wrapper. Fetches 1h STS credentials from the Dashboard (`/api/local/credentials`) and exec's `claude` with `CLAUDE_CODE_USE_BEDROCK=1`. **ADR-029**: installs `credential_process = cc-bedrock-local.sh credential-process` into `~/.aws/config [profile cc-bedrock]` — the AWS SDK re-invokes the hook before each Expiration, so sessions of any length survive the 1h role-chaining cap (re-login only when the 30d Cognito refresh token dies). Legacy static-key `[cc-bedrock]` sections in `~/.aws/credentials` are removed on login/refresh/launch (they would shadow credential_process). ADR-014.
-- `cc-otel-code-metrics.sh` — lightweight productivity telemetry helper. Emits OTLP HTTP event metrics for Claude session start/end, 5-minute active heartbeat, git commits, lines added/deleted, and successful pushes. It also installs thin `claude`/`git` wrappers; it no longer scans whole workspaces every minute.
+- `cc-otel-code-metrics.sh` — **RETIRED (ADR-009 P1 rewrite, 2026-06-26).** This custom shell emitter (session/git wrappers + 5-min heartbeat) is superseded by **native Claude Code OpenTelemetry** (`claude_code.*` metrics + `tool_result` events), enabled via env in `ec2-clients.ts` `otelEnvUserData`. Native OTEL also measures skill/agent/tool usage, which the wrapper could not. File kept for history/local-mode reference; no longer installed on devenvs.
 - `prompts/` — Reserved for shared LLM prompt templates (currently empty)
 - `scripts/` — Reserved for additional shell helpers (currently empty)
 

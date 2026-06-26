@@ -11,6 +11,7 @@ Datapoint shape (from the Phase-0 spike): resource attributes carry the injected
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 
@@ -19,15 +20,15 @@ from datetime import datetime, timezone
 # unnecessary because the value is org-issued.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Metric names emitted by Claude Code (see monitoring spec).
+# Native Claude Code OTEL metric names (claude_code.* family). Cost/token metrics
+# are intentionally NOT consumed here — cost stays authoritative in the ADR-005
+# invocation-log pipeline.
 M_LOC = "claude_code.lines_of_code.count"
 M_COMMIT = "claude_code.commit.count"
 M_PR = "claude_code.pull_request.count"
 M_SESSION = "claude_code.session.count"
 M_ACTIVE = "claude_code.active_time.total"
 M_EDIT = "claude_code.code_edit_tool.decision"
-M_COST = "claude_code.cost.usage"
-M_TOKEN = "claude_code.token.usage"
 
 
 def _attr_value(v: dict):
@@ -116,11 +117,11 @@ def _blank_rollup() -> dict:
 
 
 def aggregate_daily(records: list) -> dict:
-    """Sum delta datapoints into rollups keyed by (email, date, model).
+    """Sum delta/gauge datapoints into rollups keyed by (email, date, model).
 
-    `lines_of_code.count` carries a model attribute; the other counters do not and
-    bucket under model="_". Email is taken raw here — `normalize_identity` (handler)
-    lowercases/validates it before write.
+    `lines_of_code.count` carries a `model` attribute and an added/removed `type`;
+    the other counters carry neither and bucket under model="_". Email is taken raw
+    here — `normalize_identity` (handler) lowercases/validates it before write.
     """
     out: dict = {}
     for r in records:
@@ -166,34 +167,87 @@ def extract_presence(records: list) -> set:
     return pres
 
 
-def extract_cost_attribution(records: list) -> dict:
-    """Per-(email, date, dimension) cost/token attribution from OTel (approximate).
+# Cost/token attribution intentionally removed: OTel code-activity is productivity
+# only. Authoritative cost stays in the ADR-005 invocation-log → DynamoDB pipeline.
 
-    Dimension priority: skill.name > agent.name > model. This is the area-3 attribution
-    the Bedrock invocation log cannot provide; it is labeled "Attributed" (estimate),
-    never the authoritative "Billed" cost.
+
+# --- Tool/skill/agent usage from OTEL log events (T0-confirmed shape) ----------
+# Per-invocation detail lives in OTLP *logs*, not metrics. tool_result/tool_decision
+# carry tool_name + a tool_parameters JSON string. After the collector DLP scrub the
+# only surviving keys are skill_name / subagent_type / tool_name / decision / success.
+TOOL_EVENTS = ("claude_code.tool_result", "claude_code.tool_decision")
+
+
+def parse_otlp_logs(payload: dict) -> list:
+    """Flatten an OTLP/JSON ExportLogsServiceRequest into event records.
+
+    Each record: {event, value=1, attrs (resource ∪ record attrs, with
+    `_tool_parameters` parsed from the JSON-string `tool_parameters`), date}.
+    """
+    records = []
+    for rl in payload.get("resourceLogs", []):
+        res = _attrs_to_dict(rl.get("resource", {}).get("attributes"))
+        for sl in rl.get("scopeLogs", []):
+            for rec in sl.get("logRecords", []):
+                attrs = {**res, **_attrs_to_dict(rec.get("attributes"))}
+                tp = attrs.get("tool_parameters")
+                if isinstance(tp, str):
+                    try:
+                        attrs["_tool_parameters"] = json.loads(tp)
+                    except (ValueError, TypeError):  # malformed JSON string
+                        attrs["_tool_parameters"] = {}
+                elif isinstance(tp, dict):
+                    attrs["_tool_parameters"] = tp
+                nano = rec.get("timeUnixNano") or rec.get("observedTimeUnixNano")
+                records.append({
+                    "event": attrs.get("event.name"),
+                    "value": 1,
+                    "attrs": attrs,
+                    "date": _date_from_nano(nano),
+                })
+    return records
+
+
+def aggregate_tool_events(records: list) -> dict:
+    """Count tool/skill/agent usage keyed by (email, date, kind, name).
+
+    kind ∈ {"tool","skill","agent"}; value = {count, accept, reject}. `count` is taken
+    from `tool_result` (one per completed call); accept/reject from `tool_decision`'s
+    `decision`. Email is raw here — the handler normalizes before write.
+
+    Note: auto-approved tools emit `tool_result` but NO `tool_decision`, so their `count`
+    rises while `accept` stays 0 (by design — accept/reject reflect explicit permission
+    decisions only; dashboards must not read `accept` as total usage — use `count`).
     """
     out: dict = {}
+
+    def bump(email, date, kind, name, is_result, decision):
+        if not name:
+            return
+        row = out.setdefault((email, date, kind, name),
+                             {"count": 0, "accept": 0, "reject": 0})
+        if is_result:
+            row["count"] += 1
+        if decision == "accept":
+            row["accept"] += 1
+        elif decision == "reject":
+            row["reject"] += 1
+
     for r in records:
-        if r["metric"] not in (M_COST, M_TOKEN):
+        if r["event"] not in TOOL_EVENTS:
             continue
         a = r["attrs"]
         email = a.get("enduser.id")
         date = r["date"]
-        if not (email and date):
+        if date is None:
             continue
-        if a.get("skill.name"):
-            dim = "skill:" + a["skill.name"]
-        elif a.get("agent.name"):
-            dim = "agent:" + a["agent.name"]
-        else:
-            dim = "model:" + (a.get("model") or "_")
-        row = out.setdefault((email, date, dim), {"cost_usd": 0, "tokens_in": 0, "tokens_out": 0})
-        if r["metric"] == M_COST:
-            row["cost_usd"] += r["value"]
-        elif r["metric"] == M_TOKEN:
-            if a.get("type") == "input":
-                row["tokens_in"] += r["value"]
-            elif a.get("type") == "output":
-                row["tokens_out"] += r["value"]
+        is_result = r["event"] == "claude_code.tool_result"
+        decision = a.get("decision")
+        # After the collector DLP scrub, skill_name/subagent_type are lifted to top-level
+        # attributes and the raw tool_parameters bag is dropped. Fall back to the parsed
+        # tool_parameters for unscrubbed/raw payloads (tests, local capture).
+        tp = a.get("_tool_parameters") or {}
+        bump(email, date, "tool", a.get("tool_name"), is_result, decision)
+        bump(email, date, "skill", a.get("skill_name") or tp.get("skill_name"), is_result, decision)
+        bump(email, date, "agent", a.get("subagent_type") or tp.get("subagent_type"), is_result, decision)
     return out

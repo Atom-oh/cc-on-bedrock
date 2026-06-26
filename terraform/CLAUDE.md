@@ -14,7 +14,10 @@ Terraform HCL is the canonical IaC for this repository.
 - `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM, permission boundary.
 - `modules/ecs-devenv/` - Shared Nginx router, NLB, routing table, config Lambda, OTEL Collector.
 - `modules/ec2-devenv/` - Per-user EC2 DevEnv launch template, EBS GP3, DLP security groups.
-- `modules/usage-tracking/` - Bedrock Invocation Logs, usage aggregation, budget checks.
+- `modules/usage-tracking/` - Bedrock Invocation Logs, usage aggregation, budget checks. Also the
+  native OTEL code-activity rollup (ADR-009): raw OTLP S3 bucket with `otlp-metrics/`+`otlp-logs/`
+  lifecycle + S3 notifications triggering the rollup Lambda (per-user daily KPI → DynamoDB; needs
+  `dynamodb:TransactWriteItems` for per-chunk idempotent markers).
 - `modules/local-governance/` - STS issuer, token-limit enforcer, limit reset.
 - `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront, and Docker runtime.
 - `modules/waf/` - CloudFront-scope WAF.
