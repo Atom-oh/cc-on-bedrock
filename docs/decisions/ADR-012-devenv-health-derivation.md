@@ -32,7 +32,11 @@ false-negative)되었고, IDE/WEB/API URL 카드가 절대 노출되지 않았�
 
 - `status` 가 `running`(대소문자 무시) 이고 `privateIp` 가 비어있지 않으면
   `HEALTHY`, 그 외에는 `UNKNOWN`.
-- 이는 admin `/api/containers`(running ⇒ HEALTHY)와 동일한 판정 기준이다.
+- admin `/api/containers` 와 마찬가지로 `running` lifecycle 상태를 기준으로 하되,
+  **non-blank `privateIp` 가드를 추가**한다(admin route 는 IP 게이트 없이 running
+  ⇒ HEALTHY). ENI/IP 부착 전에 HEALTHY IDE 링크가 노출되지 않게 하기 위함이다.
+  (admin route 와 완전 동일하지는 않다 — user 포털 쪽이 더 보수적이다. 향후 helper
+  를 admin route 에도 적용해 단일 정본화하는 것은 follow-up.)
 - `ContainerInfo.healthStatus` 타입을 `"HEALTHY" | "UNKNOWN"` union 으로 좁혀
   소비자 분기를 타입 수준에서 검증 가능하게 한다.
 
@@ -47,9 +51,13 @@ stopped 인스턴스의 warm restart)에서는 짧은 시간 동안 사용자가
 
 이 trade-off 를 **수용**한다. 근거:
 1. 기존 동작은 *영구적* false-negative(포털이 절대 사용 불가)로 엄격히 더 나쁘다.
-2. fresh-create 경로의 readiness 는 SSE 프로비저닝 flow 가 이미 커버한다.
-3. code-server 부팅은 짧고(~30–60초) 자가 수렴하며, 새로고침으로 회복된다.
-4. SG 격리로 신뢰할 수 없게 된 직접 probe 를 다시 들이지 않는다.
+2. code-server 부팅은 짧고(~30–60초) 자가 수렴하며, 새로고침으로 회복된다.
+3. SG 격리로 신뢰할 수 없게 된 직접 probe 를 다시 들이지 않는다.
+
+참고: 이 502 윈도우는 fresh-create 경로에도 존재한다. SSE 프로비저닝 flow
+(`stream/route.ts`)의 `health_check` 는 인스턴스가 `running` 에 도달하는 것만 보고
+code-server/nginx 실제 도달성을 재검증하지 않기 때문이다. SSE readiness 를 실제
+reachable 기준으로 강화하는 것은 위 follow-up 과 함께 후속 과제다.
 
 ## Alternatives considered
 

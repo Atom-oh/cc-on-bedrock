@@ -57,7 +57,7 @@
 ## §3 결정 인덱스 (Decision Index)
 
 > 통합 ADR 11개 (옛 34개 → 통합) + 신규 ADR-012. 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
-> **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거). 이후 신규 ADR은 012부터 순증(reset 일괄 재번호 예외와 무관).
+> **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거). 신규 ADR-012 작성됨; 다음 신규 ADR은 013부터 순증(reset 일괄 재번호 예외와 무관).
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|

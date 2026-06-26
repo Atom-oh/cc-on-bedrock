@@ -64,6 +64,9 @@ graph LR
    **EventBridge** drives IAM deny-policy updates.
 9. **Path/port routing.** code-server reached by path (`?folder=`), stays on port **8080** (reserved);
    extra user ports mapped path→port via nginx. Custom ports must not use 8080/well-known.
+   The dashboard does **not** directly probe devenv:8080 (the devenv SG admits only the nginx SG, so a
+   direct probe always times out); portal `healthStatus` is derived from EC2 lifecycle —
+   `running` + non-blank `privateIp` ⇒ HEALTHY, else UNKNOWN (ADR-012, optimistic trade-off).
 
 ## IaC
 - **Terraform is the only IaC.** CDK/CloudFormation removed (ADR-001). Lambda handlers in `lambda/`

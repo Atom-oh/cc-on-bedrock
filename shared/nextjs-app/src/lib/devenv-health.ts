@@ -9,17 +9,21 @@
  * previously pinned the user portal on "code-server is starting up..." forever
  * even though code-server was healthy and actively serving the user via nginx.
  *
- * Instead we treat a running instance that has a private IP as HEALTHY. This
- * matches the admin /api/containers route (running ⇒ HEALTHY).
+ * Instead we treat a running instance that has a private IP as HEALTHY. Like
+ * the admin /api/containers route this keys off the running lifecycle state,
+ * but it adds a non-blank privateIp guard (the admin route maps running ⇒
+ * HEALTHY with no IP check) so we never surface a HEALTHY IDE link before the
+ * ENI/IP is attached.
  *
  * Trade-off (accepted, ADR-012): healthStatus now means "instance running with
  * an IP", not "code-server reachable". Right after a cold start the instance
  * can report running for tens of seconds before code-server finishes booting,
  * so this can briefly show HEALTHY optimistically and the IDE link may 502 on a
- * page reload outside the SSE flow. That is preferable to the previous
- * *permanent* false negative, and the SSE provisioning flow covers fresh
- * creates. Status is matched case-insensitively and a whitespace-only IP is
- * treated as absent so it does not register as healthy.
+ * page reload. This window exists on fresh creates too — the SSE provisioning
+ * flow only watches the instance reaching running, not code-server readiness —
+ * but it is preferable to the previous *permanent* false negative and self-
+ * heals on reload within ~30-60s. Status is matched case-insensitively and a
+ * whitespace-only IP is treated as absent so it does not register as healthy.
  */
 export function deriveDevenvHealth(
   status: string | undefined,
