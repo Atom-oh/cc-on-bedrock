@@ -1,12 +1,16 @@
-# ADOT (AWS Distro for OpenTelemetry) Collector config — central push endpoint for
-# Claude Code productivity metrics on Bedrock (Phase 1).
+# OpenTelemetry Collector (contrib) — central push endpoint for Claude Code native
+# OTEL on Bedrock (P1).
 #
-# Topology: Claude Code (EC2/ECS devenv, later Local PC) --OTLP/gRPC--> this collector
-#           --awss3--> cc-on-bedrock-otel-metrics-raw --S3 event--> otel-metrics-rollup Lambda.
+# Topology: Claude Code (EC2 devenv) --OTLP/gRPC--> this collector
+#   metrics --awss3(otlp-metrics/)--> otel_raw bucket --S3 event--> otel-metrics-rollup
+#   logs    --filter+SCRUB--> awss3(otlp-logs/)--> otel_raw bucket --S3 event--> rollup
 #
-# Metrics only. Claude Code metrics are counters (LOC, commits, sessions, tokens, cost) and
-# carry NO prompt/text/image content (verified in the Phase-0 spike), so no redaction
-# processor is needed. Bucket + region are injected via container env.
+# DLP (ADR-009 no-content): native tool_result/tool_decision events carry a
+# `tool_parameters` JSON string with bash commands / file paths / inputs, and other
+# events (user_prompt) carry full prompt text. The logs pipeline KEEPS ONLY
+# tool_result/tool_decision, lifts skill_name/subagent_type to top-level attributes,
+# then deletes the raw tool_parameters/tool_input so nothing sensitive reaches S3.
+# Bucket + region are injected via container env.
 receivers:
   otlp:
     protocols:
@@ -20,20 +24,48 @@ processors:
     check_interval: 1s
     limit_percentage: 80
     spike_limit_percentage: 25
-  # Claude Code may export cumulative temporality; convert to delta so the rollup
-  # Lambda can sum batches without double-counting.
   cumulativetodelta: {}
   batch:
     timeout: 30s
     send_batch_size: 1000
 
+  # Keep ONLY per-invocation tool usage events; drop user_prompt/api_request/hook/
+  # plugin/mcp events (which carry prompts, responses, and other high-cardinality content).
+  filter/tool_events:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'attributes["event.name"] != "claude_code.tool_result" and attributes["event.name"] != "claude_code.tool_decision"'
+
+  # DLP scrub: lift the only fields the rollup needs out of the tool_parameters JSON
+  # string, then delete the raw bag and any other sensitive payload.
+  transform/scrub:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["skill_name"], ParseJSON(attributes["tool_parameters"])["skill_name"]) where attributes["tool_parameters"] != nil
+          - set(attributes["subagent_type"], ParseJSON(attributes["tool_parameters"])["subagent_type"]) where attributes["tool_parameters"] != nil
+          - delete_key(attributes, "tool_parameters")
+          - delete_key(attributes, "tool_input")
+          - delete_key(attributes, "prompt")
+          - delete_key(attributes, "response")
+          - set(body, "")
+
 exporters:
-  awss3:
+  awss3/metrics:
     s3uploader:
       region: ${env:AWS_REGION}
       s3_bucket: ${env:OTEL_S3_BUCKET}
       s3_prefix: otlp-metrics
       file_prefix: metrics
+    marshaler: otlp_json
+  awss3/logs:
+    s3uploader:
+      region: ${env:AWS_REGION}
+      s3_bucket: ${env:OTEL_S3_BUCKET}
+      s3_prefix: otlp-logs
+      file_prefix: logs
     marshaler: otlp_json
 
 service:
@@ -44,4 +76,8 @@ service:
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, cumulativetodelta, batch]
-      exporters: [awss3]
+      exporters: [awss3/metrics]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/tool_events, transform/scrub, batch]
+      exporters: [awss3/logs]

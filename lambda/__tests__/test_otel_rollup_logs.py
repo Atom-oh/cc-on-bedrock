@@ -68,3 +68,18 @@ def test_aggregate_tool_events_counts_skill_agent_tool():
 def test_non_tool_events_ignored():
     counts = rollup.aggregate_tool_events(rollup.parse_otlp_logs(_logs_fixture()))
     assert not any(k[3] == "claude-opus-4-8" for k in counts)
+
+
+def test_scrubbed_shape_skill_agent_top_level():
+    # Post-collector-scrub: skill_name/subagent_type are lifted to TOP-LEVEL attrs and
+    # the raw tool_parameters bag is gone. The aggregator must still count them.
+    res = [_attr("enduser.id", "alice@example.com")]
+    recs = [
+        _record("claude_code.tool_result", {"tool_name": "Skill", "skill_name": "verify"}),
+        _record("claude_code.tool_result", {"tool_name": "Agent", "subagent_type": "Explore"}),
+    ]
+    payload = {"resourceLogs": [{"resource": {"attributes": res},
+                                 "scopeLogs": [{"logRecords": recs}]}]}
+    counts = rollup.aggregate_tool_events(rollup.parse_otlp_logs(payload))
+    assert counts[("alice@example.com", DATE, "skill", "verify")]["count"] == 1
+    assert counts[("alice@example.com", DATE, "agent", "Explore")]["count"] == 1

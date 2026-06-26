@@ -239,8 +239,11 @@ def aggregate_tool_events(records: list) -> dict:
             continue
         is_result = r["event"] == "claude_code.tool_result"
         decision = a.get("decision")
+        # After the collector DLP scrub, skill_name/subagent_type are lifted to top-level
+        # attributes and the raw tool_parameters bag is dropped. Fall back to the parsed
+        # tool_parameters for unscrubbed/raw payloads (tests, local capture).
         tp = a.get("_tool_parameters") or {}
         bump(email, date, "tool", a.get("tool_name"), is_result, decision)
-        bump(email, date, "skill", tp.get("skill_name"), is_result, decision)
-        bump(email, date, "agent", tp.get("subagent_type"), is_result, decision)
+        bump(email, date, "skill", a.get("skill_name") or tp.get("skill_name"), is_result, decision)
+        bump(email, date, "agent", a.get("subagent_type") or tp.get("subagent_type"), is_result, decision)
     return out
