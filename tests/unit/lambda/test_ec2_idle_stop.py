@@ -2,7 +2,7 @@ import importlib.util
 import os
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -26,15 +26,34 @@ class FakeInstanceTable:
         return {"Item": self.item} if self.item else {}
 
 
+class FailingInstanceTable:
+    def get_item(self, **kwargs):
+        raise RuntimeError("instance lookup unavailable")
+
+
 class FakeUsageTable:
-    def __init__(self, active_keys=()):
+    def __init__(self, active_keys=(), rows_by_key=None):
         self.active_keys = set(active_keys)
+        self.rows_by_key = rows_by_key or {}
         self.queries = []
 
     def query(self, **kwargs):
         key = kwargs["ExpressionAttributeValues"][":pk"]
-        self.queries.append(key)
-        return {"Items": [{}]} if key in self.active_keys else {"Items": []}
+        values = kwargs["ExpressionAttributeValues"]
+        self.queries.append(kwargs)
+        if key in self.active_keys:
+            return {"Items": [{}]}
+
+        items = [
+            item
+            for item in self.rows_by_key.get(key, [])
+            if item["SK"].startswith(values[":date"])
+        ]
+        if "Limit" in kwargs:
+            items = items[: kwargs["Limit"]]
+        if kwargs.get("FilterExpression") == "updatedAt >= :cutoff":
+            items = [item for item in items if item["updatedAt"] >= values[":cutoff"]]
+        return {"Items": items}
 
 
 def _load_module(fake_dynamodb=None):
@@ -70,7 +89,46 @@ def test_recent_token_usage_uses_email_key_from_instance_record():
     module = _load_module(fake_dynamodb)
 
     assert module.has_recent_token_usage("atomoh") is True
-    assert usage.queries[0] == "USER#atomoh@example.com"
+    assert usage.queries[0]["ExpressionAttributeValues"][":pk"] == "USER#atomoh@example.com"
+
+
+def test_recent_token_usage_checks_all_rows_after_updated_at_filter():
+    date_prefixes = [
+        (datetime.utcnow() + timedelta(days=offset)).date().isoformat()
+        for offset in (-1, 0, 1)
+    ]
+    old_ts = "2000-01-01T00:00:00"
+    recent_ts = "2999-01-01T00:00:00"
+    usage = FakeUsageTable(rows_by_key={
+        "USER#atomoh@example.com": [
+            row
+            for date_prefix in date_prefixes
+            for row in (
+                {"SK": f"{date_prefix}#anthropic.claude-3", "updatedAt": old_ts},
+                {"SK": f"{date_prefix}#us.anthropic.claude-opus-4-1", "updatedAt": recent_ts},
+            )
+        ],
+    })
+    instances = FakeInstanceTable({"user_id": "atomoh", "username": "atomoh@example.com"})
+    fake_dynamodb = FakeDynamoResource({
+        "cc-user-instances": instances,
+        "cc-on-bedrock-usage": usage,
+    })
+    module = _load_module(fake_dynamodb)
+
+    assert module.has_recent_token_usage("atomoh") is True
+    assert all("Limit" not in query for query in usage.queries)
+
+
+def test_recent_token_usage_fails_closed_when_instance_mapping_unavailable():
+    usage = FakeUsageTable()
+    fake_dynamodb = FakeDynamoResource({
+        "cc-user-instances": FailingInstanceTable(),
+        "cc-on-bedrock-usage": usage,
+    })
+    module = _load_module(fake_dynamodb)
+
+    assert module.has_recent_token_usage("atomoh") is True
 
 
 def test_check_idle_returns_skip_reasons_for_diagnostics():

@@ -249,15 +249,15 @@ def get_idle_minutes(instance_id: str, subdomain: str, period_minutes: int = Non
 
 def usage_lookup_keys(subdomain: str) -> list[str]:
     """Return current and legacy usage-table user keys for a subdomain."""
-    keys = []
-    try:
-        item = table.get_item(Key={"user_id": subdomain}).get("Item", {})
-        username = (item.get("username") or "").strip().lower()
-        if username:
-            keys.append(username)
-    except Exception as e:
-        logger.warning(f"Instance-table lookup failed for {subdomain}: {e}")
+    item = table.get_item(Key={"user_id": subdomain}).get("Item")
+    if not item:
+        raise RuntimeError(f"Instance row not found for {subdomain}")
 
+    username = (item.get("username") or "").strip().lower()
+    if not username:
+        raise RuntimeError(f"Instance row missing username for {subdomain}")
+
+    keys = [username]
     legacy_key = (subdomain or "").strip().lower()
     if legacy_key and legacy_key not in keys:
         keys.append(legacy_key)
@@ -272,25 +272,31 @@ def has_recent_token_usage(subdomain: str, minutes: int = 15) -> bool:
     """
     try:
         usage_table = dynamodb.Table(USAGE_TABLE)
-        now = datetime.utcnow()
+        # bedrock-usage-tracker writes naive UTC ISO strings; keep this shape for lexical comparisons.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         cutoff_dt = now - timedelta(minutes=minutes)
         cutoff = cutoff_dt.isoformat()
-        dates = {now.date().isoformat(), cutoff_dt.date().isoformat()}
+        dates = list(dict.fromkeys([now.date().isoformat(), cutoff_dt.date().isoformat()]))
 
         for user_key in usage_lookup_keys(subdomain):
             for date_prefix in dates:
-                resp = usage_table.query(
-                    KeyConditionExpression="PK = :pk AND begins_with(SK, :date)",
-                    FilterExpression="updatedAt >= :cutoff",
-                    ExpressionAttributeValues={
+                query_kwargs = {
+                    "KeyConditionExpression": "PK = :pk AND begins_with(SK, :date)",
+                    "FilterExpression": "updatedAt >= :cutoff",
+                    "ExpressionAttributeValues": {
                         ":pk": f"USER#{user_key}",
                         ":date": date_prefix,
                         ":cutoff": cutoff,
                     },
-                    Limit=1,
-                )
-                if resp.get("Items"):
-                    return True
+                }
+                while True:
+                    resp = usage_table.query(**query_kwargs)
+                    if resp.get("Items"):
+                        return True
+                    last_key = resp.get("LastEvaluatedKey")
+                    if not last_key:
+                        break
+                    query_kwargs["ExclusiveStartKey"] = last_key
         return False
     except Exception as e:
         logger.warning(f"Usage lookup failed for {subdomain}: {e}")
