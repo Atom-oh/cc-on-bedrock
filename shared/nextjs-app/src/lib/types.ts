@@ -111,7 +111,7 @@ export interface ContainerInfo {
   createdAt: string;
   startedAt?: string;
   stoppedAt?: string;
-  healthStatus?: string;
+  healthStatus?: "HEALTHY" | "UNKNOWN";
   privateIp?: string;
   storageType?: "ebs" | "efs";
   department?: string;

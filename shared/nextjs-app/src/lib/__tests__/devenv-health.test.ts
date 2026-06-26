@@ -9,6 +9,13 @@ describe("deriveDevenvHealth", () => {
   it("returns UNKNOWN when running but the private IP is missing (ENI not attached yet)", () => {
     expect(deriveDevenvHealth("running", undefined)).toBe("UNKNOWN");
     expect(deriveDevenvHealth("running", "")).toBe("UNKNOWN");
+    expect(deriveDevenvHealth("running", "   ")).toBe("UNKNOWN");
+  });
+
+  it("matches status case-insensitively and tolerates surrounding whitespace", () => {
+    expect(deriveDevenvHealth("RUNNING", "10.0.23.66")).toBe("HEALTHY");
+    expect(deriveDevenvHealth(" Running ", "10.0.23.66")).toBe("HEALTHY");
+    expect(deriveDevenvHealth("running", " 10.0.23.66 ")).toBe("HEALTHY");
   });
 
   it("returns UNKNOWN for non-running states regardless of IP", () => {
