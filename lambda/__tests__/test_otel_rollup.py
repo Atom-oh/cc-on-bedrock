@@ -29,20 +29,26 @@ def _dp(value_int, attrs, nano=NANO):
             "attributes": [_attr(k, v) for k, v in attrs.items()]}
 
 
-def _gauge_metric(name, dps):
-    return {"name": name, "gauge": {"dataPoints": dps}}
+def _metric(name, dps):
+    return {"name": name, "sum": {"dataPoints": dps}}
 
 
 def _fixture():
+    # Native Claude Code OTEL: resource carries the stamped enduser.id (T0-confirmed),
+    # lines_of_code carries type/model datapoint attrs, others bucket under model="_".
     res_attrs = [_attr("enduser.id", "Alice@Example.com"), _attr("cc.department", "platform"),
-                 _attr("service.name", "cc-on-bedrock-productivity")]
+                 _attr("service.name", "claude-code")]
     metrics = [
-        _gauge_metric("cc.git.lines_added", [_dp(12, {}), _dp(5, {})]),   # sum -> 17
-        _gauge_metric("cc.git.lines_deleted", [_dp(3, {})]),
-        _gauge_metric("cc.git.commits", [_dp(1, {}), _dp(1, {})]),        # sum -> 2
-        _gauge_metric("cc.git.pushes", [_dp(1, {})]),
-        _gauge_metric("cc.claude.sessions.started", [_dp(1, {})]),
-        _gauge_metric("cc.claude.active_minutes", [_dp(5, {}), _dp(5, {})]),  # 10 min -> 600 s
+        _metric("claude_code.lines_of_code.count", [
+            _dp(12, {"type": "added", "model": "claude-opus-4-8"}),
+            _dp(5, {"type": "added", "model": "claude-opus-4-8"}),
+            _dp(3, {"type": "removed", "model": "claude-opus-4-8"})]),
+        _metric("claude_code.commit.count", [_dp(2, {})]),
+        _metric("claude_code.pull_request.count", [_dp(1, {})]),
+        _metric("claude_code.session.count", [_dp(1, {})]),
+        _metric("claude_code.active_time.total", [_dp(90, {"type": "user"}), _dp(30, {"type": "cli"})]),
+        _metric("claude_code.code_edit_tool.decision", [
+            _dp(4, {"decision": "accept"}), _dp(1, {"decision": "reject"})]),
     ]
     return {"resourceMetrics": [
         {"resource": {"attributes": res_attrs},
@@ -52,25 +58,26 @@ def _fixture():
 def test_parse_merges_resource_and_datapoint_attrs():
     recs = rollup.parse_otlp_metrics(_fixture())
     assert recs, "should yield datapoint records"
-    commit = [r for r in recs if r["metric"] == "cc.git.commits"][0]
-    assert commit["attrs"]["enduser.id"] == "Alice@Example.com"
-    assert commit["attrs"]["cc.department"] == "platform"
-    assert commit["date"] == EXPECTED_DATE
-    assert commit["value"] == 1
+    loc = [r for r in recs if r["metric"] == "claude_code.lines_of_code.count"][0]
+    assert loc["attrs"]["enduser.id"] == "Alice@Example.com"
+    assert loc["attrs"]["cc.department"] == "platform"
+    assert loc["attrs"]["type"] == "added"
+    assert loc["date"] == EXPECTED_DATE
+    assert loc["value"] == 12
 
 
-def test_aggregate_daily_sums_cc_counters_under_model_underscore():
-    recs = rollup.parse_otlp_metrics(_fixture())
-    agg = rollup.aggregate_daily(recs)
-    key = ("Alice@Example.com", EXPECTED_DATE, "_")  # cc.* counters carry no model
-    assert key in agg
-    row = agg[key]
-    assert row["loc_added"] == 17    # 12 + 5
+def test_aggregate_daily_native_schema():
+    agg = rollup.aggregate_daily(rollup.parse_otlp_metrics(_fixture()))
+    row = agg[("Alice@Example.com", EXPECTED_DATE, "claude-opus-4-8")]
+    assert row["loc_added"] == 17  # 12 + 5
     assert row["loc_removed"] == 3
-    assert row["commits"] == 2
-    assert row["pushes"] == 1
-    assert row["sessions"] == 1
-    assert row["active_seconds"] == 600  # (5 + 5) minutes * 60
+    nm = agg[("Alice@Example.com", EXPECTED_DATE, "_")]
+    assert nm["commits"] == 2
+    assert nm["prs"] == 1
+    assert nm["sessions"] == 1
+    assert nm["active_seconds"] == 120  # 90 + 30
+    assert nm["edit_accept"] == 4
+    assert nm["edit_reject"] == 1
 
 
 def test_extract_presence_is_unique_email_date():
@@ -80,7 +87,7 @@ def test_extract_presence_is_unique_email_date():
     assert len(pres) == 1
 
 
-def test_cost_attribution_removed():
+def test_cost_attribution_stays_removed():
     assert not hasattr(rollup, "extract_cost_attribution")
 
 

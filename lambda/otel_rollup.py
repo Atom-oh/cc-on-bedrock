@@ -11,6 +11,7 @@ Datapoint shape (from the Phase-0 spike): resource attributes carry the injected
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 
@@ -19,13 +20,15 @@ from datetime import datetime, timezone
 # unnecessary because the value is org-issued.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Metric names emitted by tools/cc-otel-code-metrics.sh (#94, gauge datapoints).
-M_COMMIT = "cc.git.commits"
-M_LOC_ADDED = "cc.git.lines_added"
-M_LOC_REMOVED = "cc.git.lines_deleted"
-M_PUSH = "cc.git.pushes"
-M_SESSION = "cc.claude.sessions.started"
-M_ACTIVE_MIN = "cc.claude.active_minutes"
+# Native Claude Code OTEL metric names (claude_code.* family). Cost/token metrics
+# are intentionally NOT consumed here — cost stays authoritative in the ADR-005
+# invocation-log pipeline.
+M_LOC = "claude_code.lines_of_code.count"
+M_COMMIT = "claude_code.commit.count"
+M_PR = "claude_code.pull_request.count"
+M_SESSION = "claude_code.session.count"
+M_ACTIVE = "claude_code.active_time.total"
+M_EDIT = "claude_code.code_edit_tool.decision"
 
 
 def _attr_value(v: dict):
@@ -107,16 +110,18 @@ def is_unverified(email: str, date: str, bedrock_seen) -> bool:
 
 
 def _blank_rollup() -> dict:
-    return {"loc_added": 0, "loc_removed": 0, "commits": 0,
-            "pushes": 0, "sessions": 0, "active_seconds": 0}
+    return {
+        "loc_added": 0, "loc_removed": 0, "commits": 0, "prs": 0,
+        "sessions": 0, "active_seconds": 0, "edit_accept": 0, "edit_reject": 0,
+    }
 
 
 def aggregate_daily(records: list) -> dict:
-    """Sum gauge/delta datapoints into rollups keyed by (email, date, "_").
+    """Sum delta/gauge datapoints into rollups keyed by (email, date, model).
 
-    The cc.* event metrics carry no per-model attribute, so everything buckets
-    under model="_". Email is taken raw here — `normalize_identity` (handler)
-    lowercases/validates it before write.
+    `lines_of_code.count` carries a `model` attribute and an added/removed `type`;
+    the other counters carry neither and bucket under model="_". Email is taken raw
+    here — `normalize_identity` (handler) lowercases/validates it before write.
     """
     out: dict = {}
     for r in records:
@@ -127,19 +132,28 @@ def aggregate_daily(records: list) -> dict:
             continue
         metric = r["metric"]
         val = r["value"]
-        row = out.setdefault((email, date, "_"), _blank_rollup())
-        if metric == M_LOC_ADDED:
-            row["loc_added"] += val
-        elif metric == M_LOC_REMOVED:
-            row["loc_removed"] += val
-        elif metric == M_COMMIT:
-            row["commits"] += val
-        elif metric == M_PUSH:
-            row["pushes"] += val
-        elif metric == M_SESSION:
-            row["sessions"] += val
-        elif metric == M_ACTIVE_MIN:
-            row["active_seconds"] += val * 60
+        model = a.get("model") or "_"
+        if metric == M_LOC:
+            row = out.setdefault((email, date, model), _blank_rollup())
+            if a.get("type") == "added":
+                row["loc_added"] += val
+            elif a.get("type") == "removed":
+                row["loc_removed"] += val
+        else:
+            row = out.setdefault((email, date, "_"), _blank_rollup())
+            if metric == M_COMMIT:
+                row["commits"] += val
+            elif metric == M_PR:
+                row["prs"] += val
+            elif metric == M_SESSION:
+                row["sessions"] += val
+            elif metric == M_ACTIVE:
+                row["active_seconds"] += val
+            elif metric == M_EDIT:
+                if a.get("decision") == "accept":
+                    row["edit_accept"] += val
+                elif a.get("decision") == "reject":
+                    row["edit_reject"] += val
     return out
 
 
@@ -155,3 +169,78 @@ def extract_presence(records: list) -> set:
 
 # Cost/token attribution intentionally removed: OTel code-activity is productivity
 # only. Authoritative cost stays in the ADR-005 invocation-log → DynamoDB pipeline.
+
+
+# --- Tool/skill/agent usage from OTEL log events (T0-confirmed shape) ----------
+# Per-invocation detail lives in OTLP *logs*, not metrics. tool_result/tool_decision
+# carry tool_name + a tool_parameters JSON string. After the collector DLP scrub the
+# only surviving keys are skill_name / subagent_type / tool_name / decision / success.
+TOOL_EVENTS = ("claude_code.tool_result", "claude_code.tool_decision")
+
+
+def parse_otlp_logs(payload: dict) -> list:
+    """Flatten an OTLP/JSON ExportLogsServiceRequest into event records.
+
+    Each record: {event, value=1, attrs (resource ∪ record attrs, with
+    `_tool_parameters` parsed from the JSON-string `tool_parameters`), date}.
+    """
+    records = []
+    for rl in payload.get("resourceLogs", []):
+        res = _attrs_to_dict(rl.get("resource", {}).get("attributes"))
+        for sl in rl.get("scopeLogs", []):
+            for rec in sl.get("logRecords", []):
+                attrs = {**res, **_attrs_to_dict(rec.get("attributes"))}
+                tp = attrs.get("tool_parameters")
+                if isinstance(tp, str):
+                    try:
+                        attrs["_tool_parameters"] = json.loads(tp)
+                    except Exception:
+                        attrs["_tool_parameters"] = {}
+                elif isinstance(tp, dict):
+                    attrs["_tool_parameters"] = tp
+                nano = rec.get("timeUnixNano") or rec.get("observedTimeUnixNano")
+                records.append({
+                    "event": attrs.get("event.name"),
+                    "value": 1,
+                    "attrs": attrs,
+                    "date": _date_from_nano(nano),
+                })
+    return records
+
+
+def aggregate_tool_events(records: list) -> dict:
+    """Count tool/skill/agent usage keyed by (email, date, kind, name).
+
+    kind ∈ {"tool","skill","agent"}; value = {count, accept, reject}. `count` is taken
+    from `tool_result` (one per completed call); accept/reject from `tool_decision`'s
+    `decision`. Email is raw here — the handler normalizes before write.
+    """
+    out: dict = {}
+
+    def bump(email, date, kind, name, is_result, decision):
+        if not name:
+            return
+        row = out.setdefault((email, date, kind, name),
+                             {"count": 0, "accept": 0, "reject": 0})
+        if is_result:
+            row["count"] += 1
+        if decision == "accept":
+            row["accept"] += 1
+        elif decision == "reject":
+            row["reject"] += 1
+
+    for r in records:
+        if r["event"] not in TOOL_EVENTS:
+            continue
+        a = r["attrs"]
+        email = a.get("enduser.id")
+        date = r["date"]
+        if date is None:
+            continue
+        is_result = r["event"] == "claude_code.tool_result"
+        decision = a.get("decision")
+        tp = a.get("_tool_parameters") or {}
+        bump(email, date, "tool", a.get("tool_name"), is_result, decision)
+        bump(email, date, "skill", tp.get("skill_name"), is_result, decision)
+        bump(email, date, "agent", tp.get("subagent_type"), is_result, decision)
+    return out
