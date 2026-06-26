@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -66,27 +66,38 @@ def check_idle() -> dict:
     """Check all running devenv instances for idle status."""
     instances = get_running_instances()
     if not instances:
-        return {"statusCode": 200, "body": {"checked": 0}}
+        result = {"checked": 0, "stopped": [], "warned": [], "skipped": []}
+        logger.info(f"Idle check result: {json.dumps(result)}")
+        return {"statusCode": 200, "body": result}
 
     stopped = []
     warned = []
+    skipped = []
 
     for inst in instances:
         instance_id = inst["InstanceId"]
         subdomain = get_tag(inst, "subdomain")
+        username = get_tag(inst, "username") or get_tag(inst, "cc:user")
         launch_time = inst.get("LaunchTime")
 
         # Grace period: 10 min after launch
         if launch_time:
             uptime_min = (datetime.now(timezone.utc) - launch_time).total_seconds() / 60
             if uptime_min < 10:
+                skipped.append({
+                    "instanceId": instance_id,
+                    "subdomain": subdomain,
+                    "reason": "launch_grace",
+                    "uptime_minutes": int(uptime_min),
+                })
                 continue
 
         # Check keep_alive_until
         if is_keep_alive_active(subdomain):
+            skipped.append({"instanceId": instance_id, "subdomain": subdomain, "reason": "keep_alive"})
             continue
 
-        idle_minutes = get_idle_minutes(instance_id, subdomain)
+        idle_minutes = get_idle_minutes(instance_id, subdomain, username=username)
 
         if idle_minutes >= IDLE_THRESHOLD_MINUTES + 15:
             # 45+ min idle → stop
@@ -100,7 +111,17 @@ def check_idle() -> dict:
             send_warning(subdomain, idle_minutes)
             warned.append({"instanceId": instance_id, "subdomain": subdomain, "idle_minutes": idle_minutes})
 
-    return {"statusCode": 200, "body": {"stopped": stopped, "warned": warned}}
+        else:
+            skipped.append({
+                "instanceId": instance_id,
+                "subdomain": subdomain,
+                "reason": "active",
+                "idle_minutes": idle_minutes,
+            })
+
+    result = {"checked": len(instances), "stopped": stopped, "warned": warned, "skipped": skipped}
+    logger.info(f"Idle check result: {json.dumps(result)}")
+    return {"statusCode": 200, "body": result}
 
 
 def schedule_shutdown() -> dict:
@@ -115,6 +136,7 @@ def schedule_shutdown() -> dict:
     for inst in instances:
         instance_id = inst["InstanceId"]
         subdomain = get_tag(inst, "subdomain")
+        username = get_tag(inst, "username") or get_tag(inst, "cc:user")
 
         # Skip if no_auto_stop tag
         if get_tag(inst, "no_auto_stop").lower() == "true":
@@ -127,7 +149,7 @@ def schedule_shutdown() -> dict:
             continue
 
         # Skip if actively used (last 15 min)
-        idle_minutes = get_idle_minutes(instance_id, subdomain, period_minutes=15)
+        idle_minutes = get_idle_minutes(instance_id, subdomain, period_minutes=15, username=username)
         if idle_minutes < 15:
             skipped.append({"instanceId": instance_id, "reason": "active"})
             continue
@@ -175,7 +197,12 @@ def get_tag(instance: dict, key: str) -> str:
     return ""
 
 
-def get_idle_minutes(instance_id: str, subdomain: str, period_minutes: int = None) -> int:
+def get_idle_minutes(
+    instance_id: str,
+    subdomain: str,
+    period_minutes: int = None,
+    username: Optional[str] = None,
+) -> int:
     """Check CPU + Network metrics to determine idle duration."""
     if period_minutes is None:
         period_minutes = IDLE_THRESHOLD_MINUTES + 15
@@ -221,24 +248,77 @@ def get_idle_minutes(instance_id: str, subdomain: str, period_minutes: int = Non
         return 0  # Fail safe
 
     # Token usage check
-    if has_recent_token_usage(subdomain):
+    if has_recent_token_usage(subdomain, username=username):
         return 0
 
     return cpu_idle_count * 5  # Each datapoint is 5 min
 
 
-def has_recent_token_usage(subdomain: str, minutes: int = 15) -> bool:
-    """Check Bedrock API usage in the last N minutes."""
+def usage_lookup_keys(subdomain: str, username: Optional[str] = None) -> list[str]:
+    """Return current and legacy usage-table user keys for a subdomain."""
+    keys = []
+    tag_username = (username or "").strip().lower()
+    if tag_username:
+        keys.append(tag_username)
+
+    try:
+        item = table.get_item(Key={"user_id": subdomain}).get("Item") or {}
+    except Exception as e:
+        if keys:
+            logger.warning(f"Instance-table lookup failed for {subdomain}; using EC2 username tag: {e}")
+        else:
+            raise
+    else:
+        row_username = (item.get("username") or "").strip().lower()
+        if row_username and row_username not in keys:
+            keys.append(row_username)
+        elif not item:
+            logger.warning(f"Instance row not found for {subdomain}; falling back to legacy usage key")
+        elif not row_username:
+            logger.warning(f"Instance row missing username for {subdomain}; falling back to legacy usage key")
+
+    legacy_key = (subdomain or "").strip().lower()
+    if legacy_key and legacy_key not in keys:
+        keys.append(legacy_key)
+    return keys
+
+
+def has_recent_token_usage(subdomain: str, minutes: int = 15, username: Optional[str] = None) -> bool:
+    """Check Bedrock API usage in the last N minutes.
+
+    ADR-031 keys usage rows by lowercased email and stores the subdomain as an
+    attribute. Query the email key first, then the legacy subdomain key.
+    """
     try:
         usage_table = dynamodb.Table(USAGE_TABLE)
-        cutoff = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat() + "Z"
-        resp = usage_table.query(
-            KeyConditionExpression="PK = :pk AND SK > :cutoff",
-            ExpressionAttributeValues={":pk": f"USER#{subdomain}", ":cutoff": cutoff},
-            Limit=1,
-        )
-        return len(resp.get("Items", [])) > 0
-    except Exception:
+        # bedrock-usage-tracker writes naive UTC ISO strings; keep this shape for lexical comparisons.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff_dt = now - timedelta(minutes=minutes)
+        cutoff = cutoff_dt.isoformat()
+        dates = list(dict.fromkeys([now.date().isoformat(), cutoff_dt.date().isoformat()]))
+
+        for user_key in usage_lookup_keys(subdomain, username=username):
+            for date_prefix in dates:
+                query_kwargs = {
+                    "KeyConditionExpression": "PK = :pk AND begins_with(SK, :date)",
+                    "FilterExpression": "updatedAt >= :cutoff",
+                    "ExpressionAttributeValues": {
+                        ":pk": f"USER#{user_key}",
+                        ":date": date_prefix,
+                        ":cutoff": cutoff,
+                    },
+                }
+                while True:
+                    resp = usage_table.query(**query_kwargs)
+                    if resp.get("Items"):
+                        return True
+                    last_key = resp.get("LastEvaluatedKey")
+                    if not last_key:
+                        break
+                    query_kwargs["ExclusiveStartKey"] = last_key
+        return False
+    except Exception as e:
+        logger.warning(f"Usage lookup failed for {subdomain}: {e}")
         return True  # Fail safe
 
 

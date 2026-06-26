@@ -62,6 +62,8 @@ module "usage_tracking" {
   lambda_src_dir                = local.lambda_src_dir
   ecs_cluster_name              = var.ecs_cluster_name
   daily_budget_usd              = var.daily_budget_usd
+  instance_table_name           = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : "cc-user-instances"
+  routing_table_name            = local.devenv_enabled ? module.ecs_devenv[0].routing_table_name : "cc-routing-table"
 }
 
 # ---- 04 ECS Nginx Dev Environment -------------------------------------------
