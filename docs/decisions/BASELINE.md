@@ -56,8 +56,8 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> 통합 ADR 11개 (옛 34개 → 통합). 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
-> **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거).
+> 통합 ADR 11개 (옛 34개 → 통합) + 신규 ADR-012. 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
+> **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거). 신규 ADR-012 작성됨; 다음 신규 ADR은 013부터 순증(reset 일괄 재번호 예외와 무관).
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
@@ -72,6 +72,7 @@
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
+| 012 | DevEnv 헬스 판정 | 직접 8080 probe 제거(SG 격리로 timeout) → EC2 lifecycle 파생(running+privateIp⇒HEALTHY), 낙관적 false-positive trade-off 수용 | (신규) |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 
