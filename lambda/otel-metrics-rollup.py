@@ -55,13 +55,15 @@ def _s(v):
 
 
 def _add_expr(fields: dict):
-    """Build an ADD UpdateExpression + values for the given numeric fields."""
-    parts, vals = [], {}
+    """Build an ADD UpdateExpression with ExpressionAttributeNames for the given numeric
+    fields. Names are aliased (#n0, #n1, ...) so reserved words like `count` are legal."""
+    parts, names, vals = [], {}, {}
     for i, (name, val) in enumerate(fields.items()):
-        ph = f":v{i}"
-        parts.append(f"{name} {ph}")
-        vals[ph] = _n(val)
-    return "ADD " + ", ".join(parts), vals
+        nph, vph = f"#n{i}", f":v{i}"
+        parts.append(f"{nph} {vph}")
+        names[nph] = name
+        vals[vph] = _n(val)
+    return "ADD " + ", ".join(parts), names, vals
 
 
 def _user_data_items(email: str, prod: dict, presence: set, usage: dict) -> list:
@@ -69,19 +71,21 @@ def _user_data_items(email: str, prod: dict, presence: set, usage: dict) -> list
     SKILL#/AGENT#/TOOL# usage counts, and ACTIVE# presence rows."""
     items = []
     for (date, model), row in prod.items():
-        expr, vals = _add_expr({f: row[f] for f in _PROD_FIELDS})
+        expr, names, vals = _add_expr({f: row[f] for f in _PROD_FIELDS})
         items.append({"Update": {
             "TableName": TABLE_NAME,
             "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"PROD#{date}#{model}")},
-            "UpdateExpression": expr, "ExpressionAttributeValues": vals,
+            "UpdateExpression": expr, "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": vals,
         }})
     for (date, kind, name) in sorted(usage):
         c = usage[(date, kind, name)]
-        expr, vals = _add_expr({"count": c["count"], "accept": c["accept"], "reject": c["reject"]})
+        expr, names, vals = _add_expr({"count": c["count"], "accept": c["accept"], "reject": c["reject"]})
         items.append({"Update": {
             "TableName": TABLE_NAME,
             "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"{_USAGE_SK[kind]}#{date}#{name}")},
-            "UpdateExpression": expr, "ExpressionAttributeValues": vals,
+            "UpdateExpression": expr, "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": vals,
         }})
     for date in sorted(presence):
         items.append({"Put": {
@@ -99,6 +103,8 @@ def _user_transact_chunks(email, s3key, prod, presence, usage, marker_ttl):
     are never double-applied) while staying under the 100-item transaction limit.
     """
     data = _user_data_items(email, prod, presence, usage)
+    if not data:
+        return  # nothing to write for this user — skip the empty marker-only transaction
     cap = _MAX_TX - 1  # leave room for the marker
     chunks = [data[i:i + cap] for i in range(0, len(data), cap)] or [[]]
     for i, chunk in enumerate(chunks):
@@ -144,8 +150,15 @@ def _process_object(bucket: str, key: str) -> bool:
                 wrote_any = True
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code", "")
-                if code in ("TransactionCanceledException", "ConditionalCheckFailedException"):
-                    continue  # this chunk already processed for this object -> idempotent skip
+                if code == "ConditionalCheckFailedException":
+                    continue
+                if code == "TransactionCanceledException":
+                    # The dedup marker is the LAST item in the chunk. Skip (idempotent) ONLY
+                    # when ITS condition failed; a TransactionConflict / other reason must
+                    # propagate so Lambda retries instead of silently dropping telemetry.
+                    reasons = e.response.get("CancellationReasons", [])
+                    if reasons and reasons[-1].get("Code") == "ConditionalCheckFailed":
+                        continue
                 raise
     return wrote_any
 

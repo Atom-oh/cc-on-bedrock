@@ -78,15 +78,20 @@ class _FakeS3:
 
 
 class _FakeDDB:
-    def __init__(self, raise_cancel=False):
+    def __init__(self, raise_cancel=False, cancel_reasons=None):
         self.calls = []
         self._raise = raise_cancel
+        # default: trailing marker condition failed (the idempotent-skip case)
+        self._reasons = cancel_reasons if cancel_reasons is not None else [
+            {"Code": "None"}, {"Code": "ConditionalCheckFailed"}]
 
     def transact_write_items(self, TransactItems):
         self.calls.append(TransactItems)
         if self._raise:
             from botocore.exceptions import ClientError
-            raise ClientError({"Error": {"Code": "TransactionCanceledException"}}, "TransactWriteItems")
+            raise ClientError(
+                {"Error": {"Code": "TransactionCanceledException"},
+                 "CancellationReasons": self._reasons}, "TransactWriteItems")
         return {}
 
 
@@ -117,6 +122,10 @@ def test_metrics_object_writes_prod_presence_and_ttl_marker_no_cost():
     marker = [i["Put"] for i in items
               if "Put" in i and i["Put"]["Item"]["SK"]["S"].startswith("OTELOBJ#")][0]
     assert int(marker["Item"]["ttl"]["N"]) > 0
+    # reserved-word safety: ADD updates must use ExpressionAttributeNames (e.g. `count`)
+    upd = [i["Update"] for i in items if "Update" in i][0]
+    assert "ExpressionAttributeNames" in upd
+    assert "#" in upd["UpdateExpression"]  # placeholders, not raw attr names
 
 
 def test_logs_object_writes_skill_agent_tool_counts():
@@ -131,8 +140,19 @@ def test_logs_object_writes_skill_agent_tool_counts():
 
 
 def test_duplicate_delivery_is_idempotent_skip():
+    # marker condition failed -> already processed -> skip, no exception
     ddb = _FakeDDB(raise_cancel=True)
-    assert _run(ddb, _metrics_obj())["processed"] == 0  # cancelled, no exception
+    assert _run(ddb, _metrics_obj())["processed"] == 0
+
+
+def test_transaction_conflict_reraises_not_silently_dropped():
+    # a real write conflict (not the dedup marker) must propagate so Lambda retries,
+    # rather than silently dropping the user's telemetry.
+    import pytest
+    from botocore.exceptions import ClientError
+    ddb = _FakeDDB(raise_cancel=True, cancel_reasons=[{"Code": "TransactionConflict"}, {"Code": "None"}])
+    with pytest.raises(ClientError):
+        _run(ddb, _metrics_obj())
 
 
 def test_url_encoded_s3_key_is_decoded():
