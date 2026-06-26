@@ -29,30 +29,20 @@ def _dp(value_int, attrs, nano=NANO):
             "attributes": [_attr(k, v) for k, v in attrs.items()]}
 
 
-def _sum_metric(name, dps):
-    return {"name": name, "sum": {"dataPoints": dps}}
+def _gauge_metric(name, dps):
+    return {"name": name, "gauge": {"dataPoints": dps}}
 
 
 def _fixture():
-    res_attrs = [_attr("enduser.id", "Alice@Example.com"), _attr("department", "platform"),
-                 _attr("service.name", "claude-code")]
+    res_attrs = [_attr("enduser.id", "Alice@Example.com"), _attr("cc.department", "platform"),
+                 _attr("service.name", "cc-on-bedrock-productivity")]
     metrics = [
-        _sum_metric("claude_code.lines_of_code.count", [
-            _dp(12, {"type": "added", "model": "claude-sonnet-4-6"}),
-            _dp(3, {"type": "removed", "model": "claude-sonnet-4-6"}),
-            _dp(5, {"type": "added", "model": "claude-sonnet-4-6"}),  # delta sum -> added 17
-        ]),
-        _sum_metric("claude_code.commit.count", [_dp(2, {})]),
-        _sum_metric("claude_code.pull_request.count", [_dp(1, {})]),
-        _sum_metric("claude_code.session.count", [_dp(1, {"start_type": "fresh"})]),
-        _sum_metric("claude_code.active_time.total", [_dp(90, {"type": "user"}),
-                                                      _dp(30, {"type": "cli"})]),
-        _sum_metric("claude_code.code_edit_tool.decision", [
-            _dp(4, {"decision": "accept", "tool_name": "Edit"}),
-            _dp(1, {"decision": "reject", "tool_name": "Write"}),
-        ]),
-        _sum_metric("claude_code.cost.usage", [_dp(1, {"model": "claude-sonnet-4-6",
-                                                       "skill.name": "code-review"})]),
+        _gauge_metric("cc.git.lines_added", [_dp(12, {}), _dp(5, {})]),   # sum -> 17
+        _gauge_metric("cc.git.lines_deleted", [_dp(3, {})]),
+        _gauge_metric("cc.git.commits", [_dp(1, {}), _dp(1, {})]),        # sum -> 2
+        _gauge_metric("cc.git.pushes", [_dp(1, {})]),
+        _gauge_metric("cc.claude.sessions.started", [_dp(1, {})]),
+        _gauge_metric("cc.claude.active_minutes", [_dp(5, {}), _dp(5, {})]),  # 10 min -> 600 s
     ]
     return {"resourceMetrics": [
         {"resource": {"attributes": res_attrs},
@@ -62,32 +52,25 @@ def _fixture():
 def test_parse_merges_resource_and_datapoint_attrs():
     recs = rollup.parse_otlp_metrics(_fixture())
     assert recs, "should yield datapoint records"
-    loc = [r for r in recs if r["metric"] == "claude_code.lines_of_code.count"][0]
-    # resource attrs and datapoint attrs are both present on the record
-    assert loc["attrs"]["enduser.id"] == "Alice@Example.com"
-    assert loc["attrs"]["department"] == "platform"
-    assert loc["attrs"]["type"] == "added"
-    assert loc["date"] == EXPECTED_DATE
-    assert loc["value"] == 12
+    commit = [r for r in recs if r["metric"] == "cc.git.commits"][0]
+    assert commit["attrs"]["enduser.id"] == "Alice@Example.com"
+    assert commit["attrs"]["cc.department"] == "platform"
+    assert commit["date"] == EXPECTED_DATE
+    assert commit["value"] == 1
 
 
-def test_aggregate_daily_sums_deltas_by_email_date_model():
+def test_aggregate_daily_sums_cc_counters_under_model_underscore():
     recs = rollup.parse_otlp_metrics(_fixture())
     agg = rollup.aggregate_daily(recs)
-    # email is taken raw here (lowercasing is T2's normalize_identity)
-    key = ("Alice@Example.com", EXPECTED_DATE, "claude-sonnet-4-6")
+    key = ("Alice@Example.com", EXPECTED_DATE, "_")  # cc.* counters carry no model
     assert key in agg
     row = agg[key]
-    assert row["loc_added"] == 17  # 12 + 5
+    assert row["loc_added"] == 17    # 12 + 5
     assert row["loc_removed"] == 3
-    # metrics without a model attr bucket under model="_"
-    nomodel = agg[("Alice@Example.com", EXPECTED_DATE, "_")]
-    assert nomodel["commits"] == 2
-    assert nomodel["prs"] == 1
-    assert nomodel["sessions"] == 1
-    assert nomodel["active_seconds"] == 120  # 90 + 30
-    assert nomodel["edit_accept"] == 4
-    assert nomodel["edit_reject"] == 1
+    assert row["commits"] == 2
+    assert row["pushes"] == 1
+    assert row["sessions"] == 1
+    assert row["active_seconds"] == 600  # (5 + 5) minutes * 60
 
 
 def test_extract_presence_is_unique_email_date():
@@ -97,13 +80,8 @@ def test_extract_presence_is_unique_email_date():
     assert len(pres) == 1
 
 
-def test_extract_cost_attribution_by_dimension():
-    recs = rollup.parse_otlp_metrics(_fixture())
-    cost = rollup.extract_cost_attribution(recs)
-    # cost.usage attributed to the skill dimension when present
-    key = ("Alice@Example.com", EXPECTED_DATE, "skill:code-review")
-    assert key in cost
-    assert cost[key]["cost_usd"] == 1
+def test_cost_attribution_removed():
+    assert not hasattr(rollup, "extract_cost_attribution")
 
 
 # --- T2: email-key identity normalization + unverified flag (ADR-029) ---

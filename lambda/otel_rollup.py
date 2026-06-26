@@ -19,15 +19,13 @@ from datetime import datetime, timezone
 # unnecessary because the value is org-issued.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Metric names emitted by Claude Code (see monitoring spec).
-M_LOC = "claude_code.lines_of_code.count"
-M_COMMIT = "claude_code.commit.count"
-M_PR = "claude_code.pull_request.count"
-M_SESSION = "claude_code.session.count"
-M_ACTIVE = "claude_code.active_time.total"
-M_EDIT = "claude_code.code_edit_tool.decision"
-M_COST = "claude_code.cost.usage"
-M_TOKEN = "claude_code.token.usage"
+# Metric names emitted by tools/cc-otel-code-metrics.sh (#94, gauge datapoints).
+M_COMMIT = "cc.git.commits"
+M_LOC_ADDED = "cc.git.lines_added"
+M_LOC_REMOVED = "cc.git.lines_deleted"
+M_PUSH = "cc.git.pushes"
+M_SESSION = "cc.claude.sessions.started"
+M_ACTIVE_MIN = "cc.claude.active_minutes"
 
 
 def _attr_value(v: dict):
@@ -109,17 +107,15 @@ def is_unverified(email: str, date: str, bedrock_seen) -> bool:
 
 
 def _blank_rollup() -> dict:
-    return {
-        "loc_added": 0, "loc_removed": 0, "commits": 0, "prs": 0,
-        "sessions": 0, "active_seconds": 0, "edit_accept": 0, "edit_reject": 0,
-    }
+    return {"loc_added": 0, "loc_removed": 0, "commits": 0,
+            "pushes": 0, "sessions": 0, "active_seconds": 0}
 
 
 def aggregate_daily(records: list) -> dict:
-    """Sum delta datapoints into rollups keyed by (email, date, model).
+    """Sum gauge/delta datapoints into rollups keyed by (email, date, "_").
 
-    `lines_of_code.count` carries a model attribute; the other counters do not and
-    bucket under model="_". Email is taken raw here — `normalize_identity` (handler)
+    The cc.* event metrics carry no per-model attribute, so everything buckets
+    under model="_". Email is taken raw here — `normalize_identity` (handler)
     lowercases/validates it before write.
     """
     out: dict = {}
@@ -131,28 +127,19 @@ def aggregate_daily(records: list) -> dict:
             continue
         metric = r["metric"]
         val = r["value"]
-        model = a.get("model") or "_"
-        if metric == M_LOC:
-            row = out.setdefault((email, date, model), _blank_rollup())
-            if a.get("type") == "added":
-                row["loc_added"] += val
-            elif a.get("type") == "removed":
-                row["loc_removed"] += val
-        else:
-            row = out.setdefault((email, date, "_"), _blank_rollup())
-            if metric == M_COMMIT:
-                row["commits"] += val
-            elif metric == M_PR:
-                row["prs"] += val
-            elif metric == M_SESSION:
-                row["sessions"] += val
-            elif metric == M_ACTIVE:
-                row["active_seconds"] += val
-            elif metric == M_EDIT:
-                if a.get("decision") == "accept":
-                    row["edit_accept"] += val
-                elif a.get("decision") == "reject":
-                    row["edit_reject"] += val
+        row = out.setdefault((email, date, "_"), _blank_rollup())
+        if metric == M_LOC_ADDED:
+            row["loc_added"] += val
+        elif metric == M_LOC_REMOVED:
+            row["loc_removed"] += val
+        elif metric == M_COMMIT:
+            row["commits"] += val
+        elif metric == M_PUSH:
+            row["pushes"] += val
+        elif metric == M_SESSION:
+            row["sessions"] += val
+        elif metric == M_ACTIVE_MIN:
+            row["active_seconds"] += val * 60
     return out
 
 
@@ -166,34 +153,5 @@ def extract_presence(records: list) -> set:
     return pres
 
 
-def extract_cost_attribution(records: list) -> dict:
-    """Per-(email, date, dimension) cost/token attribution from OTel (approximate).
-
-    Dimension priority: skill.name > agent.name > model. This is the area-3 attribution
-    the Bedrock invocation log cannot provide; it is labeled "Attributed" (estimate),
-    never the authoritative "Billed" cost.
-    """
-    out: dict = {}
-    for r in records:
-        if r["metric"] not in (M_COST, M_TOKEN):
-            continue
-        a = r["attrs"]
-        email = a.get("enduser.id")
-        date = r["date"]
-        if not (email and date):
-            continue
-        if a.get("skill.name"):
-            dim = "skill:" + a["skill.name"]
-        elif a.get("agent.name"):
-            dim = "agent:" + a["agent.name"]
-        else:
-            dim = "model:" + (a.get("model") or "_")
-        row = out.setdefault((email, date, dim), {"cost_usd": 0, "tokens_in": 0, "tokens_out": 0})
-        if r["metric"] == M_COST:
-            row["cost_usd"] += r["value"]
-        elif r["metric"] == M_TOKEN:
-            if a.get("type") == "input":
-                row["tokens_in"] += r["value"]
-            elif a.get("type") == "output":
-                row["tokens_out"] += r["value"]
-    return out
+# Cost/token attribution intentionally removed: OTel code-activity is productivity
+# only. Authoritative cost stays in the ADR-005 invocation-log → DynamoDB pipeline.
