@@ -72,11 +72,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set -euo pipefail
           raw_diff="$RUNNER_TEMP/claude-pr-diff-raw.txt"
           filtered_diff="$RUNNER_TEMP/claude-pr-diff-filtered.txt"
           review_diff="$GITHUB_WORKSPACE/.claude-pr-diff.txt"
+          current_head=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "PR head changed from $HEAD_SHA to $current_head before diff fetch; canceling stale review." >&2
+            exit 1
+          fi
           gh pr diff "$PR_NUMBER" > "$raw_diff"
           awk '
             function clean(path) {
@@ -108,12 +114,16 @@ jobs:
               echo "No reviewable changes remain after lockfile/binary/build-output filtering."
             } > "$review_diff"
             echo "has_reviewable_changes=false" >> "$GITHUB_OUTPUT"
+            echo "truncated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           {
             echo "Filtered PR diff for #${PR_NUMBER}. total_lines=${total_lines}; max_lines=${max_lines}."
             if [ "$total_lines" -gt "$max_lines" ]; then
               echo "WARNING: diff was truncated to the first ${max_lines} lines."
+              echo "truncated=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "truncated=false" >> "$GITHUB_OUTPUT"
             fi
             echo
             head -"$max_lines" "$filtered_diff"
@@ -151,7 +161,8 @@ jobs:
 
             Return only structured output matching the schema. Set status to BLOCKED if any
             CRITICAL or MAJOR finding remains; otherwise set status to PASSED. The body must
-            be concise markdown grouped by CRITICAL / MAJOR / MINOR. 한국어+영문 기술용어 혼용 가능.
+            be concise markdown grouped by CRITICAL / MAJOR / MINOR. If the diff header says
+            it was truncated, mention that the review is partial. 한국어+영문 기술용어 혼용 가능.
 
       - name: Build no-op review body
         id: no_review
@@ -172,12 +183,23 @@ jobs:
             echo "---"
             echo "_Triggered manually for PR #${PR_NUMBER} at commit \`${HEAD_SHA}\` · workflow: \`.github/workflows/claude-review.yml\`_"
           } > "$RUNNER_TEMP/claude-review-comment.md"
+          write_output_file() {
+            name="$1"
+            file="$2"
+            delimiter="EOF_$(openssl rand -hex 16)"
+            while grep -qxF "$delimiter" "$file"; do
+              delimiter="EOF_$(openssl rand -hex 16)"
+            done
+            {
+              echo "$name<<$delimiter"
+              cat "$file"
+              echo "$delimiter"
+            } >> "$GITHUB_OUTPUT"
+          }
           {
             echo "status=PASSED"
-            echo "body<<CLAUDE_REVIEW_EOF"
-            cat "$RUNNER_TEMP/claude-review-comment.md"
-            echo "CLAUDE_REVIEW_EOF"
           } >> "$GITHUB_OUTPUT"
+          write_output_file body "$RUNNER_TEMP/claude-review-comment.md"
 
       - name: Build Claude review body
         id: rendered_review
@@ -185,6 +207,7 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TRUNCATED: ${{ steps.diff.outputs.truncated }}
           REVIEW_STATUS: ${{ fromJSON(steps.claude.outputs.structured_output).status }}
           REVIEW_BODY: ${{ fromJSON(steps.claude.outputs.structured_output).body }}
         run: |
@@ -207,17 +230,32 @@ jobs:
             echo
             echo "$status_badge"
             echo
+            if [ "$TRUNCATED" = "true" ]; then
+              echo "_WARNING: diff was truncated to the first 3000 lines; review is partial._"
+              echo
+            fi
             printf '%s\n' "$REVIEW_BODY"
             echo
             echo "---"
             echo "_Triggered manually for PR #${PR_NUMBER} at commit \`${HEAD_SHA}\` · workflow: \`.github/workflows/claude-review.yml\`_"
           } > "$RUNNER_TEMP/claude-review-comment.md"
+          write_output_file() {
+            name="$1"
+            file="$2"
+            delimiter="EOF_$(openssl rand -hex 16)"
+            while grep -qxF "$delimiter" "$file"; do
+              delimiter="EOF_$(openssl rand -hex 16)"
+            done
+            {
+              echo "$name<<$delimiter"
+              cat "$file"
+              echo "$delimiter"
+            } >> "$GITHUB_OUTPUT"
+          }
           {
             echo "status=$REVIEW_STATUS"
-            echo "body<<CLAUDE_REVIEW_EOF"
-            cat "$RUNNER_TEMP/claude-review-comment.md"
-            echo "CLAUDE_REVIEW_EOF"
           } >> "$GITHUB_OUTPUT"
+          write_output_file body "$RUNNER_TEMP/claude-review-comment.md"
 
       - name: Select review output
         id: review
@@ -236,11 +274,17 @@ jobs:
             status="$NO_REVIEW_STATUS"
             body="$NO_REVIEW_BODY"
           fi
+          body_file="$RUNNER_TEMP/selected-claude-review-comment.md"
+          printf '%s\n' "$body" > "$body_file"
+          delimiter="EOF_$(openssl rand -hex 16)"
+          while grep -qxF "$delimiter" "$body_file"; do
+            delimiter="EOF_$(openssl rand -hex 16)"
+          done
           {
             echo "status=$status"
-            echo "body<<CLAUDE_REVIEW_EOF"
-            printf '%s\n' "$body"
-            echo "CLAUDE_REVIEW_EOF"
+            echo "body<<$delimiter"
+            cat "$body_file"
+            echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
   post-review:
@@ -264,11 +308,11 @@ jobs:
           marker="<!-- claude-code-review -->"
           body_file="$RUNNER_TEMP/claude-review-comment.md"
           printf '%s\n' "$REVIEW_BODY" > "$body_file"
+          grep -qF "$marker" "$body_file"
           existing=$(gh api "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.body | contains("<!-- claude-code-review -->")) | .id' 2>/dev/null | head -1)
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->"))) | .id' 2>/dev/null | head -1)
           if [ -n "$existing" ]; then
             gh api "repos/$GH_REPO/issues/comments/$existing" -X PATCH -f body="$(cat "$body_file")"
           else
-            grep -qF "$marker" "$body_file"
             gh pr comment "$PR_NUMBER" --body-file "$body_file"
           fi
