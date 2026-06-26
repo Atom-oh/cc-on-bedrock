@@ -1145,7 +1145,7 @@ resource "aws_iam_role_policy" "otel_rollup" {
       {
         Sid      = "UsageTableRW"
         Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchWriteItem"]
+        Action   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchWriteItem", "dynamodb:TransactWriteItems"]
         Resource = [aws_dynamodb_table.usage.arn, "${aws_dynamodb_table.usage.arn}/index/*"]
       },
       {
