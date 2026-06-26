@@ -85,3 +85,11 @@ def test_every_codeserver_location_intercepts_boot_502():
         f"code-server locations leak raw 502 during boot (missing "
         f"proxy_intercept_errors + @loading_codeserver): {unguarded}"
     )
+
+
+def test_folder_redirect_can_intercept_codeserver_boot_502_recursively():
+    """The root custom route sends ?folder=... to @codeserver via error_page 418.
+    Nginx needs recursive_error_pages enabled so a connect-time 502 from that
+    internal redirect is handled by @loading_codeserver instead of leaking raw 502."""
+    sb = _server_block()
+    assert "recursive_error_pages on;" in sb

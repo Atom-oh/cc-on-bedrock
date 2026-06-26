@@ -358,6 +358,7 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         proxy_connect_timeout 10s;
         proxy_send_timeout 3600s;
         proxy_read_timeout 3600s;
+        recursive_error_pages on;
 
         # ─── code-server named location ───
         location @codeserver {{
@@ -391,7 +392,7 @@ SERVER_TEMPLATE = """    # Server block for {subdomain}
         # (WebSocket reconnection endpoint — no trailing slash, query string only).
         # The previous regex required `/` after the hash, which missed the WS path
         # and silently fell back to frontend:3000 → "WebSocket close with status code 1006".
-        location ~ ^/stable-[a-f0-9]+(/|$|\?) {{
+        location ~ ^/stable-[a-f0-9]+(/|$|\\?) {{
             proxy_pass http://codeserver_{subdomain};
             proxy_intercept_errors on;
             error_page 502 503 504 = @loading_codeserver;

@@ -650,14 +650,19 @@ data "aws_iam_policy_document" "ec2_idle_stop_policy" {
       "${aws_dynamodb_table.usage.arn}/index/*",
     ]
   }
+  statement {
+    sid       = "DynamoDbKmsDecrypt"
+    actions   = ["kms:Decrypt"]
+    resources = [var.kms_key_arn]
+  }
   # Instance + routing tables are read-write — stop/start updates state rows
   # and the routing table is rewritten when an instance is removed.
   statement {
     sid     = "InstanceAndRoutingTablesReadWrite"
     actions = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query"]
     resources = [
-      "arn:aws:dynamodb:${local.region}:${local.account_id}:table/cc-user-instances",
-      "arn:aws:dynamodb:${local.region}:${local.account_id}:table/cc-routing-table",
+      "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.instance_table_name}",
+      "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.routing_table_name}",
     ]
   }
   statement {
@@ -690,8 +695,8 @@ resource "aws_lambda_function" "ec2_idle_stop" {
   environment {
     variables = {
       REGION                 = local.region
-      INSTANCE_TABLE         = "cc-user-instances"
-      ROUTING_TABLE          = "cc-routing-table"
+      INSTANCE_TABLE         = var.instance_table_name
+      ROUTING_TABLE          = var.routing_table_name
       USAGE_TABLE            = aws_dynamodb_table.usage.name
       IDLE_THRESHOLD_MINUTES = "30"
       SNS_TOPIC_ARN          = aws_sns_topic.budget_alerts.arn
