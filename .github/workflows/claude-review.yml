@@ -1,0 +1,57 @@
+name: Claude Code Review
+
+# Single-Claude review using the official anthropics/claude-code-action on Bedrock.
+# Security model matches pr-review.yml:
+# - pull_request_target runs with trusted token/secrets, so checkout only the trusted base SHA.
+# - PR changes are passed to Claude as a diff file, not checked out or executed.
+# - Claude is restricted to read-only tools for defense-in-depth against prompt injection in the diff.
+# - Same-repo PR guard matches pr-review.yml; forks are skipped.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+jobs:
+  claude-review:
+    name: Claude Code Review
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: cc-on-bedrock-claude-arm
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CLAUDE_CODE_USE_BEDROCK: 1
+      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Fetch PR diff (data only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr diff "$PR_NUMBER" > "$GITHUB_WORKSPACE/.ci-pr-diff.txt"
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          use_bedrock: "true"
+          claude_args: |
+            --model us.anthropic.claude-opus-4-8
+            --allowedTools Read,Grep,Glob
+          prompt: |
+            You are reviewing a pull request for cc-on-bedrock. Its unified diff is in
+            `.ci-pr-diff.txt` in the current directory; read that file because it is the
+            change under review. The trusted repository base is checked out here for
+            context only. Read the base files touched by the diff before flagging missing
+            behavior. Do not run commands; you have read-only tools.
+
+            Project conventions: current architectural truth is `docs/decisions/BASELINE.md`
+            plus `docs/architecture.md`; local module guidance lives in `CLAUDE.md` files.
+            Review for bugs, security risks, logic errors, Terraform/IAM drift, Lambda
+            runtime issues, and convention violations. Post concise findings grouped
+            CRITICAL / MAJOR / MINOR. 한국어+영문 기술용어 혼용 가능.
