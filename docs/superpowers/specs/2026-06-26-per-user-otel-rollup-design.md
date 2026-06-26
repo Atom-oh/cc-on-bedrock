@@ -131,7 +131,18 @@ OTELOBJ#{s3key}       Put dedup (attribute_not_exists, ttl=+7d)
 - `tests/run-all.sh` green.
 - (수동) acceptance §2: atomoh devenv 네이티브 OTEL on → DynamoDB 행 확인 + scrub 확인.
 
-## 10. Open items (구현계획 초기 검증 태스크)
-- **네이티브 OTEL on Bedrock 실증**: atomoh devenv에서 env 켜고 `tool_result` 이벤트 + enduser.id가 실제로 collector/S3에 도달하는지 확인(식별자/이벤트 리스크 해소). plan의 첫 태스크.
-- collector docker 이미지 재빌드/푸시 필요 여부(config.yaml 변경 시 ECR push).
-- s3 prefix 분리 방식(awss3 marshaler가 metrics/logs를 어떻게 키잉하는지) 확인.
+## 10. Confirmed OTLP shape (T0 empirical capture, 2026-06-26, Bedrock)
+
+로컬 OTLP 캡처(claude 2.1.193, Bedrock)로 실제 형태 확정 — T2/T3 파서의 근거:
+
+**식별자 (리스크 해소):** 우리가 스탬프한 `enduser.id`가 **metrics resource attrs + 모든 log 이벤트 attributes** 양쪽에 확실히 존재(`atomoh@example.com`). native `user.email`는 이벤트 attr엔 키가 있으나 Bedrock에서 신뢰 불가 → **`enduser.id` 사용**.
+
+**Metrics:** `resourceMetrics[].{resource.attributes[], scopeMetrics[].metrics[]}`. metric은 `sum`/`gauge` dataPoints(`asInt`/`asDouble`, `timeUnixNano`, datapoint `attributes[]`). resource attrs: `enduser.id, cc.department, cc.mode, service.name=claude-code, service.version, host.arch, os.*`. 확인된 이름: `claude_code.session.count|active_time.total|token.usage|cost.usage` (loc/commit/PR/code_edit_tool.decision은 편집·커밋 시 발생).
+
+**Logs(events):** `resourceLogs[].scopeLogs[].logRecords[]`. 각 record는 `attributes[]`(list of {key,value:{stringValue|intValue}}). **이벤트명 = `attributes['event.name']`**. 관측된 이벤트: hook_*, plugin_loaded, mcp_server_connection, `user_prompt`(⚠️`prompt` 전문 포함), `api_request`(input/output_tokens·cost_usd), `tool_decision`, `tool_result`, `assistant_response`.
+
+**tool_result / tool_decision (핵심):** attrs = `event.name, tool_name, tool_use_id, success, duration_ms, prompt.id, session.id, enduser.id, tool_parameters, tool_input(raw)`. **`tool_parameters`는 JSON 문자열**(예: Bash → `{"bash_command":..,"full_command":..,"description":..}`). → **Skill tool: `tool_parameters`에 `skill_name`; Agent tool: `subagent_type`** (같은 JSON 문자열에서 `json.loads` 후 추출). `tool_decision`엔 `decision`(accept/reject).
+
+**DLP 실증:** `tool_parameters`(bash_command/full_command)·`tool_input`·`user_prompt.prompt`(전체 프롬프트)가 평문으로 옴 → **collector scrub 필수**(T4). 파서가 받는 건 scrub 후 데이터(skill_name/subagent_type/tool_name/success/duration/enduser.id/session.id만).
+
+**잔여 확인:** collector docker 이미지 변경 시 ECR 재빌드/푸시; awss3 marshaler의 metrics/logs prefix 키잉.
