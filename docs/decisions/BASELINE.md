@@ -62,7 +62,7 @@
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
 | 001 | IaC: Terraform 단일 | CDK/CFN 폐기, Terraform 단일 정본 (boundary도 TF에서 생성) | 033·034 |
-| 002 | DevEnv 컴퓨트·스토리지 | per-user EC2, dual-OS, **2-볼륨**(ephemeral root + persistent /home/coder EBS), GP3, hibernation | 004·010·018·032 · ~~001·003~~ |
+| 002 | DevEnv 컴퓨트·스토리지 | per-user EC2, dual-OS, **2-볼륨**(ephemeral root + persistent /home/coder EBS), GP3, hibernation, idle-check diagnostics(`checked`/`stopped`/`warned`/`skipped`) | 004·010·018·032 · ~~001·003~~ |
 | 003 | 접근 토폴로지·라우팅 | 2 CloudFront(devenv NLB+nginx / dashboard ALB), code-server ?folder= 8080 + custom 포트 | 002·009·016·027 · ~~013~~ |
 | 004 | 인증 | Cognito public client + NextAuth, JIT 트리거 fallback, 삭제 cleanup | 024·028 · ~~012~~ |
 | 005 | 사용량 집계 | Inference Profile + Invocation Log → DynamoDB, email canonical key, 모델 정규화 | 011·019·031 · ~~025~~ |

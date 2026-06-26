@@ -67,3 +67,23 @@ def test_readme_documented_terraform_contracts_exist():
     assert "generate_secret = false" in security_tf
     assert "COGNITO_CLI_CLIENT_ID" in dashboard_tf
     assert re.search(r"cognito_cli_public_client_id\s+=\s+module\.security\.cli_public_client_id", root_tf)
+
+
+def test_ec2_idle_stop_uses_terraform_devenv_table_outputs():
+    root_tf = (REPO / "terraform/main.tf").read_text()
+    usage_tf = (REPO / "terraform/modules/usage-tracking/main.tf").read_text()
+    usage_vars_tf = (REPO / "terraform/modules/usage-tracking/variables.tf").read_text()
+
+    assert 'variable "instance_table_name"' in usage_vars_tf
+    assert 'variable "routing_table_name"' in usage_vars_tf
+    assert re.search(r"instance_table_name\s+=\s+local\.devenv_enabled \? module\.ec2_devenv\[0\]\.instance_table_name", root_tf)
+    assert re.search(r"routing_table_name\s+=\s+local\.devenv_enabled \? module\.ecs_devenv\[0\]\.routing_table_name", root_tf)
+    assert 'INSTANCE_TABLE         = var.instance_table_name' in usage_tf
+    assert 'ROUTING_TABLE          = var.routing_table_name' in usage_tf
+    assert 'table/${var.instance_table_name}' in usage_tf
+    assert 'table/${var.routing_table_name}' in usage_tf
+
+    idle_policy = usage_tf.split('data "aws_iam_policy_document" "ec2_idle_stop_policy"', 1)[1]
+    idle_policy = idle_policy.split('resource "aws_iam_role_policy" "ec2_idle_stop_policy"', 1)[0]
+    assert '"kms:Decrypt"' in idle_policy
+    assert "resources = [var.kms_key_arn]" in idle_policy
