@@ -32,12 +32,11 @@ def _otlp():
     def dp(n, attrs):
         return {"asInt": str(n), "timeUnixNano": "1780392600000000000",
                 "attributes": [attr(k, v) for k, v in attrs.items()]}
-    res = [attr("enduser.id", "Alice@Example.com"), attr("department", "platform")]
+    res = [attr("enduser.id", "Alice@Example.com"), attr("cc.department", "platform")]
     metrics = [
-        {"name": "claude_code.lines_of_code.count",
-         "sum": {"dataPoints": [dp(10, {"type": "added", "model": "claude-sonnet-4-6"})]}},
-        {"name": "claude_code.commit.count", "sum": {"dataPoints": [dp(1, {})]}},
-        {"name": "claude_code.session.count", "sum": {"dataPoints": [dp(1, {})]}},
+        {"name": "cc.git.lines_added", "gauge": {"dataPoints": [dp(10, {})]}},
+        {"name": "cc.git.commits", "gauge": {"dataPoints": [dp(1, {})]}},
+        {"name": "cc.claude.sessions.started", "gauge": {"dataPoints": [dp(1, {})]}},
     ]
     return {"resourceMetrics": [{"resource": {"attributes": res},
                                  "scopeMetrics": [{"metrics": metrics}]}]}
@@ -87,6 +86,11 @@ def _flatten(items):
     return out
 
 
+def test_prod_fields_are_the_cc_schema():
+    assert handler_mod._PROD_FIELDS == (
+        "loc_added", "loc_removed", "commits", "pushes", "sessions", "active_seconds")
+
+
 def test_writes_prod_presence_and_marker_in_one_transaction():
     ddb = _FakeDDB()
     res = _run(ddb)
@@ -96,14 +100,21 @@ def test_writes_prod_presence_and_marker_in_one_transaction():
     blob = json.dumps(items)
     # email lowercased per ADR-029
     assert "USER#alice@example.com" in blob
-    assert f"PROD#{DATE}#claude-sonnet-4-6" in blob
+    # cc.* counters carry no model -> bucket under "_"
+    assert f"PROD#{DATE}#_" in blob
     assert f"ACTIVE#{DATE}" in blob
     # dedup marker present with attribute_not_exists condition, in the same transaction
     assert "OTELOBJ#2026/06/14/abc.json" in blob
     assert "attribute_not_exists" in blob
+    # no cost attribution rows (cost stays authoritative in 005)
+    assert "ATTR#" not in blob
     # delta counters use ADD
     assert any(b.get("UpdateExpression", "").strip().upper().startswith("ADD")
                for verb, b in _flatten(items) if verb == "Update")
+    # dedup marker is TTL'd
+    marker = [b for verb, b in _flatten(items)
+              if verb == "Put" and b["Item"]["SK"]["S"].startswith("OTELOBJ#")][0]
+    assert "ttl" in marker["Item"] and int(marker["Item"]["ttl"]["N"]) > 0
 
 
 def test_duplicate_delivery_is_idempotent_skip():
@@ -122,7 +133,7 @@ def _otlp_two_users():
     def block(email):
         return {"resource": {"attributes": [attr("enduser.id", email)]},
                 "scopeMetrics": [{"metrics": [
-                    {"name": "claude_code.commit.count", "sum": {"dataPoints": [dp(1)]}}]}]}
+                    {"name": "cc.git.commits", "gauge": {"dataPoints": [dp(1)]}}]}]}
     return {"resourceMetrics": [block("alice@example.com"), block("bob@example.com")]}
 
 

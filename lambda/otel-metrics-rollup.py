@@ -6,10 +6,11 @@ counters (via the pure `otel_rollup` module) and upserts daily, email-keyed roll
 into the existing usage table:
 
   PK = USER#{email}
-    SK = PROD#{date}#{model}   ADD delta counters (loc/commits/prs/sessions/active/edits)
+    SK = PROD#{date}#_         ADD delta counters (loc_added/removed, commits, pushes,
+                               sessions, active_seconds) — cc.* event metrics, no model
     SK = ACTIVE#{date}         presence (one per active day) -> DAU/WAU/MAU, with the
                                DAY#{date} GSI key for window counting
-    SK = ATTR#{date}#{dim}     ADD approximate cost/token attribution (area 3)
+    SK = OTELOBJ#{key}         per-(user, object) dedup marker (TTL'd)
 
 Idempotency (per plan/Gemini review): each S3 object's writes ride in ONE
 TransactWriteItems alongside an `OTELOBJ#{key}` marker guarded by attribute_not_exists.
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.parse
 from collections import defaultdict
 
@@ -29,12 +31,13 @@ from botocore.exceptions import ClientError
 import otel_rollup
 
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
+OTELOBJ_TTL_SECONDS = 604800  # 7 days — bound dedup-marker storage growth
 
 s3 = boto3.client("s3")
 ddb = boto3.client("dynamodb")
 
-_PROD_FIELDS = ("loc_added", "loc_removed", "commits", "prs",
-                "sessions", "active_seconds", "edit_accept", "edit_reject")
+_PROD_FIELDS = ("loc_added", "loc_removed", "commits",
+                "pushes", "sessions", "active_seconds")
 
 
 def _n(v):
@@ -55,13 +58,13 @@ def _add_expr(fields: dict):
     return "ADD " + ", ".join(parts), vals
 
 
-def _user_transact_items(email: str, s3key: str, prod: dict, presence: set, cost: dict) -> list:
+def _user_transact_items(email: str, s3key: str, prod: dict, presence: set, marker_ttl: int) -> list:
     """Build ONE TransactWriteItems list for a single user's rows in this S3 object,
-    plus a per-(user, object) dedup marker. Keeping each user in their own transaction
-    means we never approach the 100-item TransactWriteItems limit (a central collector
-    object can mix many users), the marker lives under the user's own PK (no hot
-    partition), and a mid-object crash leaves committed users intact while uncommitted
-    ones are safely retried.
+    plus a TTL'd per-(user, object) dedup marker. Keeping each user in their own
+    transaction means we never approach the 100-item TransactWriteItems limit (a central
+    collector object can mix many users), the marker lives under the user's own PK (no
+    hot partition), and a mid-object crash leaves committed users intact while
+    uncommitted ones are safely retried.
     """
     items = []
     for (date, model), row in prod.items():
@@ -77,18 +80,11 @@ def _user_transact_items(email: str, s3key: str, prod: dict, presence: set, cost
             "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"ACTIVE#{date}"),
                      "gsi_day_pk": _s(f"DAY#{date}"), "gsi_day_sk": _s(f"USER#{email}")},
         }})
-    for (date, dim), c in cost.items():
-        expr, vals = _add_expr({"cost_usd_est": c["cost_usd"],
-                                "tokens_in": c["tokens_in"], "tokens_out": c["tokens_out"]})
-        items.append({"Update": {
-            "TableName": TABLE_NAME,
-            "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"ATTR#{date}#{dim}")},
-            "UpdateExpression": expr, "ExpressionAttributeValues": vals,
-        }})
     # Dedup marker under the user's own partition — only applied once per (user, object).
+    # TTL'd so markers do not accumulate unbounded.
     items.append({"Put": {
         "TableName": TABLE_NAME,
-        "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"OTELOBJ#{s3key}")},
+        "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"OTELOBJ#{s3key}"), "ttl": _n(marker_ttl)},
         "ConditionExpression": "attribute_not_exists(PK)",
     }})
     return items
@@ -102,20 +98,18 @@ def _process_object(bucket: str, key: str) -> bool:
         r["attrs"]["enduser.id"] = otel_rollup.normalize_identity(r["attrs"]) or "unattributed"
     agg = otel_rollup.aggregate_daily(records)
     presence = otel_rollup.extract_presence(records)
-    cost = otel_rollup.extract_cost_attribution(records)
 
     # Group everything by user so each user is written in an independent transaction.
-    by_user: dict = defaultdict(lambda: {"prod": {}, "presence": set(), "cost": {}})
+    by_user: dict = defaultdict(lambda: {"prod": {}, "presence": set()})
     for (email, date, model), row in agg.items():
         by_user[email]["prod"][(date, model)] = row
     for (email, date) in presence:
         by_user[email]["presence"].add(date)
-    for (email, date, dim), c in cost.items():
-        by_user[email]["cost"][(date, dim)] = c
 
+    marker_ttl = int(time.time()) + OTELOBJ_TTL_SECONDS
     wrote_any = False
     for email, d in by_user.items():
-        items = _user_transact_items(email, key, d["prod"], d["presence"], d["cost"])
+        items = _user_transact_items(email, key, d["prod"], d["presence"], marker_ttl)
         if len(items) > 100:
             # A single user in one export window cannot realistically exceed this.
             raise RuntimeError(f"per-user transaction too large ({len(items)}) for {email}/{key}")
