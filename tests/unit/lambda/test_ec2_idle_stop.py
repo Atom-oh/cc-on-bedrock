@@ -131,6 +131,29 @@ def test_recent_token_usage_fails_closed_when_instance_mapping_unavailable():
     assert module.has_recent_token_usage("atomoh") is True
 
 
+def test_recent_token_usage_uses_instance_username_when_table_lookup_fails():
+    usage = FakeUsageTable(active_keys={"USER#atomoh@example.com"})
+    fake_dynamodb = FakeDynamoResource({
+        "cc-user-instances": FailingInstanceTable(),
+        "cc-on-bedrock-usage": usage,
+    })
+    module = _load_module(fake_dynamodb)
+
+    assert module.has_recent_token_usage("atomoh", username="atomoh@example.com") is True
+    assert usage.queries[0]["ExpressionAttributeValues"][":pk"] == "USER#atomoh@example.com"
+
+
+def test_recent_token_usage_does_not_treat_malformed_instance_row_as_active():
+    usage = FakeUsageTable()
+    fake_dynamodb = FakeDynamoResource({
+        "cc-user-instances": FakeInstanceTable({"user_id": "atomoh"}),
+        "cc-on-bedrock-usage": usage,
+    })
+    module = _load_module(fake_dynamodb)
+
+    assert module.has_recent_token_usage("atomoh") is False
+
+
 def test_check_idle_returns_skip_reasons_for_diagnostics():
     module = _load_module()
     module.get_running_instances = lambda: [{
@@ -139,7 +162,7 @@ def test_check_idle_returns_skip_reasons_for_diagnostics():
         "Tags": [{"Key": "subdomain", "Value": "atomoh"}],
     }]
     module.is_keep_alive_active = lambda subdomain: False
-    module.get_idle_minutes = lambda instance_id, subdomain: 0
+    module.get_idle_minutes = lambda instance_id, subdomain, username=None: 0
 
     result = module.check_idle()
 
@@ -147,3 +170,50 @@ def test_check_idle_returns_skip_reasons_for_diagnostics():
     assert result["body"]["skipped"] == [
         {"instanceId": "i-123", "subdomain": "atomoh", "reason": "active", "idle_minutes": 0}
     ]
+
+
+def test_check_idle_passes_instance_username_tag_to_idle_detection():
+    module = _load_module()
+    captured = {}
+    module.get_running_instances = lambda: [{
+        "InstanceId": "i-123",
+        "LaunchTime": datetime(2026, 6, 25, 0, 0, tzinfo=timezone.utc),
+        "Tags": [
+            {"Key": "subdomain", "Value": "atomoh"},
+            {"Key": "username", "Value": "atomoh@example.com"},
+        ],
+    }]
+    module.is_keep_alive_active = lambda subdomain: False
+
+    def fake_idle_minutes(instance_id, subdomain, period_minutes=None, username=None):
+        captured["username"] = username
+        return 0
+
+    module.get_idle_minutes = fake_idle_minutes
+
+    module.check_idle()
+
+    assert captured["username"] == "atomoh@example.com"
+
+
+def test_schedule_shutdown_passes_instance_username_tag_to_idle_detection():
+    module = _load_module()
+    captured = {}
+    module.get_running_instances = lambda: [{
+        "InstanceId": "i-123",
+        "Tags": [
+            {"Key": "subdomain", "Value": "atomoh"},
+            {"Key": "username", "Value": "atomoh@example.com"},
+        ],
+    }]
+    module.is_keep_alive_active = lambda subdomain: False
+
+    def fake_idle_minutes(instance_id, subdomain, period_minutes=None, username=None):
+        captured["username"] = username
+        return 0
+
+    module.get_idle_minutes = fake_idle_minutes
+
+    module.schedule_shutdown()
+
+    assert captured["username"] == "atomoh@example.com"
