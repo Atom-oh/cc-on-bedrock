@@ -1110,9 +1110,15 @@ resource "aws_s3_bucket_policy" "otel_raw_ssl" {
 resource "aws_s3_bucket_lifecycle_configuration" "otel_raw" {
   bucket = aws_s3_bucket.otel_raw.id
   rule {
-    id     = "expire-raw-batches"
+    id     = "expire-raw-metrics"
     status = "Enabled"
     filter { prefix = "otlp-metrics/" }
+    expiration { days = 30 }
+  }
+  rule {
+    id     = "expire-raw-logs"
+    status = "Enabled"
+    filter { prefix = "otlp-logs/" }
     expiration { days = 30 }
   }
 }
@@ -1197,6 +1203,14 @@ resource "aws_s3_bucket_notification" "otel_raw" {
     lambda_function_arn = aws_lambda_function.otel_rollup.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "otlp-metrics/"
+  }
+  # The collector writes tool_result/tool_decision events under otlp-logs/ (config.yaml
+  # awss3/logs). Without this block those objects never trigger the rollup and the
+  # SKILL#/AGENT#/TOOL# usage data is never written.
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.otel_rollup.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "otlp-logs/"
   }
   depends_on = [aws_lambda_permission.otel_rollup_s3]
 }

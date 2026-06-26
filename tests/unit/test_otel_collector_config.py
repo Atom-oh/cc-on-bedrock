@@ -31,14 +31,19 @@ def test_logs_pipeline_filters_and_scrubs():
     assert any("transform" in p for p in procs), "logs must run the DLP scrub transform"
 
 
-def test_scrub_lifts_skill_agent_and_drops_sensitive_fields():
+def test_scrub_is_break_closed_keep_only_allowlist():
     raw = CFG.read_text(encoding="utf-8")
     # lifts the two identifiers the rollup needs
     assert 'attributes["skill_name"]' in raw
     assert 'attributes["subagent_type"]' in raw
-    # drops the raw bags / content
-    for dropped in ("tool_parameters", "tool_input", "prompt", "response"):
-        assert f'delete_key(attributes, "{dropped}")' in raw, dropped
+    # break-closed: keep ONLY an allowlist, so any unlisted (incl. future) field is dropped
+    assert "keep_keys(attributes" in raw
+    keep_line = [ln for ln in raw.splitlines() if "keep_keys(attributes" in ln][0]
+    for kept in ("event.name", "tool_name", "skill_name", "subagent_type"):
+        assert kept in keep_line, kept
+    # sensitive payload must NOT be in the allowlist (so it is dropped)
+    for sensitive in ("tool_parameters", "tool_input", "prompt", "response", "bash_command"):
+        assert sensitive not in keep_line, sensitive
 
 
 def test_filter_keeps_only_tool_events():

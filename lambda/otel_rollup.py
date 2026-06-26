@@ -194,7 +194,7 @@ def parse_otlp_logs(payload: dict) -> list:
                 if isinstance(tp, str):
                     try:
                         attrs["_tool_parameters"] = json.loads(tp)
-                    except Exception:
+                    except (ValueError, TypeError):  # malformed JSON string
                         attrs["_tool_parameters"] = {}
                 elif isinstance(tp, dict):
                     attrs["_tool_parameters"] = tp
@@ -214,6 +214,10 @@ def aggregate_tool_events(records: list) -> dict:
     kind ∈ {"tool","skill","agent"}; value = {count, accept, reject}. `count` is taken
     from `tool_result` (one per completed call); accept/reject from `tool_decision`'s
     `decision`. Email is raw here — the handler normalizes before write.
+
+    Note: auto-approved tools emit `tool_result` but NO `tool_decision`, so their `count`
+    rises while `accept` stays 0 (by design — accept/reject reflect explicit permission
+    decisions only; dashboards must not read `accept` as total usage — use `count`).
     """
     out: dict = {}
 

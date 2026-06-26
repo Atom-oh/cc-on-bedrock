@@ -44,12 +44,13 @@ processors:
     log_statements:
       - context: log
         statements:
+          # Lift the only two identifiers the rollup needs out of the tool_parameters JSON
+          # string, then KEEP-ONLY an allowlist (break-closed): anything not explicitly
+          # listed — tool_parameters, tool_input, prompt, response, future fields — is
+          # dropped, so no bash command / file path / prompt can ever reach S3 (ADR-009).
           - set(attributes["skill_name"], ParseJSON(attributes["tool_parameters"])["skill_name"]) where attributes["tool_parameters"] != nil
           - set(attributes["subagent_type"], ParseJSON(attributes["tool_parameters"])["subagent_type"]) where attributes["tool_parameters"] != nil
-          - delete_key(attributes, "tool_parameters")
-          - delete_key(attributes, "tool_input")
-          - delete_key(attributes, "prompt")
-          - delete_key(attributes, "response")
+          - keep_keys(attributes, ["event.name", "tool_name", "skill_name", "subagent_type", "decision", "success", "duration_ms", "enduser.id", "session.id", "cc.department", "cc.mode"])
           - set(body, "")
 
 exporters:

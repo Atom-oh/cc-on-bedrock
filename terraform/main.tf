@@ -124,7 +124,10 @@ module "dashboard" {
   devenv_sg_open_id                   = local.devenv_enabled ? module.ec2_devenv[0].sg_open_id : local.default_dev_env
   devenv_sg_restricted_id             = local.devenv_enabled ? module.ec2_devenv[0].sg_restricted_id : local.default_dev_env
   devenv_sg_locked_id                 = local.devenv_enabled ? module.ec2_devenv[0].sg_locked_id : local.default_dev_env
-  otel_collector_endpoint             = local.devenv_enabled ? module.ecs_devenv[0].otel_collector_endpoint : local.default_dev_env
+  # Point devenv/dashboard telemetry at the usage-tracking collector (gRPC :4317), which
+  # exports to S3 -> rollup Lambda. The legacy ecs-devenv awsemf (CloudWatch) collector is
+  # superseded; its decommission is a follow-up (ADR-009 P1).
+  otel_collector_endpoint             = module.usage_tracking.otel_collector_endpoint
   dns_firewall_rule_group_id          = module.network.dns_firewall_rule_group_id
 }
 

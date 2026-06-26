@@ -250,7 +250,8 @@ function otelEnvUserData(email: string, department: string): string[] {
     // OTEL_LOG_TOOL_DETAILS=1 surfaces skill_name/subagent_type (DLP-scrubbed at collector).
     `echo "OTEL_LOGS_EXPORTER=otlp" >> /etc/environment`,
     `echo "OTEL_LOG_TOOL_DETAILS=1" >> /etc/environment`,
-    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" >> /etc/environment`,
+    // gRPC to match the collector NLB (4317 TCP, gRPC-only — no 4318 http listener exposed).
+    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=grpc" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta" >> /etc/environment`,
     `echo "OTEL_RESOURCE_ATTRIBUTES=${attrs}" >> /etc/environment`,
