@@ -1,10 +1,10 @@
-"""Phase 1: S3-event rollup handler → DynamoDB (USER#{email}).
+"""P1: S3-event rollup handler → DynamoDB (USER#{email}).
 
 Mocks S3 get_object + the DynamoDB client. Asserts:
-- PROD#{date}#{model} rows use ADD for delta counters
-- ACTIVE#{date} presence is written (feeds DAU/WAU/MAU)
-- the OTELOBJ#{key} dedup marker rides in the SAME transaction with
-  attribute_not_exists, so a duplicate S3 delivery is an idempotent skip.
+- a metrics object writes PROD#{date}#{model} (native claude_code.* 8-field set) + ACTIVE#
+- a logs object writes SKILL#/AGENT#/TOOL# usage counts
+- the OTELOBJ#{key}#{i} dedup marker rides in each chunk with attribute_not_exists
+- no cost/ATTR# rows; counters use ADD; marker is TTL'd
 """
 import io
 import json
@@ -25,26 +25,46 @@ os.environ.setdefault("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 handler_mod = importlib.import_module("otel-metrics-rollup")
 
 
-def _otlp():
-    def attr(k, v):
-        return {"key": k, "value": {"stringValue": v}}
+def _attr(k, v):
+    return {"key": k, "value": {"stringValue": v}}
 
-    def dp(n, attrs):
-        return {"asInt": str(n), "timeUnixNano": "1780392600000000000",
-                "attributes": [attr(k, v) for k, v in attrs.items()]}
-    res = [attr("enduser.id", "Alice@Example.com"), attr("department", "platform")]
+
+def _dp(n, attrs):
+    return {"asInt": str(n), "timeUnixNano": str(_NANO),
+            "attributes": [_attr(k, v) for k, v in attrs.items()]}
+
+
+def _metrics_obj():
+    res = [_attr("enduser.id", "Alice@Example.com"), _attr("cc.department", "platform")]
     metrics = [
         {"name": "claude_code.lines_of_code.count",
-         "sum": {"dataPoints": [dp(10, {"type": "added", "model": "claude-sonnet-4-6"})]}},
-        {"name": "claude_code.commit.count", "sum": {"dataPoints": [dp(1, {})]}},
-        {"name": "claude_code.session.count", "sum": {"dataPoints": [dp(1, {})]}},
+         "sum": {"dataPoints": [_dp(10, {"type": "added", "model": "claude-opus-4-8"})]}},
+        {"name": "claude_code.commit.count", "sum": {"dataPoints": [_dp(1, {})]}},
+        {"name": "claude_code.session.count", "sum": {"dataPoints": [_dp(1, {})]}},
     ]
     return {"resourceMetrics": [{"resource": {"attributes": res},
                                  "scopeMetrics": [{"metrics": metrics}]}]}
 
 
-def _s3_event(bucket="otel-metrics-raw", key="2026/06/14/abc.json"):
-    return {"Records": [{"s3": {"bucket": {"name": bucket}, "object": {"key": key}}}]}
+def _log_rec(event, attrs):
+    return {"timeUnixNano": str(_NANO),
+            "attributes": [_attr("event.name", event)] + [_attr(k, v) for k, v in attrs.items()]}
+
+
+def _logs_obj():
+    res = [_attr("enduser.id", "Alice@Example.com")]
+    recs = [
+        _log_rec("claude_code.tool_result",
+                 {"tool_name": "Skill", "tool_parameters": '{"skill_name":"verify"}'}),
+        _log_rec("claude_code.tool_result",
+                 {"tool_name": "Agent", "tool_parameters": '{"subagent_type":"Explore"}'}),
+    ]
+    return {"resourceLogs": [{"resource": {"attributes": res},
+                              "scopeLogs": [{"logRecords": recs}]}]}
+
+
+def _s3_event(key="otlp-metrics/abc.json"):
+    return {"Records": [{"s3": {"bucket": {"name": "otel-metrics-raw"}, "object": {"key": key}}}]}
 
 
 class _FakeS3:
@@ -58,93 +78,102 @@ class _FakeS3:
 
 
 class _FakeDDB:
-    def __init__(self, raise_cancel=False):
+    def __init__(self, raise_cancel=False, cancel_reasons=None):
         self.calls = []
         self._raise = raise_cancel
+        # default: trailing marker condition failed (the idempotent-skip case)
+        self._reasons = cancel_reasons if cancel_reasons is not None else [
+            {"Code": "None"}, {"Code": "ConditionalCheckFailed"}]
 
     def transact_write_items(self, TransactItems):
         self.calls.append(TransactItems)
         if self._raise:
             from botocore.exceptions import ClientError
-            raise ClientError({"Error": {"Code": "TransactionCanceledException"}},
-                              "TransactWriteItems")
+            raise ClientError(
+                {"Error": {"Code": "TransactionCanceledException"},
+                 "CancellationReasons": self._reasons}, "TransactWriteItems")
         return {}
 
 
-def _run(ddb, payload=None):
-    with mock.patch.object(handler_mod, "s3", _FakeS3(payload or _otlp())), \
+def _run(ddb, payload, key="otlp-metrics/abc.json"):
+    with mock.patch.object(handler_mod, "s3", _FakeS3(payload)), \
          mock.patch.object(handler_mod, "ddb", ddb):
-        return handler_mod.handler(_s3_event(), None)
+        return handler_mod.handler(_s3_event(key), None)
 
 
-def _flatten(items):
-    """Return (verb, key_dict, item_or_update) tuples for assertions."""
-    out = []
-    for it in items:
-        verb = next(iter(it))
-        body = it[verb]
-        out.append((verb, body))
-    return out
+def test_prod_fields_native_schema():
+    assert handler_mod._PROD_FIELDS == (
+        "loc_added", "loc_removed", "commits", "prs",
+        "sessions", "active_seconds", "edit_accept", "edit_reject")
 
 
-def test_writes_prod_presence_and_marker_in_one_transaction():
+def test_metrics_object_writes_prod_presence_and_ttl_marker_no_cost():
     ddb = _FakeDDB()
-    res = _run(ddb)
-    assert res["processed"] == 1
-    assert len(ddb.calls) == 1
-    items = ddb.calls[0]
-    blob = json.dumps(items)
-    # email lowercased per ADR-029
-    assert "USER#alice@example.com" in blob
-    assert f"PROD#{DATE}#claude-sonnet-4-6" in blob
+    assert _run(ddb, _metrics_obj())["processed"] == 1
+    blob = json.dumps(ddb.calls)
+    assert "USER#alice@example.com" in blob          # lowercased per ADR-029
+    assert f"PROD#{DATE}#claude-opus-4-8" in blob     # loc carries model
     assert f"ACTIVE#{DATE}" in blob
-    # dedup marker present with attribute_not_exists condition, in the same transaction
-    assert "OTELOBJ#2026/06/14/abc.json" in blob
+    assert "OTELOBJ#otlp-metrics/abc.json#0" in blob  # chunked dedup marker
     assert "attribute_not_exists" in blob
-    # delta counters use ADD
+    assert "ATTR#" not in blob                        # cost stays in 005
+    # marker TTL'd
+    items = ddb.calls[0]
+    marker = [i["Put"] for i in items
+              if "Put" in i and i["Put"]["Item"]["SK"]["S"].startswith("OTELOBJ#")][0]
+    assert int(marker["Item"]["ttl"]["N"]) > 0
+    # reserved-word safety: ADD updates must use ExpressionAttributeNames (e.g. `count`)
+    upd = [i["Update"] for i in items if "Update" in i][0]
+    assert "ExpressionAttributeNames" in upd
+    assert "#" in upd["UpdateExpression"]  # placeholders, not raw attr names
+
+
+def test_logs_object_writes_skill_agent_tool_counts():
+    ddb = _FakeDDB()
+    assert _run(ddb, _logs_obj())["processed"] == 1
+    blob = json.dumps(ddb.calls)
+    assert f"SKILL#{DATE}#verify" in blob
+    assert f"AGENT#{DATE}#Explore" in blob
+    assert f"TOOL#{DATE}#Skill" in blob and f"TOOL#{DATE}#Agent" in blob
     assert any(b.get("UpdateExpression", "").strip().upper().startswith("ADD")
-               for verb, b in _flatten(items) if verb == "Update")
+               for it in ddb.calls[0] for b in [list(it.values())[0]] if "UpdateExpression" in b)
 
 
 def test_duplicate_delivery_is_idempotent_skip():
-    ddb = _FakeDDB(raise_cancel=True)  # marker already exists -> transaction cancelled
-    res = _run(ddb)
-    assert res["processed"] == 0  # skipped, no exception raised
+    # marker condition failed -> already processed -> skip, no exception
+    ddb = _FakeDDB(raise_cancel=True)
+    assert _run(ddb, _metrics_obj())["processed"] == 0
 
 
-def _otlp_two_users():
-    def attr(k, v):
-        return {"key": k, "value": {"stringValue": v}}
-
-    def dp(n):
-        return {"asInt": str(n), "timeUnixNano": "1780392600000000000", "attributes": []}
-
-    def block(email):
-        return {"resource": {"attributes": [attr("enduser.id", email)]},
-                "scopeMetrics": [{"metrics": [
-                    {"name": "claude_code.commit.count", "sum": {"dataPoints": [dp(1)]}}]}]}
-    return {"resourceMetrics": [block("alice@example.com"), block("bob@example.com")]}
+def test_transaction_conflict_reraises_not_silently_dropped():
+    # a real write conflict (not the dedup marker) must propagate so Lambda retries,
+    # rather than silently dropping the user's telemetry.
+    import pytest
+    from botocore.exceptions import ClientError
+    ddb = _FakeDDB(raise_cancel=True, cancel_reasons=[{"Code": "TransactionConflict"}, {"Code": "None"}])
+    with pytest.raises(ClientError):
+        _run(ddb, _metrics_obj())
 
 
 def test_url_encoded_s3_key_is_decoded():
-    # Collector writes Hive-style keys (year=2026/...); S3 events arrive percent-encoded.
     ddb = _FakeDDB()
-    fake_s3 = _FakeS3(_otlp())
-    encoded = "otlp-metrics/year%3D2026/month%3D06/day%3D16/metricsmetrics_1.json"
-    event = {"Records": [{"s3": {"bucket": {"name": "otel-metrics-raw"},
-                                 "object": {"key": encoded}}}]}
-    with mock.patch.object(handler_mod, "s3", fake_s3), \
-         mock.patch.object(handler_mod, "ddb", ddb):
+    fake_s3 = _FakeS3(_metrics_obj())
+    encoded = "otlp-metrics/year%3D2026/month%3D06/m_1.json"
+    event = {"Records": [{"s3": {"bucket": {"name": "otel-metrics-raw"}, "object": {"key": encoded}}}]}
+    with mock.patch.object(handler_mod, "s3", fake_s3), mock.patch.object(handler_mod, "ddb", ddb):
         handler_mod.handler(event, None)
-    assert fake_s3.last_key == "otlp-metrics/year=2026/month=06/day=16/metricsmetrics_1.json"
+    assert fake_s3.last_key == "otlp-metrics/year=2026/month=06/m_1.json"
 
 
-def test_multi_user_object_writes_one_transaction_per_user():
-    # A central collector batches many users into one S3 object; each user must be its
-    # own transaction (no 100-item ceiling, per-user idempotency).
+def test_multi_user_metrics_object_one_transaction_per_user():
+    res_b = [_attr("enduser.id", "bob@example.com")]
+    payload = _metrics_obj()
+    payload["resourceMetrics"].append(
+        {"resource": {"attributes": res_b},
+         "scopeMetrics": [{"metrics": [
+             {"name": "claude_code.commit.count", "sum": {"dataPoints": [_dp(1, {})]}}]}]})
     ddb = _FakeDDB()
-    res = _run(ddb, payload=_otlp_two_users())
-    assert res["processed"] == 1          # one S3 object
-    assert len(ddb.calls) == 2            # one transaction per user
+    assert _run(ddb, payload)["processed"] == 1
+    assert len(ddb.calls) == 2  # one transaction per user
     blob = json.dumps(ddb.calls)
     assert "USER#alice@example.com" in blob and "USER#bob@example.com" in blob

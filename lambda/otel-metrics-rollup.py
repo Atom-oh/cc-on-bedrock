@@ -6,10 +6,15 @@ counters (via the pure `otel_rollup` module) and upserts daily, email-keyed roll
 into the existing usage table:
 
   PK = USER#{email}
-    SK = PROD#{date}#{model}   ADD delta counters (loc/commits/prs/sessions/active/edits)
+    SK = PROD#{date}#{model}   ADD productivity counters from native claude_code.* metrics
+                               (loc_added/removed, commits, prs, sessions, active_seconds,
+                               edit_accept/reject)
+    SK = SKILL#{date}#{name}   ADD count from tool_result events (Skill tool)
+    SK = AGENT#{date}#{type}   ADD count from tool_result events (Agent/Task tool)
+    SK = TOOL#{date}#{name}    ADD count/accept/reject from tool_result/tool_decision events
     SK = ACTIVE#{date}         presence (one per active day) -> DAU/WAU/MAU, with the
                                DAY#{date} GSI key for window counting
-    SK = ATTR#{date}#{dim}     ADD approximate cost/token attribution (area 3)
+    SK = OTELOBJ#{key}#{i}     per-(user, object, chunk) dedup marker (TTL'd)
 
 Idempotency (per plan/Gemini review): each S3 object's writes ride in ONE
 TransactWriteItems alongside an `OTELOBJ#{key}` marker guarded by attribute_not_exists.
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.parse
 from collections import defaultdict
 
@@ -29,12 +35,15 @@ from botocore.exceptions import ClientError
 import otel_rollup
 
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
+OTELOBJ_TTL_SECONDS = 604800  # 7 days — bound dedup-marker storage growth
 
 s3 = boto3.client("s3")
 ddb = boto3.client("dynamodb")
 
 _PROD_FIELDS = ("loc_added", "loc_removed", "commits", "prs",
                 "sessions", "active_seconds", "edit_accept", "edit_reject")
+_USAGE_SK = {"skill": "SKILL", "agent": "AGENT", "tool": "TOOL"}
+_MAX_TX = 100  # DynamoDB TransactWriteItems hard limit
 
 
 def _n(v):
@@ -46,87 +55,111 @@ def _s(v):
 
 
 def _add_expr(fields: dict):
-    """Build an ADD UpdateExpression + values for the given numeric fields."""
-    parts, vals = [], {}
+    """Build an ADD UpdateExpression with ExpressionAttributeNames for the given numeric
+    fields. Names are aliased (#n0, #n1, ...) so reserved words like `count` are legal."""
+    parts, names, vals = [], {}, {}
     for i, (name, val) in enumerate(fields.items()):
-        ph = f":v{i}"
-        parts.append(f"{name} {ph}")
-        vals[ph] = _n(val)
-    return "ADD " + ", ".join(parts), vals
+        nph, vph = f"#n{i}", f":v{i}"
+        parts.append(f"{nph} {vph}")
+        names[nph] = name
+        vals[vph] = _n(val)
+    return "ADD " + ", ".join(parts), names, vals
 
 
-def _user_transact_items(email: str, s3key: str, prod: dict, presence: set, cost: dict) -> list:
-    """Build ONE TransactWriteItems list for a single user's rows in this S3 object,
-    plus a per-(user, object) dedup marker. Keeping each user in their own transaction
-    means we never approach the 100-item TransactWriteItems limit (a central collector
-    object can mix many users), the marker lives under the user's own PK (no hot
-    partition), and a mid-object crash leaves committed users intact while uncommitted
-    ones are safely retried.
-    """
+def _user_data_items(email: str, prod: dict, presence: set, usage: dict) -> list:
+    """All non-marker write items for one user: PROD# productivity counters,
+    SKILL#/AGENT#/TOOL# usage counts, and ACTIVE# presence rows."""
     items = []
     for (date, model), row in prod.items():
-        expr, vals = _add_expr({f: row[f] for f in _PROD_FIELDS})
+        expr, names, vals = _add_expr({f: row[f] for f in _PROD_FIELDS})
         items.append({"Update": {
             "TableName": TABLE_NAME,
             "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"PROD#{date}#{model}")},
-            "UpdateExpression": expr, "ExpressionAttributeValues": vals,
+            "UpdateExpression": expr, "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": vals,
         }})
-    for date in presence:
+    for (date, kind, name) in sorted(usage):
+        c = usage[(date, kind, name)]
+        expr, names, vals = _add_expr({"count": c["count"], "accept": c["accept"], "reject": c["reject"]})
+        items.append({"Update": {
+            "TableName": TABLE_NAME,
+            "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"{_USAGE_SK[kind]}#{date}#{name}")},
+            "UpdateExpression": expr, "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": vals,
+        }})
+    for date in sorted(presence):
         items.append({"Put": {
             "TableName": TABLE_NAME,
             "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"ACTIVE#{date}"),
                      "gsi_day_pk": _s(f"DAY#{date}"), "gsi_day_sk": _s(f"USER#{email}")},
         }})
-    for (date, dim), c in cost.items():
-        expr, vals = _add_expr({"cost_usd_est": c["cost_usd"],
-                                "tokens_in": c["tokens_in"], "tokens_out": c["tokens_out"]})
-        items.append({"Update": {
-            "TableName": TABLE_NAME,
-            "Key": {"PK": _s(f"USER#{email}"), "SK": _s(f"ATTR#{date}#{dim}")},
-            "UpdateExpression": expr, "ExpressionAttributeValues": vals,
-        }})
-    # Dedup marker under the user's own partition — only applied once per (user, object).
-    items.append({"Put": {
-        "TableName": TABLE_NAME,
-        "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"OTELOBJ#{s3key}")},
-        "ConditionExpression": "attribute_not_exists(PK)",
-    }})
     return items
 
 
-def _process_object(bucket: str, key: str) -> bool:
-    body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-    records = otel_rollup.parse_otlp_metrics(json.loads(body))
-    # Normalize identity to the ADR-029 email key; missing/invalid -> "unattributed".
+def _user_transact_chunks(email, s3key, prod, presence, usage, marker_ttl):
+    """Yield TransactWriteItems lists (<= _MAX_TX), each ending with its own TTL'd dedup
+    marker OTELOBJ#{key}#{i} guarded by attribute_not_exists. Per-chunk markers keep each
+    chunk independently idempotent (a duplicate delivery cancels the chunk; ADD counters
+    are never double-applied) while staying under the 100-item transaction limit.
+    """
+    data = _user_data_items(email, prod, presence, usage)
+    if not data:
+        return  # nothing to write for this user — skip the empty marker-only transaction
+    cap = _MAX_TX - 1  # leave room for the marker
+    chunks = [data[i:i + cap] for i in range(0, len(data), cap)] or [[]]
+    for i, chunk in enumerate(chunks):
+        marker = {"Put": {
+            "TableName": TABLE_NAME,
+            "Item": {"PK": _s(f"USER#{email}"), "SK": _s(f"OTELOBJ#{s3key}#{i}"), "ttl": _n(marker_ttl)},
+            "ConditionExpression": "attribute_not_exists(PK)",
+        }}
+        yield chunk + [marker]
+
+
+def _normalize(records):
+    """Normalize identity to the ADR-029 email key; missing/invalid -> 'unattributed'."""
     for r in records:
         r["attrs"]["enduser.id"] = otel_rollup.normalize_identity(r["attrs"]) or "unattributed"
-    agg = otel_rollup.aggregate_daily(records)
-    presence = otel_rollup.extract_presence(records)
-    cost = otel_rollup.extract_cost_attribution(records)
 
-    # Group everything by user so each user is written in an independent transaction.
-    by_user: dict = defaultdict(lambda: {"prod": {}, "presence": set(), "cost": {}})
-    for (email, date, model), row in agg.items():
-        by_user[email]["prod"][(date, model)] = row
-    for (email, date) in presence:
-        by_user[email]["presence"].add(date)
-    for (email, date, dim), c in cost.items():
-        by_user[email]["cost"][(date, dim)] = c
 
+def _process_object(bucket: str, key: str) -> bool:
+    payload = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+    by_user: dict = defaultdict(lambda: {"prod": {}, "presence": set(), "usage": {}})
+
+    if "resourceMetrics" in payload:  # native claude_code.* productivity metrics
+        recs = otel_rollup.parse_otlp_metrics(payload)
+        _normalize(recs)
+        for (email, date, model), row in otel_rollup.aggregate_daily(recs).items():
+            by_user[email]["prod"][(date, model)] = row
+        for (email, date) in otel_rollup.extract_presence(recs):
+            by_user[email]["presence"].add(date)
+    if "resourceLogs" in payload:  # scrubbed tool_result/tool_decision events
+        recs = otel_rollup.parse_otlp_logs(payload)
+        _normalize(recs)
+        for (email, date, kind, name), c in otel_rollup.aggregate_tool_events(recs).items():
+            by_user[email]["usage"][(date, kind, name)] = c
+        for (email, date) in otel_rollup.extract_presence(recs):
+            by_user[email]["presence"].add(date)
+
+    marker_ttl = int(time.time()) + OTELOBJ_TTL_SECONDS
     wrote_any = False
     for email, d in by_user.items():
-        items = _user_transact_items(email, key, d["prod"], d["presence"], d["cost"])
-        if len(items) > 100:
-            # A single user in one export window cannot realistically exceed this.
-            raise RuntimeError(f"per-user transaction too large ({len(items)}) for {email}/{key}")
-        try:
-            ddb.transact_write_items(TransactItems=items)
-            wrote_any = True
-        except ClientError as e:
-            code = e.response.get("Error", {}).get("Code", "")
-            if code in ("TransactionCanceledException", "ConditionalCheckFailedException"):
-                continue  # this user already processed for this object -> idempotent skip
-            raise
+        for items in _user_transact_chunks(email, key, d["prod"], d["presence"], d["usage"], marker_ttl):
+            try:
+                ddb.transact_write_items(TransactItems=items)
+                wrote_any = True
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                if code == "ConditionalCheckFailedException":
+                    continue
+                if code == "TransactionCanceledException":
+                    # The dedup marker is the LAST item in the chunk. Skip (idempotent) ONLY
+                    # when ITS condition failed; a TransactionConflict / other reason must
+                    # propagate so Lambda retries instead of silently dropping telemetry.
+                    reasons = e.response.get("CancellationReasons", [])
+                    if reasons and reasons[-1].get("Code") == "ConditionalCheckFailed":
+                        continue
+                raise
     return wrote_any
 
 

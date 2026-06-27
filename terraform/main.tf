@@ -124,7 +124,7 @@ module "dashboard" {
   devenv_sg_open_id                   = local.devenv_enabled ? module.ec2_devenv[0].sg_open_id : local.default_dev_env
   devenv_sg_restricted_id             = local.devenv_enabled ? module.ec2_devenv[0].sg_restricted_id : local.default_dev_env
   devenv_sg_locked_id                 = local.devenv_enabled ? module.ec2_devenv[0].sg_locked_id : local.default_dev_env
-  otel_collector_endpoint             = local.devenv_enabled ? module.ecs_devenv[0].otel_collector_endpoint : local.default_dev_env
+  otel_collector_endpoint             = module.usage_tracking.otel_collector_endpoint
   dns_firewall_rule_group_id          = module.network.dns_firewall_rule_group_id
 }
 
