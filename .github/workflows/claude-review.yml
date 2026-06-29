@@ -51,11 +51,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           is_cross=$(gh pr view "$PR_NUMBER" --json isCrossRepository --jq '.isCrossRepository')
           if [ "$is_cross" != "false" ]; then
             echo "Cross-repository PRs are not reviewed by this privileged workflow." >&2
+            exit 1
+          fi
+          # M3: we checkout the PR base SHA and run claude in it, which loads that tree's
+          # .claude/settings.json (including SessionStart hooks — hooks are not tools, so
+          # --disallowedTools does not block them). Restrict to PRs targeting the default
+          # branch so a write-access user cannot point the base at a branch carrying a
+          # malicious settings hook.
+          base_ref=$(gh pr view "$PR_NUMBER" --json baseRefName --jq '.baseRefName')
+          if [ "$base_ref" != "${DEFAULT_BRANCH}" ]; then
+            echo "PR base '$base_ref' is not the default branch '${DEFAULT_BRANCH}'; refusing privileged review." >&2
             exit 1
           fi
           {
@@ -137,6 +148,9 @@ jobs:
 
       - id: claude
         if: steps.diff.outputs.has_reviewable_changes == 'true'
+        # M1 fail-closed: if the action errors (Bedrock throttle/5xx, auth, max-turns),
+        # do not fail the job — let rendered_review run and post the UNAVAILABLE notice.
+        continue-on-error: true
         uses: anthropics/claude-code-action@521136812280ae7ef256e06045655b9da02793f0 # v1.0.158
         with:
           use_bedrock: "true"
@@ -209,7 +223,7 @@ jobs:
 
       - name: Build Claude review body
         id: rendered_review
-        if: steps.diff.outputs.has_reviewable_changes == 'true'
+        if: always() && steps.diff.outputs.has_reviewable_changes == 'true'
         env:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -283,6 +297,7 @@ jobs:
 
       - name: Select review output
         id: review
+        if: always() && steps.diff.outputs.has_reviewable_changes != ''
         env:
           HAS_REVIEWABLE_CHANGES: ${{ steps.diff.outputs.has_reviewable_changes }}
           NO_REVIEW_STATUS: ${{ steps.no_review.outputs.status }}
@@ -317,6 +332,9 @@ jobs:
     if: needs.claude-review.result == 'success'
     runs-on: cc-on-bedrock-claude-arm
     timeout-minutes: 5
+    concurrency:
+      group: claude-review-post-${{ inputs.pr_number }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: write
@@ -342,13 +360,18 @@ jobs:
             echo "PR head moved ($HEAD_SHA -> $current_head) during review; skipping stale comment upsert." >&2
             exit 0
           fi
-          # NB: no --paginate here. `gh api --paginate ... | head -1` would SIGPIPE the
-          # still-paginating gh process; under `set -o pipefail` that fails the step and the
-          # comment is never posted. Matches sibling pr-review.yml (single page is enough).
-          existing=$(gh api "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->"))) | .id' 2>/dev/null | head -1)
+          # M2: search ALL comment pages for the marker (a busy PR exceeds one 30-item page,
+          # so first-page-only lookup would keep creating new comments instead of upserting).
+          # SIGPIPE-safe: capture the full paginated result, then take the first id via bash
+          # parameter expansion — no `gh --paginate ... | head` pipeline (head closing the pipe
+          # would SIGPIPE gh and, under `set -o pipefail`, fail this step so nothing posts).
+          all_ids=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->"))) | .id' 2>/dev/null || true)
+          existing="${all_ids%%$'\n'*}"
           if [ -n "$existing" ]; then
-            gh api "repos/$GH_REPO/issues/comments/$existing" -X PATCH -f body="$(cat "$body_file")"
+            # || fallback: the marker comment may be deleted between lookup and PATCH (404).
+            gh api "repos/$GH_REPO/issues/comments/$existing" -X PATCH -f body="$(cat "$body_file")" \
+              || gh pr comment "$PR_NUMBER" --body-file "$body_file"
           else
             gh pr comment "$PR_NUMBER" --body-file "$body_file"
           fi
