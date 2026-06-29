@@ -97,6 +97,8 @@ jobs:
               return (path ~ /(^|\/)package-lock\.json$/) ||
                      (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
                      (path ~ /(^|\/)yarn\.lock$/) ||
+                     (path ~ /(^|\/)poetry\.lock$/) ||
+                     (path ~ /(^|\/)bun\.lockb$/) ||
                      (path ~ /(^|\/)node_modules\//) ||
                      (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
                      (path ~ /(^|\/)(dist|out|build)\//) ||
@@ -180,7 +182,7 @@ jobs:
             echo "<!-- claude-code-review -->"
             echo "## Claude Code Review"
             echo
-            echo "**Status: PASSED** -- No reviewable changes after filtering"
+            echo "**Status: PASSED** -- No reviewable changes after filtering _(advisory; does not gate merge)_"
             echo
             echo "No reviewable changes remain after lockfile/binary/build-output filtering."
             echo
@@ -225,17 +227,22 @@ jobs:
             REVIEW_STATUS=$(printf '%s' "$STRUCTURED_OUTPUT" | jq -r '.status // empty')
             REVIEW_BODY=$(printf '%s' "$STRUCTURED_OUTPUT" | jq -r '.body // empty')
           fi
+          # This workflow is a manual, supplemental review — it does NOT gate merge, so badges
+          # say "advisory". M-2: if structured_output is empty/invalid (max-turns, or an action
+          # output-contract change at the pinned SHA), render a NEUTRAL "UNAVAILABLE" tooling
+          # notice — never a false BLOCKED on healthy code. ("structured_output" is the action's
+          # documented output name; --json-schema is its documented arg form.)
           case "$REVIEW_STATUS" in
             PASSED)
-              status_badge="**Status: PASSED** -- No blocking issues found"
+              status_badge="**Status: PASSED** -- No blocking issues found _(advisory; does not gate merge)_"
               ;;
             BLOCKED)
-              status_badge="**Status: BLOCKED** -- CRITICAL/MAJOR issues must be resolved before merge"
+              status_badge="**Status: BLOCKED** -- CRITICAL/MAJOR issues flagged _(advisory; does not gate merge)_"
               ;;
             *)
-              REVIEW_STATUS="BLOCKED"
-              status_badge="**Status: BLOCKED** -- review unavailable"
-              REVIEW_BODY="⚠️ Claude did not return valid structured output (empty or schema mismatch — possibly max-turns exhausted). Treating as BLOCKED; see the workflow run logs."
+              REVIEW_STATUS="UNAVAILABLE"
+              status_badge="**Status: ⚠️ UNAVAILABLE** -- review could not be produced _(advisory; does not gate merge)_"
+              REVIEW_BODY="The Claude review step returned empty or schema-mismatched output (possibly max-turns exhausted, or an action output-contract change at the pinned SHA). This is a tooling issue, not a code judgment — see the workflow run logs."
               ;;
           esac
           if [ -z "$REVIEW_BODY" ]; then
@@ -335,7 +342,10 @@ jobs:
             echo "PR head moved ($HEAD_SHA -> $current_head) during review; skipping stale comment upsert." >&2
             exit 0
           fi
-          existing=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+          # NB: no --paginate here. `gh api --paginate ... | head -1` would SIGPIPE the
+          # still-paginating gh process; under `set -o pipefail` that fails the step and the
+          # comment is never posted. Matches sibling pr-review.yml (single page is enough).
+          existing=$(gh api "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->"))) | .id' 2>/dev/null | head -1)
           if [ -n "$existing" ]; then
             gh api "repos/$GH_REPO/issues/comments/$existing" -X PATCH -f body="$(cat "$body_file")"
