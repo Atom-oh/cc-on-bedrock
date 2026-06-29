@@ -9,7 +9,10 @@ name: Claude Code Review
 # Security model:
 # - Resolve a same-repo PR by number, then checkout only the trusted base SHA.
 # - PR changes are filtered and passed to Claude as inert diff data, not checked out or executed.
-# - Claude runs in a read-only job: no write token, no Bash, no comment-posting tool.
+# - Claude runs in a read-only job: no write token, no comment-posting tool. Tools are
+#   --allowedTools Read,Grep,Glob AND --disallowedTools Bash,Edit,Write,... — disallow takes
+#   precedence, so even if the checked-out base's .claude/settings.json permissions.allow
+#   (which lists destructive aws/deploy Bash commands) is merged in, Bash/exec stays blocked.
 # - A separate deterministic job with pull-requests:write upserts the marker comment.
 # - The final comment is AI-authored from untrusted diff data; treat it as review output, not trusted instructions.
 
@@ -140,6 +143,7 @@ jobs:
           claude_args: |
             --model us.anthropic.claude-opus-4-8
             --allowedTools Read,Grep,Glob
+            --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit,Task,WebFetch,WebSearch
             --max-turns 8
             --json-schema '{"type":"object","properties":{"status":{"type":"string","enum":["PASSED","BLOCKED"]},"body":{"type":"string","description":"Markdown review body without the marker. Group findings under CRITICAL, MAJOR, and MINOR. If there are no findings, say so clearly."}},"required":["status","body"],"additionalProperties":false}'
           prompt: |
@@ -208,10 +212,19 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           TRUNCATED: ${{ steps.diff.outputs.truncated }}
-          REVIEW_STATUS: ${{ fromJSON(steps.claude.outputs.structured_output).status }}
-          REVIEW_BODY: ${{ fromJSON(steps.claude.outputs.structured_output).body }}
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
         run: |
           set -euo pipefail
+          # M1: parse structured_output defensively. Referencing fromJSON() in env throws on an
+          # empty/invalid value (max-turns exhausted or schema mismatch), which fails this step
+          # and silently drops the review (post-review needs success). Surface it instead as a
+          # visible BLOCKED fallback comment.
+          REVIEW_STATUS=""
+          REVIEW_BODY=""
+          if [ -n "${STRUCTURED_OUTPUT:-}" ] && printf '%s' "$STRUCTURED_OUTPUT" | jq -e . >/dev/null 2>&1; then
+            REVIEW_STATUS=$(printf '%s' "$STRUCTURED_OUTPUT" | jq -r '.status // empty')
+            REVIEW_BODY=$(printf '%s' "$STRUCTURED_OUTPUT" | jq -r '.body // empty')
+          fi
           case "$REVIEW_STATUS" in
             PASSED)
               status_badge="**Status: PASSED** -- No blocking issues found"
@@ -220,10 +233,14 @@ jobs:
               status_badge="**Status: BLOCKED** -- CRITICAL/MAJOR issues must be resolved before merge"
               ;;
             *)
-              echo "Unexpected Claude review status: $REVIEW_STATUS" >&2
-              exit 1
+              REVIEW_STATUS="BLOCKED"
+              status_badge="**Status: BLOCKED** -- review unavailable"
+              REVIEW_BODY="⚠️ Claude did not return valid structured output (empty or schema mismatch — possibly max-turns exhausted). Treating as BLOCKED; see the workflow run logs."
               ;;
           esac
+          if [ -z "$REVIEW_BODY" ]; then
+            REVIEW_BODY="(no review body returned)"
+          fi
           {
             echo "<!-- claude-code-review -->"
             echo "## Claude Code Review"
@@ -302,6 +319,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.claude-review.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.claude-review.outputs.head_sha }}
           REVIEW_BODY: ${{ needs.claude-review.outputs.review_body }}
         run: |
           set -euo pipefail
@@ -309,7 +327,15 @@ jobs:
           body_file="$RUNNER_TEMP/claude-review-comment.md"
           printf '%s\n' "$REVIEW_BODY" > "$body_file"
           grep -qF "$marker" "$body_file"
-          existing=$(gh api "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+          # M2: the review can take minutes; if a new push landed meanwhile, the diff this
+          # review was computed from is stale. Skip the upsert rather than overwrite a newer
+          # review/footer with a result for an old commit.
+          current_head=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "PR head moved ($HEAD_SHA -> $current_head) during review; skipping stale comment upsert." >&2
+            exit 0
+          fi
+          existing=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->"))) | .id' 2>/dev/null | head -1)
           if [ -n "$existing" ]; then
             gh api "repos/$GH_REPO/issues/comments/$existing" -X PATCH -f body="$(cat "$body_file")"
