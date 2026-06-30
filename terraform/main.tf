@@ -64,6 +64,11 @@ module "usage_tracking" {
   daily_budget_usd              = var.daily_budget_usd
   instance_table_name           = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : "cc-user-instances"
   routing_table_name            = local.devenv_enabled ? module.ecs_devenv[0].routing_table_name : "cc-routing-table"
+  # OTel collector (Fargate + internal NLB:4317) networking — without these the collector
+  # SG/NLB get empty vpc_cidr/subnets and terraform errors on an invalid CIDR.
+  vpc_id             = module.network.vpc_id
+  vpc_cidr           = module.network.vpc_cidr
+  private_subnet_ids = module.network.private_subnet_ids
 }
 
 # ---- 04 ECS Nginx Dev Environment -------------------------------------------
