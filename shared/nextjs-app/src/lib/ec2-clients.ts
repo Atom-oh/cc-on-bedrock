@@ -250,8 +250,9 @@ function otelEnvUserData(email: string, department: string): string[] {
     // OTEL_LOG_TOOL_DETAILS=1 surfaces skill_name/subagent_type (DLP-scrubbed at collector).
     `echo "OTEL_LOGS_EXPORTER=otlp" >> /etc/environment`,
     `echo "OTEL_LOG_TOOL_DETAILS=1" >> /etc/environment`,
-    // gRPC to match the collector NLB (4317 TCP, gRPC-only — no 4318 http listener exposed).
-    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=grpc" >> /etc/environment`,
+    // OTLP/HTTP (collector NLB :4318). gRPC/HTTP2 over the L4 NLB is unreliable
+    // ("server preface" timeouts) and the Claude Code OTEL SDK exposes no grpc tuning knobs.
+    `echo "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}" >> /etc/environment`,
     `echo "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta" >> /etc/environment`,
     `echo "OTEL_RESOURCE_ATTRIBUTES=${attrs}" >> /etc/environment`,
@@ -527,12 +528,12 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // configured (telemetry stays off, fail-safe).
       ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
-      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 4.6.
-      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6[1m]" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 5 [1m],
+      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 5.
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-5[1m]" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]" >> /etc/environment`,
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
-      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `# Allow coder to use package managers without password`,
       `cat > /etc/sudoers.d/coder << 'SUDOEOF'`,
@@ -1074,12 +1075,12 @@ export async function restoreFromSnapshot(
       // configured (telemetry stays off, fail-safe).
       ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 4.6 [1m],
-      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 4.6.
-      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6[1m]" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 5 [1m],
+      // Opus option → 4.8 [1m], fast → Haiku 4.5, subagents → Sonnet 5.
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-5[1m]" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]" >> /etc/environment`,
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
-      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
+      `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `mkdir -p /home/coder/.config/code-server`,
       // Default code-server (VS Code) to a dark theme without clobbering existing user settings.
