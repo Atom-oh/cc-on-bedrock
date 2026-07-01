@@ -72,7 +72,7 @@ variable "opus_model_id" {
 
 variable "sonnet_model_id" {
   type    = string
-  default = "global.anthropic.claude-sonnet-4-6[1m]"
+  default = "global.anthropic.claude-sonnet-5[1m]"
 }
 
 variable "ecs_cluster_name" {

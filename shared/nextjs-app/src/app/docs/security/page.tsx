@@ -191,7 +191,7 @@ Flags: Secure; HttpOnly; SameSite=Lax; Path=/`}</CodeBlock>
 ├── Permission Boundary: cc-on-bedrock-task-boundary
 │   └── Maximum allowed: Bedrock, S3 (user-prefix), CloudWatch, SSM
 ├── Base Policies (always attached):
-│   ├── Bedrock InvokeModel (Opus 4.6, Sonnet 4.6)
+│   ├── Bedrock InvokeModel (Opus 4.6, Sonnet 5)
 │   ├── CloudWatch PutMetricData + Logs
 │   └── SSM GetParameter (read-only)
 └── Extended Policies (via approval workflow):

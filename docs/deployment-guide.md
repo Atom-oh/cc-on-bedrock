@@ -44,7 +44,7 @@
 
 3. **Bedrock 모델 접근** (`ap-northeast-2` 서울):
    - Claude **Opus 4.8** — `global.anthropic.claude-opus-4-8[1m]`
-   - Claude **Sonnet 4.6** — `global.anthropic.claude-sonnet-4-6[1m]`
+   - Claude **Sonnet 5** — `global.anthropic.claude-sonnet-5[1m]`
    - AWS Console > Bedrock > Model access 에서 활성화.
 
 4. **Bedrock 사용량 메터링 전제 (ADR-011/019)**: 사용량은 **Application Inference Profile + Bedrock Invocation Log → DynamoDB** 경로로 집계됩니다 (CloudWatch 계정 전역 메트릭이 **아님**, LiteLLM 프록시도 **아님**). Invocation Log 대상 리소스(S3/DynamoDB 파이프라인)는 `modules/usage-tracking` 에서 생성됩니다.

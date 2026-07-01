@@ -276,13 +276,13 @@ export default function AIAssistant() {
           </div>
           <div>
             <h1 className="text-lg font-bold text-white">AI Assistant</h1>
-            <p className="text-[10px] text-gray-500">Powered by Claude Sonnet 4.6 on Bedrock · {locale === "ko" ? "음성 지원" : "Voice enabled"}</p>
+            <p className="text-[10px] text-gray-500">Powered by Claude Sonnet 5 on Bedrock · {locale === "ko" ? "음성 지원" : "Voice enabled"}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-medium rounded-full bg-cyan-500/10 text-cyan-400">
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            Sonnet 4.6
+            Sonnet 5
           </span>
           {history.length > 0 && (
             <button onClick={() => setShowHistory(!showHistory)} className="px-2 py-1 text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors">
