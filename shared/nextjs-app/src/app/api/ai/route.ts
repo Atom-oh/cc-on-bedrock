@@ -13,7 +13,7 @@ import { listInstances } from "@/lib/ec2-clients";
 import { getEc2AggregateMetrics } from "@/lib/cloudwatch-client";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const MODEL_ID = "global.anthropic.claude-sonnet-4-6";
+const MODEL_ID = "global.anthropic.claude-sonnet-5";
 
 function getBedrockClient() {
   return new BedrockRuntimeClient({ region });
@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        send({ status: "Analyzing with Claude Sonnet 4.6..." });
+        send({ status: "Analyzing with Claude Sonnet 5..." });
         await converseWithTools(userMessages.slice(-8), lang, send);
         send({ status: "" });
         send({ done: true, via: "Bedrock Converse + Tool Use (Direct)" });

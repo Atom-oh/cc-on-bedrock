@@ -78,7 +78,7 @@ fi
 cat > "\${CFG_DIR}/config" <<EOF
 # cc-bedrock-local config (mode 600). Edit as needed.
 # To change models without editing this file directly:
-#   cc --set-model sonnet 'global.anthropic.claude-sonnet-4-6[1m]'
+#   cc --set-model sonnet 'global.anthropic.claude-sonnet-5[1m]'
 #   cc --set-model opus   'global.anthropic.claude-opus-4-8[1m]'
 #   cc --set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
 #   cc --models                         # show current values
@@ -91,13 +91,13 @@ EMAIL=\${CC_EMAIL}
 AWS_PROFILE_NAME=cc-bedrock
 AWS_REGION=\${COGNITO_REGION}
 
-# Models (Bedrock inference profile IDs). Sonnet 4.6 backs /model "Default" + "Sonnet";
+# Models (Bedrock inference profile IDs). Sonnet 5 backs /model "Default" + "Sonnet";
 # real Opus 4.6 backs "Opus"; Haiku 4.5 backs "Haiku" + background. ANTHROPIC_MODEL
 # is intentionally absent so the picker shows "Default" instead of "Custom".
-ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
+ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
 ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]
 ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
-CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6
+CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5
 EOF
 if [[ -n "\${LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT}" ]]; then
   {

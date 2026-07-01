@@ -19,7 +19,7 @@ dev_subdomain = "dev"
 
 # Models
 opus_model_id   = "global.anthropic.claude-opus-4-8[1m]"
-sonnet_model_id = "global.anthropic.claude-sonnet-4-6[1m]"
+sonnet_model_id = "global.anthropic.claude-sonnet-5[1m]"
 
 # Compute
 dashboard_instance_type = "t4g.xlarge"

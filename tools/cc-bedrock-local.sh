@@ -56,15 +56,15 @@ OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-${OTEL_COLLECTOR_END
 OTEL_HELPER="${OTEL_HELPER:-${HOME}/.local/bin/cc-otel-code-metrics}"
 
 # Model env — Bedrock inference profile IDs mapped to Claude Code's model slots.
-# Defaults: Sonnet 4.6 backs "Default"/"Sonnet" in the /model picker, real Opus 4.6
+# Defaults: Sonnet 5 backs "Default"/"Sonnet" in the /model picker, real Opus 4.6
 # backs "Opus", Haiku 4.5 backs "Haiku"/background. ANTHROPIC_MODEL is intentionally
 # unset so the picker shows "Default" — setting it forces the "Custom" slot.
 ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
-ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-4-6}"
+ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-5}"
 ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-8[1m]}"
 # ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
 ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${ANTHROPIC_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}}"
-CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-4-6}"
+CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-5}"
 
 die() { echo "cc-bedrock-local: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -580,7 +580,7 @@ Current model env (from ${CFG_FILE} or defaults):
   ANTHROPIC_MODEL                = ${ANTHROPIC_MODEL:-(unset — picker shows Default)}
 
 Examples:
-  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-4-6[1m]'
+  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5[1m]'
   cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8[1m]'
   cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
   cc-bedrock-local set-model pin    global.anthropic.claude-opus-4-8   # force Custom slot
