@@ -234,15 +234,19 @@ def aggregate_tool_events(records: list) -> dict:
             row["reject"] += 1
 
     for r in records:
-        if r["event"] not in TOOL_EVENTS:
-            continue
         a = r["attrs"]
+        tool = a.get("tool_name")
+        if not tool:  # only tool_result/tool_decision carry tool_name — event-name-independent
+            continue
         email = a.get("enduser.id")
         date = r["date"]
         if date is None:
             continue
-        is_result = r["event"] == "claude_code.tool_result"
         decision = a.get("decision")
+        # tool_decision carries `decision`; tool_result does not. Count usage from results
+        # (no decision) so we don't rely on event.name (which may live in the OTLP
+        # LogRecord event_name field rather than attributes, depending on version).
+        is_result = decision is None
         # After the collector DLP scrub, skill_name/subagent_type are lifted to top-level
         # attributes and the raw tool_parameters bag is dropped. Fall back to the parsed
         # tool_parameters for unscrubbed/raw payloads (tests, local capture).

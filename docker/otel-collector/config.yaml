@@ -29,13 +29,17 @@ processors:
     timeout: 30s
     send_batch_size: 1000
 
-  # Keep ONLY per-invocation tool usage events; drop user_prompt/api_request/hook/
-  # plugin/mcp events (which carry prompts, responses, and other high-cardinality content).
+  # Keep ONLY per-invocation tool usage events (tool_result/tool_decision), dropping
+  # user_prompt/api_request/hook/plugin/mcp events (which carry prompts, responses, and
+  # other high-cardinality content). Key on the tool_name attribute rather than
+  # event.name: only tool_result/tool_decision carry tool_name, and this is robust to
+  # whether the event name lands in attributes["event.name"] or the LogRecord event_name
+  # field (OTLP versions differ; event.name-based filtering silently dropped everything).
   filter/tool_events:
     error_mode: ignore
     logs:
       log_record:
-        - 'attributes["event.name"] != "claude_code.tool_result" and attributes["event.name"] != "claude_code.tool_decision"'
+        - 'attributes["tool_name"] == nil'
 
   # DLP scrub: lift the only fields the rollup needs out of the tool_parameters JSON
   # string, then delete the raw bag and any other sensitive payload.
