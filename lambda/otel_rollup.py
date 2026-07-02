@@ -175,7 +175,6 @@ def extract_presence(records: list) -> set:
 # Per-invocation detail lives in OTLP *logs*, not metrics. tool_result/tool_decision
 # carry tool_name + a tool_parameters JSON string. After the collector DLP scrub the
 # only surviving keys are skill_name / subagent_type / tool_name / decision / success.
-TOOL_EVENTS = ("claude_code.tool_result", "claude_code.tool_decision")
 
 
 def parse_otlp_logs(payload: dict) -> list:
@@ -218,6 +217,14 @@ def aggregate_tool_events(records: list) -> dict:
     Note: auto-approved tools emit `tool_result` but NO `tool_decision`, so their `count`
     rises while `accept` stays 0 (by design — accept/reject reflect explicit permission
     decisions only; dashboards must not read `accept` as total usage — use `count`).
+
+    Records reaching here already passed the collector's tool_name-based filter (see
+    docker/otel-collector/config.yaml) — `event.name`-based filtering is not usable
+    because OTLP puts the event name in the LogRecord's top-level `event_name` field, not
+    in attributes (confirmed empirically: it silently dropped every record). If a future
+    native event type also emits `tool_name`, it would be counted as a tool_result here
+    too; that's an accepted attribution-accuracy trade-off, not a content leak (the
+    collector's DLP scrub is the actual no-content boundary, independent of this filter).
     """
     out: dict = {}
 

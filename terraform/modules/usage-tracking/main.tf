@@ -1223,7 +1223,7 @@ resource "aws_s3_bucket_notification" "otel_raw" {
   depends_on = [aws_lambda_permission.otel_rollup_s3]
 }
 
-# ---- OTel Collector Fargate service + internal NLB:4317 ---------------------
+# ---- OTel Collector Fargate service + internal NLB:4318 (OTLP/HTTP) ---------
 locals {
   otel_collector_image = "${local.account_id}.dkr.ecr.${local.region}.amazonaws.com/cc-on-bedrock/otel-collector:latest"
 }

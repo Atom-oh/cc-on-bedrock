@@ -102,7 +102,7 @@ resource "aws_security_group" "restricted" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  # OTLP/gRPC to the in-VPC OTEL collector (ADR-009 native telemetry). Without this the
+  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Without this the
   # restricted tier's egress (DNS + 443 only) blocks the collector, so no metrics/events flow.
   egress {
     description = "OTLP/HTTP to in-VPC OTEL collector"
@@ -166,7 +166,7 @@ resource "aws_security_group" "locked" {
     cidr_blocks = [var.vpc_cidr]
   }
 
-  # OTLP/gRPC to the in-VPC OTEL collector (ADR-009 native telemetry). Internal-only
+  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Internal-only
   # (VPC CIDR); the collector SG still gates who may connect.
   egress {
     description = "OTLP/HTTP to in-VPC OTEL collector"
