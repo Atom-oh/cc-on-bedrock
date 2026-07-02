@@ -61,7 +61,7 @@ OTEL_HELPER="${OTEL_HELPER:-${HOME}/.local/bin/cc-otel-code-metrics}"
 # unset so the picker shows "Default" — setting it forces the "Custom" slot.
 ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
 ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-5}"
-ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-8[1m]}"
+ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-8}"
 # ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
 ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${ANTHROPIC_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}}"
 CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-5}"
@@ -580,8 +580,8 @@ Current model env (from ${CFG_FILE} or defaults):
   ANTHROPIC_MODEL                = ${ANTHROPIC_MODEL:-(unset — picker shows Default)}
 
 Examples:
-  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5[1m]'
-  cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8[1m]'
+  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5'
+  cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8'
   cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
   cc-bedrock-local set-model pin    global.anthropic.claude-opus-4-8   # force Custom slot
 

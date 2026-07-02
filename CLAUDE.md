@@ -22,7 +22,7 @@ CC-on-Bedrock: AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫�
 - **Backend Services:** DynamoDB (usage tracking), code-server, Claude Code CLI, Kiro CLI
 - **Compute:** EC2 per-user DevEnv (ARM64, ADR-004), ECS (Dashboard Ec2Service + Nginx Fargate)
 - **AWS Services:** EC2, ECS, ALB, CloudFront, DynamoDB, EventBridge, Lambda, Route 53, Secrets Manager, KMS
-- **AI Models:** Bedrock Opus 4.8 (`global.anthropic.claude-opus-4-8[1m]`), Sonnet 5 (`global.anthropic.claude-sonnet-5[1m]`)
+- **AI Models:** Bedrock Opus 4.8 (`global.anthropic.claude-opus-4-8`), Sonnet 5 (`global.anthropic.claude-sonnet-5`)
 - **Region:** ap-northeast-2 (Seoul)
 
 ## Project Structure
