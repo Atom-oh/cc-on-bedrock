@@ -290,15 +290,15 @@ Nginx Fargate Service
             <Cloud className="w-4 h-4 text-amber-400" />
             <span className="text-sm font-bold text-white">Claude Opus 4.8</span>
           </div>
-          <div className="text-xs text-gray-500 font-mono mb-1">global.anthropic.claude-opus-4-8[1m]</div>
+          <div className="text-xs text-gray-500 font-mono mb-1">global.anthropic.claude-opus-4-8</div>
           <P>{ko ? "최고 성능 모델. 복잡한 코드 생성, 아키텍처 설계, 대규모 리팩토링에 적합." : "Highest performance model. Best for complex code generation, architecture design, large refactoring."}</P>
         </div>
         <div className="rounded-xl bg-[#0d1117] border border-white/5 p-4">
           <div className="flex items-center gap-2 mb-2">
             <Cloud className="w-4 h-4 text-blue-400" />
-            <span className="text-sm font-bold text-white">Claude Sonnet 4.6</span>
+            <span className="text-sm font-bold text-white">Claude Sonnet 5</span>
           </div>
-          <div className="text-xs text-gray-500 font-mono mb-1">global.anthropic.claude-sonnet-4-6[1m]</div>
+          <div className="text-xs text-gray-500 font-mono mb-1">global.anthropic.claude-sonnet-5</div>
           <P>{ko ? "균형잡힌 모델. 빠른 응답 속도와 높은 코드 품질. 일반 개발 작업에 최적." : "Balanced model. Fast response with high code quality. Optimal for general development."}</P>
         </div>
       </div>

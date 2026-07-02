@@ -48,3 +48,4 @@ def test_claude_pricing_unchanged():
     m = _load()
     assert m.get_model_pricing("global.anthropic.claude-opus-4-8")["output"] == 75.0
     assert m.get_model_pricing("claude-sonnet-4-6")["output"] == 15.0
+    assert m.get_model_pricing("global.anthropic.claude-sonnet-5")["output"] == 15.0

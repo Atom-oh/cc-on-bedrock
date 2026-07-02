@@ -195,11 +195,12 @@ AWS_PROFILE_NAME=cc-bedrock
 AWS_REGION=ap-northeast-2
 
 # 모델 매핑 (Claude Code의 /model 픽커 슬롯)
-# Opus는 최신인 4.8로 두는 것을 권장 (CLI 기본값과 일치)
-ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8[1m]
+# ANTHROPIC_MODEL=opusplan: Default 슬롯이 계획은 Opus, 실행은 Sonnet 사용
+ANTHROPIC_MODEL=opusplan
+ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
 ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
-CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6`}
+CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5`}
       </CodeBlock>
 
       <SubTitle>{ko ? "2.3 하루 사용 흐름" : "2.3 Daily workflow"}</SubTitle>
@@ -334,7 +335,7 @@ cc-bedrock-local logout`}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
           { name: "Haiku 4.5", weight: "1×", color: "from-emerald-500/20 to-emerald-500/5", text: "text-emerald-300" },
-          { name: "Sonnet 4.6", weight: "~3.5×", color: "from-cyan-500/20 to-cyan-500/5", text: "text-cyan-300" },
+          { name: "Sonnet 5", weight: "~3.5×", color: "from-cyan-500/20 to-cyan-500/5", text: "text-cyan-300" },
           { name: "Opus 4.8", weight: "~15×", color: "from-violet-500/20 to-violet-500/5", text: "text-violet-300" },
         ].map((m, i) => (
           <div key={i} className={`rounded-xl border border-white/5 bg-gradient-to-br ${m.color} p-5`}>

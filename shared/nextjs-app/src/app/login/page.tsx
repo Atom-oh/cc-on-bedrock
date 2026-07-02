@@ -143,7 +143,7 @@ function LoginContent() {
 
         {/* Bottom branding */}
         <p className="mt-8 text-center text-xs text-white/15">
-          Powered by Amazon Bedrock &middot; Opus 4.6 &middot; Sonnet 4.6
+          Powered by Amazon Bedrock &middot; Opus 4.8 &middot; Sonnet 5
         </p>
       </div>
     </div>

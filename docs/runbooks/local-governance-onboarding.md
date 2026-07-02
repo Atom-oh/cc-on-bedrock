@@ -50,7 +50,7 @@ aws sts get-caller-identity --profile cc-bedrock
 # 1회 호출 테스트
 aws bedrock-runtime converse \
   --profile cc-bedrock --region ap-northeast-2 \
-  --model-id global.anthropic.claude-sonnet-4-6 \
+  --model-id global.anthropic.claude-sonnet-5 \
   --messages '[{"role":"user","content":[{"text":"hello"}]}]'
 ```
 
