@@ -117,10 +117,10 @@ EMAIL=you@company.com
 AWS_PROFILE_NAME=cc-bedrock
 AWS_REGION=ap-northeast-2
 
-# 모델 매핑 (Opus는 최신인 4.7로 두는 것을 권장)
+# 모델 매핑 (Opus는 최신인 4.8로 두는 것을 권장)
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-7
-ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
+ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
 CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5`}
       </CodeBlock>
 

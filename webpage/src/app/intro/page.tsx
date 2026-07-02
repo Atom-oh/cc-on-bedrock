@@ -112,7 +112,7 @@ export default function IntroPage() {
           { model: <strong className="text-white">Claude Opus 4.7</strong>, id: "global.anthropic.claude-opus-4-7" },
           { model: <strong className="text-white">Claude Opus 4.8</strong>, id: "global.anthropic.claude-opus-4-8" },
           { model: <strong className="text-white">Claude Sonnet 5</strong>, id: "global.anthropic.claude-sonnet-5" },
-          { model: <strong className="text-white">Claude Haiku 4.5</strong>, id: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+          { model: <strong className="text-white">Claude Haiku 4.5</strong>, id: "global.anthropic.claude-haiku-4-5-20251001-v1:0" },
         ]}
       />
       <Callout type="info" title={t("Wildcard IAM", "Wildcard IAM")}>
