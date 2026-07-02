@@ -10,7 +10,7 @@ import {
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const bedrockClient = new BedrockRuntimeClient({ region });
-const MODEL_ID = "global.anthropic.claude-sonnet-4-6[1m]";
+const MODEL_ID = "global.anthropic.claude-sonnet-5";
 
 const SYSTEM_PROMPT = `당신은 클라우드 리소스 최적화 전문가입니다.
 사용자의 컨테이너 메트릭을 분석하고, 리소스 확장이 실제로 필요한지 판단해주세요.

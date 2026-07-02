@@ -67,12 +67,12 @@ variable "dev_subdomain" {
 # ---- Models ------------------------------------------------------------------
 variable "opus_model_id" {
   type    = string
-  default = "global.anthropic.claude-opus-4-8[1m]"
+  default = "global.anthropic.claude-opus-4-8"
 }
 
 variable "sonnet_model_id" {
   type    = string
-  default = "global.anthropic.claude-sonnet-4-6[1m]"
+  default = "global.anthropic.claude-sonnet-5"
 }
 
 variable "ecs_cluster_name" {

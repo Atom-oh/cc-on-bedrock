@@ -31,7 +31,7 @@ terraform apply`}
       </ul>
       <P>
         {t("Bedrock 모델은 ap-northeast-2 inference profile 사용:", "Bedrock models use ap-northeast-2 inference profiles:")}{" "}
-        <strong className="text-white">Claude Opus 4.7 / 4.6 (1M context) / Sonnet 4.6 / Haiku 4.5</strong>.
+        <strong className="text-white">Claude Opus 4.7 / 4.6 (1M context) / Sonnet 5 / Haiku 4.5</strong>.
       </P>
 
       <H2 id="modes">{t("3. 두 가지 개발환경 접속 모드", "3. Two dev-environment modes")}</H2>

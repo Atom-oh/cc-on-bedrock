@@ -3,7 +3,7 @@
 Generate realistic large-scale LLM usage data for 30 users across 5 departments.
 Writes directly to DynamoDB cc-on-bedrock-usage table.
 
-Models: Opus 4.6, Sonnet 4.6, Haiku 4.5, Sonnet 4.5, Opus 4.5
+Models: Opus 4.8, Sonnet 5, Haiku 4.5, Sonnet 4.5, Opus 4.5
 Departments: engineering(8), data-science(6), product(6), devops(5), research(5)
 Period: last 30 days
 """
@@ -23,8 +23,8 @@ table = dynamodb.Table(TABLE_NAME)
 
 # ─── Models & Pricing (per 1M tokens) ───
 MODELS = {
-    "claude-opus-4-6-v1": {"input": 15.0, "output": 75.0, "avg_latency": 8000},
-    "claude-sonnet-4-6-v1": {"input": 3.0, "output": 15.0, "avg_latency": 3500},
+    "claude-opus-4-8": {"input": 15.0, "output": 75.0, "avg_latency": 8000},
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0, "avg_latency": 3500},
     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0, "avg_latency": 800},
     "claude-sonnet-4-5-20250514": {"input": 3.0, "output": 15.0, "avg_latency": 3000},
     "claude-opus-4-5-20250514": {"input": 15.0, "output": 75.0, "avg_latency": 9000},
@@ -38,9 +38,9 @@ DEPARTMENTS = {
     "engineering": {
         "count": 8,
         "model_weights": {
-            "claude-sonnet-4-6-v1": 0.45,
+            "claude-sonnet-5": 0.45,
             "claude-haiku-4-5-20251001": 0.25,
-            "claude-opus-4-6-v1": 0.15,
+            "claude-opus-4-8": 0.15,
             "claude-sonnet-4-5-20250514": 0.10,
             "claude-opus-4-5-20250514": 0.05,
         },
@@ -51,8 +51,8 @@ DEPARTMENTS = {
     "data-science": {
         "count": 6,
         "model_weights": {
-            "claude-opus-4-6-v1": 0.30,
-            "claude-sonnet-4-6-v1": 0.30,
+            "claude-opus-4-8": 0.30,
+            "claude-sonnet-5": 0.30,
             "claude-opus-4-5-20250514": 0.15,
             "claude-sonnet-4-5-20250514": 0.15,
             "claude-haiku-4-5-20251001": 0.10,
@@ -64,10 +64,10 @@ DEPARTMENTS = {
     "product": {
         "count": 6,
         "model_weights": {
-            "claude-sonnet-4-6-v1": 0.40,
+            "claude-sonnet-5": 0.40,
             "claude-haiku-4-5-20251001": 0.35,
             "claude-sonnet-4-5-20250514": 0.15,
-            "claude-opus-4-6-v1": 0.07,
+            "claude-opus-4-8": 0.07,
             "claude-opus-4-5-20250514": 0.03,
         },
         "intensity": (15, 45),
@@ -77,10 +77,10 @@ DEPARTMENTS = {
     "devops": {
         "count": 5,
         "model_weights": {
-            "claude-sonnet-4-6-v1": 0.40,
+            "claude-sonnet-5": 0.40,
             "claude-haiku-4-5-20251001": 0.30,
             "claude-sonnet-4-5-20250514": 0.15,
-            "claude-opus-4-6-v1": 0.10,
+            "claude-opus-4-8": 0.10,
             "claude-opus-4-5-20250514": 0.05,
         },
         "intensity": (20, 60),
@@ -90,9 +90,9 @@ DEPARTMENTS = {
     "research": {
         "count": 5,
         "model_weights": {
-            "claude-opus-4-6-v1": 0.35,
+            "claude-opus-4-8": 0.35,
             "claude-opus-4-5-20250514": 0.20,
-            "claude-sonnet-4-6-v1": 0.25,
+            "claude-sonnet-5": 0.25,
             "claude-sonnet-4-5-20250514": 0.10,
             "claude-haiku-4-5-20251001": 0.10,
         },

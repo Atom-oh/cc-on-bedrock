@@ -99,8 +99,8 @@ export default function FaqPage() {
         <FaqItem
           q={ko ? "어떤 모델을 사용할 수 있나요?" : "What models are available?"}
           a={ko
-            ? "Claude Opus 4.6 (최고 성능)과 Claude Sonnet 4.6 (빠른 응답)을 사용할 수 있습니다. 모델 선택은 Claude Code/Kiro 내에서 자유롭게 전환 가능합니다."
-            : "Claude Opus 4.6 (highest performance) and Claude Sonnet 4.6 (fast response). You can freely switch between models within Claude Code/Kiro."}
+            ? "Claude Opus 4.8 (최고 성능)과 Claude Sonnet 5 (빠른 응답)을 사용할 수 있습니다. 모델 선택은 Claude Code/Kiro 내에서 자유롭게 전환 가능합니다."
+            : "Claude Opus 4.8 (highest performance) and Claude Sonnet 5 (fast response). You can freely switch between models within Claude Code/Kiro."}
         />
         <FaqItem
           q={ko ? "비밀번호는 어디서 확인하나요?" : "Where can I find my password?"}

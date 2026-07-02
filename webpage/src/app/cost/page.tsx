@@ -54,8 +54,8 @@ export default function CostPage() {
         ]}
         rows={[
           { model: "Claude Opus 4.7", input: "$15.00", output: "$75.00" },
-          { model: "Claude Opus 4.6", input: "$15.00", output: "$75.00" },
-          { model: "Claude Sonnet 4.6", input: "$3.00", output: "$15.00" },
+          { model: "Claude Opus 4.8", input: "$15.00", output: "$75.00" },
+          { model: "Claude Sonnet 5", input: "$3.00", output: "$15.00" },
           { model: "Claude Haiku 4.5", input: "$0.80", output: "$4.00" },
         ]}
       />

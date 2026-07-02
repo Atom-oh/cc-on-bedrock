@@ -118,10 +118,10 @@ AWS_PROFILE_NAME=cc-bedrock
 AWS_REGION=ap-northeast-2
 
 # 모델 매핑 (Opus는 최신인 4.7로 두는 것을 권장)
-ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
+ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
 ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-7
 ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
-CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-4-6`}
+CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5`}
       </CodeBlock>
 
       <H3>{t("2.3 하루 사용 흐름", "2.3 Daily workflow")}</H3>
@@ -200,8 +200,8 @@ cc-bedrock-local logout       # 토큰 캐시 삭제`}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
           { name: "Haiku 4.5", weight: "1×", color: "from-accent-green/30 to-accent-green/5", text: "text-accent-green" },
-          { name: "Sonnet 4.6", weight: "~3.5×", color: "from-accent-cyan/30 to-accent-cyan/5", text: "text-accent-cyan" },
-          { name: "Opus 4.6 / 4.7", weight: "~15×", color: "from-accent-purple/30 to-accent-purple/5", text: "text-accent-purple" },
+          { name: "Sonnet 5", weight: "~3.5×", color: "from-accent-cyan/30 to-accent-cyan/5", text: "text-accent-cyan" },
+          { name: "Opus 4.8", weight: "~15×", color: "from-accent-purple/30 to-accent-purple/5", text: "text-accent-purple" },
         ].map((m) => (
           <div key={m.name} className={`rounded-xl border border-navy-600 bg-gradient-to-br ${m.color} p-5`}>
             <div className={`text-2xl font-black mb-1 ${m.text}`}>{m.weight}</div>

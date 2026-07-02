@@ -20,7 +20,8 @@
 #                 sonnet | opus | haiku | subagent | pin
 #                 (full: ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
 #                  ANTHROPIC_DEFAULT_HAIKU_MODEL, CLAUDE_CODE_SUBAGENT_MODEL,
-#                  ANTHROPIC_MODEL [forces /model "Custom" slot — usually leave unset])
+#                  ANTHROPIC_MODEL [defaults to opusplan; set a raw model id to
+#                  pin /model to "Custom" instead])
 #   models        print current model env + suggested ids
 #   run -- <cmd>  generic wrapper: ensure session, exec <cmd> (no claude env)
 #   config        print current config / file paths
@@ -56,15 +57,15 @@ OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-${OTEL_COLLECTOR_END
 OTEL_HELPER="${OTEL_HELPER:-${HOME}/.local/bin/cc-otel-code-metrics}"
 
 # Model env — Bedrock inference profile IDs mapped to Claude Code's model slots.
-# Defaults: Sonnet 4.6 backs "Default"/"Sonnet" in the /model picker, real Opus 4.6
-# backs "Opus", Haiku 4.5 backs "Haiku"/background. ANTHROPIC_MODEL is intentionally
-# unset so the picker shows "Default" — setting it forces the "Custom" slot.
-ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
-ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-4-6}"
-ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-8[1m]}"
+# Defaults: ANTHROPIC_MODEL=opusplan backs "Default" (Opus for planning, Sonnet for
+# execution), Haiku 4.5 backs "Haiku"/background. Set ANTHROPIC_MODEL to a raw model
+# id instead to pin /model to "Custom".
+ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-opusplan}"
+ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-5}"
+ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-8}"
 # ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
 ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${ANTHROPIC_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}}"
-CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-4-6}"
+CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-5}"
 
 die() { echo "cc-bedrock-local: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -486,7 +487,7 @@ do_claude() {
   # when the cached state was still fresh (migration from the static-key flow).
   setup_aws_profile
 
-  if [[ -n "${ANTHROPIC_MODEL}" ]]; then
+  if [[ -n "${ANTHROPIC_MODEL}" && "${ANTHROPIC_MODEL}" != "opusplan" ]]; then
     echo "[Bedrock] pinned=${ANTHROPIC_MODEL} (forces /model Custom slot)"
   else
     echo "[Bedrock] sonnet=${ANTHROPIC_DEFAULT_SONNET_MODEL} opus=${ANTHROPIC_DEFAULT_OPUS_MODEL} haiku=${ANTHROPIC_DEFAULT_HAIKU_MODEL}"
@@ -500,8 +501,8 @@ do_claude() {
   export ANTHROPIC_DEFAULT_HAIKU_MODEL
   export CLAUDE_CODE_SUBAGENT_MODEL
   otel_prepare
-  # Only export ANTHROPIC_MODEL when explicitly pinned — otherwise the picker
-  # would show "Custom" instead of "Default".
+  # Export ANTHROPIC_MODEL whenever set (default: opusplan); unset it entirely
+  # only if the user cleared it, so the picker falls back to raw Sonnet "Default".
   if [[ -n "${ANTHROPIC_MODEL}" ]]; then
     export ANTHROPIC_MODEL
   else
@@ -580,8 +581,8 @@ Current model env (from ${CFG_FILE} or defaults):
   ANTHROPIC_MODEL                = ${ANTHROPIC_MODEL:-(unset — picker shows Default)}
 
 Examples:
-  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-4-6[1m]'
-  cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8[1m]'
+  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5'
+  cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8'
   cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
   cc-bedrock-local set-model pin    global.anthropic.claude-opus-4-8   # force Custom slot
 

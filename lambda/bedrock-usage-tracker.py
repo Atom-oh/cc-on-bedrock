@@ -44,9 +44,11 @@ USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 # Bedrock pricing (ap-northeast-2, per 1M tokens).
 # Exact per-version entries allow overriding a specific version if its price
 # diverges from its family. New versions that are NOT listed here fall back to
-# FAMILY_PRICING below (see get_model_pricing) — so e.g. claude-opus-4-8 is
-# priced as Opus, not silently as the Sonnet-level "default".
+# FAMILY_PRICING below (see get_model_pricing) — so e.g. a future claude-opus-5
+# is priced as Opus, not silently as the Sonnet-level "default".
 PRICING = {
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
+    "claude-opus-4-8": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-opus-4-6": {"input": 15.0, "output": 75.0},
     "claude-haiku-4-5": {"input": 0.80, "output": 4.0},
@@ -319,9 +321,9 @@ def normalize_model(model_id: str) -> str:
     """Normalize model ID to short form.
 
     Handles:
-      - ARN: arn:aws:bedrock:region:account:inference-profile/global.anthropic.claude-sonnet-4-6-v1
-      - Prefixed: global.anthropic.claude-sonnet-4-6-v1
-      - Plain: claude-sonnet-4-6
+      - ARN: arn:aws:bedrock:region:account:inference-profile/global.anthropic.claude-sonnet-5
+      - Prefixed: global.anthropic.claude-sonnet-5
+      - Plain: claude-sonnet-5
     """
     if not model_id or model_id == "unknown":
         return "unknown"
