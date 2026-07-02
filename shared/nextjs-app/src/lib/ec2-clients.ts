@@ -530,8 +530,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // Model defaults (Bedrock canonical, per AWS docs): opusplan = Opus for
       // planning, Sonnet 5 for execution; fast → Haiku 4.5, subagents → Sonnet 5.
       `echo "ANTHROPIC_MODEL=opusplan" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
-      `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `# Allow coder to use package managers without password`,
@@ -1077,8 +1078,9 @@ export async function restoreFromSnapshot(
       // Model defaults (Bedrock canonical, per AWS docs): opusplan = Opus for
       // planning, Sonnet 5 for execution; fast → Haiku 4.5, subagents → Sonnet 5.
       `echo "ANTHROPIC_MODEL=opusplan" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
-      `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
+      `echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `mkdir -p /home/coder/.config/code-server`,
