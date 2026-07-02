@@ -152,8 +152,8 @@ index ad0ac0e..e8de8ba 100644
 -// ─── Bedrock Usage Metrics (AWS/Bedrock namespace) ───
 -
 -const BEDROCK_MODELS = [
--  { id: "global.anthropic.claude-opus-4-6-v1", inputPricePer1M: 15, outputPricePer1M: 75 },
--  { id: "global.anthropic.claude-sonnet-4-6", inputPricePer1M: 3, outputPricePer1M: 15 },
+-  { id: "global.anthropic.claude-opus-4-8", inputPricePer1M: 15, outputPricePer1M: 75 },
+-  { id: "global.anthropic.claude-sonnet-5", inputPricePer1M: 3, outputPricePer1M: 15 },
 -  { id: "global.anthropic.claude-haiku-4-5-20251001-v1:0", inputPricePer1M: 1, outputPricePer1M: 5 },
 -];
 -

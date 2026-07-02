@@ -36,7 +36,8 @@ EN — Per-user Bedrock usage must be metered near-real-time as the single input
 
 ### 3. Model-ID normalization (ADR-019)
 - `normalize_model(model_id)`가 모든 호출 경로의 model ID를 단일 short form으로 환원(예: `arn:...inference-profile/global.anthropic.claude-sonnet-4-6-v1` → `claude-sonnet-4-6`). 적용 순서: `/` 마지막 segment → `arn:` colon-split → vendor prefix(`global.anthropic.` 등) 제거 → colon suffix → `[1m]` → version(`-vN`) → 8자리 date suffix(`-\d{8}$`) 제거.
-- 정규화된 short form이 DynamoDB SK(`{date}#{model}`)·`PRICING` dict·ADR-008 normalized-token family 판정의 **단일 진실 원천**. partial-match로 새 date-suffix SKU 자동 분류, raw modelId는 로그에만 보존(lossy).
+- 정규화된 short form이 DynamoDB SK(`{date}#{model}`)·`PRICING` dict·ADR-008 normalized-token family 판정의 **단일 진실 원천**. `PRICING`의 정확 일치가 없으면 family(opus/sonnet/haiku) substring 매칭으로 자동 분류되므로, **신규 버전 model ID는 코드 변경 없이 자동으로 올바른 family 요율을 받는다** — 위 §의 "자동갱신"이 의미하는 지점은 이 family fallback이며, `normalize_model`의 문자열 축약(짧은 이름 유도) 자체는 자동이 아니다(vendor prefix/버전 규칙이 바뀌면 수동 갱신 필요, 아래 Negative 참조). partial-match로 새 date-suffix SKU 자동 분류, raw modelId는 로그에만 보존(lossy).
+- **Opus 4.7+ / Sonnet 5+: `[1m]` suffix가 기본값이 되어 더 이상 필요 없다.** 이전 세대(Opus ≤4.6, Sonnet ≤4.6)는 1M 컨텍스트가 opt-in이라 model ID에 `[1m]`을 명시해야 했다. Opus 4.7부터, Sonnet 5부터는 1M 컨텍스트가 기본 동작이므로 model ID에 접미사를 붙이지 않는다(예: `global.anthropic.claude-opus-4-8`, `global.anthropic.claude-sonnet-5` — suffix 없음). `normalize_model`의 `[1m]` 제거 스텝은 **레거시 호환용으로 유지**된다(과거 로그·이전 세대 모델 ID에 여전히 등장할 수 있음); 신규 세대 ID에는 목표 문자열이 없어 no-op이다.
 
 ### 4. Cost allocation hybrid (ADR-011)
 - 커스텀 시스템(Lambda+DynamoDB, ~초 지연)이 5분 예산 집행(ADR-008)의 입력으로 **정본**. AWS 네이티브 cost allocation(CUR 2.0 / Cost Explorer, ~24h)은 재무 정산용 **보조 채널**.

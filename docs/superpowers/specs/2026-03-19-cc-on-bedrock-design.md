@@ -6,7 +6,7 @@ AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼.
 CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 3가지 IaC로 동일 아키텍처를 구현하여 교육/가이드 자료로 활용.
 
 - **Region:** ap-northeast-2 (Seoul)
-- **Models:** Opus 4.6 (`global.anthropic.claude-opus-4-6-v1[1m]`), Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6[1m]`)
+- **Models:** Opus 4.8 (`global.anthropic.claude-opus-4-8`), Sonnet 5 (`global.anthropic.claude-sonnet-5`)
 - **Users:** Default 10-20, scalable to 100
 - **IaC:** CDK (TypeScript) + Terraform (HCL) + CloudFormation (YAML)
 - **Reference repos:**
@@ -231,13 +231,13 @@ docker/litellm/
 
 ```yaml
 model_list:
-  - model_name: "claude-opus-4-6"
+  - model_name: "claude-opus-4-8"
     litellm_params:
-      model: "bedrock/global.anthropic.claude-opus-4-6-v1[1m]"
+      model: "bedrock/global.anthropic.claude-opus-4-8"
       aws_region_name: "ap-northeast-2"
-  - model_name: "claude-sonnet-4-6"
+  - model_name: "claude-sonnet-5"
     litellm_params:
-      model: "bedrock/global.anthropic.claude-sonnet-4-6[1m]"
+      model: "bedrock/global.anthropic.claude-sonnet-5"
       aws_region_name: "ap-northeast-2"
 
 router_settings:
@@ -422,7 +422,7 @@ ASG:
 
 A) Analytics (user + admin):
 - Per-user token usage (input/output tokens)
-- Model usage ratio (Opus 4.6 vs Sonnet 4.6)
+- Model usage ratio (Opus 4.8 vs Sonnet 5)
 - Cost estimation per user/team
 - Daily/weekly/monthly trends (time series charts)
 
