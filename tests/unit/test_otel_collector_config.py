@@ -53,4 +53,6 @@ def test_filter_keeps_only_tool_events():
     c = _cfg()
     filter_key = next(p for p in c["service"]["pipelines"]["logs"]["processors"] if "filter" in p)
     conditions = c["processors"][filter_key]["logs"]["log_record"]
-    assert any("tool_name" in cond for cond in conditions)
+    # Exact match, not substring: a substring check would still pass on an unrelated or
+    # negated condition that happens to contain "tool_name" — the OTTL semantics matter.
+    assert conditions == ['attributes["tool_name"] == nil'], conditions

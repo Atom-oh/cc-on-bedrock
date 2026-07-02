@@ -223,8 +223,11 @@ def aggregate_tool_events(records: list) -> dict:
     because OTLP puts the event name in the LogRecord's top-level `event_name` field, not
     in attributes (confirmed empirically: it silently dropped every record). If a future
     native event type also emits `tool_name`, it would be counted as a tool_result here
-    too; that's an accepted attribution-accuracy trade-off, not a content leak (the
-    collector's DLP scrub is the actual no-content boundary, independent of this filter).
+    too. This drops defense-in-depth from 2 layers (event-type filter + scrub) to 1
+    (scrub only) — an accepted, reduced security posture, not a content leak: the
+    collector's DLP scrub is the actual no-content boundary and doesn't depend on this
+    filter either way. It does mean rollup attribution needs re-checking whenever the
+    native event taxonomy changes.
     """
     out: dict = {}
 

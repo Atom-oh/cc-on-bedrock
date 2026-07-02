@@ -35,11 +35,13 @@ processors:
   # event.name: only tool_result/tool_decision carry tool_name, and this is robust to
   # whether the event name lands in attributes["event.name"] or the LogRecord event_name
   # field (OTLP versions differ; event.name-based filtering silently dropped everything —
-  # confirmed empirically in production, see PR #100). Accepted trade-off: if a future
-  # event type also emits tool_name it would pass this filter too, but the DLP scrub below
-  # is the actual no-content boundary (break-closed keep_keys), so no content leak results
-  # either way — only rollup counter attribution would need re-checking against the then-
-  # current native event taxonomy.
+  # confirmed empirically in production, see PR #100). Accepted trade-off: this drops
+  # defense-in-depth from 2 layers (event-type filter + scrub) to 1 (scrub only) — a
+  # future event type that also emits tool_name would pass this filter too. That is a
+  # reduced security posture, not a content leak: the DLP scrub below is the actual
+  # no-content boundary (break-closed keep_keys) and does not depend on this filter
+  # either way. It does mean rollup counter attribution needs re-checking against the
+  # then-current native event taxonomy whenever it changes.
   filter/tool_events:
     error_mode: ignore
     logs:
