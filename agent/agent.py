@@ -28,7 +28,7 @@ SERVICE = "bedrock-agentcore"
 
 # Bedrock Model
 model = BedrockModel(
-    model_id=os.environ.get("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+    model_id=os.environ.get("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-5"),
     region_name=GATEWAY_REGION,
 )
 
