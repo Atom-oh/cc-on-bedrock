@@ -91,9 +91,9 @@ EMAIL=\${CC_EMAIL}
 AWS_PROFILE_NAME=cc-bedrock
 AWS_REGION=\${COGNITO_REGION}
 
-# Models (Bedrock inference profile IDs). Sonnet 5 backs /model "Default" + "Sonnet";
-# real Opus 4.6 backs "Opus"; Haiku 4.5 backs "Haiku" + background. ANTHROPIC_MODEL
-# is intentionally absent so the picker shows "Default" instead of "Custom".
+# Models (Bedrock inference profile IDs). ANTHROPIC_MODEL=opusplan backs /model
+# "Default": Opus for planning, Sonnet for execution. Haiku 4.5 backs "Haiku" + background.
+ANTHROPIC_MODEL=opusplan
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
 ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
 ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0

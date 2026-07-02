@@ -134,7 +134,7 @@ export default function GettingStartedPage() {
           </li>
           <li className="flex items-start gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-            <span>{ko ? "Bedrock 모델 접근 활성화 (Opus 4.6 + Sonnet 5, ap-northeast-2)" : "Bedrock model access enabled (Opus 4.6 + Sonnet 5, ap-northeast-2)"}</span>
+            <span>{ko ? "Bedrock 모델 접근 활성화 (Opus 4.8 + Sonnet 5, ap-northeast-2)" : "Bedrock model access enabled (Opus 4.8 + Sonnet 5, ap-northeast-2)"}</span>
           </li>
           <li className="flex items-start gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />

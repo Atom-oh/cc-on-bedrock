@@ -203,7 +203,7 @@ kiro
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/10">
-            <div className="font-bold text-white">Claude Opus 4.6</div>
+            <div className="font-bold text-white">Claude Opus 4.8</div>
             <div className="text-gray-500">{ko ? "최고 성능, 복잡한 작업" : "Highest performance, complex tasks"}</div>
           </div>
           <div className="px-3 py-2 rounded-lg bg-blue-500/5 border border-blue-500/10">

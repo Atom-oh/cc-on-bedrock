@@ -191,7 +191,7 @@ export default function DocsPage() {
           {[
             "Terraform", "Next.js 14",
             "Tailwind CSS", "Amazon Cognito", "DynamoDB", "ECS Fargate",
-            "CloudFront", "Lambda@Edge", "Bedrock Opus 4.6", "Bedrock Sonnet 5",
+            "CloudFront", "Lambda@Edge", "Bedrock Opus 4.8", "Bedrock Sonnet 5",
             "code-server", "Claude Code", "Kiro", "EventBridge", "KMS", "OpenTelemetry",
             "Route 53", "ARM64 (Graviton)",
           ].map((tech) => (

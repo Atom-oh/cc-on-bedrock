@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
       "*CC-on-Bedrock Status*",
       `Region: \`ap-northeast-2\``,
       `Architecture: \`CloudFront → NLB → Nginx → ECS\``,
-      `AI: \`Direct Bedrock (Opus 4.6 / Sonnet 5)\``,
+      `AI: \`Direct Bedrock (Opus 4.8 / Sonnet 5)\``,
     ].join("\n");
 
     return new NextResponse(statusMsg, { status: 200 });

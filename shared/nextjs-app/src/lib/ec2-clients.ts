@@ -527,9 +527,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // configured (telemetry stays off, fail-safe).
       ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 5,
-      // Opus option → 4.8, fast → Haiku 4.5, subagents → Sonnet 5.
-      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): opusplan = Opus for
+      // planning, Sonnet 5 for execution; fast → Haiku 4.5, subagents → Sonnet 5.
+      `echo "ANTHROPIC_MODEL=opusplan" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
@@ -1074,9 +1074,9 @@ export async function restoreFromSnapshot(
       // configured (telemetry stays off, fail-safe).
       ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      // Model defaults (Bedrock canonical, per AWS docs): default = Sonnet 5,
-      // Opus option → 4.8, fast → Haiku 4.5, subagents → Sonnet 5.
-      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,
+      // Model defaults (Bedrock canonical, per AWS docs): opusplan = Opus for
+      // planning, Sonnet 5 for execution; fast → Haiku 4.5, subagents → Sonnet 5.
+      `echo "ANTHROPIC_MODEL=opusplan" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8" >> /etc/environment`,
       `echo "ANTHROPIC_SMALL_FAST_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0" >> /etc/environment`,
       `echo "CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5" >> /etc/environment`,

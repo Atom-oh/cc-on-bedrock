@@ -201,7 +201,7 @@ cc-bedrock-local logout       # 토큰 캐시 삭제`}
         {[
           { name: "Haiku 4.5", weight: "1×", color: "from-accent-green/30 to-accent-green/5", text: "text-accent-green" },
           { name: "Sonnet 5", weight: "~3.5×", color: "from-accent-cyan/30 to-accent-cyan/5", text: "text-accent-cyan" },
-          { name: "Opus 4.6 / 4.7", weight: "~15×", color: "from-accent-purple/30 to-accent-purple/5", text: "text-accent-purple" },
+          { name: "Opus 4.8", weight: "~15×", color: "from-accent-purple/30 to-accent-purple/5", text: "text-accent-purple" },
         ].map((m) => (
           <div key={m.name} className={`rounded-xl border border-navy-600 bg-gradient-to-br ${m.color} p-5`}>
             <div className={`text-2xl font-black mb-1 ${m.text}`}>{m.weight}</div>
