@@ -157,7 +157,7 @@ jobs:
           classify_inline_comments: "false"
           include_fix_links: "false"
           claude_args: |
-            --model us.anthropic.claude-opus-4-8
+            --model us.anthropic.claude-fable-5
             --allowedTools Read,Grep,Glob
             --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit,Task,WebFetch,WebSearch
             --max-turns 8
