@@ -1,9 +1,12 @@
 name: AI Code Review
 
-# PR마다 멀티 AI 패널(Codex + Kiro x3 + Antigravity)이 리뷰하고 Claude Opus 4.8 의장이
-# 종합해 코멘트로 게시(fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
+# PR마다 lens×모델 매트릭스 패널(Codex + Kiro x3, L2~L5 각 lens 독립 에이전트)이 리뷰하고
+# Claude Opus 4.8 의장이 lens별로 종합해 코멘트로 게시(fail-closed VERDICT). 공유
+# actions-runner-claude 이미지 사용. (oh-my-cloud-skills 의 lens×model 매트릭스 설계를
+# 포팅 — 이 repo는 매니페스트 검증 대상이 없어 L1 결정적 게이트는 포함하지 않음)
 #   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
-#   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO/ANTIGRAVITY)
+#   - 매트릭스 fan-out: scripts/pr-review/run-panel.sh(4모델×4lens=16셀) → synthesize.sh
+#   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO)
 #   - 리전: us-east-1 (Claude us. geo / codex gpt-5.5 bedrock-mantle In-Region)
 
 on:
@@ -23,7 +26,7 @@ jobs:
       contents: read
     env:
       # us-east-1 통일: Claude us. geo(on-demand) + codex gpt-5.5 mantle(In-Region).
-      ANTHROPIC_MODEL: us.anthropic.claude-fable-5
+      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-8
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
@@ -60,32 +63,70 @@ jobs:
           ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
           echo "total_lines=$(wc -l < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
 
-      - name: Build panel prompt
+      - name: Build lens prompts (L2-L5 — each self-contained, one lens only)
         run: |
           set -euo pipefail
           MAX_LINES=3000
           head -"$MAX_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-truncated.txt
-          cat <<'PROMPT_EOF' > /tmp/panel-prompt.txt
-          Review the diff provided via stdin for bugs, security risks, logic errors,
-          and convention violations (read CLAUDE.md / AGENTS.md for this repo's conventions).
-          Output concise findings grouped CRITICAL/MAJOR/MINOR.
-          DO NOT output a VERDICT line — that is the chair's job.
-          한국어+영문 기술용어 혼용 가능.
+          rm -rf /tmp/pr-review/lenses
+          mkdir -p /tmp/pr-review/lenses
+          COMMON="Review ONLY the diff under review for this PR, in
+          this governed multi-user Claude Code/Codex-on-Bedrock platform repo (Terraform + Python). The diff reaches you one of
+          two ways depending on your tool: it is either piped to your stdin directly, or
+          your instructions below tell you to read it via a file-read tool from an
+          absolute path — whichever applies to you, that IS the diff under review; do not
+          expect any other delivery format.
+          Stay inside your assigned lens below — do not comment on other lenses (other
+          agents cover those independently). Output concise findings grouped
+          CRITICAL/MAJOR/MINOR. DO NOT output a VERDICT line — that is the chair's job.
+          한국어+영문 기술용어 혼용 가능."
+
+          cat <<PROMPT_EOF > /tmp/pr-review/lenses/L2.txt
+          $COMMON
+
+          LENS: L2 — IaC 정확성
+          - Terraform 리소스 정의, per-user DevEnv 프로비저닝 로직.
           PROMPT_EOF
+
+          cat <<PROMPT_EOF > /tmp/pr-review/lenses/L3.txt
+          $COMMON
+
+          LENS: L3 — 보안/거버넌스
+          - per-user 격리, budget deny-policy.
+          - Cognito/STS 자격증명 발급, 하드코딩 시크릿.
+          PROMPT_EOF
+
+          cat <<PROMPT_EOF > /tmp/pr-review/lenses/L4.txt
+          $COMMON
+
+          LENS: L4 — 사용량/비용 정확성
+          - inference profile → DynamoDB 사용량 집계.
+          - budget 트리거 로직.
+          PROMPT_EOF
+
+          cat <<PROMPT_EOF > /tmp/pr-review/lenses/L5.txt
+          $COMMON
+
+          LENS: L5 — 문서/ADR 일관성
+          - docs/decisions/ADR-*.md 와 실제 구현 정합.
+          - README 최신성.
+          PROMPT_EOF
+
           if [ "${total_lines:-0}" -gt "$MAX_LINES" ]; then
-            echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed." >> /tmp/panel-prompt.txt
+            for f in /tmp/pr-review/lenses/*.txt; do
+              echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed." >> "$f"
+            done
             echo "panel_truncated=1" >> "$GITHUB_ENV"
           fi
 
-      - name: Run panel + synthesize
+      - name: Run panel + synthesize (lens×model matrix -> Claude chair)
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PANEL_TIMEOUT: "300"
         run: |
           set -euo pipefail
-          mkdir -p /tmp/pr-review
-          bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/panel-prompt.txt /tmp/pr-review
+          bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
           bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
             "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
@@ -95,10 +136,13 @@ jobs:
         run: |
           if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=VERDICT: FAIL" >> "$GITHUB_OUTPUT"
           elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
+            echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
           else
             echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=No VERDICT line found — fail-closed" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post review comment (upsert)
@@ -117,9 +161,9 @@ jobs:
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## 🤖 AI Code Review (Claude Opus 4.8 chair · Codex + Kiro panel)"
+            echo "## 🤖 AI Code Review (${chair_used:-Claude Opus 4.8} chair · lens×model matrix)"
             echo ""
-            echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
+            echo "_Cells (model/lens): ${panel_responded:-solo}_"
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
             echo ""
             echo "$STATUS_BADGE"
@@ -141,5 +185,5 @@ jobs:
       - name: Fail if CRITICAL or MAJOR
         if: steps.gate.outputs.result == 'fail'
         run: |
-          echo "AI Review failed"
+          echo "AI Review failed: ${{ steps.gate.outputs.reason }}"
           exit 1
