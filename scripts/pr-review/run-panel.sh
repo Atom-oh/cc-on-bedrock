@@ -30,7 +30,7 @@ mkdir -p "$WORK" || { echo "run-panel.sh: failed to create workdir: $WORK" >&2; 
 WORK="$(realpath "$WORK")" \
   || { echo "run-panel.sh: realpath failed to resolve workdir: $WORK" >&2; exit 1; }
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
-ensure_slots "$WORK"
+ensure_slots "$WORK" || exit 1
 SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 # 비-ephemeral 러너에서 $WORK 가 재사용되면 이전 실행이 남긴 severe 플래그가 그대로
 # 살아남아, 이번엔 4모델 모두 정상 응답해도 synthesize.sh 가 강제 FAIL 하게 된다 —
@@ -78,14 +78,18 @@ try_panel() {
 # coverage-severe.flag/slot/lenses 와 같은 뿌리 — 비-ephemeral 러너에서 $WORK 가
 # 재사용되면 kiro-cli 가 이 가짜 HOME 아래 남긴 캐시/세션 상태가 실행 간 누적·전이될 수
 # 있다(크리덴셜은 없어 보안 영향은 아니지만 재현성 문제) — 매 실행 시작 시 리셋.
-KIRO_CWD="$WORK/kiro-cwd"
-[ -L "$KIRO_CWD" ] && { echo "run-panel.sh: \$KIRO_CWD is a symlink, refusing (TOCTOU guard)" >&2; exit 1; }
-rm -rf "$KIRO_CWD"; mkdir -p "$KIRO_CWD"
-# HOME 도 격리(실제 러너 $HOME 이 아니라 $KIRO_CWD) — fs_read 의 절대경로 read 자체는 여전히
-# 잔여 위험(막을 방법 없음)이지만, "~/.aws/credentials"·"~/.codex/config.toml" 처럼 상대적
-# ~ 표기로 유도되는 케이스의 실효 표면을 줄인다(실제 크리덴셜은 이 가짜 HOME 아래 없음).
+KIRO_CWD_BASE="$WORK/kiro-cwd"
+[ -L "$KIRO_CWD_BASE" ] && { echo "run-panel.sh: \$KIRO_CWD_BASE is a symlink, refusing (TOCTOU guard)" >&2; exit 1; }
+rm -rf "$KIRO_CWD_BASE"; mkdir -p "$KIRO_CWD_BASE"
+# HOME 도 격리(실제 러너 $HOME 이 아니라 셀별 서브디렉터리) — fs_read 의 절대경로 read 자체는
+# 여전히 잔여 위험(막을 방법 없음)이지만, "~/.aws/credentials"·"~/.codex/config.toml" 처럼
+# 상대적 ~ 표기로 유도되는 케이스의 실효 표면을 줄인다(실제 크리덴셜은 이 가짜 HOME 아래
+# 없음). 매트릭스 확장(4→16셀, kiro 셀 3→12개)으로 모든 kiro 셀이 동시(&) 실행되므로,
+# 셀 하나의 cwd/HOME 을 공유하면 kiro-cli 의 세션/캐시 상태가 병렬 실행 간 경합할 수 있다
+# — 셀마다 별도 서브디렉터리를 준다(15차 리뷰 M2).
 kiro_env() {
-  env -i PATH="$PATH" HOME="$KIRO_CWD" LANG="${LANG:-}" LC_ALL="${LC_ALL:-}" TMPDIR="${TMPDIR:-/tmp}" \
+  local cell_cwd="$1"; shift
+  env -i PATH="$PATH" HOME="$cell_cwd" LANG="${LANG:-}" LC_ALL="${LC_ALL:-}" TMPDIR="${TMPDIR:-/tmp}" \
     ${KIRO_API_KEY:+KIRO_API_KEY="$KIRO_API_KEY"} "$@"
 }
 
@@ -114,8 +118,9 @@ for lens_file in "${LENS_FILES[@]}"; do
   for entry in "${KIRO_MODELS[@]}"; do
     m="${entry%%:*}"; tag="${entry##*:}"
     if command -v kiro-cli >/dev/null 2>&1; then
-      ( cd "$KIRO_CWD" && try_panel "$SLOT/$tag-$lens.md" "$SLOT/$tag-$lens.err" \
-          kiro_env timeout "$T" kiro-cli chat "$KIRO_INSTRUCTION" --model "$m" \
+      CELL_CWD="$KIRO_CWD_BASE/$tag-$lens"; mkdir -p "$CELL_CWD"
+      ( cd "$CELL_CWD" && try_panel "$SLOT/$tag-$lens.md" "$SLOT/$tag-$lens.err" \
+          kiro_env "$CELL_CWD" timeout "$T" kiro-cli chat "$KIRO_INSTRUCTION" --model "$m" \
           --mode default --no-interactive --trust-tools=fs_read --wrap never ) &
     else echo "[skip] $tag/$lens (binary absent)" >&2; : > "$SLOT/$tag-$lens.md"; fi
   done
