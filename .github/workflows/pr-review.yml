@@ -139,10 +139,12 @@ jobs:
       - name: Check for blocking issues
         id: gate
         run: |
-          if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
+          last_line="$(tail -n1 /tmp/review.md)"
+          verdict_count="$(grep -c '^VERDICT:' /tmp/review.md 2>/dev/null || echo 0)"
+          if [ "$last_line" = "VERDICT: FAIL" ]; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
             echo "reason=VERDICT: FAIL" >> "$GITHUB_OUTPUT"
-          elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
+          elif [ "$last_line" = "VERDICT: PASS" ] && [ "$verdict_count" = "1" ]; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
             echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
           else
