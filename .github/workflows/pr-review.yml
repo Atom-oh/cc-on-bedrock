@@ -1,6 +1,6 @@
 name: AI Code Review
 
-# PR마다 멀티 AI 패널(Codex + Kiro x3 + Antigravity)이 리뷰하고 Claude Opus 4.8 의장이
+# PR마다 멀티 AI 패널(Codex + Kiro x3 + Antigravity)이 리뷰하고 Claude Fable 5 의장이
 # 종합해 코멘트로 게시(fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
 #   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
 #   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO/ANTIGRAVITY)
@@ -117,7 +117,7 @@ jobs:
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## 🤖 AI Code Review (Claude Opus 4.8 chair · Codex + Kiro panel)"
+            echo "## 🤖 AI Code Review (Claude Fable 5 chair · Codex + Kiro panel)"
             echo ""
             echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
