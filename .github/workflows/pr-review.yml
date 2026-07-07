@@ -23,7 +23,8 @@ jobs:
       contents: read
     env:
       # us-east-1 통일: Claude us. geo(on-demand) + codex gpt-5.5 mantle(In-Region).
-      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-8
+      # 의장은 fleet 표준(fable-5)으로 정렬 — 다른 pr-review 리포 전부 동일.
+      ANTHROPIC_MODEL: us.anthropic.claude-fable-5
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
