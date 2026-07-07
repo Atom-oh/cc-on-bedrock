@@ -84,13 +84,7 @@ IMPORTANT: 마지막 줄은 정확히 하나:
   VERDICT: PASS
   VERDICT: FAIL
 CRITICAL/MAJOR 있으면 FAIL, 아니면 PASS.
-
-=== PANEL REVIEWS ===
 PROMPT_EOF
-
-# 패널 원문(${PANEL})은 heredoc 밖에서 append: 패널 출력에 'PROMPT_EOF' 단독 라인이
-# 있어도 heredoc 가 조기 종료되지 않도록.
-printf '%s\n' "$PANEL" >> "$WORK/synth-prompt.txt"
 
 # stdin 페이로드: diff + 패널 리뷰. 여기는 heredoc 이 아니라 순수 파일 결합이라
 # 패널 출력 안의 임의 텍스트(예: 'PROMPT_EOF' 단독 라인)가 조기 종료를 유발할 걱정이 없다.
@@ -112,7 +106,7 @@ printf '%s\n' "$PANEL" >> "$WORK/synth-prompt.txt"
 # 286초를 정상적으로 썼다. 매트릭스(4→16 패널 출력)는 체어 입력이 더 커 286s 실측조차
 # 밑돎 — job timeout-minutes 여유를 반영해 600s로 상향.
 PRIMARY_MODEL="${ANTHROPIC_MODEL:-us.anthropic.claude-opus-4-8}"
-FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-4-8}"
+FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-fable-5}"
 CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-600}"
 
 chair_label() { case "$1" in

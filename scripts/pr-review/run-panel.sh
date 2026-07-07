@@ -162,6 +162,20 @@ if [ "$DEGRADED_COUNT" -ge "$((TOTAL_MODELS - 1))" ]; then
   : > "$WORK/coverage-severe.flag"
 fi
 
+# lens 단위 붕괴 감지 — 위 per-model floor 는 "어느 lens에든 한 번이라도 응답하면 생존"으로
+# 처리해, 각 모델이 서로 다른 lens에서만 죽는 패턴(예: 3개 Kiro 모델이 각각 L2에만 응답하고
+# 나머지 lens에서 전부 타임아웃)을 놓친다 — 이 경우 TOTAL_MODELS 전원이 "생존"으로 집계돼도
+# L3/L4/L5는 실제로 codex 단독 리뷰가 된다. lens마다 응답한 모델 수를 따로 세어, 그 lens의
+# 생존 모델이 1개 이하면 (다른 lens가 멀쩍이 정상이어도) severe 로 승격한다.
+for lens_file in "${LENS_FILES[@]}"; do
+  lens="$(basename "$lens_file" .txt)"
+  lens_count="$(grep -c "/${lens}\$" "$RESP" 2>/dev/null)"
+  if [ "${lens_count:-0}" -le 1 ]; then
+    echo "::error::lens '$lens' has ≤1 responding model ($lens_count/$TOTAL_MODELS) — no cross-model check for this lens, forcing VERDICT: FAIL" >&2
+    : > "$WORK/coverage-severe.flag"
+  fi
+done
+
 # skip 원인 노출: 빈 슬롯인데 stderr 가 있으면 stderr 의 끝(실제 에러)을 로그에 찍는다.
 # public repo 라 이 Actions 로그는 누구나 읽을 수 있고, Kiro fs_read 전환 이후로는 diff
 # 인젝션이 유도한 절대경로 read 결과가 stdout(셀 .md, synthesize.sh 에서 스크럽) 대신
