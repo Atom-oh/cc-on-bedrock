@@ -56,8 +56,8 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> 통합 ADR 11개 (옛 34개 → 통합) + 신규 ADR-012. 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
-> **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거). 신규 ADR-012 작성됨; 다음 신규 ADR은 013부터 순증(reset 일괄 재번호 예외와 무관).
+> 통합 ADR 11개 (옛 34개 → 통합) + 신규 ADR-012·013. 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
+> **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거). 신규 ADR-012·013 작성됨; 다음 신규 ADR은 014부터 순증(reset 일괄 재번호 예외와 무관).
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
@@ -73,6 +73,7 @@
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
 | 012 | DevEnv 헬스 판정 | 직접 8080 probe 제거(SG 격리로 timeout) → EC2 lifecycle 파생(running+privateIp⇒HEALTHY), 낙관적 false-positive trade-off 수용 | (신규) |
+| 013 | PR-review Kiro fs_read 잔여 위험 | Kiro diff 전달을 `fs_read`로 전환하며 도입된 절대경로 read 잔여 위험 수용(격리 cwd/HOME·env allowlist·scrub_secrets 완화 + `persist-credentials: false`로 알려진 유일한 구체적 경로 차단) | (신규) |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 

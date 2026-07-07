@@ -32,7 +32,12 @@ jobs:
       AWS_REGION: us-east-1
     steps:
       # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
+      # persist-credentials: false (ADR-013) — Kiro 는 fs_read 로 절대경로를 read 할 수 있어,
+      # diff 인젝션이 기본값(true)이 남기는 .git/config 의 GITHUB_TOKEN 을 읽어 외부 서비스로
+      # 유출시킬 수 있다. 이 스텝이 그 토큰을 아예 디스크에 남기지 않게 한다.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Verify CLIs present (runner image)
         run: |

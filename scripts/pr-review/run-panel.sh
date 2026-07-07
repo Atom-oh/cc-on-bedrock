@@ -2,7 +2,8 @@
 # lens×모델 매트릭스 병렬 fan-out. 인자: <diff> <lenses_dir> <workdir>
 # lenses_dir 안의 각 *.txt 가 lens 하나(파일명 stem = lens 태그, 예: L2/L3/L4/L5) —
 # 그 lens 전용 리뷰 프롬프트(자체 완결형: "이 lens만 봐"). 각 lens × 각 모델이
-# 독립 에이전트 셀 하나(design: docs/superpowers/specs/2026-07-05-pr-review-hybrid-lens-design.md).
+# 독립 에이전트 셀 하나(design: oh-my-cloud-skills 원본 설계 문서 — 이 repo엔 없음, 그 repo의
+# docs/superpowers/specs/2026-07-05-pr-review-hybrid-lens-design.md 참조).
 # diff 전달 경로는 CLI 별로 다름: Codex 는 stdin(`< "$DIFF"` 직접 리다이렉트, 파일이라
 # TTY 아님 → no-hang); Kiro 는 stdin 을 무시하므로 `fs_read`로 파일 경로를 읽게 한다
 # (아래 Kiro 셀 주석 참조) — 어느 쪽도 diff 를 argv 텍스트로 embed 하지 않는다(ARG_MAX/
@@ -37,6 +38,10 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 rm -f "$WORK/coverage-severe.flag"
 T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-3}"
+# gpt-5.5 가 codex(openai.gpt-5.5) 와 kiro-gpt 두 셀에 겹치는 것은 의도된 트레이드오프다 —
+# kimi-k2.5 는 프로덕션에서 커버리지 저하 2/2회 + 근거 없는 지적 7건으로 교체됨(자세한 근거:
+# oh-my-cloud-skills ADR-012). 겹침으로 lens당 독립 모델 수가 줄지만, 그 대안(kimi 유지)이
+# 오탐/무응답 쪽에서 더 나쁜 것으로 판단됨.
 KIRO_MODELS=("claude-opus-4.8:kiro-opus" "gpt-5.5:kiro-gpt" "glm-5:kiro-glm")
 
 shopt -s nullglob
@@ -99,9 +104,10 @@ for lens_file in "${LENS_FILES[@]}"; do
   # `chat` reads ONLY the prompt arg — it ignores stdin, so the diff must reach it via
   # `fs_read` from a file path in argv, NOT embedded as text: embedding risks the
   # single-argv 128KiB exec limit (a 3000-line diff only needs ~43B/line to exceed it)
-  # and leaks the full diff into `ps` output. Same fs_read pattern already established
-  # in plugins/co-agent/skills/co-agent/references/ai-cli-adapters.md — `--trust-tools=
-  # read,grep` (previous revision) is invalid; the real read-only tool name is `fs_read`.
+  # and leaks the full diff into `ps` output. Same fs_read pattern already established in
+  # oh-my-cloud-skills's plugins/co-agent/skills/co-agent/references/ai-cli-adapters.md
+  # (cross-repo reference, not a path in this repo) — `--trust-tools=read,grep` (previous
+  # revision) is invalid; the real read-only tool name is `fs_read`.
   KIRO_INSTRUCTION="$LENS_PROMPT"$'\n\n'"Read the diff under review with fs_read from: $DIFF (review THIS diff only; do not scan the wider repo)"
   for entry in "${KIRO_MODELS[@]}"; do
     m="${entry%%:*}"; tag="${entry##*:}"
@@ -180,8 +186,9 @@ done
 # public repo 라 이 Actions 로그는 누구나 읽을 수 있고, Kiro fs_read 전환 이후로는 diff
 # 인젝션이 유도한 절대경로 read 결과가 stdout(셀 .md, synthesize.sh 에서 스크럽) 대신
 # stderr(에러 메시지·스택트레이스)로 새어나올 수도 있다 — 원시로 찍으면 이 경로가 스크럽
-# 없는 유출구가 된다(docs/ci-pr-review.md 가 이미 "원시 stderr 노출 안 함"이라 주장하던
-# 것과도 실제로 어긋났었다). synthesize.sh 의 셀과 동일한 scrub_secrets() 를 통과시킨다.
+# 없는 유출구가 된다(oh-my-cloud-skills 의 docs/ci-pr-review.md — 이 repo엔 없음 — 가 이미
+# "원시 stderr 노출 안 함"이라 주장하던 것과도 실제로 어긋났었다). synthesize.sh 의 셀과
+# 동일한 scrub_secrets() 를 통과시킨다.
 for e in "$SLOT"/*.err; do
   [ -s "$e" ] || continue
   b="$(basename "$e" .err)"

@@ -30,7 +30,7 @@ record_result() {
 # `consensus_hooks.py::_SECRET_RE`(AWS/GitHub/Slack/OpenAI·Anthropic/Google + generic
 # key=value)를 재사용하고, EKS Pod Identity 토큰(고정 경로 파일의 값 자체가 JWT 포맷)
 # 탐지를 추가했다. 절대경로 read 자체를 막지는 못하므로(스크럽은 값이 셀 출력에 실제로
-# 나타난 *뒤*에만 작동) 잔여 위험은 그대로 남는다 — ADR-011 명시.
+# 나타난 *뒤*에만 작동) 잔여 위험은 그대로 남는다 — ADR-013 명시.
 scrub_secrets() {
   # PEM 은 여러 줄에 걸치므로 line-oriented sed 로는 본문을 못 지운다(헤더 줄만 매칭)
   # — awk 상태기계로 BEGIN..END 블록 전체를 마커 한 줄로 치환(첫 스테이지, 구조적 스크럽).
