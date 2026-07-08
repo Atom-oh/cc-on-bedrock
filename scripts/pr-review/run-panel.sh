@@ -44,7 +44,10 @@ else echo "[skip] codex (binary absent)" >&2; : > "$SLOT/codex.md"; fi
 # CRITICAL exfiltration 경로다(claude-code-usage-dashboard PR #4 리뷰에서 다른 repo의 동일
 # 계열 버그로 발견 — fs_read 를 vector로 썼을 뿐 위협모델은 동일). `--trust-tools=` 로 툴을
 # 아예 안 주면 이 경로가 구조적으로 막힌다. diff 는 이미 argv 에 직접 embed 되므로(위) 이
-# 수정으로 기능 변화는 없다.
+# 수정으로 기능 변화는 없다. `--trust-tools=`(빈 값)이 "무툴"임은 라이브 재현만이 아니라
+# kiro-cli 자신의 공식 문서(`kiro-cli chat --help`): "trust no tools: '--trust-tools='" —
+# 그대로 인용되는 예시 문구다(버전: `kiro-cli 2.11.1`). 향후 kiro-cli 가 이 시맨틱을 바꾸면
+# 이 fail-closed 가정도 재검증 필요.
 KIRO_MSG="$(printf '%s\n\n=== DIFF UNDER REVIEW (review this) ===\n%s\n' "$PROMPT" "$(cat "$DIFF")")"
 for entry in "${KIRO_MODELS[@]}"; do
   m="${entry%%:*}"; tag="${entry##*:}"
