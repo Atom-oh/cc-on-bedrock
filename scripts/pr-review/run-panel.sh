@@ -17,12 +17,13 @@ KIRO_MODELS=("claude-opus-4.8:kiro-opus" "gpt-5.5:kiro-gpt" "glm-5:kiro-glm")
 #   try_panel <slot> <err> <cmd...>   (stdin=$DIFF, stdout=slot, stderr=err)
 try_panel() {
   local slot="$1" err="$2"; shift 2
-  local a
+  local a rc=1
   for a in $(seq 1 "$RETRIES"); do
-    "$@" > "$slot" 2>"$err" < "$DIFF" || true
-    [ -s "$slot" ] && break
+    "$@" > "$slot" 2>"$err" < "$DIFF"; rc=$?
+    [ -s "$slot" ] && [ "$rc" -eq 0 ] && break
     [ "$a" -lt "$RETRIES" ] && echo "[retry $a/$RETRIES] $(basename "$slot" .md)" >&2
   done
+  echo "$rc" > "$slot.rc"
 }
 
 # Codex (Bedrock, config.toml). --skip-git-repo-check 필수. AWS_REGION 강제: gpt-5.5
@@ -34,17 +35,23 @@ if command -v codex >/dev/null 2>&1; then
 else echo "[skip] codex (binary absent)" >&2; : > "$SLOT/codex.md"; fi
 
 # Kiro x3 — model:tag 를 한 배열에서 파생(호출/집계 동기화).
-# ⚠️ kiro-cli `chat` 는 메시지를 ARG 로 받는다 — codex 와 달리 stdin 을 읽지 않는다.
-# diff 를 stdin(`< "$DIFF"`)으로만 주면 kiro 패널 3종은 instruction 만 보고 diff 를
-# 못 받아 항상 "no findings" 가 된다(과거 PR 리뷰에서 kiro-opus/kimi/glm 전부 리뷰 불성립의 원인).
-# → prompt + diff 를 합쳐 chat ARG 로 전달한다.
+# kiro-cli `chat` 는 메시지를 ARG 로 받는다 — codex 와 달리 stdin 을 읽지 않는다. prompt +
+# diff 를 합쳐 chat ARG 로 전달한다(과거 PR 리뷰에서 kiro-opus/kimi/glm 전부 리뷰 불성립의
+# 원인이었던 stdin-only 전달 버그의 수정). `--trust-tools=read,grep` 는 무효한 플래그가
+# 아니라 **실제로 파일 read 를 그랜트한다** — 직접 재현 확인(`kiro-cli chat "Use your read
+# tool to read /etc/hostname..." --trust-tools=read,grep` 가 실제로 파일을 읽어냄). diff 는
+# untrusted PR 콘텐츠이므로 이 그랜트는 diff-injection 이 절대경로 read 를 유도할 수 있는
+# CRITICAL exfiltration 경로다(claude-code-usage-dashboard PR #4 리뷰에서 다른 repo의 동일
+# 계열 버그로 발견 — fs_read 를 vector로 썼을 뿐 위협모델은 동일). `--trust-tools=` 로 툴을
+# 아예 안 주면 이 경로가 구조적으로 막힌다. diff 는 이미 argv 에 직접 embed 되므로(위) 이
+# 수정으로 기능 변화는 없다.
 KIRO_MSG="$(printf '%s\n\n=== DIFF UNDER REVIEW (review this) ===\n%s\n' "$PROMPT" "$(cat "$DIFF")")"
 for entry in "${KIRO_MODELS[@]}"; do
   m="${entry%%:*}"; tag="${entry##*:}"
   if command -v kiro-cli >/dev/null 2>&1; then
     ( try_panel "$SLOT/$tag.md" "$SLOT/$tag.err" \
         timeout "$T" kiro-cli --v3 chat "$KIRO_MSG" --model "$m" \
-        --no-interactive --trust-tools=read,grep --wrap never ) &
+        --no-interactive --trust-tools= --wrap never ) &
   else echo "[skip] $tag (binary absent)" >&2; : > "$SLOT/$tag.md"; fi
 done
 
