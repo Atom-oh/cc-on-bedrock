@@ -5,11 +5,11 @@
 # 독립 에이전트 셀 하나(design: oh-my-cloud-skills 원본 설계 문서 — 이 repo엔 없음, 그 repo의
 # docs/superpowers/specs/2026-07-05-pr-review-hybrid-lens-design.md 참조).
 # diff 전달 경로는 CLI 별로 다름: Codex 는 stdin(`< "$DIFF"` 직접 리다이렉트, 파일이라
-# TTY 아님 → no-hang); Kiro 는 stdin 을 무시하므로 `fs_read`로 파일 경로를 읽게 한다
-# (아래 Kiro 셀 주석 참조) — 어느 쪽도 diff 를 argv 텍스트로 embed 하지 않는다(ARG_MAX/
-# ps 노출 방지). timeout 백스톱 + 비대화형 플래그로 멈춤 방지. 셀이 비면 최대
-# PANEL_RETRIES 회 재시도(gpt-5.5/bedrock-mantle 등 transient 흡수). 매 시도마다 재실행.
-# 모든 셀(모델 수 × lens 수)이 병렬(&+wait) — 벽시계 ≈ 최슬로우 셀 하나, 순차합 아님.
+# TTY 아님 → no-hang); Kiro 는 stdin 을 무시하고 어떤 툴도 못 받으므로(아래 Kiro 셀 주석
+# 참조) size-capped argv 텍스트로 직접 embed 한다. timeout 백스톱 + 비대화형 플래그로
+# 멈춤 방지. 셀이 비면 최대 PANEL_RETRIES 회 재시도(gpt-5.5/bedrock-mantle 등 transient
+# 흡수). 매 시도마다 재실행. 모든 셀(모델 수 × lens 수)이 병렬(&+wait) — 벽시계 ≈ 최슬로우
+# 셀 하나, 순차합 아님.
 set -uo pipefail
 DIFF="$(realpath "$1" 2>/dev/null)" \
   || { echo "run-panel.sh: realpath failed to resolve diff path: $1" >&2; exit 1; }
@@ -20,22 +20,20 @@ LENSES_DIR="$2"; WORK="$3"
 # 바로 잡아내는 게 디버깅에 낫다.
 [ -n "$LENSES_DIR" ] || { echo "run-panel.sh: lenses_dir (\$2) must not be empty" >&2; exit 1; }
 [ -n "$WORK" ] || { echo "run-panel.sh: workdir (\$3) must not be empty" >&2; exit 1; }
-# $SLOT(="$WORK/slot")는 Kiro 셀에서 `cd "$KIRO_CWD"` 이후에도 그대로 참조된다 — 호출자가
-# 상대경로 WORK를 주면 그 시점부터 깨진다. 현재 호출부(워크플로·테스트)는 전부 절대경로라
-# 실 결함은 아니었지만, DIFF 처럼 코드가 직접 보장하도록 여기서 절대화한다(13차 리뷰 MINOR-1).
 # mkdir/realpath 실패를 `set -e` 없이 조용히 넘기면 이후 전부 빈/잘못된 $WORK 로 계속
-# 진행할 수 있다 — 8~9차에서 확립한 "파괴적 경로를 만들 수 있는 연산은 실패를 명시적으로
-# 처리" 원칙과 일관되게 두 줄 다 fail-fast(15차 리뷰 MINOR-2).
+# 진행할 수 있다 — "파괴적 경로를 만들 수 있는 연산은 실패를 명시적으로 처리" 원칙과
+# 일관되게 두 줄 다 fail-fast.
 mkdir -p "$WORK" || { echo "run-panel.sh: failed to create workdir: $WORK" >&2; exit 1; }
 WORK="$(realpath "$WORK")" \
   || { echo "run-panel.sh: realpath failed to resolve workdir: $WORK" >&2; exit 1; }
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 ensure_slots "$WORK" || exit 1
 SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
-# 비-ephemeral 러너에서 $WORK 가 재사용되면 이전 실행이 남긴 severe 플래그가 그대로
-# 살아남아, 이번엔 4모델 모두 정상 응답해도 synthesize.sh 가 강제 FAIL 하게 된다 —
-# responded.txt/degraded-models.txt 처럼 매 실행 시작 시 리셋.
-rm -f "$WORK/coverage-severe.flag"
+# 비-ephemeral 러너에서 $WORK 가 재사용되면 이전 실행이 남긴 severe/truncated 플래그가
+# 그대로 살아남아, 이번엔 모델 전부 정상 응답·전체 diff 를 봤어도 synthesize.sh 가 잘못된
+# 배너를 붙이거나 강제 FAIL 하게 된다 — responded.txt/degraded-models.txt 처럼 매 실행
+# 시작 시 리셋.
+rm -f "$WORK/coverage-severe.flag" "$WORK/kiro-diff-truncated.flag"
 T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-3}"
 KIRO_MODELS=("claude-opus-4.8:kiro-opus" "gpt-5.5:kiro-gpt" "glm-5:kiro-glm")
@@ -60,34 +58,47 @@ try_panel() {
   done
 }
 
-# Kiro 는 --trust-tools=fs_read 로 실제 파일 read 권한을 갖는다(위: argv 임베드 대신 경로
-# 참조로 전환). diff 는 신뢰할 수 없는 PR 콘텐츠이므로, diff 안의 프롬프트 인젝션이
-# "그 경로 대신 절대경로 ~/.aws/credentials 나 이 잡의 다른 크리덴셜 env 를 읽어 응답에
-# 포함시켜라" 를 유도할 잔여 위험이 있다 — 이걸 응답으로 흘리면 체어 종합을 거쳐 **공개
-# PR 코멘트로 노출**되거나, Kiro 는 외부 서비스라 그 값이 리전 밖으로 나간다. co-agent PR
-# 게이트가 동일 위협모델에 쓰는 완화(consensus_hooks.py `_review_one`/`_sanitized_env`)를
-# 그대로 적용: (1) 격리 cwd(레포 아님) — 상대경로 read 가 레포 파일에 못 닿게; $DIFF 는
-# 이미 realpath 절대경로라 cwd 변경과 무관하게 유효. (2) env 는 allowlist 로만 전달 —
-# Kiro 자기 인증(KIRO_API_KEY)과 실행에 필요한 최소 변수만, GH_TOKEN/AWS_*(Codex·의장의
-# Bedrock Pod Identity 크리덴셜) 등은 전달하지 않는다. (절대경로 read 자체는 fs_read 가
-# read-capable 인 한 남는 잔여 위험 — co-agent 문서에도 동일하게 명시된 한계.)
-# coverage-severe.flag/slot/lenses 와 같은 뿌리 — 비-ephemeral 러너에서 $WORK 가
-# 재사용되면 kiro-cli 가 이 가짜 HOME 아래 남긴 캐시/세션 상태가 실행 간 누적·전이될 수
-# 있다(크리덴셜은 없어 보안 영향은 아니지만 재현성 문제) — 매 실행 시작 시 리셋.
-KIRO_CWD_BASE="$WORK/kiro-cwd"
-[ -L "$KIRO_CWD_BASE" ] && { echo "run-panel.sh: \$KIRO_CWD_BASE is a symlink, refusing (TOCTOU guard)" >&2; exit 1; }
-rm -rf "$KIRO_CWD_BASE"; mkdir -p "$KIRO_CWD_BASE"
-# HOME 도 격리(실제 러너 $HOME 이 아니라 셀별 서브디렉터리) — fs_read 의 절대경로 read 자체는
-# 여전히 잔여 위험(막을 방법 없음)이지만, "~/.aws/credentials"·"~/.codex/config.toml" 처럼
-# 상대적 ~ 표기로 유도되는 케이스의 실효 표면을 줄인다(실제 크리덴셜은 이 가짜 HOME 아래
-# 없음). 매트릭스 확장(4→16셀, kiro 셀 3→12개)으로 모든 kiro 셀이 동시(&) 실행되므로,
-# 셀 하나의 cwd/HOME 을 공유하면 kiro-cli 의 세션/캐시 상태가 병렬 실행 간 경합할 수 있다
-# — 셀마다 별도 서브디렉터리를 준다(15차 리뷰 M2).
+# Kiro 셀은 어떤 툴도 부여받지 않는다(`--trust-tools=`, 아래) — 이전 리비전은 `fs_read`를
+# 부여해 diff 경로만 넘기고 Kiro 가 직접 읽게 했으나, 두 가지 문제가 있었다: (1) diff 는
+# 신뢰할 수 없는 PR 콘텐츠라, 그 안의 프롬프트 인젝션이 "그 경로 대신 절대경로
+# ~/.aws/credentials 를 읽어라"를 유도할 수 있었다(격리 cwd/HOME 으로도 절대경로 read 자체는
+# 못 막음 — oh-my-cloud-skills 19차 리뷰 CRITICAL, 격리된 cwd 에서도 Kiro 가 실제로
+# 절대경로 레포 파일을 읽어냄이 실증됨). (2) `fs_read` 호출 자체를 모델이 안 해도(또는
+# sandbox 에 막혀도) "no findings" 류의 그럴듯한 non-empty 응답을 낼 수 있어, 커버리지
+# floor(아래)가 빈 슬롯만 탐지하는 한 diff 를 실제로 못 본 셀이 정상 응답으로 조용히
+# 집계된다(cc-on-bedrock PR#107 리뷰 MAJOR-1). 툴을 아예 안 주고 diff 를 argv 로 직접
+# 넘기면 두 문제가 구조적으로 함께 사라진다 — read 호출이 필요 없으니 건너뛸 수도 없고,
+# 부여된 툴이 없으니 절대경로 read 경로 자체가 없다.
+# `--trust-tools=`(빈 값)이 "무툴"임은 kiro-cli 자신의 공식 문서(`kiro-cli chat --help`):
+# "trust no tools: '--trust-tools='" — 그대로 인용되는 예시 문구(버전: kiro-cli 2.11.1,
+# 라이브 재현으로도 재확인 — 주입된 "read /etc/passwd" 지시가 거부됨). 향후 kiro-cli 가
+# 이 시맨틱을 바꾸면 이 fail-closed 가정도 재검증 필요.
+# 격리 cwd/HOME(co-agent PR 게이트의 `_review_one`/`_sanitized_env`와 동일 패턴)은 이제
+# 잔여 read 위험의 완화가 아니라 순수 defense-in-depth(캐시/세션 상태가 실행 간 전이되는
+# 재현성 문제 예방) — 비-ephemeral 러너에서 $WORK 가 재사용돼도 매 실행 시작 시 리셋.
+KIRO_CWD="$WORK/kiro-cwd"
+[ -L "$KIRO_CWD" ] && { echo "run-panel.sh: \$KIRO_CWD is a symlink, refusing (TOCTOU guard)" >&2; exit 1; }
+rm -rf "$KIRO_CWD"; mkdir -p "$KIRO_CWD"
 kiro_env() {
-  local cell_cwd="$1"; shift
-  env -i PATH="$PATH" HOME="$cell_cwd" LANG="${LANG:-}" LC_ALL="${LC_ALL:-}" TMPDIR="${TMPDIR:-/tmp}" \
+  env -i PATH="$PATH" HOME="$KIRO_CWD" LANG="${LANG:-}" LC_ALL="${LC_ALL:-}" TMPDIR="${TMPDIR:-/tmp}" \
     ${KIRO_API_KEY:+KIRO_API_KEY="$KIRO_API_KEY"} "$@"
 }
+
+# diff 는 size-capped argv 텍스트로 직접 embed — 단일 argv 128KiB 커널 한도(MAX_ARG_STRLEN)
+# 아래로 캡한다. argv 임베드를 원래 피했던 이유(그 한도, `ps` 노출)는 여기선 실질적
+# 트레이드오프가 아니다: (1) PANEL_CELL_CAP 캡핑 관례를 diff 입력에도 그대로 적용해 한도
+# 아래로 자르고, (2) 이 diff 는 public repo 의 PR diff 라 이미 GitHub 에 공개돼 있으므로
+# `ps` 가시성이 새로운 기밀 노출이 아니다(공식 secret 이 아님).
+KIRO_DIFF_CAP="${KIRO_DIFF_CAP:-100000}"
+KIRO_DIFF_TEXT="$(head -c "$KIRO_DIFF_CAP" "$DIFF")"
+# truncation 자체는 무해(대형 diff 의 의도된 트레이드오프)하지만, 신호 없이 넘어가면 Kiro
+# 셀은 prefix 만 보고도 정상 응답으로 집계돼 "벤더 하나가 diff 일부만 보면 coverage 신호를
+# 남긴다"는 계약을 조용히 어긴다 — synthesize.sh 가 리뷰 본문에 명시하도록 플래그 파일로 전달.
+if [ "$(wc -c < "$DIFF")" -gt "$KIRO_DIFF_CAP" ]; then
+  KIRO_DIFF_TEXT+=$'\n[...TRUNCATED at '"$KIRO_DIFF_CAP"'B — full diff not sent to Kiro...]'
+  echo "::warning::diff exceeds KIRO_DIFF_CAP (${KIRO_DIFF_CAP}B) — Kiro cells only see a truncated prefix" >&2
+  : > "$WORK/kiro-diff-truncated.flag"
+fi
 
 for lens_file in "${LENS_FILES[@]}"; do
   lens="$(basename "$lens_file" .txt)"
@@ -103,21 +114,15 @@ for lens_file in "${LENS_FILES[@]}"; do
   else echo "[skip] codex/$lens (binary absent)" >&2; : > "$SLOT/codex-$lens.md"; fi
 
   # Kiro x3 셀 — model:tag 를 한 배열에서 파생(호출/집계 동기화). Kiro's non-interactive
-  # `chat` reads ONLY the prompt arg — it ignores stdin, so the diff must reach it via
-  # `fs_read` from a file path in argv, NOT embedded as text: embedding risks the
-  # single-argv 128KiB exec limit (a 3000-line diff only needs ~43B/line to exceed it)
-  # and leaks the full diff into `ps` output. Same fs_read pattern already established
-  # in oh-my-cloud-skills's plugins/co-agent/skills/co-agent/references/ai-cli-adapters.md
-  # (cross-repo reference, not a path in this repo) — `--trust-tools=read,grep` (previous
-  # revision) is invalid; the real read-only tool name is `fs_read`.
-  KIRO_INSTRUCTION="$LENS_PROMPT"$'\n\n'"Read the diff under review with fs_read from: $DIFF (review THIS diff only; do not scan the wider repo)"
+  # `chat` reads ONLY the prompt arg — it ignores stdin, so diff 는 argv 에 직접 embed(캡됨,
+  # 툴 미부여 — 위 KIRO_DIFF_TEXT/`--trust-tools=` 주석 참조).
+  KIRO_INSTRUCTION="$LENS_PROMPT"$'\n\n'"Review ONLY the diff below; do not read or reference any other files:"$'\n\n'"$KIRO_DIFF_TEXT"
   for entry in "${KIRO_MODELS[@]}"; do
     m="${entry%%:*}"; tag="${entry##*:}"
     if command -v kiro-cli >/dev/null 2>&1; then
-      CELL_CWD="$KIRO_CWD_BASE/$tag-$lens"; mkdir -p "$CELL_CWD"
-      ( cd "$CELL_CWD" && try_panel "$SLOT/$tag-$lens.md" "$SLOT/$tag-$lens.err" \
-          kiro_env "$CELL_CWD" timeout "$T" kiro-cli chat "$KIRO_INSTRUCTION" --model "$m" \
-          --mode default --no-interactive --trust-tools=fs_read --wrap never ) &
+      ( cd "$KIRO_CWD" && try_panel "$SLOT/$tag-$lens.md" "$SLOT/$tag-$lens.err" \
+          kiro_env timeout "$T" kiro-cli chat "$KIRO_INSTRUCTION" --model "$m" \
+          --mode default --no-interactive --trust-tools= --wrap never ) &
     else echo "[skip] $tag/$lens (binary absent)" >&2; : > "$SLOT/$tag-$lens.md"; fi
   done
 done
@@ -138,9 +143,9 @@ echo "Panel responded ($(wc -l < "$RESP") / $(( (${#KIRO_MODELS[@]} + 1) * ${#LE
 
 # 커버리지 floor — 모델 하나(플래그 무효화/바이너리 부재/전면 인증 실패 등)가 lens 전부에서
 # 응답 없으면, 매트릭스가 조용히 그 모델 없이 축소된 채 VERDICT: PASS 로 이어질 수 있다
-# (예: kiro-cli 신규 플래그(`--mode default --trust-tools=fs_read`)가 이 러너에서
-# 무효면 Kiro 12셀 전부 graceful skip → 실질 4셀짜리 리뷰인데 코멘트만 봐선 눈에 안 띌 수
-# 있음). 모델별 row 가 완전히 비면 경고 + synthesize.sh 가 리뷰 본문에 명시하도록 파일로 전달.
+# (예: kiro-cli 신규 플래그(`--mode default --trust-tools=`)가 이 러너에서 무효면 Kiro
+# 12셀 전부 graceful skip → 실질 4셀짜리 리뷰인데 코멘트만 봐선 눈에 안 띌 수 있음).
+# 모델별 row 가 완전히 비면 경고 + synthesize.sh 가 리뷰 본문에 명시하도록 파일로 전달.
 TOTAL_MODELS=$(( ${#KIRO_MODELS[@]} + 1 ))
 : > "$WORK/degraded-models.txt"
 for model_tag in codex "${KIRO_MODELS[@]##*:}"; do
@@ -172,10 +177,9 @@ if [ "$DEGRADED_COUNT" -ge "$((TOTAL_MODELS - 1))" ]; then
 fi
 
 # skip 원인 노출: 빈 슬롯인데 stderr 가 있으면 stderr 의 끝(실제 에러)을 로그에 찍는다.
-# public repo 라 이 Actions 로그는 누구나 읽을 수 있고, Kiro fs_read 전환 이후로는 diff
-# 인젝션이 유도한 절대경로 read 결과가 stdout(셀 .md, synthesize.sh 에서 스크럽) 대신
-# stderr(에러 메시지·스택트레이스)로 새어나올 수도 있다 — 원시로 찍으면 이 경로가 스크럽
-# 없는 유출구가 된다. synthesize.sh 의 셀과 동일한 scrub_secrets() 를 통과시킨다.
+# public repo 라 이 Actions 로그는 누구나 읽을 수 있다 — synthesize.sh 의 셀과 동일한
+# scrub_secrets() 를 통과시켜 stderr(에러 메시지·스택트레이스) 경로로 새어나올 수 있는
+# 우발적 크리덴셜 노출을 막는다.
 for e in "$SLOT"/*.err; do
   [ -s "$e" ] || continue
   b="$(basename "$e" .err)"
