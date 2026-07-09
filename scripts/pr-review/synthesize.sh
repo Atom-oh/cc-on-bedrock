@@ -180,22 +180,36 @@ fi
 # truncation + codex degraded 조합은 soft 배너만 붙이면 diff 뒷부분을 아무 모델도 못 본
 # 채 PASS 가 나갈 수 있다(cc-on-bedrock PR#107 리뷰 M3, chair 코드 확인으로 CONFIRMED) —
 # "살아남은 벤더 ≤1"과 동등하므로 coverage-severe.flag 와 동일하게 fail-closed 취급한다.
+# 이 repo 는 워크플로 단계에서 이미 MAX_LINES=3000 으로 pre-truncate 하고(그 경로는
+# soft 배너만), 코드 diff 는 ~33B/line 만 넘어도 3000줄 ≈ KIRO_DIFF_CAP(100KB) 를 넘는다
+# — "무조건 강제 FAIL"을 여기 걸면 조밀한 정상 PR 이 내용과 무관하게 상시 차단된다(이 PR
+# 자체가 도입한 게이트 정책 결함, cc-on-bedrock PR#107 리뷰 M1/M2, diff 대조 CONFIRMED —
+# security-ops PR#8 은 MAX_LINES 가 12000 로 훨씬 높고 다른 soft-truncation 경로가 없어
+# 같은 강제 FAIL 이 적절했지만, 그 정책을 이 repo 에 그대로 복제한 게 이 결함의 원인).
+# codex 가 건강하면 여전히 그 벤더가 뒷부분을 리뷰하므로(≥1 벤더 커버리지), workflow 의
+# line-truncation 과 동일하게 soft 배너로 그친다 — codex 마저 degraded 여야(=벤더 0) 이
+# 세그먼트가 진짜 무검증이므로 그때만 coverage-severe 와 동일하게 강제 FAIL.
 if [ -f "$WORK/kiro-diff-truncated.flag" ]; then
-  TAIL_COVERAGE="codex 는 전체 diff 를 봤으므로 뒷부분 이슈는 codex 단일 벤더 커버리지."
-  if [ -s "$WORK/degraded-models.txt" ] && grep -qx codex "$WORK/degraded-models.txt"; then
-    TAIL_COVERAGE="codex 도 이 실행에서 degraded — diff 뒷부분(cap 이후)을 어떤 모델도 보지 않았을 수 있음."
+  CODEX_TRUNC_DEAD=0
+  [ -s "$WORK/degraded-models.txt" ] && grep -qx codex "$WORK/degraded-models.txt" && CODEX_TRUNC_DEAD=1
+  if [ "$CODEX_TRUNC_DEAD" -eq 1 ]; then
+    if grep -q '^VERDICT:' "$OUT"; then
+      TAC_TMP="$(tac "$OUT" | sed '0,/^VERDICT:/d' | tac)"
+      printf '%s\n' "$TAC_TMP" > "$OUT"
+    fi
+    {
+      echo "🛑 **Kiro diff truncated + codex degraded — 강제 FAIL**: diff 가 KIRO_DIFF_CAP 을 초과해 Kiro 셀은 앞부분만 리뷰했고, codex 도 이 실행에서 degraded 라 diff 뒷부분(cap 이후)을 어떤 모델도 보지 않았다 — 살아남은 벤더가 0개라 체어의 판정과 무관하게 fail-closed."
+      echo ""
+      cat "$OUT"
+      echo ""
+      echo "VERDICT: FAIL"
+    } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+  else
+    { echo "✂️ **Kiro diff truncated**: diff 가 KIRO_DIFF_CAP 을 초과해 Kiro 셀은 앞부분만 리뷰함 — codex 는 전체 diff 를 봤으므로 뒷부분 이슈는 codex 단일 벤더 커버리지."
+      echo ""
+      cat "$OUT"
+    } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
   fi
-  if grep -q '^VERDICT:' "$OUT"; then
-    TAC_TMP="$(tac "$OUT" | sed '0,/^VERDICT:/d' | tac)"
-    printf '%s\n' "$TAC_TMP" > "$OUT"
-  fi
-  {
-    echo "🛑 **Kiro diff truncated — 강제 FAIL**: diff 가 KIRO_DIFF_CAP 을 초과해 Kiro 셀은 앞부분만 리뷰함 — $TAIL_COVERAGE cap 이후 구간은 살아남은 벤더가 1개 이하인 것과 동등해 lens×model 교차확인이 성립하지 않으므로, PR 작성자가 diff 크기로 리뷰를 회피하지 못하도록 체어의 판정과 무관하게 fail-closed."
-    echo ""
-    cat "$OUT"
-    echo ""
-    echo "VERDICT: FAIL"
-  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
 # 심각도 상향(run-panel.sh 의 coverage-severe.flag) — degraded 모델이 (전체-1)개 이상이면
