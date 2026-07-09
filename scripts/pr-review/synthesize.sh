@@ -123,6 +123,12 @@ esac ; }
 
 run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
+  # 잔여 위험(cc-on-bedrock PR#107 리뷰 M3): Kiro 셀은 `--trust-tools=` 로 무툴화해
+  # "diff 인젝션 → 절대경로 read → 공개 유출" 체인을 구조적으로 끊었지만, 이 chair 호출은
+  # tool 제한이 없다(headless 기본은 read 계열 도구를 허용) — 대칭이 아니다. `scrub_secrets`
+  # 는 알려진 크리덴셜 포맷만 잡는 last-line-of-defense 라 완전한 방어는 아니다. 강한 제한
+  # (`--disallowedTools`)은 AWS-Demo-Platform 의 chair 가 의도적으로 read 계열 도구로 diff
+  # 대조 검증을 수행하는 것과 충돌할 수 있어 이 PR 범위에서는 보류 — 잔여 위험만 문서화.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
     < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT" || true
@@ -148,8 +154,15 @@ if ! chair_valid && [ "$CHAIR_FALLBACK_MODEL" != "$CHAIR_PRIMARY_MODEL" ]; then
   # 빠져 있었다 — claude CLI 에러 메시지에 credential/env 정보가 섞이면 public Actions
   # 로그로 그대로 새는 경로였다(cc-on-bedrock PR#107 리뷰 M4). scrub 을 head -c 뒤에 걸면
   # 500B 경계에서 시크릿이 반토막 나 정규식 미매칭으로 통과할 수 있다 — 전체를 먼저
-  # scrub 하고 그 결과를 자른다(ttobak PR#104 리뷰).
-  CHAIR_ERR_EXCERPT="$(scrub_secrets < "$WORK/chair.err" 2>/dev/null | head -c 500)"
+  # scrub 하고 그 결과를 자른다(ttobak PR#104 리뷰). 단, scrub_secrets 결과를 파이프로
+  # head 에 바로 넘기면 head 가 500B 만 읽고 먼저 종료할 때 upstream awk/sed 가 SIGPIPE
+  # 를 받고 `set -euo pipefail` 하에서 그 command substitution 실패가 스크립트 전체를
+  # 죽인다 — 바로 이 fallback 경로(그리고 그 아래 최종 fail-closed 코멘트 생성)가 스킵
+  # 되는 최악의 타이밍이 된다(cc-on-bedrock PR#107 리뷰 M1). 패널 셀 처리와 동일하게
+  # 파일 기반으로 받는다.
+  scrub_secrets < "$WORK/chair.err" 2>/dev/null > "$WORK/chair-err-scrubbed.tmp" || true
+  CHAIR_ERR_EXCERPT="$(head -c 500 "$WORK/chair-err-scrubbed.tmp" 2>/dev/null)"
+  rm -f "$WORK/chair-err-scrubbed.tmp"
   echo "::warning::chair '$(chair_label "$CHAIR_PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $CHAIR_ERR_EXCERPT — falling back to '$(chair_label "$CHAIR_FALLBACK_MODEL")'"
   run_chair "$CHAIR_FALLBACK_MODEL"
   if chair_valid; then

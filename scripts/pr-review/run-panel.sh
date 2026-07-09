@@ -20,6 +20,13 @@ LENSES_DIR="$2"; WORK="$3"
 # 바로 잡아내는 게 디버깅에 낫다.
 [ -n "$LENSES_DIR" ] || { echo "run-panel.sh: lenses_dir (\$2) must not be empty" >&2; exit 1; }
 [ -n "$WORK" ] || { echo "run-panel.sh: workdir (\$3) must not be empty" >&2; exit 1; }
+# ensure_slots() 의 `[ -L "$1" ]` 가드는 $WORK 를 인자로 받는데, 그 시점의 $WORK 는 이미
+# realpath 를 거친 뒤라 symlink 가 전부 resolve 돼 있다 — 즉 그 가드는 이 호출 경로에서
+# 절대 발동하지 않는 dead code 다(cc-on-bedrock PR#107 리뷰 M2, chair 코드 대조 확인).
+# realpath 이전, 호출자가 넘긴 원래 경로에서 심링크를 검사해야 의미가 있다 — 완전한
+# TOCTOU 방지는 아니지만(check 와 mkdir/realpath 사이 윈도우는 남음), "인자로 받은 경로가
+# 처음부터 심링크였다"는 흔한 경우는 여기서 잡는다.
+[ -L "$WORK" ] && { echo "run-panel.sh: \$WORK ($WORK) is a symlink, refusing (TOCTOU guard, checked before realpath resolves it away)" >&2; exit 1; }
 # mkdir/realpath 실패를 `set -e` 없이 조용히 넘기면 이후 전부 빈/잘못된 $WORK 로 계속
 # 진행할 수 있다 — "파괴적 경로를 만들 수 있는 연산은 실패를 명시적으로 처리" 원칙과
 # 일관되게 두 줄 다 fail-fast.
