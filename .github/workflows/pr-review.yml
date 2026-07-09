@@ -73,9 +73,9 @@ jobs:
           COMMON="Review ONLY the diff under review for this PR, in this repo (AWS Bedrock
           기반 멀티유저 Claude Code 개발환경 플랫폼, Terraform-only IaC). The diff reaches you
           one of two ways depending on your tool: it is either piped to your stdin directly,
-          or your instructions below tell you to read it via a file-read tool from an
-          absolute path — whichever applies to you, that IS the diff under review; do not
-          expect any other delivery format.
+          or embedded inline below in your instructions (Kiro cells: no file-read tool is
+          granted — the diff text is inline, not a path to read) — whichever applies to
+          you, that IS the diff under review; do not expect any other delivery format.
           Stay inside your assigned lens below — do not comment on other lenses (other
           agents cover those independently). Output concise findings grouped
           CRITICAL/MAJOR/MINOR. DO NOT output a VERDICT line — that is the chair's job.
