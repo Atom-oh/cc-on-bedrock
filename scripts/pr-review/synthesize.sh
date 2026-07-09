@@ -144,7 +144,11 @@ CHAIR_USED="$CHAIR_PRIMARY_MODEL"
 # PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면 재시도는 동일 호출을 그대로
 # 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
 if ! chair_valid && [ "$CHAIR_FALLBACK_MODEL" != "$CHAIR_PRIMARY_MODEL" ]; then
-  echo "::warning::chair '$(chair_label "$CHAIR_PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair.err" 2>/dev/null) — falling back to '$(chair_label "$CHAIR_FALLBACK_MODEL")'"
+  # panel/chair stdout 은 scrub_secrets 를 통과시키는데 이 fallback 경고의 stderr 발췌만
+  # 빠져 있었다 — claude CLI 에러 메시지에 credential/env 정보가 섞이면 public Actions
+  # 로그로 그대로 새는 경로였다(cc-on-bedrock PR#107 리뷰 M4).
+  CHAIR_ERR_EXCERPT="$(head -c 500 "$WORK/chair.err" 2>/dev/null | scrub_secrets)"
+  echo "::warning::chair '$(chair_label "$CHAIR_PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $CHAIR_ERR_EXCERPT — falling back to '$(chair_label "$CHAIR_FALLBACK_MODEL")'"
   run_chair "$CHAIR_FALLBACK_MODEL"
   if chair_valid; then
     CHAIR_USED="$CHAIR_FALLBACK_MODEL"
@@ -173,10 +177,24 @@ fi
 # 셀에 prefix 만 전달된다(argv 커널 한도 회피, 의도된 트레이드오프). truncation 은 VERDICT
 # 를 강제하진 않되(codex 가 여전히 전체 diff 를 봄) 신호 없이 넘기면 "Kiro 셀이 diff 뒷부분은
 # 못 본 채 정상 응답으로 집계됐다"는 사실이 리뷰에서 안 보인다.
+# truncation + codex degraded 조합은 soft 배너만 붙이면 diff 뒷부분을 아무 모델도 못 본
+# 채 PASS 가 나갈 수 있다(cc-on-bedrock PR#107 리뷰 M3, chair 코드 확인으로 CONFIRMED) —
+# "살아남은 벤더 ≤1"과 동등하므로 coverage-severe.flag 와 동일하게 fail-closed 취급한다.
 if [ -f "$WORK/kiro-diff-truncated.flag" ]; then
-  { echo "✂️ **Kiro diff truncated**: diff 가 KIRO_DIFF_CAP 을 초과해 Kiro 셀은 앞부분만 리뷰함 — codex 는 전체 diff 를 봤으므로 뒷부분 이슈는 codex 단일 벤더 커버리지."
+  TAIL_COVERAGE="codex 는 전체 diff 를 봤으므로 뒷부분 이슈는 codex 단일 벤더 커버리지."
+  if [ -s "$WORK/degraded-models.txt" ] && grep -qx codex "$WORK/degraded-models.txt"; then
+    TAIL_COVERAGE="codex 도 이 실행에서 degraded — diff 뒷부분(cap 이후)을 어떤 모델도 보지 않았을 수 있음."
+  fi
+  if grep -q '^VERDICT:' "$OUT"; then
+    TAC_TMP="$(tac "$OUT" | sed '0,/^VERDICT:/d' | tac)"
+    printf '%s\n' "$TAC_TMP" > "$OUT"
+  fi
+  {
+    echo "🛑 **Kiro diff truncated — 강제 FAIL**: diff 가 KIRO_DIFF_CAP 을 초과해 Kiro 셀은 앞부분만 리뷰함 — $TAIL_COVERAGE cap 이후 구간은 살아남은 벤더가 1개 이하인 것과 동등해 lens×model 교차확인이 성립하지 않으므로, PR 작성자가 diff 크기로 리뷰를 회피하지 못하도록 체어의 판정과 무관하게 fail-closed."
     echo ""
     cat "$OUT"
+    echo ""
+    echo "VERDICT: FAIL"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
