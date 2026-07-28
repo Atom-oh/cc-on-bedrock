@@ -17,6 +17,11 @@ jobs:
     name: AI Code Review
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: cc-on-bedrock-claude-arm
+    # 행 백스톱: GitHub 기본값은 360분(6시간)이라 스크립트 내부 timeout 이 못 덮는 구간
+    # (gh pr diff, npm fallback, 패널 wait 등)에서 멈추면 러너 파드가 6시간 잡힌다.
+    # 정상 상한은 패널 PANEL_TIMEOUT×PANEL_RETRIES + 의장 CHAIR_TIMEOUT×2 ≈ 35분이므로
+    # 45분이면 정상 실행을 자르지 않고 행만 끊는다.
+    timeout-minutes: 45
     concurrency:
       group: pr-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
