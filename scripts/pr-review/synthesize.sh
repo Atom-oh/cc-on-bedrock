@@ -108,7 +108,7 @@ PROMPT_EOF
 # 전용 CHAIR_PRIMARY_MODEL/CHAIR_FALLBACK_MODEL 로 완전히 분리(claude-code-usage-dashboard
 # 와 동일 패턴).
 CHAIR_PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
-CHAIR_FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-4-8}"
+CHAIR_FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
 # CHAIR_TIMEOUT 600s (oh-my-cloud-skills #105 실측 근거 재사용): 같은 러너 이미지/서비스
 # 어카운트를 쓰는 ttobak 에서, 타임아웃 없는 구(4-패널) 버전 스크립트가 357줄 diff 종합에
 # 286초를 정상적으로 썼다. 매트릭스(4→16 패널 출력)는 체어 입력이 더 커 286s 실측조차
@@ -117,7 +117,7 @@ CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-600}"
 
 chair_label() { case "$1" in
   *fable-5*)  echo "Claude Fable 5" ;;
-  *opus-4-8*) echo "Claude Opus 4.8" ;;
+  *opus-5*)   echo "Claude Opus 5" ;;
   *)          echo "$1" ;;
 esac ; }
 
