@@ -67,7 +67,7 @@ L2=Terraform/배포 정확성, L3=보안, L4=코드 정확성, L5=문서/ADR 일
 Synthesize ONE final review, grouped by lens (L2/L3/L4/L5):
 1. **Summary** (2-3문장, 한국어)
 2. **Issues per lens** — CRITICAL/MAJOR/MINOR. 같은 lens 를 본 여러 모델 간 합의/이견을 표시
-   (예: "3/4 모델 CRITICAL 지적, 1/4 미언급"). 서로 다른 모델이 독립적으로 같은 finding에
+   (예: "2/3 모델 CRITICAL 지적, 1/3 미언급"). 서로 다른 모델이 독립적으로 같은 finding에
    도달했으면 신호가 강하다고 명시하되, 합의 자체를 증거로 취급하지 말고 diff와 대조해 확인하라
    (공유 학습 편향으로 여러 모델이 같은 오탐에 도달할 수 있음).
 3. **Suggestions**

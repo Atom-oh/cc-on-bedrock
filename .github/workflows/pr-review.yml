@@ -1,10 +1,10 @@
 name: AI Code Review
 
-# PR마다 lens×모델 매트릭스 패널(Codex + Kiro x3, L2~L5 각 lens 독립 에이전트, 4모델×4lens=
-# 16셀)이 리뷰하고 Claude 의장(primary/fallback)이 lens별로 종합해 코멘트로 게시
+# PR마다 lens×모델 매트릭스 패널(Codex + Kiro x2, L2~L5 각 lens 독립 에이전트, 3모델×4lens=
+# 12셀)이 리뷰하고 Claude 의장(primary/fallback)이 lens별로 종합해 코멘트로 게시
 # (fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
 #   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
-#   - 매트릭스 fan-out: scripts/pr-review/run-panel.sh(4모델×4lens=16셀) → synthesize.sh
+#   - 매트릭스 fan-out: scripts/pr-review/run-panel.sh(3모델×4lens=12셀) → synthesize.sh
 #   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO)
 #   - 리전: us-east-1 (Claude us. geo / codex gpt-5.6-sol bedrock-mantle In-Region)
 
