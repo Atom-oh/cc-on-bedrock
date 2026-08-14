@@ -43,8 +43,8 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 rm -f "$WORK/coverage-severe.flag" "$WORK/kiro-diff-truncated.flag"
 T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-3}"
-# glm-5(kiro-glm) 는 로스터에서 제외 — AWS-Demo-Platform PR#88 리뷰에서 이 모델만 4건의
-# 오탐을 냈다(ADR-015). 되살릴 때는 오탐률을 먼저 재측정할 것.
+# glm-5(kiro-glm) 는 로스터에서 제외 — AWS-Demo-Platform 저장소의 PR#88 리뷰에서 이 모델만
+# 4건의 오탐을 냈다(AWS-Demo-Platform 저장소의 ADR-015). 되살릴 때는 오탐률을 먼저 재측정할 것.
 KIRO_MODELS=("claude-opus-5:kiro-opus" "gpt-5.6-terra:kiro-gpt")
 
 shopt -s nullglob
