@@ -75,7 +75,7 @@ devenvInstanceType: string;     // 기본 instance type (t4g.large)
 | 3 | Lambda subdomain 추출 | `resolve_user_from_arn()` → `USER#{subdomain}` |
 | 4 | budget-check deny policy 부착 | per-user role에 deny policy 확인 |
 | 5 | 중복 subscription filter 정리 | 2개 → 1개 |
-| 6 | model ID 정규화 | ARN → `claude-sonnet-4-6` short name |
+| 6 | model ID 정규화 | ARN → `claude-sonnet-5` short name |
 
 ---
 
@@ -393,7 +393,7 @@ Admin 승인 →
 | T-4 | DynamoDB 기록 | Lambda → DynamoDB | `USER#{subdomain}` 레코드, inputTokens/outputTokens > 0 | `aws dynamodb query --key-condition-expression "PK = :pk"` |
 | T-5 | 비용 계산 | DynamoDB estimatedCost | $0 아닌 값 | DynamoDB 레코드 확인 |
 | T-6 | Dashboard 표시 | `/user` Environment 탭 "오늘 사용량" | 토큰 수 > 0, 비용 > $0 | UI 확인 |
-| T-7 | model ID 정규화 | DynamoDB SK 필드 | `2026-04-08#claude-sonnet-4-6` ("arn" 아님) | DynamoDB scan |
+| T-7 | model ID 정규화 | DynamoDB SK 필드 | `2026-04-08#claude-sonnet-5` ("arn" 아님) | DynamoDB scan |
 | T-8 | 비-cc-on-bedrock 필터 | 다른 역할의 Bedrock 호출 | DynamoDB에 기록 안 됨 | Lambda 로그 "Skipping non-cc-on-bedrock role" |
 | T-9 | Admin 토큰 페이지 | `/admin/tokens` | 사용자별 토큰/비용 표시 | UI 확인 |
 

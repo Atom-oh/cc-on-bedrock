@@ -51,6 +51,7 @@
 | **DEFERRED** | Codex on Bedrock | 후속 확장. 현 타깃은 Claude Code on Bedrock | §0 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
+| **LIVE** | PR-review 패널 로스터 | Codex + Kiro x2(`claude-opus-5`, `gpt-5.6-terra`), 12 cell (기존 Codex + Kiro x3, 16 cell에서 축소). `glm-5`(kiro-glm)는 오탐률(false-positive) 문제로 제외 | AWS-Demo-Platform 저장소 ADR-015 (cross-repo) |
 
 ---
 
