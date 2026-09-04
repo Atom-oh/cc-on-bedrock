@@ -102,6 +102,15 @@ resource "aws_security_group" "restricted" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Without this the
+  # restricted tier's egress (DNS + 443 only) blocks the collector, so no metrics/events flow.
+  egress {
+    description = "OTLP/HTTP to in-VPC OTEL collector"
+    from_port   = 4318
+    to_port     = 4318
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
   # DNS ONLY via the VPC resolver — external DNS (e.g. 8.8.8.8) would bypass
   # the Route 53 DNS Firewall threat blocks and enable DNS-tunnel exfiltration.
   egress {
@@ -153,6 +162,16 @@ resource "aws_security_group" "locked" {
     description = "HTTPS to VPC endpoints only"
     from_port   = 443
     to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Internal-only
+  # (VPC CIDR); the collector SG still gates who may connect.
+  egress {
+    description = "OTLP/HTTP to in-VPC OTEL collector"
+    from_port   = 4318
+    to_port     = 4318
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr]
   }

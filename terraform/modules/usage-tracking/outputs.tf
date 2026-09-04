@@ -55,8 +55,8 @@ output "dept_mcp_config_table_name" {
 }
 
 output "otel_collector_endpoint" {
-  description = "Internal OTLP/gRPC endpoint (NLB DNS:4317) for devenv telemetry push"
-  value       = "${aws_lb.otel.dns_name}:4317"
+  description = "Internal OTLP/HTTP endpoint (NLB DNS:4318) for devenv telemetry push"
+  value       = "${aws_lb.otel.dns_name}:4318"
 }
 
 output "otel_metrics_raw_bucket" {

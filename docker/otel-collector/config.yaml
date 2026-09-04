@@ -1,7 +1,7 @@
 # OpenTelemetry Collector (contrib) — central push endpoint for Claude Code native
 # OTEL on Bedrock (P1).
 #
-# Topology: Claude Code (EC2 devenv) --OTLP/gRPC--> this collector
+# Topology: Claude Code (EC2 devenv) --OTLP/HTTP :4318--> this collector
 #   metrics --awss3(otlp-metrics/)--> otel_raw bucket --S3 event--> otel-metrics-rollup
 #   logs    --filter+SCRUB--> awss3(otlp-logs/)--> otel_raw bucket --S3 event--> rollup
 #
@@ -29,13 +29,24 @@ processors:
     timeout: 30s
     send_batch_size: 1000
 
-  # Keep ONLY per-invocation tool usage events; drop user_prompt/api_request/hook/
-  # plugin/mcp events (which carry prompts, responses, and other high-cardinality content).
+  # Keep ONLY per-invocation tool usage events (tool_result/tool_decision), dropping
+  # user_prompt/api_request/hook/plugin/mcp events (which carry prompts, responses, and
+  # other high-cardinality content). Key on the tool_name attribute rather than
+  # event.name: only tool_result/tool_decision carry tool_name, and this is robust to
+  # whether the event name lands in attributes["event.name"] or the LogRecord event_name
+  # field (OTLP versions differ; event.name-based filtering silently dropped everything —
+  # confirmed empirically in production, see PR #100). Accepted trade-off: this drops
+  # defense-in-depth from 2 layers (event-type filter + scrub) to 1 (scrub only) — a
+  # future event type that also emits tool_name would pass this filter too. That is a
+  # reduced security posture, not a content leak: the DLP scrub below is the actual
+  # no-content boundary (break-closed keep_keys) and does not depend on this filter
+  # either way. It does mean rollup counter attribution needs re-checking against the
+  # then-current native event taxonomy whenever it changes.
   filter/tool_events:
     error_mode: ignore
     logs:
       log_record:
-        - 'attributes["event.name"] != "claude_code.tool_result" and attributes["event.name"] != "claude_code.tool_decision"'
+        - 'attributes["tool_name"] == nil'
 
   # DLP scrub: lift the only fields the rollup needs out of the tool_parameters JSON
   # string, then delete the raw bag and any other sensitive payload.

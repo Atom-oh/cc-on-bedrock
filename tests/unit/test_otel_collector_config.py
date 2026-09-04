@@ -47,6 +47,12 @@ def test_scrub_is_break_closed_keep_only_allowlist():
 
 
 def test_filter_keeps_only_tool_events():
-    raw = CFG.read_text(encoding="utf-8")
-    assert "claude_code.tool_result" in raw
-    assert "claude_code.tool_decision" in raw
+    # Keyed on the tool_name attribute (only tool_result/tool_decision carry one) rather
+    # than event.name, which OTLP may put in the LogRecord event_name field instead of
+    # attributes depending on version.
+    c = _cfg()
+    filter_key = next(p for p in c["service"]["pipelines"]["logs"]["processors"] if "filter" in p)
+    conditions = c["processors"][filter_key]["logs"]["log_record"]
+    # Exact match, not substring: a substring check would still pass on an unrelated or
+    # negated condition that happens to contain "tool_name" — the OTTL semantics matter.
+    assert conditions == ['attributes["tool_name"] == nil'], conditions
