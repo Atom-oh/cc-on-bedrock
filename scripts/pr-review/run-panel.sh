@@ -119,15 +119,14 @@ for lens_file in "${LENS_FILES[@]}"; do
   LENS_PROMPT="$(cat "$lens_file")"
 
   # Codex 셀 (Bedrock, config.toml — 모델 문자열은 이 repo 코드가 아니라 러너 이미지의
-  # ~/.codex/config.toml 이 결정하며, 그 값이 gpt-5.6-sol; KIRO_MODELS 의 gpt-5.6-terra 와는
-  # 별개 문자열 — 둘 다 gpt-5.6 계열이지만 Kiro 의 cross-vendor 라우터 카탈로그와 Codex 자체
-  # Bedrock-mantle 카탈로그가 서로 다른 alias 를 매핑하므로, 하나가 다른 하나의 오타/drift가
-  # 아니다). --skip-git-repo-check 필수. AWS_REGION 강제:
-  # gpt-5.6-sol(bedrock-mantle)는 In-Region(us-east-1) 만 지원 — 잡 region 무관하게 고정.
-  # diff 는 stdin.
+  # ~/.codex/config.toml 이 결정하며, 그 값이 global.openai.gpt-6-astra(amazon-bedrock-runtime
+  # provider); KIRO_MODELS 의 gpt-5.6-terra 와는 별개 문자열이자 별개 provider — Kiro 의
+  # cross-vendor 라우터 카탈로그와 Codex 자체 Bedrock 카탈로그가 서로 다른 alias 를 매핑하므로,
+  # 하나가 다른 하나의 오타/drift가 아니다). --skip-git-repo-check 필수. global.openai.gpt-6-astra
+  # 는 global 모델이라 region pinning 불필요(이전 gpt-5.6-sol/bedrock-mantle 은 In-Region
+  # us-east-1 전용이었음). diff 는 stdin.
   if command -v codex >/dev/null 2>&1; then
     ( try_panel "$SLOT/codex-$lens.md" "$SLOT/codex-$lens.err" \
-        env AWS_REGION="${CODEX_AWS_REGION:-us-east-1}" AWS_DEFAULT_REGION="${CODEX_AWS_REGION:-us-east-1}" \
         timeout "$T" codex exec -s read-only --skip-git-repo-check "$LENS_PROMPT" ) &
   else echo "[skip] codex/$lens (binary absent)" >&2; : > "$SLOT/codex-$lens.md"; fi
 
