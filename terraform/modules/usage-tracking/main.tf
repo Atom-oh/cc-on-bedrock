@@ -1081,6 +1081,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "otel_raw" {
       sse_algorithm     = "aws:kms"
       kms_master_key_id = var.kms_key_arn
     }
+    # Also reduces per-request KMS calls/cost; the OtelRawKms policy below allows for
+    # both the bucket-ARN context this enables and the per-object-ARN context objects
+    # written before it was enabled would have used.
+    bucket_key_enabled = true
   }
 }
 
@@ -1340,16 +1344,23 @@ resource "aws_iam_role_policy" "otel_task_s3put" {
         # "PutObject only needs encrypt-side perms" read) would break large-batch uploads.
         # Scoped instead of granting Decrypt bucket-wide: kms:ViaService pins the call to
         # S3 in this region, and the EncryptionContext condition pins it to this specific
-        # bucket's default SSE context, so this role can't ride the same key grant to
-        # decrypt objects in an unrelated bucket that happens to share it.
+        # bucket, so this role can't ride the same key grant to decrypt objects in an
+        # unrelated bucket that happens to share it. StringLike against BOTH the bucket
+        # ARN and the object-ARN wildcard, not StringEquals against the bucket ARN alone:
+        # S3's SSE-KMS encryption context is the bucket ARN only when Bucket Key is
+        # enabled (it now is, see aws_s3_bucket_server_side_encryption_configuration.otel_raw
+        # above) -- otherwise (and for every object written before that setting existed)
+        # it's the per-object ARN. A bucket-ARN-only match would have silently denied
+        # GenerateDataKey/PutObject for any non-Bucket-Key object, breaking every S3 write
+        # this PR exists to fix.
         Sid      = "OtelRawKms"
         Effect   = "Allow"
         Action   = ["kms:GenerateDataKey", "kms:Decrypt"]
         Resource = [var.kms_key_arn]
         Condition = {
-          StringEquals = {
+          StringLike = {
             "kms:ViaService"                   = "s3.${local.region}.amazonaws.com"
-            "kms:EncryptionContext:aws:s3:arn" = aws_s3_bucket.otel_raw.arn
+            "kms:EncryptionContext:aws:s3:arn" = [aws_s3_bucket.otel_raw.arn, "${aws_s3_bucket.otel_raw.arn}/*"]
           }
         }
       },

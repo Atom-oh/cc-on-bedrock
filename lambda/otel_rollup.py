@@ -253,10 +253,16 @@ def aggregate_tool_events(records: list) -> dict:
         if date is None:
             continue
         decision = a.get("decision")
-        # tool_decision carries `decision`; tool_result does not. Count usage from results
-        # (no decision) so we don't rely on event.name (which may live in the OTLP
-        # LogRecord event_name field rather than attributes, depending on version).
-        is_result = decision is None
+        # tool_result carries `success`; tool_decision carries `decision` instead. Classify
+        # on the positive signal (success present) rather than decision's absence: if the
+        # emitter ever starts stamping `decision` onto tool_result too (the CLI auto-updates
+        # every boot via cc-cli-update.service, and upstream's own docs list `decision` as a
+        # tool_result attribute in some versions), decision-is-None would silently misclassify
+        # every result as a decision -- count drops to 0, accept/reject doubles. success is
+        # tool_result-specific in every version seen so far and is already kept by the
+        # collector's allowlist (config.yaml keep_keys). Also avoids relying on event.name,
+        # which may live in the OTLP LogRecord event_name field instead of attributes.
+        is_result = a.get("success") is not None
         # After the collector DLP scrub, skill_name/subagent_type are lifted to top-level
         # attributes and the raw tool_parameters bag is dropped. Fall back to the parsed
         # tool_parameters for unscrubbed/raw payloads (tests, local capture).
