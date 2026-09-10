@@ -16,6 +16,14 @@ def _cfg():
     return yaml.safe_load(CFG.read_text(encoding="utf-8"))
 
 
+def test_otlp_http_receiver_matches_the_nlb_target_port():
+    # Guards against TF (NLB target group port) <-> container (this receiver) port drift
+    # -- the two are configured independently and nothing else catches a mismatch.
+    c = _cfg()
+    http = c["receivers"]["otlp"]["protocols"]["http"]
+    assert http["endpoint"] == "0.0.0.0:4318", http["endpoint"]
+
+
 def test_has_metrics_and_logs_pipelines_to_s3():
     c = _cfg()
     pipes = c["service"]["pipelines"]

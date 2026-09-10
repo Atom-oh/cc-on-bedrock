@@ -31,3 +31,9 @@ variable "nginx_security_group_id" {
   type        = string
   default     = ""
 }
+
+variable "otel_collector_security_group_id" {
+  description = "SG attached to the OTEL collector's NLB + ECS tasks (usage-tracking module's otel_collector_security_group_id output) -- OTLP/HTTP:4318 egress is scoped to this SG instead of the whole VPC CIDR"
+  type        = string
+  default     = ""
+}

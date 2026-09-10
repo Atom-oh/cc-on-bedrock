@@ -15,6 +15,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REPOS=(
   "cc-on-bedrock/devenv"
   "cc-on-bedrock/nginx"
+  "cc-on-bedrock/otel-collector"
 )
 
 TF_MANAGED_REPOS=(

@@ -59,6 +59,43 @@ aws dynamodb delete-item --table-name cc-routing-table \
 ```
 Then restart instance from dashboard.
 
+### Stale OTLP/gRPC telemetry config after the HTTP/4318 migration (PR #100)
+`otelEnvUserData()` (`shared/nextjs-app/src/lib/ec2-clients.ts`) only writes
+`/etc/environment` at first boot. Any instance already running before this migration
+still has the old `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` + a `:4317` endpoint baked in, and
+won't pick up the new HTTP/4318 config on a simple stop/start (UserData doesn't re-run).
+Symptom: no telemetry/events reach the collector for pre-existing instances even though
+new instances work.
+
+Patch the running instance in place via SSM (no data loss, no relaunch required):
+```bash
+INSTANCE_ID="<instance-id>"
+NEW_ENDPOINT="http://<otel-nlb-dns>:4318"   # from: terraform output -json | jq -r .otel_collector_endpoint (or the module's otel_collector_endpoint output), prefixed with http://
+
+aws ssm send-command --instance-ids $INSTANCE_ID \
+  --document-name AWS-RunShellScript \
+  --parameters "commands=[
+    \"sed -i 's|^OTEL_EXPORTER_OTLP_PROTOCOL=.*|OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf|' /etc/environment\",
+    \"sed -i 's|^OTEL_EXPORTER_OTLP_ENDPOINT=.*|OTEL_EXPORTER_OTLP_ENDPOINT=${NEW_ENDPOINT}|' /etc/environment\",
+    \"pkill -u coder -f 'claude' || true\"
+  ]" \
+  --region ap-northeast-2
+```
+The `claude` CLI reads `/etc/environment` at process start (login shell), so a fresh
+`claude` invocation after this picks up the new values — no reboot needed. Verify with
+`cat /etc/environment | grep OTEL_EXPORTER_OTLP` over SSM.
+
+To bulk-migrate every existing devenv instead of doing it one at a time:
+```bash
+aws ec2 describe-instances \
+  --filters "Name=tag:managed_by,Values=cc-on-bedrock" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].InstanceId' --region ap-northeast-2 --output text \
+  | tr '\t' '\n' | while read -r id; do
+    aws ssm send-command --instance-ids "$id" --document-name AWS-RunShellScript \
+      --parameters "commands=[...]" --region ap-northeast-2
+  done
+```
+
 ## Escalation
 If none of the above resolves the issue, check ECS dashboard service logs:
 ```bash

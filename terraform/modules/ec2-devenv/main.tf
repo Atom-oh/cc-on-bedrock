@@ -103,13 +103,16 @@ resource "aws_security_group" "restricted" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Without this the
-  # restricted tier's egress (DNS + 443 only) blocks the collector, so no metrics/events flow.
+  # restricted tier's egress (DNS + 443 only) blocks the collector, so no metrics/events
+  # flow. Scoped to the collector's own SG (also attached to its NLB), not the whole VPC
+  # CIDR -- restricted's entire purpose is a tight allowlist, and a VPC-wide 4318 hole
+  # would let any other in-VPC host reachable on that port become a side-channel.
   egress {
-    description = "OTLP/HTTP to in-VPC OTEL collector"
-    from_port   = 4318
-    to_port     = 4318
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "OTLP/HTTP to the OTEL collector only"
+    from_port       = 4318
+    to_port         = 4318
+    protocol        = "tcp"
+    security_groups = [var.otel_collector_security_group_id]
   }
   # DNS ONLY via the VPC resolver — external DNS (e.g. 8.8.8.8) would bypass
   # the Route 53 DNS Firewall threat blocks and enable DNS-tunnel exfiltration.
@@ -166,14 +169,15 @@ resource "aws_security_group" "locked" {
     cidr_blocks = [var.vpc_cidr]
   }
 
-  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Internal-only
-  # (VPC CIDR); the collector SG still gates who may connect.
+  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Scoped to the
+  # collector's own SG rather than the whole VPC CIDR, consistent with locked's
+  # otherwise-minimal egress surface.
   egress {
-    description = "OTLP/HTTP to in-VPC OTEL collector"
-    from_port   = 4318
-    to_port     = 4318
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "OTLP/HTTP to the OTEL collector only"
+    from_port       = 4318
+    to_port         = 4318
+    protocol        = "tcp"
+    security_groups = [var.otel_collector_security_group_id]
   }
 
   # DNS to the in-VPC Route 53 Resolver (VPC base + 2) ONLY — required for name

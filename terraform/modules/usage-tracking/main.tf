@@ -1264,6 +1264,11 @@ resource "aws_lb" "otel" {
   internal           = true
   load_balancer_type = "network"
   subnets            = var.private_subnet_ids
+  # Attaching the collector's own SG to the NLB (supported for NLBs since 2023) is what
+  # lets devenv security groups scope their egress via `security_groups = [...]` instead
+  # of the whole VPC CIDR -- without this, the NLB's ENI carries no SG and destination-SG
+  # matching on client egress rules would silently fail to scope anything.
+  security_groups = [aws_security_group.otel_collector.id]
 }
 
 resource "aws_lb_target_group" "otel" {
@@ -1329,11 +1334,23 @@ resource "aws_iam_role_policy" "otel_task_s3put" {
       },
       {
         # otel_raw is SSE-KMS encrypted, so writing an object requires a data key.
-        # Without this the awss3 exporter gets S3 403 AccessDenied (kms:GenerateDataKey).
+        # kms:Decrypt is also required, not just GenerateDataKey: AWS's SSE-KMS multipart
+        # upload flow calls Decrypt internally, so removing it (as suggested by a naive
+        # "PutObject only needs encrypt-side perms" read) would break large-batch uploads.
+        # Scoped instead of granting Decrypt bucket-wide: kms:ViaService pins the call to
+        # S3 in this region, and the EncryptionContext condition pins it to this specific
+        # bucket's default SSE context, so this role can't ride the same key grant to
+        # decrypt objects in an unrelated bucket that happens to share it.
         Sid      = "OtelRawKms"
         Effect   = "Allow"
         Action   = ["kms:GenerateDataKey", "kms:Decrypt"]
         Resource = [var.kms_key_arn]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService"                   = "s3.${local.region}.amazonaws.com"
+            "kms:EncryptionContext:aws:s3:arn" = aws_s3_bucket.otel_raw.arn
+          }
+        }
       },
     ]
   })

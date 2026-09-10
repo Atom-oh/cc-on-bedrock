@@ -146,12 +146,13 @@ module "ec2_devenv" {
   source = "./modules/ec2-devenv"
   count  = local.devenv_enabled ? 1 : 0
 
-  vpc_id                       = module.network.vpc_id
-  vpc_cidr                     = module.network.vpc_cidr
-  kms_key_arn                  = module.security.kms_key_arn
-  devenv_instance_type         = var.devenv_instance_type
-  task_permission_boundary_arn = module.security.task_permission_boundary_arn
-  nginx_security_group_id      = local.devenv_enabled ? module.ecs_devenv[0].nginx_security_group_id : local.default_dev_env
+  vpc_id                           = module.network.vpc_id
+  vpc_cidr                         = module.network.vpc_cidr
+  kms_key_arn                      = module.security.kms_key_arn
+  devenv_instance_type             = var.devenv_instance_type
+  task_permission_boundary_arn     = module.security.task_permission_boundary_arn
+  nginx_security_group_id          = local.devenv_enabled ? module.ecs_devenv[0].nginx_security_group_id : local.default_dev_env
+  otel_collector_security_group_id = module.usage_tracking.otel_collector_security_group_id
 }
 
 # ---- 08 Local Governance -----------------------------------------------------
