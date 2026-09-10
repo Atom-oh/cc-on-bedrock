@@ -172,7 +172,7 @@ terraform apply           # 확인 메시지에 'yes'
 | `security` | Cognito(Hosted UI), ACM, KMS, Secrets Manager, IAM, **task permission boundary (ADR-034)** |
 | `ecs-devenv` | ECS Cluster, NLB + nginx Fargate, routing DynamoDB, DLP SGs, nginx-config-gen Lambda |
 | `ec2-devenv` | per-user EC2 launch template + DLP SGs (ADR-004), permission-boundary 적용 |
-| `usage-tracking` | usage DynamoDB(+GSI/Stream), OTel collector(Fargate+NLB:4317), rollup Lambda |
+| `usage-tracking` | usage DynamoDB(+GSI/Stream), OTel collector (Fargate+NLB:4318, OTLP/HTTP), rollup Lambda |
 | `dashboard` | Dashboard EC2 ASG + ALB + CloudFront (us-east-1 ACM) |
 | `local-governance` | STS issuer / token-limit enforcer / reset (ADR-014) |
 | `waf` | CLOUDFRONT-scope WebACL (us-east-1) |

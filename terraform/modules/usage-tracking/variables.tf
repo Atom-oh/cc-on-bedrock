@@ -65,7 +65,7 @@ variable "vpc_id" {
 }
 
 variable "vpc_cidr" {
-  description = "VPC CIDR — OTLP/gRPC (4317) ingress is restricted to this"
+  description = "VPC CIDR — OTLP/HTTP (4318) ingress is restricted to this"
   type        = string
   default     = ""
 }

@@ -63,3 +63,5 @@ depends on the launch template tag string changing.
 - Keep code-server on `8080`; nginx may route additional validated custom ports.
 - Keep EC2 and Local roles distinct, but aligned by shared policy boundary, tags, and inference-profile attribution.
 - Keep OTEL Collector output available through `otel_collector_endpoint`.
+- Two same-named-pattern OTel collectors exist, exported as distinct root outputs: `otel_collector_endpoint` (legacy `ecs-devenv` awsemf collector, container-devenv path) and `otel_rollup_collector_endpoint` (`usage-tracking` module's rollup collector — what EC2 devenv instances actually push Claude Code telemetry to). Don't conflate them.
+- `ec2-devenv`'s `otel_collector_subnet_cidrs` variable scopes devenv egress on OTLP/HTTP:4318 to the rollup collector's private subnets rather than the whole VPC CIDR — NOT a security-group reference, since the collector's pre-existing NLB has no SG and adding one forces a replace (new DNS, cascading ECS service replacement). See `usage-tracking/main.tf`'s `aws_lb.otel` comment.
