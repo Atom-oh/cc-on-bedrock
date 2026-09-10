@@ -56,8 +56,13 @@ output "routing_table_name" {
 }
 
 output "otel_collector_endpoint" {
-  description = "Internal OTLP HTTP endpoint for EC2 code activity metrics"
+  description = "Internal OTLP HTTP endpoint for EC2 code activity metrics -- the legacy ecs-devenv module's own awsemf collector (container-devenv path, docker/devenv/scripts/entrypoint.sh). NOT the rollup collector devenv instances actually push Claude Code telemetry to -- see otel_rollup_collector_endpoint for that one. Two differently-purposed collectors sharing a near-identical name is confusing; kept as-is to avoid a breaking rename of an existing output."
   value       = var.governance_only ? null : module.ecs_devenv[0].otel_collector_endpoint
+}
+
+output "otel_rollup_collector_endpoint" {
+  description = "Internal OTLP/HTTP endpoint (NLB DNS:4318) for the usage-tracking module's rollup collector -- this is what shared/nextjs-app/src/lib/ec2-clients.ts's otelEnvUserData() and the EC2 devenv migration runbook (docs/runbooks/instance-recovery.md) need, NOT otel_collector_endpoint above."
+  value       = module.usage_tracking.otel_collector_endpoint
 }
 
 # Dashboard

@@ -1264,11 +1264,12 @@ resource "aws_lb" "otel" {
   internal           = true
   load_balancer_type = "network"
   subnets            = var.private_subnet_ids
-  # Attaching the collector's own SG to the NLB (supported for NLBs since 2023) is what
-  # lets devenv security groups scope their egress via `security_groups = [...]` instead
-  # of the whole VPC CIDR -- without this, the NLB's ENI carries no SG and destination-SG
-  # matching on client egress rules would silently fail to scope anything.
-  security_groups = [aws_security_group.otel_collector.id]
+  # Deliberately NOT setting security_groups here: this NLB already exists with none, and
+  # AWS/the provider can't add security_groups to an existing NLB in place -- it forces a
+  # full replace (new DNS name, listener/TG rebuild, cascading ECS service replacement),
+  # breaking every already-running devenv's configured endpoint on apply. Egress scoping
+  # for devenv -> collector uses the private-subnet CIDRs instead (see ec2-devenv), which
+  # needs no change to this resource at all.
 }
 
 resource "aws_lb_target_group" "otel" {

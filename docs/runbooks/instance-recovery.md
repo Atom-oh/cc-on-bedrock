@@ -67,34 +67,57 @@ won't pick up the new HTTP/4318 config on a simple stop/start (UserData doesn't 
 Symptom: no telemetry/events reach the collector for pre-existing instances even though
 new instances work.
 
-Patch the running instance in place via SSM (no data loss, no relaunch required):
+**`/etc/environment` alone is not enough to fix a running instance.** It's read by PAM
+(`pam_env`) at session-start time, not sourced by a login shell directly, and
+`code-server.service` sets neither `EnvironmentFile=` nor `PAMName=` — so code-server's
+own process, and any terminal it spawns, keeps whatever environment it inherited at its
+own start. Editing the file and `pkill`-ing `claude` is **not sufficient**: the next
+`claude` invocation still inherits code-server's stale environment, not the edited file.
+
+Patch and reboot the instance via SSM (no data loss — reboot preserves the persistent
+`/home/coder` EBS volume per the ADR-002 2-volume model; only forces a clean restart of
+code-server and every PAM-sourced session):
 ```bash
 INSTANCE_ID="<instance-id>"
-NEW_ENDPOINT="http://<otel-nlb-dns>:4318"   # from: terraform output -json | jq -r .otel_collector_endpoint (or the module's otel_collector_endpoint output), prefixed with http://
+NEW_ENDPOINT="http://<otel-nlb-dns>:4318"   # from: terraform output -raw otel_rollup_collector_endpoint, prefixed with http:// (NOT otel_collector_endpoint -- that's the unrelated legacy ecs-devenv collector)
 
 aws ssm send-command --instance-ids $INSTANCE_ID \
   --document-name AWS-RunShellScript \
   --parameters "commands=[
     \"sed -i 's|^OTEL_EXPORTER_OTLP_PROTOCOL=.*|OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf|' /etc/environment\",
     \"sed -i 's|^OTEL_EXPORTER_OTLP_ENDPOINT=.*|OTEL_EXPORTER_OTLP_ENDPOINT=${NEW_ENDPOINT}|' /etc/environment\",
-    \"pkill -u coder -f 'claude' || true\"
+    \"reboot\"
   ]" \
   --region ap-northeast-2
 ```
-The `claude` CLI reads `/etc/environment` at process start (login shell), so a fresh
-`claude` invocation after this picks up the new values — no reboot needed. Verify with
-`cat /etc/environment | grep OTEL_EXPORTER_OTLP` over SSM.
+Wait for the instance to come back (`aws ec2 wait instance-status-ok --instance-ids
+$INSTANCE_ID --region ap-northeast-2`), then verify against the **actual running**
+`claude` process's environment — not just the file, which only proves the edit landed,
+not that anything picked it up:
+```bash
+aws ssm send-command --instance-ids $INSTANCE_ID --document-name AWS-RunShellScript \
+  --parameters 'commands=["tr \"\\0\" \"\\n\" < /proc/$(pgrep -u coder -n claude)/environ | grep OTEL_EXPORTER_OTLP"]' \
+  --region ap-northeast-2
+```
 
 To bulk-migrate every existing devenv instead of doing it one at a time:
 ```bash
+NEW_ENDPOINT="http://<otel-nlb-dns>:4318"   # terraform output -raw otel_rollup_collector_endpoint, prefixed with http://
+
 aws ec2 describe-instances \
   --filters "Name=tag:managed_by,Values=cc-on-bedrock" "Name=instance-state-name,Values=running" \
   --query 'Reservations[].Instances[].InstanceId' --region ap-northeast-2 --output text \
   | tr '\t' '\n' | while read -r id; do
     aws ssm send-command --instance-ids "$id" --document-name AWS-RunShellScript \
-      --parameters "commands=[...]" --region ap-northeast-2
+      --parameters "commands=[
+        \"sed -i 's|^OTEL_EXPORTER_OTLP_PROTOCOL=.*|OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf|' /etc/environment\",
+        \"sed -i 's|^OTEL_EXPORTER_OTLP_ENDPOINT=.*|OTEL_EXPORTER_OTLP_ENDPOINT=${NEW_ENDPOINT}|' /etc/environment\",
+        \"reboot\"
+      ]" --region ap-northeast-2
   done
 ```
+Reboots stagger naturally since each `send-command` returns immediately; avoid rebooting
+every devenv at once if any are in active use.
 
 ## Escalation
 If none of the above resolves the issue, check ECS dashboard service logs:
