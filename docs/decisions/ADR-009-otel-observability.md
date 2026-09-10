@@ -35,9 +35,19 @@ Amazon Bedrock exposes none of Anthropic's first-party Analytics/Admin/Complianc
 > (no 1P Analytics API). T0 empirically confirmed the shape on Bedrock.
 
 - **Emit (native OTEL).** Devenvs set `CLAUDE_CODE_ENABLE_TELEMETRY=1` + `OTEL_METRICS_EXPORTER=otlp` + `OTEL_LOGS_EXPORTER=otlp` + `OTEL_LOG_TOOL_DETAILS=1`. Metrics give sessions/active-time/LOC/commits/PRs/edit-decisions; `tool_result`/`tool_decision` events give per-skill (`skill_name`) / per-agent (`subagent_type`) / per-tool usage.
+- **Transport: OTLP/HTTP :4318 (not gRPC).** OTLP gRPC/HTTP2 over the L4 NLB is unreliable
+  ("failed to receive server preface", DNS-multi-IP + keepalive issues) and the Claude Code
+  OTEL SDK exposes no gRPC keepalive/round_robin knobs; HTTP export is one independent
+  request per batch and works cleanly through the NLB. Devenv, NLB listener/target-group,
+  and collector receiver all use 4318.
+- **Log filter: `tool_name` attribute, not `event.name`.** OTLP puts the event name in the
+  LogRecord's top-level `event_name` field, not in `attributes["event.name"]` — an
+  `event.name`-keyed filter silently drops every record (confirmed empirically). The
+  collector instead keeps records where `attributes["tool_name"]` is present, which only
+  `tool_result`/`tool_decision` currently emit.
 - **Pipeline.** Collector (otel-contrib) → `awss3` (metrics + logs prefixes) → S3 `otel_raw` → `otel-metrics-rollup` Lambda → DynamoDB `cc-on-bedrock-usage` (`PROD#`/`SKILL#`/`AGENT#`/`TOOL#`/`ACTIVE#`, per-user email-keyed daily ADD counters; `OTELOBJ#` TTL dedup).
 - **Identity.** `enduser.id` is stamped from the provisioned email via `OTEL_RESOURCE_ATTRIBUTES` (native `user.email` is OAuth-only / absent on Bedrock). ADR-029 canonical lowercased-email key; invalid → `unattributed`.
-- **Privacy / DLP (no-content).** `OTEL_LOG_TOOL_DETAILS=1` would log bash commands / file paths / prompts; the **collector logs pipeline scrubs** them — keeps only `tool_result`/`tool_decision`, lifts `skill_name`/`subagent_type` to top-level, deletes `tool_parameters`/`tool_input`/`prompt`/`response` before S3. No prompt/text/image content is ever persisted.
+- **Privacy / DLP (no-content).** `OTEL_LOG_TOOL_DETAILS=1` would log bash commands / file paths / prompts; the **collector logs pipeline scrubs** them — keeps only records carrying `tool_name` (the filter above — in practice `tool_result`/`tool_decision`, since only those emit it), lifts `skill_name`/`subagent_type` to top-level, deletes `tool_parameters`/`tool_input`/`prompt`/`response` before S3. No prompt/text/image content is ever persisted.
 - **Authoritative cost stays 005.** Per-skill/agent/model cost remains an OTel-based estimate; authoritative billing stays in the 005 invocation-log pipeline. The rollup writes no cost/token rows.
 
 후속(P2/P3): Productivity/Economic Score 계산·7일 트렌드·AI 진단(`/api/ai`)·대시보드 UI. 운영 follow-up: collector 통일(ecs-devenv awsemf collector 폐기 후 devenv 엔드포인트를 awss3 collector로 일원화).

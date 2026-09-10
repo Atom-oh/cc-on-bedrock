@@ -102,6 +102,20 @@ resource "aws_security_group" "restricted" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Without this the
+  # restricted tier's egress (DNS + 443 only) blocks the collector, so no metrics/events
+  # flow. Scoped to the private subnets the collector's NLB lives in, not the whole VPC
+  # CIDR -- restricted's entire purpose is a tight allowlist, and a VPC-wide 4318 hole
+  # would let any other in-VPC host reachable on that port become a side-channel. Not
+  # SG-referenced: the NLB has no SG attached and adding one forces a replace (see
+  # usage-tracking/main.tf's aws_lb.otel comment) -- subnet CIDR is the safe scope here.
+  egress {
+    description = "OTLP/HTTP to the OTEL collector subnets only"
+    from_port   = 4318
+    to_port     = 4318
+    protocol    = "tcp"
+    cidr_blocks = var.otel_collector_subnet_cidrs
+  }
   # DNS ONLY via the VPC resolver — external DNS (e.g. 8.8.8.8) would bypass
   # the Route 53 DNS Firewall threat blocks and enable DNS-tunnel exfiltration.
   egress {
@@ -155,6 +169,18 @@ resource "aws_security_group" "locked" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr]
+  }
+
+  # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Scoped to the
+  # collector's NLB subnets rather than the whole VPC CIDR, consistent with locked's
+  # otherwise-minimal egress surface (see the restricted block above for why this isn't
+  # SG-referenced).
+  egress {
+    description = "OTLP/HTTP to the OTEL collector subnets only"
+    from_port   = 4318
+    to_port     = 4318
+    protocol    = "tcp"
+    cidr_blocks = var.otel_collector_subnet_cidrs
   }
 
   # DNS to the in-VPC Route 53 Resolver (VPC base + 2) ONLY — required for name

@@ -75,11 +75,53 @@ def test_scrubbed_shape_skill_agent_top_level():
     # the raw tool_parameters bag is gone. The aggregator must still count them.
     res = [_attr("enduser.id", "alice@example.com")]
     recs = [
-        _record("claude_code.tool_result", {"tool_name": "Skill", "skill_name": "verify"}),
-        _record("claude_code.tool_result", {"tool_name": "Agent", "subagent_type": "Explore"}),
+        _record("claude_code.tool_result", {"tool_name": "Skill", "skill_name": "verify", "success": "true"}),
+        _record("claude_code.tool_result", {"tool_name": "Agent", "subagent_type": "Explore", "success": "true"}),
     ]
     payload = {"resourceLogs": [{"resource": {"attributes": res},
                                  "scopeLogs": [{"logRecords": recs}]}]}
     counts = rollup.aggregate_tool_events(rollup.parse_otlp_logs(payload))
     assert counts[("alice@example.com", DATE, "skill", "verify")]["count"] == 1
     assert counts[("alice@example.com", DATE, "agent", "Explore")]["count"] == 1
+
+
+def _record_no_event_name(attrs, nano=NANO):
+    # True production OTLP shape: NO "event.name" key in attributes at all — the real
+    # collector puts the event name in the LogRecord's top-level event_name field, which
+    # this fixture (unlike _record() above) never carries into attributes. Every other
+    # test in this file injects event.name and so would stay green even if
+    # aggregate_tool_events regressed back to gating on it.
+    return {"timeUnixNano": nano, "attributes": [_attr(k, v) for k, v in attrs.items()]}
+
+
+def test_aggregate_tool_events_ignores_event_name_by_design():
+    # tool_result carries `success`; tool_decision carries `decision` instead (is_result
+    # = success is not None). Gating is purely on tool_name presence, not event.name.
+    res = [_attr("enduser.id", "bob@example.com")]
+    recs = [
+        _record_no_event_name({"tool_name": "Skill", "skill_name": "verify", "success": "true"}),
+        _record_no_event_name({"tool_name": "Bash", "decision": "accept"}),
+    ]
+    payload = {"resourceLogs": [{"resource": {"attributes": res},
+                                 "scopeLogs": [{"logRecords": recs}]}]}
+    counts = rollup.aggregate_tool_events(rollup.parse_otlp_logs(payload))
+    assert counts[("bob@example.com", DATE, "skill", "verify")]["count"] == 1
+    bash = counts[("bob@example.com", DATE, "tool", "Bash")]
+    assert bash["count"] == 0 and bash["accept"] == 1 and bash["reject"] == 0
+
+
+def test_aggregate_tool_events_result_carrying_decision_still_counts_as_result():
+    # Regression guard for the exact silent-misclassification risk the review flagged:
+    # if the emitter ever stamps `decision` onto a tool_result too, classification must
+    # still key off `success` (tool_result-specific) rather than decision's absence --
+    # otherwise this record would be miscounted as a tool_decision (count 0, accept 1).
+    res = [_attr("enduser.id", "carol@example.com")]
+    recs = [
+        _record("claude_code.tool_result",
+                {"tool_name": "Bash", "success": "true", "decision": "accept"}),
+    ]
+    payload = {"resourceLogs": [{"resource": {"attributes": res},
+                                 "scopeLogs": [{"logRecords": recs}]}]}
+    counts = rollup.aggregate_tool_events(rollup.parse_otlp_logs(payload))
+    bash = counts[("carol@example.com", DATE, "tool", "Bash")]
+    assert bash["count"] == 1

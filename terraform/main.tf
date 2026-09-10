@@ -64,7 +64,7 @@ module "usage_tracking" {
   daily_budget_usd              = var.daily_budget_usd
   instance_table_name           = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : "cc-user-instances"
   routing_table_name            = local.devenv_enabled ? module.ecs_devenv[0].routing_table_name : "cc-routing-table"
-  # OTel collector (Fargate + internal NLB:4317) networking — without these the collector
+  # OTel collector (Fargate + internal NLB:4318 OTLP/HTTP) networking — without these the collector
   # SG/NLB get empty vpc_cidr/subnets and terraform errors on an invalid CIDR.
   vpc_id             = module.network.vpc_id
   vpc_cidr           = module.network.vpc_cidr
@@ -152,6 +152,10 @@ module "ec2_devenv" {
   devenv_instance_type         = var.devenv_instance_type
   task_permission_boundary_arn = module.security.task_permission_boundary_arn
   nginx_security_group_id      = local.devenv_enabled ? module.ecs_devenv[0].nginx_security_group_id : local.default_dev_env
+  # The collector's NLB has no SG (adding one would force a replace -- see
+  # usage-tracking/main.tf's aws_lb.otel comment), so egress is scoped to its subnets
+  # instead of a SG reference.
+  otel_collector_subnet_cidrs = [var.private_subnet_cidr_a, var.private_subnet_cidr_c]
 }
 
 # ---- 08 Local Governance -----------------------------------------------------

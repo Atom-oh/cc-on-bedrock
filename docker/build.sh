@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Usage: ./build.sh [build|push|all] [devenv-ubuntu|devenv-al2023|dashboard|litellm|all]
+# Usage: ./build.sh [build|push|all] [devenv-ubuntu|devenv-al2023|dashboard|litellm|otel-collector|all]
 ACTION="${1:-build}"
 TARGET="${2:-all}"
 REGION="${AWS_REGION:-ap-northeast-2}"
@@ -60,11 +60,14 @@ do_build() {
       build_image "dashboard" "$SCRIPT_DIR/dashboard/Dockerfile" "$PROJECT_ROOT" "cc-on-bedrock/dashboard" "$TAG" ;;
     litellm)
       build_image "litellm" "$SCRIPT_DIR/litellm/Dockerfile" "$SCRIPT_DIR/litellm" "cc-on-bedrock/litellm" "$TAG" ;;
+    otel-collector)
+      build_image "otel-collector" "$SCRIPT_DIR/otel-collector/Dockerfile" "$SCRIPT_DIR/otel-collector" "cc-on-bedrock/otel-collector" "$TAG" ;;
     all)
       build_image "devenv-ubuntu" "$SCRIPT_DIR/devenv/Dockerfile.ubuntu" "$SCRIPT_DIR/devenv" "cc-on-bedrock/devenv" "ubuntu-${TAG}"
       build_image "devenv-al2023" "$SCRIPT_DIR/devenv/Dockerfile.al2023" "$SCRIPT_DIR/devenv" "cc-on-bedrock/devenv" "al2023-${TAG}"
       build_image "dashboard" "$SCRIPT_DIR/dashboard/Dockerfile" "$PROJECT_ROOT" "cc-on-bedrock/dashboard" "$TAG"
       build_image "litellm" "$SCRIPT_DIR/litellm/Dockerfile" "$SCRIPT_DIR/litellm" "cc-on-bedrock/litellm" "$TAG"
+      build_image "otel-collector" "$SCRIPT_DIR/otel-collector/Dockerfile" "$SCRIPT_DIR/otel-collector" "cc-on-bedrock/otel-collector" "$TAG"
       ;;
   esac
 }
@@ -79,11 +82,14 @@ do_push() {
       push_image "cc-on-bedrock/dashboard" "$TAG" ;;
     litellm)
       push_image "cc-on-bedrock/litellm" "$TAG" ;;
+    otel-collector)
+      push_image "cc-on-bedrock/otel-collector" "$TAG" ;;
     all)
       push_image "cc-on-bedrock/devenv" "ubuntu-${TAG}"
       push_image "cc-on-bedrock/devenv" "al2023-${TAG}"
       push_image "cc-on-bedrock/dashboard" "$TAG"
       push_image "cc-on-bedrock/litellm" "$TAG"
+      push_image "cc-on-bedrock/otel-collector" "$TAG"
       ;;
   esac
 }

@@ -15,7 +15,7 @@ Docker 이미지 빌드 및 관리. devenv (Ubuntu/AL2023) 개발환경 이미�
 - `devenv/systemd/cc-mcp-sync.service` - MCP config 동기화 systemd 서비스 (부팅 시 실행)
 - `devenv/config/extensions.txt` - code-server 기본 확장 목록
 - `devenv/config/settings.json` - code-server 기본 설정
-- `otel-collector/` - OpenTelemetry Collector (contrib) image for native Claude Code OTEL (ADR-009 P1). `config.yaml`: metrics + logs pipelines → `awss3` (S3 `otlp-metrics/`·`otlp-logs/`). **logs pipeline DLP-scrubs** — keeps only `claude_code.tool_result`/`tool_decision`, lifts `skill_name`/`subagent_type`, then `keep_keys` allowlist (break-closed: drops `tool_parameters`/`tool_input`/`prompt`/content). Bucket/region via `${env:...}`.
+- `otel-collector/` - OpenTelemetry Collector (contrib) image for native Claude Code OTEL (ADR-009 P1). Receives OTLP/HTTP :4318 (gRPC unreliable over the L4 NLB — not used). `config.yaml`: metrics + logs pipelines → `awss3` (S3 `otlp-metrics/`·`otlp-logs/`). **logs pipeline DLP-scrubs** — keeps only records carrying a `tool_name` attribute (`tool_result`/`tool_decision`; `event.name`-based filtering doesn't work since OTLP puts the event name in the LogRecord's `event_name` field, not attributes), lifts `skill_name`/`subagent_type`, then `keep_keys` allowlist (break-closed: drops `tool_parameters`/`tool_input`/`prompt`/content). Bucket/region via `${env:...}`.
 - `litellm/` - LiteLLM proxy (deprecated, 제거 예정)
 - `build.sh` - ECR 빌드/푸시 스크립트
 

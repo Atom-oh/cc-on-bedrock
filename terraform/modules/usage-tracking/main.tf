@@ -1081,6 +1081,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "otel_raw" {
       sse_algorithm     = "aws:kms"
       kms_master_key_id = var.kms_key_arn
     }
+    # Also reduces per-request KMS calls/cost; the OtelRawKms policy below allows for
+    # both the bucket-ARN context this enables and the per-object-ARN context objects
+    # written before it was enabled would have used.
+    bucket_key_enabled = true
   }
 }
 
@@ -1165,6 +1169,14 @@ resource "aws_iam_role_policy" "otel_rollup" {
         Action   = ["s3:GetObject", "s3:ListBucket"]
         Resource = [aws_s3_bucket.otel_raw.arn, "${aws_s3_bucket.otel_raw.arn}/*"]
       },
+      {
+        # otel_raw objects are SSE-KMS encrypted, so GetObject needs kms:Decrypt or the
+        # Lambda gets S3 403 AccessDenied and never writes the rollup rows.
+        Sid      = "RawBucketKmsDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = [var.kms_key_arn]
+      },
     ]
   })
 }
@@ -1215,7 +1227,7 @@ resource "aws_s3_bucket_notification" "otel_raw" {
   depends_on = [aws_lambda_permission.otel_rollup_s3]
 }
 
-# ---- OTel Collector Fargate service + internal NLB:4317 ---------------------
+# ---- OTel Collector Fargate service + internal NLB:4318 (OTLP/HTTP) ---------
 locals {
   otel_collector_image = "${local.account_id}.dkr.ecr.${local.region}.amazonaws.com/cc-on-bedrock/otel-collector:latest"
 }
@@ -1225,14 +1237,21 @@ resource "aws_ecs_cluster" "otel" {
 }
 
 resource "aws_security_group" "otel_collector" {
-  name        = "cc-on-bedrock-otel-collector"
+  name = "cc-on-bedrock-otel-collector"
+  # NOTE: SG description is immutable in AWS — changing it forces a replace that fails with
+  # DependencyViolation while the collector tasks still use the old SG. Keep it as-is; the
+  # ingress below now uses OTLP/HTTP :4318 (in-place rule update, no SG replace).
   description = "OTLP gRPC from VPC devenvs only"
   vpc_id      = var.vpc_id
 
+  # OTLP/HTTP on 4318 (not gRPC 4317): gRPC/HTTP2 over an L4 NLB is unreliable
+  # ("failed to receive server preface" / DNS-multi-IP + keepalive issues), and the
+  # Claude Code OTEL SDK exposes no grpc keepalive/round_robin knobs to tune. HTTP export
+  # is one independent request per batch and works cleanly through the NLB.
   ingress {
-    description = "OTLP gRPC from VPC devenvs"
-    from_port   = 4317
-    to_port     = 4317
+    description = "OTLP HTTP from VPC devenvs"
+    from_port   = 4318
+    to_port     = 4318
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr]
   }
@@ -1249,19 +1268,31 @@ resource "aws_lb" "otel" {
   internal           = true
   load_balancer_type = "network"
   subnets            = var.private_subnet_ids
+  # Deliberately NOT setting security_groups here: this NLB already exists with none, and
+  # AWS/the provider can't add security_groups to an existing NLB in place -- it forces a
+  # full replace (new DNS name, listener/TG rebuild, cascading ECS service replacement),
+  # breaking every already-running devenv's configured endpoint on apply. Egress scoping
+  # for devenv -> collector uses the private-subnet CIDRs instead (see ec2-devenv), which
+  # needs no change to this resource at all.
 }
 
 resource "aws_lb_target_group" "otel" {
-  name        = "cc-on-bedrock-otel-4317"
-  port        = 4317
+  name        = "cc-on-bedrock-otel-4318"
+  port        = 4318
   protocol    = "TCP"
   target_type = "ip"
   vpc_id      = var.vpc_id
+
+  # Port is immutable → this TG is replaced. Create the new TG before destroying the old
+  # one (distinct name, no conflict) so the listener/service can re-point before deletion.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_lb_listener" "otel" {
   load_balancer_arn = aws_lb.otel.arn
-  port              = 4317
+  port              = 4318
   protocol          = "TCP"
   default_action {
     type             = "forward"
@@ -1299,12 +1330,41 @@ resource "aws_iam_role_policy" "otel_task_s3put" {
   role = aws_iam_role.otel_task.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid      = "PutRawBatches"
-      Effect   = "Allow"
-      Action   = ["s3:PutObject"]
-      Resource = ["${aws_s3_bucket.otel_raw.arn}/*"]
-    }]
+    Statement = [
+      {
+        Sid      = "PutRawBatches"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${aws_s3_bucket.otel_raw.arn}/*"]
+      },
+      {
+        # otel_raw is SSE-KMS encrypted, so writing an object requires a data key.
+        # kms:Decrypt is also required, not just GenerateDataKey: AWS's SSE-KMS multipart
+        # upload flow calls Decrypt internally, so removing it (as suggested by a naive
+        # "PutObject only needs encrypt-side perms" read) would break large-batch uploads.
+        # Scoped instead of granting Decrypt bucket-wide: kms:ViaService pins the call to
+        # S3 in this region, and the EncryptionContext condition pins it to this specific
+        # bucket, so this role can't ride the same key grant to decrypt objects in an
+        # unrelated bucket that happens to share it. StringLike against BOTH the bucket
+        # ARN and the object-ARN wildcard, not StringEquals against the bucket ARN alone:
+        # S3's SSE-KMS encryption context is the bucket ARN only when Bucket Key is
+        # enabled (it now is, see aws_s3_bucket_server_side_encryption_configuration.otel_raw
+        # above) -- otherwise (and for every object written before that setting existed)
+        # it's the per-object ARN. A bucket-ARN-only match would have silently denied
+        # GenerateDataKey/PutObject for any non-Bucket-Key object, breaking every S3 write
+        # this PR exists to fix.
+        Sid      = "OtelRawKms"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:Decrypt"]
+        Resource = [var.kms_key_arn]
+        Condition = {
+          StringLike = {
+            "kms:ViaService"                   = "s3.${local.region}.amazonaws.com"
+            "kms:EncryptionContext:aws:s3:arn" = [aws_s3_bucket.otel_raw.arn, "${aws_s3_bucket.otel_raw.arn}/*"]
+          }
+        }
+      },
+    ]
   })
 }
 
@@ -1331,7 +1391,7 @@ resource "aws_ecs_task_definition" "otel_collector" {
     name         = "otel-collector"
     image        = local.otel_collector_image
     essential    = true
-    portMappings = [{ containerPort = 4317, protocol = "tcp" }]
+    portMappings = [{ containerPort = 4318, protocol = "tcp" }]
     environment = [
       { name = "OTEL_S3_BUCKET", value = aws_s3_bucket.otel_raw.id },
       { name = "AWS_REGION", value = local.region },
@@ -1362,7 +1422,7 @@ resource "aws_ecs_service" "otel_collector" {
   load_balancer {
     target_group_arn = aws_lb_target_group.otel.arn
     container_name   = "otel-collector"
-    container_port   = 4317
+    container_port   = 4318
   }
 
   depends_on = [aws_lb_listener.otel]

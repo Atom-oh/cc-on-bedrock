@@ -31,3 +31,9 @@ variable "nginx_security_group_id" {
   type        = string
   default     = ""
 }
+
+variable "otel_collector_subnet_cidrs" {
+  description = "CIDRs of the private subnets the OTEL collector's NLB lives in -- OTLP/HTTP:4318 egress is scoped to these instead of the whole VPC CIDR. Not the collector's own SG: the NLB is pre-existing with no SG attached, and adding one would force a replace (new DNS, telemetry outage on apply) -- see usage-tracking/main.tf's aws_lb.otel comment."
+  type        = list(string)
+  default     = []
+}
