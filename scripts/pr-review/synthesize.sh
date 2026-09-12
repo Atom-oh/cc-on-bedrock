@@ -124,7 +124,8 @@ esac ; }
 
 run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
-  # 잔여 위험(cc-on-bedrock PR#107 리뷰 M3): Kiro 셀은 `--trust-tools=` 로 무툴화해
+  # 잔여 위험(cc-on-bedrock PR#107 리뷰 M3): Kiro 셀은 `--agent pr-review-notools`(`tools: []`
+  # 에이전트)로 무툴화해
   # "diff 인젝션 → 절대경로 read → 공개 유출" 체인을 구조적으로 끊었지만, 이 chair 호출은
   # tool 제한이 없다(headless 기본은 read 계열 도구를 허용) — 대칭이 아니다. `scrub_secrets`
   # 는 알려진 크리덴셜 포맷만 잡는 last-line-of-defense 라 완전한 방어는 아니다. 강한 제한
@@ -184,6 +185,28 @@ fi
 if [ -s "$WORK/degraded-models.txt" ]; then
   DEGRADED="$(tr '\n' ',' < "$WORK/degraded-models.txt" | sed 's/,$//; s/,/, /g')"
   { echo "⚠️ **커버리지 저하**: [$DEGRADED] 모델이 전체 lens 에서 응답 없음(플래그 무효·바이너리 부재·인증 실패 등) — 아래 리뷰는 그 모델 없이 종합됨."
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro 월간 요청 한도 소진(run-panel.sh 의 kiro-quota.flag) — 위 degraded 배너의 원인 후보
+# 나열 대신 실제 원인을 못박는다. 코드/플래그 문제가 아니라 KIRO_API_KEY 계정 한도이므로
+# 사람이 취할 행동(overage 활성화 또는 키 교체)과 리셋 시점을 코멘트에서 바로 읽을 수 있게.
+if [ -s "$WORK/kiro-quota.flag" ]; then
+  QUOTA_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-quota.flag" | sed 's/ *$//')"
+  { echo "🚫 **Kiro 월간 요청 한도 소진**: KIRO_API_KEY 계정이 MONTHLY_REQUEST_COUNT 한도에 도달해 Kiro 셀이 응답 없음 (\`$QUOTA_DETAIL\`) — kiro-cli headless 플래그 문제가 아님. overage 활성화 또는 \`/demo-platform/actions/AI-key\` 의 KIRO_API_KEY 교체 전까지 매 실행 반복됨. 절차: docs/runbooks/pr-review-panel.md"
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro 에이전트 폴백(run-panel.sh 의 kiro-agent-fallback.flag) — 러너의 kiro-cli 가
+# `--agent pr-review-notools` 를 무시하고 툴 있는 기본 에이전트로 실행한 셀이 있었다. 응답은
+# 이미 폐기됐고 coverage-severe 로 강제 FAIL 되지만, "왜 FAIL 인지"를 코멘트에서 바로 읽게 한다.
+if [ -s "$WORK/kiro-agent-fallback.flag" ]; then
+  AGENTFAIL_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-agent-fallback.flag" | sed 's/ *$//')"
+  { echo "🔓 **Kiro 무툴 계약 위반**: kiro-cli 가 \`--agent pr-review-notools\` 를 무시하고 툴 있는 기본 에이전트로 실행함 (\`$AGENTFAIL_DETAIL\`) — 해당 셀 응답은 폐기, 강제 FAIL. 러너 이미지의 kiro-cli 버전/에이전트 스키마 변경 여부 확인 필요(docs/runbooks/pr-review-panel.md)."
     echo ""
     cat "$OUT"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
