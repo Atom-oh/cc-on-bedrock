@@ -23,6 +23,9 @@ if [ -f tests/unit/test-build-ami-datavol.sh ]; then
   bash tests/unit/test-build-ami-datavol.sh
 fi
 
+echo "== AI PR-review panel: Kiro no-tools agent + quota/agent-fallback detection (stub run, no model calls) =="
+bash tests/unit/test-pr-review-panel.sh
+
 echo "== ADR-030: boundary-X deny-floor + validator coherence invariant (self-test) =="
 python3 scripts/check-policyset-boundary.py --self-test
 
