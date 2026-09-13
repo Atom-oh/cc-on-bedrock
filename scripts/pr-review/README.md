@@ -1,97 +1,103 @@
 # Specialist review protocol
 
-CI activates this protocol with `ROLE_REVIEW=1`. The trusted preparer selects
-complete project-approved input; executors send issued nonce-framed requests;
-aggregation verifies receipts and responses; synthesis adjudicates only when
-needed. See [the project contract](../../docs/pr-review-specialists.md).
+CI selects `ROLE_REVIEW=1`: trusted project inputs feed specialist executors,
+validated results feed aggregation, and substantive findings reach the chair.
+See [the project contract](../../docs/pr-review-specialists.md).
 
-Target responsibilities: Codex `global.openai.gpt-6-astra` checks correctness;
-Kiro `claude-opus-5` checks AWS; Kiro `gpt-5.6-sol` checks operations; Claude
-`global.anthropic.claude-fable-5-1` checks auth/data/API/ADR requirements. Sol is an
-intentional replacement for the legacy Terra slot in the active workflow. Kiro
-aliases and Bedrock profile IDs are separate namespaces. The `kiro-fable` tag is
-the compatibility name of the Opus slot. Prompts request English-only review artifacts; response language is not mechanically validated.
+| Tag | Requested model | Responsibility |
+| --- | --- | --- |
+| `codex` | `global.openai.gpt-6-astra` | Implementation, concurrency, tests |
+| `kiro-fable` | `claude-opus-5` | AWS, IAM, networking |
+| `kiro-sol` | `gpt-5.6-sol` | Deployment, contracts, recovery |
+| `claude-self` | `global.anthropic.claude-fable-5-1` | Auth, data, API, ADR requirements |
 
-## API and files
+`kiro-fable` means Opus. Kiro aliases differ from Bedrock profile IDs. `ROLES`
+governs specialists; existing roster files govern legacy execution. Prompts request
+English (not mechanically validated). Configuration does not attest model weights.
 
-Run `python3 scripts/pr-review/role_review.py COMMAND --help` for exact flags.
+## API
 
-| Command | Contract |
+Run `python3 scripts/pr-review/role_review.py COMMAND --help` for flags.
+
+| Command | Input and output |
 | --- | --- |
-| `prepare` | Accept approved diff/context files, HEAD/base SHAs and work directory; optional authoritative paths/provenance. Write `role-plan.json` and `roles/TAG.txt/.diff`. Invalidate old result, request and timing records. |
-| `issue` | Given work directory and required tag, generate a fresh nonce and persist exact `requests/TAG.prompt/.input` plus `slot/TAG-request.json`. Call before every provider attempt. |
-| `record` | Given tag, output/stderr files, exit code and issued `--nonce`, require the matching issued receipt and validate/scrub the response. Write `slot/TAG-result.json`. |
-| `aggregate` | Require matching receipts and valid complete results. Write `role-summary.json`, `responded.txt`, `chair-mode.txt`, and applicable `coverage-severe.flag`/`deterministic-review.md`. |
+| `prepare` | Diff/context, HEAD/base, work; optional paths/provenance. Writes `role-plan.json`, `roles/TAG.txt/.diff`; invalidates old results. |
+| `issue` | Work/tag → fresh nonce, `requests/TAG.prompt/.input`, `slot/TAG-request.json` receipt; call before every attempt. |
+| `record` | Tag, output/stderr, exit code, issued `--nonce` → receipt validation and scrubbed `slot/TAG-result.json`. |
+| `aggregate` | Validates results/receipts → `role-summary.json`, `responded.txt`, `chair-mode.txt`, applicable flag/report. |
 
-The executor sends the issued framed bytes and retains their receipt with the
-result. A result cannot nominate a different nonce. Hashes bind prepared inputs,
-provenance, issued frames and results; they are not provider signatures or proof
-of a model's identity, honesty or transport. The trusted executor and upstream
-collector remain responsible for actual execution and complete source selection.
+The executor sends issued bytes and retains receipts. Hashes bind input,
+provenance and results, not actual transport. The collector owns source completeness.
 
-Start each job with a fresh work directory before collecting current inputs.
-`prepare` removes prior `*-result.json`, `*-request.json` and timing files from
-`slot/`; current upstream failure flags remain. Aggregation treats upstream
-`*.flag` files under the work tree as failures, except its own root
-`coverage-severe.flag`. Upload issued receipts alongside results and safe source
-metadata. `failure_codes` is canonical; `failures` is a compatibility alias.
+## Collector input
 
-## Collector input schema
+`--paths`: UTF-8 JSON array of unique repository-relative paths, e.g.
+`["src/api.ts"]`, matching the patch. Renames use destinations; the collector
+checks both sides. Omit only for authoritative, unambiguous patch paths.
 
-`--paths` names a UTF-8 JSON array of unique repository-relative changed paths,
-for example `["src/api.ts", "docs/architecture.md"]`. It must cover the prepared
-patch exactly. Paths cannot escape the repository. Omit this flag only when the
-patch itself is authoritative and its paths are unambiguous.
-
-`--provenance` names a JSON object with these required fields:
-
-| Field | Value |
-| --- | --- |
-| `head_sha` | The same 40-character lowercase Git SHA as `--head`. |
-| `base_sha` | The same 40-character lowercase Git SHA as `--base`. |
-| `diff_sha256` | SHA-256 of the exact raw `--diff` bytes before framing or scrubbing. |
-
-Optional `input_failures` is an array of static failure codes; any entry blocks
-coverage. Optional `path_only` is an array of collector-approved metadata-only
-deletions. The trusted collector must verify deletion scope before withholding
-bodies; this does not permit omitting arbitrary source changes. MRA uses this
-hook for its existing state-file deletion custody policy.
-
-Minimal provenance (replace all values with the actual supplied revisions/hash):
+`--provenance` names a JSON object. Required `head_sha` and `base_sha` equal the
+40-character lowercase CLI revisions; `diff_sha256` hashes the exact raw diff
+bytes before framing/scrubbing. Minimal example, with illustrative values:
 
 ```json
 {"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","diff_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
 ```
 
-A configured exclusions-only input additionally requires
-`scope_exception: "configured_exclusions_only"`, a 64-character
-`input_policy_sha256`, and matching nonempty `scope_paths` / `excluded_paths`
-arrays of safe unique paths. Its prepared diff and `--paths` must both be empty.
-The upstream collector verifies the approved policy against the base revision.
-A missing or accidentally empty patch never qualifies as this exception.
+Optional `input_failures` is a list of codes matching `[a-z][a-z0-9_:.-]{0,63}`;
+any code blocks input. Invalid provenance is discarded and blocks. Persisted
+provenance values are scrubbed. Optional `path_only: list[str]` identifies
+collector-approved metadata-only deletions: verify deletion eligibility before
+withholding bodies. This hook does not authorize omitting arbitrary changes.
 
-## Coverage and limits
+## Coverage and exceptions
 
-Trusted code routes untrusted path/content data conservatively. Codex and Claude
-remain required across families; only clearly irrelevant Kiro roles are inactive.
-Missing/failed/invalid required output is never NOT_APPLICABLE. Structural checks
-reject incomplete hunks and incomplete new/deleted-file records; approved
-metadata-only deletions must be explicitly identified by trusted provenance.
+Codex/Claude remain required across families for reviewable source. Trusted
+routing may deactivate clearly irrelevant Kiro roles; App Router React files
+remain conservative. Failed, missing, stale or invalid output never means N/A.
 
-Bounds: 95,000 UTF-8 diff bytes, 3,000 lines, up to 24,000 context bytes and a
-complete request below 128 KiB. Projects may impose smaller limits. The caller
-must retain its own source exclusions, state/secret custody and budget controls.
-Never replace a required project collector with raw Git input. There is no chunk
-coordinator: oversized input blocks; independent PASS results cannot be combined
-to claim coverage of a larger change.
+An existing, BASE-approved exclusions-only policy may mark all roles
+NOT_APPLICABLE and return PASS without model calls. The collector must verify
+that policy and account for all Git paths. Provenance requires
+`scope_exception: "configured_exclusions_only"`, a 64-character lowercase
+`input_policy_sha256`, and matching nonempty, unique, safe `scope_paths` and
+`excluded_paths` lists; the prepared diff and `--paths` must be empty. The report
+shows excluded paths/hash and claims no model review. Missing or accidentally
+empty input never qualifies. New exclusions require a reviewed policy change.
+Project-specific collectors retain their own exception rules.
 
-Exit 2 means blocked. After aggregate exit 0, read `chair-mode.txt`: `deterministic`
-permits the prepared clean summary, while `review` requires substantive
-adjudication. Coverage failure produces FAIL and cannot be waived by the chair.
-Scope assertions do not prove that every defect was found.
+Parsing rejects incomplete hunks but cannot detect whole omitted files or all
+cut prefixes. Validate source scope/hashes upstream; retain required collectors.
 
-## Verification
+## Lifecycle and outcomes
 
-`python3 -m unittest discover -s scripts/pr-review -p test_role_review.py -v`
-uses no provider credentials or model calls. Also run all `test_*role*.py` tests
-for executors, project input preparation, invocation limits and exact-head publishing.
+Start with fresh work before collecting input. `prepare` clears owned results,
+receipts, timings, claims, duplicate/terminal flags and histories; upstream flags
+remain. Old request copies lack valid receipts. Duplicate records retain the first
+result and block; finish all writers before aggregation.
+
+Reissue archives up to 32 results in `slot/TAG-attempts.json`. Model-selection,
+fallback, quota and agent-preflight failures stay blocking until new preparation.
+Summaries retain history. All work-tree `*.flag` files block except the engine's
+root `coverage-severe.flag`. `failure_codes` is canonical (`failures` is an alias).
+
+Exit 2 means blocked. After aggregate exit 0, `chair-mode.txt` is `deterministic`
+for complete results with no blocking candidate/uncertainty (Minor/Info remain),
+or `review` for required adjudication. Blocked input yields a deterministic FAIL;
+a chair cannot waive missing coverage. Scope attestation is not proof of no bugs.
+
+Never upload raw `roles/*.diff` or `requests/*.input/.prompt`. Upload only selected
+scrubbed reports, issued receipts and safe source metadata.
+
+## Limits and verification
+
+Limits: 95,000 UTF-8 diff bytes, 3,000 lines, context up to 24,000 bytes, complete
+request below 128 KiB. Projects may lower these. Oversized input blocks; there is
+no chunk coordinator and separate PASS results cannot establish larger coverage.
+Preserve existing source exclusions, custody and budget controls.
+
+Verify: `python3 -m unittest discover -s scripts/pr-review -p test_role_review.py`.
+Offline CI: `.github/workflows/pr-review-roles-tests.yml`. Also run all `test_*role*.py` tests for executors/adapters, limits and publication.
+Offline tests do not prove live provider success.
+
+The target Sol slot intentionally replaces this repository's legacy Terra slot
+in the active protocol; application inference models remain unchanged.
