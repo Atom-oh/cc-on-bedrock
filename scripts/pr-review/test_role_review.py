@@ -206,6 +206,7 @@ class RoleReviewTests(unittest.TestCase):
             ("xox" + "b-" + "A" * 35, "A" * 35),
             ("AI" + "za" + "B" * 35, "B" * 35),
             ("Authorization: Basic " + "C" * 40, "C" * 40),
+            ('{"Authorization": "Basic ' + "Q" * 12 + '"}', "Q" * 12),
             ('access_token="' + "D" * 35 + '"', "D" * 35),
             ('client_secret="' + "E" * 35 + '"', "E" * 35),
             ("aws_access_key_id=" + "F" * 35, "F" * 35),
@@ -227,6 +228,7 @@ class RoleReviewTests(unittest.TestCase):
     def test_decoded_multiline_and_control_split_credentials_are_scrubbed(self):
         cases = [
             ("-----BEGIN PRIVATE KEY-----\nPRIVATE_MATERIAL\n-----END PRIVATE KEY-----", "PRIVATE_MATERIAL"),
+            ("-----BEGIN PRIVATE KEY-----\nUNTERMINATED_PRIVATE_MATERIAL", "UNTERMINATED_PRIVATE_MATERIAL"),
             ("ghp_" + "A" * 18 + "\x1b[31m" + "B" * 18, "B" * 18),
             ("ghp_" + "A" * 18 + "\u200b" + "B" * 18, "B" * 18),
             ("ghp_" + "A" * 18 + "\x9b;31m" + "B" * 18, "B" * 18),
@@ -245,6 +247,8 @@ class RoleReviewTests(unittest.TestCase):
         for raw in (
             f"diff --git a/{FRONTEND} b/{FRONTEND}\n",
             patch().rsplit("+new label", 1)[0],
+            "diff --git a/new.py b/new.py\nnew file mode 100644\n--- /dev/null\n+++ b/new.py\n",
+            "diff --git a/old.py b/old.py\ndeleted file mode 100644\n--- a/old.py\n+++ /dev/null\n",
         ):
             with self.subTest(raw=raw):
                 self.prepare(raw, expected=2)

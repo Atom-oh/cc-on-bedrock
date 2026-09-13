@@ -12,6 +12,11 @@
 # 중단). 매 시도마다 재실행. 모든 셀(모델 수 × lens 수)이 병렬(&+wait) — 벽시계 ≈ 최슬로우
 # 셀 하나, 순차합 아님.
 set -uo pipefail
+
+# CI selects the specialist protocol; legacy matrix fixtures remain isolated.
+if [ "${ROLE_REVIEW:-0}" = 1 ]; then
+  exec bash "$(dirname "$0")/run-specialists.sh" "$@"
+fi
 DIFF="$(realpath "$1" 2>/dev/null)" \
   || { echo "run-panel.sh: realpath failed to resolve diff path: $1" >&2; exit 1; }
 LENSES_DIR="$2"; WORK="$3"
@@ -46,7 +51,7 @@ T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-3}"
 # glm-5(kiro-glm) 는 로스터에서 제외 — AWS-Demo-Platform 저장소의 PR#88 리뷰에서 이 모델만
 # 4건의 오탐을 냈다(AWS-Demo-Platform 저장소의 ADR-015). 되살릴 때는 오탐률을 먼저 재측정할 것.
-KIRO_MODELS=("claude-opus-5:kiro-opus" "gpt-5.6-terra:kiro-gpt")
+KIRO_MODELS=("claude-opus-5:kiro-opus" "gpt-5.6-sol:kiro-gpt")
 # 러너 이미지의 kiro-cli 는 unpinned vendor-latest 라(AWS-Demo-Platform 저장소의
 # docker/actions-runner-claude/Dockerfile 참조) 아래 무툴/한도 시그니처 가정(2.11.1 기준)이
 # 어느 버전에서 깨졌는지 로그에서 추적할 수 있게 버전을 첫 줄에 찍는다.
@@ -216,14 +221,14 @@ for lens_file in "${LENS_FILES[@]}"; do
 
   # Codex 셀 (Bedrock, config.toml — 모델 문자열은 이 repo 코드가 아니라 러너 이미지의
   # ~/.codex/config.toml 이 결정하며, 그 값이 global.openai.gpt-6-astra(amazon-bedrock-runtime
-  # provider); KIRO_MODELS 의 gpt-5.6-terra 와는 별개 문자열이자 별개 provider — Kiro 의
+  # provider); KIRO_MODELS 의 gpt-5.6-sol 와는 별개 문자열이자 별개 provider — Kiro 의
   # cross-vendor 라우터 카탈로그와 Codex 자체 Bedrock 카탈로그가 서로 다른 alias 를 매핑하므로,
   # 하나가 다른 하나의 오타/drift가 아니다). --skip-git-repo-check 필수. global.openai.gpt-6-astra
   # 는 global 모델이라 region pinning 불필요(이전 gpt-5.6-sol/bedrock-mantle 은 In-Region
   # us-east-1 전용이었음). diff 는 stdin.
   if command -v codex >/dev/null 2>&1; then
     ( try_panel codex "$SLOT/codex-$lens.md" "$SLOT/codex-$lens.err" \
-        timeout "$T" codex exec -s read-only --skip-git-repo-check "$LENS_PROMPT" ) &
+        timeout "$T" codex exec --model global.openai.gpt-6-astra -s read-only --skip-git-repo-check "$LENS_PROMPT" ) &
   else echo "[skip] codex/$lens (binary absent)" >&2; : > "$SLOT/codex-$lens.md"; fi
 
   # Kiro x2 셀 — model:tag 를 한 배열에서 파생(호출/집계 동기화). Kiro's non-interactive

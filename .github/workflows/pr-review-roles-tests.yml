@@ -23,4 +23,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Test scope and execution without provider calls
-        run: python3 -m unittest discover -s scripts/pr-review -p test_role_review.py -v
+        run: python3 -m unittest discover -s scripts/pr-review -p 'test_*role*.py' -v
+      - name: Check shell syntax
+        run: bash -n scripts/pr-review/run-specialists.sh

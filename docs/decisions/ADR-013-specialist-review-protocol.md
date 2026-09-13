@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted design, 2026-09-13. Protocol library staged; the legacy workflow is still
-active. Activation must be reviewed separately with its input and runner controls.
+Accepted 2026-09-13. CI activates specialist responsibilities with `ROLE_REVIEW=1`
+and retains the project input, runner, coverage and publication safeguards.
 
 ## Decision
 
@@ -19,8 +19,8 @@ waive missing or invalid coverage. Preserve existing project input exclusions,
 secret/state custody, context and budgets. No quota or billing limits are raised.
 Review instructions and output are English to avoid duplicate translations.
 
-This records intent and the new library; it does not supersede the live legacy
-workflow yet. The activation change must identify which older execution/coverage
-rules it replaces and preserve their remaining security and ownership decisions.
+This supersedes the repeated model-by-lens matrix, permissive dropout floor and
+unconditional chair call. Existing security, source-custody, context, ownership
+and budget decisions remain in force.
 See [the module contract](../../scripts/pr-review/README.md) for current interfaces
 and offline checks. Model access and production execution require separate evidence.

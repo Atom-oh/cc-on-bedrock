@@ -51,7 +51,7 @@
 | **DEFERRED** | Codex on Bedrock | 후속 확장. 현 타깃은 Claude Code on Bedrock | §0 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
-| **LIVE** | PR-review 패널 로스터 | Codex + Kiro x2(`claude-opus-5`, `gpt-5.6-terra`), 12 cell (기존 Codex + Kiro x3, 16 cell에서 축소). `glm-5`(kiro-glm)는 오탐률(false-positive) 문제로 제외 | AWS-Demo-Platform 저장소 ADR-015 (cross-repo) |
+| **LIVE** | PR-review 패널 로스터 | Codex + Kiro x2(`claude-opus-5`, `gpt-5.6-sol`), 12 cell (기존 Codex + Kiro x3, 16 cell에서 축소). `glm-5`(kiro-glm)는 오탐률(false-positive) 문제로 제외 | AWS-Demo-Platform 저장소 ADR-015 (cross-repo) |
 
 ---
 
@@ -79,7 +79,7 @@
 
 새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 §3(또는 §2) 갱신 필수**(anti-drift, §1).
 
-## Staged specialist protocol
+## Active specialist protocol
 
-[ADR-013](ADR-013-specialist-review-protocol.md) records the inactive protocol library. The LIVE
-legacy panel row remains authoritative until a separate activation change.
+[ADR-013](ADR-013-specialist-review-protocol.md) defines the selected `ROLE_REVIEW=1` protocol. Earlier matrix cell counts
+and permissive dropout descriptions are superseded; source-custody controls remain.

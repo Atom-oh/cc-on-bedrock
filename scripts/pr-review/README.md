@@ -1,9 +1,11 @@
 # Specialist review protocol
 
-This change introduces the protocol library, `role_review.py`, and its offline
-regression tests. The current `pr-review.yml` still runs the legacy panel. Provider
-execution, project input adapters and activation follow in a separate reviewed
-change; this library alone changes no live review or deployment behavior.
+CI selects the specialist runtime with `ROLE_REVIEW=1`. `prepare_roles.py`
+prepares trusted inputs, `run_role.py` invokes each applicable specialist,
+`role_review.py` validates and aggregates results, and `synthesize_roles.py`
+conditionally adjudicates findings. Legacy entrypoints remain compatibility
+wrappers and regression fixtures; their old matrix is not the selected CI path.
+See [the current project contract](../../docs/pr-review-specialists.md).
 
 The approved target roles are Codex (`global.openai.gpt-6-astra`) for correctness,
 Kiro Opus (`claude-opus-5`) for AWS, Kiro Sol (`gpt-5.6-sol`) for operations, and
@@ -28,11 +30,11 @@ adjudication; coverage failure cannot be waived. `failure_codes` is the diagnost
 field; `failures` is a compatibility alias. These are scope attestations, not proof
 that a model found every defect.
 
-Before activation, preserve each project's approved input filtering, state/secret
+Preserve each project's approved input filtering, state/secret
 custody, context, no-tools checks, invocation budgets and publishing safeguards.
 Never feed a filtered-input workflow through a raw Git fallback. Project exceptions
 need explicit provenance. Runtime and workflow changes use the trusted PR base;
 head code and instructions remain untrusted review data.
 
-Run `python3 -m unittest discover -s scripts/pr-review -p test_role_review.py -v`.
+Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*role*.py' -v`.
 These tests use no provider credentials or model calls.
