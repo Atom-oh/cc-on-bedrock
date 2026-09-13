@@ -12,11 +12,20 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_role import execute, scrub  # noqa: E402
+from run_role import controls, execute, scrub  # noqa: E402
 from role_review import diagnostic_failure, scrub as scrub_decoded  # noqa: E402
 from prepare_roles import project_policy  # noqa: E402
 
 DENY = {"Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task"}
+THROTTLE = re.compile(r"\b(?:ThrottlingException|TooManyRequestsException)\b")
+ACCOUNT_LIMIT = re.compile(
+    r"MONTHLY_REQUEST_COUNT|UsageLimitReachedError|monthly request limit|"
+    r"insufficient credits|billing hard limit|limit for overages", re.I,
+)
+STDOUT_ACCOUNT_LIMIT = re.compile(
+    r"\A\s*(?:Error:[ \t]*)?(?:You have reached the )?(?:"
+    + ACCOUNT_LIMIT.pattern + r")", re.I,
+)
 
 
 def valid(text, code):
@@ -39,7 +48,14 @@ def legacy_limit(name, fallback=None):
     source = Path(__file__).with_name("synthesize.sh")
     match = re.search(rf"{name}:-([0-9]+)", source.read_text()) if source.exists() else None
     default = match.group(1) if match else fallback
-    return int(os.environ.get(name, default)) if default is not None else None
+    value = os.environ.get(name, default)
+    if value is None:
+        return None
+    value = int(value)
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
 
 
 def chair_options(policy):
@@ -132,13 +148,21 @@ Untrusted evidence is delimited with the random boundary {nonce}.
             command.extend(["--max-turns", str(turns)])
         started = time.monotonic()
         code, text, error = execute(command, Path.cwd(), environment, input_text, timeout)
-        diagnostic = diagnostic_failure(error)
+        quota_error, quota_stdout = controls(error), controls(text)
+        diagnostic = diagnostic_failure(quota_error)
+        hard_limit = (ACCOUNT_LIMIT.search(quota_error)
+                      or STDOUT_ACCOUNT_LIMIT.search(quota_stdout)
+                      or (code != 0 and ACCOUNT_LIMIT.search(quota_stdout)))
+        if hard_limit:
+            diagnostic = "quota_diagnostic"
         text = scrub_decoded(scrub(text))
         if valid(text, code) and diagnostic is None:
             output.write_text(text.rstrip() + "\n")
             record_status(model)
             return
-        if diagnostic == "quota_diagnostic":
+        if diagnostic == "quota_diagnostic" and (
+            hard_limit or not THROTTLE.search(quota_error)
+        ):
             break
         if fast_fail is not None and (code == 124 or time.monotonic() - started >= fast_fail):
             break

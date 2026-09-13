@@ -211,7 +211,7 @@ class IntegrityTests(unittest.TestCase):
             run_role.run(self.work, "codex")
         result = json.loads((self.work / "slot/codex-result.json").read_text())
         self.assertFalse(result["valid"])
-        self.assertEqual((self.work / "runtime/codex.txt").read_text(), "")
+        self.assertFalse((self.work / "runtime/codex.txt").exists())
 
     def test_codex_transport_does_not_extract_json_from_invalid_agent_text(self):
         final = "Unrequested prose\n" + self.response("codex")
@@ -221,7 +221,7 @@ class IntegrityTests(unittest.TestCase):
             run_role.run(self.work, "codex")
         result = json.loads((self.work / "slot/codex-result.json").read_text())
         self.assertFalse(result["valid"])
-        self.assertTrue((self.work / "runtime/codex.txt").read_text().startswith("Unrequested prose"))
+        self.assertFalse((self.work / "runtime/codex.txt").exists())
 
     def test_codex_progress_is_ignored_but_cli_final_reply_is_strictly_validated(self):
         final = self.response("codex")

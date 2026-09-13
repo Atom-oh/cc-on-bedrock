@@ -27,7 +27,6 @@ FAILURE = re.compile(
     r"Json supplied at .* is invalid|failed to set model|using tool:",
     re.IGNORECASE,
 )
-ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 AGENT = {
     "name": "inline-review",
     "description": "Review inline data without tools, hooks or external resources.",
@@ -146,6 +145,18 @@ def install_agent(cwd):
     (location / "inline-review.json").write_text(json.dumps(AGENT) + "\n")
 
 
+def controls(text):
+    """Use the existing CSI/OSC/C1 contract without redacting diagnostic text."""
+    process = subprocess.run(
+        ["bash", "-c", 'set -e; source "$1"; strip_ansi',
+         "review-controls", str(DIRECTORY / "role-controls.sh")],
+        input=text, text=True, encoding="utf-8", capture_output=True,
+    )
+    if process.returncode:
+        raise RuntimeError("Review control-byte normalizer failed")
+    return process.stdout
+
+
 def preflight(binary, model, cwd, environment, timeout):
     install_agent(cwd)
     (cwd / "preflight-canary.txt").write_text(secrets.token_hex(24) + "\n")
@@ -159,8 +170,11 @@ def preflight(binary, model, cwd, environment, timeout):
          "--no-interactive", "--wrap", "never"],
         cwd, kiro_environment(cwd, environment), "", timeout,
     )
-    reply = re.sub(r"(?m)^\s*> ?", "", ANSI.sub("", output)).strip()
-    return code == 0 and reply == "NO_TOOLS" and not FAILURE.search(error), code, error
+    reply = re.sub(r"(?m)^\s*> ?", "", controls(output)).strip()
+    diagnostic = controls(error)
+    return (code == 0 and reply == "NO_TOOLS" and not FAILURE.search(diagnostic)
+            and not diagnostic_failure(diagnostic)), code, error
+
 
 
 def bounded_setting(name, default, maximum):
@@ -180,6 +194,17 @@ def scrub(text):
     if process.returncode:
         raise RuntimeError("Review output scrubber failed")
     return process.stdout
+
+
+def preserve_stdout_error(output, error):
+    lines = controls(output).lstrip().splitlines()
+    first = re.sub(r"^> ?", "", lines[0]) if lines else ""
+    # JSON review evidence and JSONL events are not text-mode CLI diagnostics.
+    if first.startswith(("{", "```")):
+        return error
+    if first.startswith("You have reached the limit for overages"):
+        first = "UsageLimitReachedError: stdout account limit"
+    return error + "\n" + first if diagnostic_failure(first) else error
 
 
 def run(work, tag):
@@ -236,6 +261,8 @@ def run(work, tag):
                         code, output, error = execute(
                             command, cwd, kiro_environment(cwd, environment), "", timeout
                         )
+                        error = controls(error)
+                        error = preserve_stdout_error(output, error)
                         if FAILURE.search(error) or diagnostic_failure(error):
                             code = code or 1
                             break
@@ -278,22 +305,30 @@ def run(work, tag):
                         error = error + ("\n" if error else "") + event_error
                     if not complete:
                         code = code or 1
+                error = controls(error)
+                error = preserve_stdout_error(output, error)
                 if diagnostic_failure(error):
                     code = code or 1
                     break
                 if code == 0 and output.strip():
                     break
-    # Only scrubbed artifacts enter slot/. Runtime raw output is never uploaded.
-    output_path = runtime / f"{tag}.txt"
+    # Diagnostics remain scrubbed. Record must see the original JSON so it can
+    # validate and preserve source paths before scrubbing decoded evidence.
     error_path = runtime / f"{tag}.err"
-    output_path.write_text(scrub(output))
     error_path.write_text(scrub(error))
-    result = subprocess.run([
-        sys.executable, str(DIRECTORY / "role_review.py"), "record",
-        "--work", str(work), "--tag", tag, "--output", str(output_path),
-        "--stderr", str(error_path), "--exit-code", str(code),
-        "--nonce", nonce,
-    ])
+    # NamedTemporaryFile is mode 0600 and is removed even if recording raises.
+    # Keep it outside the review workspace and its publishable artifact paths.
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix=f"{tag}-response-", dir=work.parent,
+    ) as response:
+        response.write(controls(output))
+        response.flush()
+        result = subprocess.run([
+            sys.executable, str(DIRECTORY / "role_review.py"), "record",
+            "--work", str(work), "--tag", tag, "--output", response.name,
+            "--stderr", str(error_path), "--exit-code", str(code),
+            "--nonce", nonce,
+        ])
     if result.returncode not in (0, 2):
         raise RuntimeError("Specialist result recording failed")
     (slot / f"{tag}-timing.json").write_text(json.dumps({
