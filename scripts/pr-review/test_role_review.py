@@ -109,6 +109,40 @@ class RoleReviewTests(unittest.TestCase):
         self.assertEqual((self.work / "chair-mode.txt").read_text(), "blocked\n")
         self.assertTrue((self.work / "deterministic-review.md").read_text().endswith("VERDICT: FAIL\n"))
 
+    def test_validated_paths_survive_scrubbing_without_preserving_private_prose(self):
+        paths = ["infra/task-definition-worker.tf", "frontend/surveyJob.test.tsx",
+                 "fixtures/password=example.txt"]
+        raw = "".join(patch(path) for path in paths)
+        provenance = self.root / "provenance.json"
+        provenance.write_text(json.dumps({"head_sha": HEAD, "base_sha": BASE,
+            "diff_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+            "scope_paths": paths, "excluded_paths": [],
+            "note": "password=private-prose"}))
+        plan = self.prepare(raw, extra=("--provenance", provenance))
+        self.assertEqual(plan["provenance"]["scope_paths"], paths)
+        for tag, role in plan["roles"].items():
+            if role["required"]:
+                self.record(tag, self.response(tag, checks=[
+                    {"path": path, "evidence": "password=private-prose"} for path in paths],
+                    findings=[{"severity": "MINOR", "path": paths[-1],
+                               "condition": "Changed fixture", "evidence": "password=private-prose"}]))
+        self.cli("aggregate", "--work", self.work)
+        self.assertEqual(self.read("role-summary.json")["mode"], "deterministic")
+        self.assertEqual(self.read("role-summary.json")["findings"][0]["path"], paths[-1])
+        for file in self.work.rglob("*.json"):
+            self.assertNotIn("private-prose", file.read_text())
+
+    def test_secret_shaped_json_keys_are_scrubbed(self):
+        secrets = ["ghp_" + "A" * 36, "AKIA" + "B" * 16]
+        self.prepare()
+        evidence = json.dumps({secrets[0]: {"nested": {secrets[1]: "example"}},
+                               "tok\u200ben": "hidden-value"})
+        self.record("codex", self.response("codex", checks=[
+            {"path": FRONTEND, "evidence": evidence}]))
+        published = (self.work / "slot/codex-result.json").read_text()
+        for secret in secrets + ["hidden-value"]:
+            self.assertNotIn(secret, published)
+
     def test_frontend_routing_has_two_independent_full_scope_requests(self):
         raw = patch() + patch("dashboard/frontend/app/styles.css", "blue", "green")
         plan = self.prepare(raw)

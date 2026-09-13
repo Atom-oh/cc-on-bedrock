@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
-"""Portable role-review preparation, response validation, and aggregation.
+"""Offline specialist protocol; see README.md and subcommand --help for contracts.
 
-CLI:
-  prepare --diff RAW --context CONTEXT --head SHA --base SHA --work WORK
-          [--context-cap BYTES] [--paths JSON_FILE] [--provenance JSON_FILE]
-          [--allow-exclusions-only --policy TRUSTED_BASE_JSON_FILE]
-  issue --work WORK --tag TAG
-  record --work WORK --tag TAG --output FILE --stderr FILE --exit-code RC --nonce NONCE
-  aggregate --work WORK
-
-Schema 1 plans list all four tags; only required roles get roles/TAG.txt and
-roles/TAG.diff. Response ``role`` is the stable role slug, not the tag. Result
-envelopes obtain tag, configured family/model and fingerprints from the plan.
-Exit 2 means blocked. Aggregate exit 0 means deterministic PASS or chair handoff;
-read chair-mode.txt to distinguish them. No networking or model invocation.
-Use a fresh work directory per complete reviewed diff. This library does not
-coordinate chunks. These are scope attestations,
-not proof of model honesty or of the provider's actual executed weights.
+Schema-1 plans bind tags, roles, scope and invocation receipts. Exit 2 blocks;
+aggregate exit 0 needs chair-mode.txt to distinguish PASS from chair handoff.
+Use a fresh work directory per full diff; no chunk coordination or provider calls.
+Attestations bind supplied evidence, not model honesty or executed weights.
 """
 
 import argparse
@@ -471,7 +459,20 @@ def prepare(args):
         remove(anchor)
     if re.search(r"^(?:Binary files .* differ|GIT binary patch)$", diff, re.M):
         failures.append("binary_content_not_reviewable")
-    provenance = scrub(provenance)
+    preserved = set(paths)
+    try:
+        for key in ("scope_paths", "excluded_paths", "path_only"):
+            declared_paths = provenance.get(key, [])
+            if not isinstance(declared_paths, list):
+                raise Invalid("invalid_input_provenance")
+            validated = [repo_path(path) for path in declared_paths]
+            if len(set(validated)) != len(validated):
+                raise Invalid("invalid_input_provenance")
+            preserved.update(validated)
+    except Invalid:
+        failures.append("invalid_input_provenance")
+        provenance = {}
+    provenance = scrub(provenance, frozenset(preserved))
     plan = {
         "schema_version": 1, "head_sha": args.head, "base_sha": args.base,
         "diff_sha256": digest(raw), "context_sha256": digest(context.encode()),
@@ -729,18 +730,21 @@ SENSITIVE_KEY = re.compile(
 )
 
 
-def scrub(value):
+def scrub(value, preserved=frozenset()):
     """Scrub decoded strings too: raw-JSON sanitizers miss escaped credentials."""
     if isinstance(value, list):
-        return [scrub(x) for x in value]
+        return [scrub(x, preserved) for x in value]
     if isinstance(value, dict):
-        fields = {str(k).lower(): v for k, v in value.items()}
+        keyed = {scrub(k, preserved): v for k, v in value.items()}
+        fields = {str(k).lower(): v for k, v in keyed.items()}
         sensitive_values = {v for k, v in (("name", "value"), ("headername", "headervalue"))
                             if isinstance(fields.get(k), str) and SENSITIVE_KEY.fullmatch(fields[k])}
         return {k: "[REDACTED]" if isinstance(k, str) and (
             SENSITIVE_KEY.fullmatch(k) or k.lower() in sensitive_values
-        ) else scrub(v) for k, v in value.items()}
+        ) else scrub(v, preserved) for k, v in keyed.items()}
     if not isinstance(value, str):
+        return value
+    if value in preserved:
         return value
     value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
@@ -749,12 +753,12 @@ def scrub(value):
     try:
         decoded = strict_json(value)
         if isinstance(decoded, (dict, list)):
-            return canonical(scrub(decoded))
+            return canonical(scrub(decoded, preserved))
     except Invalid:
         pass
     def quoted(match):
         try:
-            return canonical(scrub(strict_json(match.group())))
+            return canonical(scrub(strict_json(match.group()), preserved))
         except Invalid:
             return match.group()
     # Decode nested JSON strings/escaped keys before applying key/value patterns.
@@ -844,7 +848,7 @@ def _record(args):
             raise Invalid(result["failure_codes"][0])
         response = parse_response(text_file(args.output))
         validate_response(response, plan, args.tag)
-        response = scrub(response)
+        response = scrub(response, frozenset(plan["paths"]))
         validate_response(response, plan, args.tag)
         result.update(valid=True, response=response, response_digest=digest(response))
     except Invalid as exc:
@@ -912,8 +916,8 @@ def aggregate(args):
                 if result.get("response_digest") != digest(response):
                     raise Invalid("invalid_response_digest")
                 responded.append(tag)
-                findings.extend({"tag": tag, **scrub(item)} for item in response["findings"])
-                uncertainties.extend({"tag": tag, "text": scrub(text)} for text in response["uncertainties"])
+                findings.extend({"tag": tag, **scrub(item, frozenset(plan["paths"]))} for item in response["findings"])
+                uncertainties.extend({"tag": tag, "text": scrub(text, frozenset(plan["paths"]))} for text in response["uncertainties"])
             except Invalid as exc:
                 failures.append(f"{exc}:{tag}")
         failures.extend(f"missing_result:{tag}" for tag in sorted(required - seen))
@@ -927,7 +931,7 @@ def aggregate(args):
                 attempts = strict_json(text_file(path))
                 if not isinstance(attempts, list) or len(attempts) > 32:
                     raise Invalid("invalid_attempt_history")
-                history[tag] = scrub(attempts)
+                history[tag] = scrub(attempts, frozenset(plan["paths"]) if plan else frozenset())
             except Invalid:
                 failures.append(f"invalid_attempt_history:{tag}")
     mode = "blocked" if failures else "review" if uncertainties or any(
