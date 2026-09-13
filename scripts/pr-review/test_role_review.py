@@ -128,6 +128,7 @@ class RoleReviewTests(unittest.TestCase):
                               "access_token", "client_secret", "secret", "passwd", "password", "token")
                   for quote in ("\"", "'", "")]
         cases += [("X_API_KEY='" + opaque + "'", opaque)]
+        cases = [(prefix + text, secret) for prefix in ("", "토큰", "é", "word\u200b", "word\u2028") for text, secret in cases]
         path = "fixtures/_ghp_" + "z" * 30 + "_.txt"
         self.prepare(patch(path))
         result = self.record("codex", self.response("codex", checks=[

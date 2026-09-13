@@ -735,11 +735,22 @@ SENSITIVE_KEY = re.compile(
 )
 
 
-def strip_controls(value):
+API_KEY_PATTERN = re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{16,}")
+
+
+def strip_controls(value, protect_api_boundary=False):
     value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
-    return "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+    result = []
+    for index, char in enumerate(value):
+        if char in "\n\r\t" or unicodedata.category(char) not in ("Cc", "Cf", "Zl", "Zp"):
+            result.append(char)
+        elif (protect_api_boundary and result and re.fullmatch(r"[A-Za-z0-9_]", result[-1])
+              and API_KEY_PATTERN.match(value, index + 1)):
+            # Do not join a word to a key across a removed legacy separator.
+            result.append(" ")
+    return "".join(result)
 
 
 def scrub(value, preserved=frozenset()):
@@ -766,7 +777,7 @@ def scrub(value, preserved=frozenset()):
         return value
     if value in preserved:
         return value
-    value = strip_controls(value)
+    value = strip_controls(value, protect_api_boundary=True)
     try:
         decoded = strict_json(value)
         if isinstance(decoded, (dict, list)):
@@ -793,8 +804,8 @@ def scrub(value, preserved=frozenset()):
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
         r"(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}",
         r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})",
-        # Match the legacy API-key boundary; word suffixes such as task- are not keys.
-        r"\bsk-[A-Za-z0-9_-]{16,}",
+        # Match the legacy ASCII boundary; word suffixes such as task- are not keys.
+        API_KEY_PATTERN.pattern,
         r"xox[abprs]-[A-Za-z0-9-]{10,}",
         r"AIza[0-9A-Za-z_-]{30,}",
         r"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
