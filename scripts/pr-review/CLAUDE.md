@@ -6,8 +6,8 @@ no-tools profile. Their current behavior remains authoritative until activation.
 See [the runbook](../../docs/runbooks/pr-review-panel.md) and
 [legacy tests](../../tests/unit/test-pr-review-panel.sh).
 
-[README.md](README.md) defines the planned specialist contract. The Python library,
-its tests and its test workflow arrive in a later implementation PR. Run those
-checks only once present. Keep new documentation in English; planned protocol
+[README.md](README.md) defines the staged specialist contract. The Python library,
+its tests and its offline test workflow are installed. Executors and activation
+remain separate; run the documented protocol tests. Keep new documentation in English; planned protocol
 output becomes English at activation. Preserve source custody, budgets and
 current safety controls when integrating the executors.

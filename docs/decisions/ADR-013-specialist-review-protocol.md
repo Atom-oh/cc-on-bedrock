@@ -10,8 +10,7 @@ runtime_required: false
 ## Status
 
 Accepted, 2026-09-13. Documentation language convention: **LIVE** with the
-incremental migration rule below. Specialist protocol: **GATED**, implementation
-planned; legacy execution and review-output language remain active until a
+incremental migration rule below. Specialist protocol: **GATED**, offline library staged; legacy execution and review-output language remain active until a
 separate reviewed activation. No provider or application behavior changes here.
 
 ## Context
@@ -49,7 +48,7 @@ English with protocol activation; the current legacy prompts remain in force unt
 This records the approved protocol design; it does not supersede the live legacy
 workflow yet. The activation change must identify which older execution/coverage
 rules it replaces and preserve their remaining security and ownership decisions.
-See [the module contract](../../scripts/pr-review/README.md) for planned interfaces
+See [the module contract](../../scripts/pr-review/README.md) for library interfaces
 and offline checks. Model access and production execution require separate evidence.
 
 The target Sol configuration intentionally replaces the legacy Terra review slot
@@ -69,8 +68,8 @@ The machine tag `kiro-fable` is a compatibility identifier for the Opus AWS role
 not a model-brand assertion; its requested model is recorded separately. Renaming
 receipt keys is outside this policy change.
 
-Only static policy consistency is required here. Provider access, executable
-protocol tests and runtime activation evidence belong to their later changes.
+Static policy checks and offline protocol tests apply to the staged library.
+Provider access and runtime activation evidence belong to the later activation.
 
 ## Verification
 
