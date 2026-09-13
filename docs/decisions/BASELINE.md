@@ -51,6 +51,7 @@
 | **DEFERRED** | Codex on Bedrock | 후속 확장. 현 타깃은 Claude Code on Bedrock | §0 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
+| **LIVE** | Documentation language | English for documentation/ADRs/comments; Korean conversation/UI remain supported. Review output changes at protocol activation. | ADR-013 |
 | **GATED** | Specialist review protocol | Library staged; target Astra + Opus + Sol + Fable, activation follows separately | ADR-013 |
 | **LIVE** | PR-review 패널 로스터 | Codex + Kiro x2(`claude-opus-5`, `gpt-5.6-terra`), 12 cell (기존 Codex + Kiro x3, 16 cell에서 축소). `glm-5`(kiro-glm)는 오탐률(false-positive) 문제로 제외 | AWS-Demo-Platform 저장소 ADR-015 (cross-repo) |
 
@@ -58,7 +59,7 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> 통합 ADR 11개 (옛 34개 → 통합) + 신규 ADR-012. 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
+> 통합 ADR 11개 (옛 34개 → 통합) + 신규 ADR-012/013. 옛 본문 → `../history/ADR-MAPPING.md` + git tag `adr-legacy-2026-06-23`.
 > **상태:** Phase 2 완료 — 통합 ADR 11개(`ADR-001`~`ADR-011`) 작성됨. 옛 ADR-001~034 본문은 git tag `adr-legacy-2026-06-23` + `../history/ADR-MAPPING.md`(트리에서 제거). 신규 ADR-012/013 작성됨; 다음 신규 ADR은 014부터 순증(reset 일괄 재번호 예외와 무관).
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
@@ -74,8 +75,8 @@
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
-| 013 | Specialist PR review | Inactive protocol; explicit Terra-to-Sol target and Astra correctness role | New |
 | 012 | DevEnv 헬스 판정 | 직접 8080 probe 제거(SG 격리로 timeout) → EC2 lifecycle 파생(running+privateIp⇒HEALTHY), 낙관적 false-positive trade-off 수용 | (신규) |
+| 013 | Specialist PR review | Inactive protocol; explicit Terra-to-Sol target and Astra correctness role | (신규) |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 

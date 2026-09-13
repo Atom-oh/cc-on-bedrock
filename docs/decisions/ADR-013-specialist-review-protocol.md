@@ -5,6 +5,12 @@
 Accepted, 2026-09-13 (design; not live activation). Protocol library staged; the legacy workflow is still
 active. Activation must be reviewed separately with its input and runner controls.
 
+## Context
+
+Repeated lens requests and conflicting documentation increase review latency and
+false positives. The owner selected specialist roles and English-only repository
+documentation to reduce duplicated context.
+
 ## Decision
 
 Assign distinct responsibilities to the supported model pool instead of repeating
@@ -17,7 +23,14 @@ A complete report without blocking candidates or uncertainty may receive a
 deterministic summary. A chair adjudicates substantive candidates, but cannot
 waive missing or invalid coverage. Preserve existing project input exclusions,
 secret/state custody, context and budgets. No quota or billing limits are raised.
-Review instructions and output are English to avoid duplicate translations.
+Repository documentation, ADRs and code comments use English. Operator conversation
+and product UI localization may remain Korean. When updating an old bilingual guide,
+keep the current English content and remove its stale duplicate translation; immutable
+historical evidence retains its original text. Missing Korean duplicates are not defects.
+This documentation convention is active now. Automated review output switches to
+English with protocol activation; the current legacy prompts remain in force until then.
+
+## Consequences and activation
 
 This records intent and the new library; it does not supersede the live legacy
 workflow yet. The activation change must identify which older execution/coverage
