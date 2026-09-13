@@ -75,3 +75,14 @@ also have offline checks for the candidate implementation. Review the latest HEA
 resolve real Critical/Major findings, satisfy required CI and branch rules, and
 verify the integration path before merge. Missing review or quota failure is not
 a clean result. Model limits and required gates remain in force.
+
+## Approved source scope
+
+`role-input-scope.json` preserves this repository's existing lockfile/generated-
+asset exclusions. The trusted base copy classifies immutable Git paths before
+requests are prepared. Provenance records every excluded path and both raw and
+approved diff hashes. Renames are expanded into deletion/addition records so a
+source path cannot disappear through an artifact rename. A verified exclusions-
+only change is explicitly NOT_APPLICABLE and invokes no model; missing inputs,
+unknown exclusions and truncated required source remain blocked. The policy does
+not authorize excluding additional source merely to obtain a pass.

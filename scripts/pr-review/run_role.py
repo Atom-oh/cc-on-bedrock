@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure, frame_request, MAX_REQUEST_BYTES
+from role_review import diagnostic_failure, issue_request, MAX_REQUEST_BYTES
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -134,7 +134,7 @@ def run(work, tag):
     output = ""
     error = ""
     code = 1
-    nonce = secrets.token_hex(16)
+    nonce, framed_prompt, payload = issue_request(work, tag)
     with tempfile.TemporaryDirectory(prefix=f"{tag}-", dir=runtime) as temporary:
         cwd = Path(temporary)
         if tag.startswith("kiro-"):
@@ -148,7 +148,6 @@ def run(work, tag):
                 )
                 code = code or 1
             else:
-                framed_prompt, payload = frame_request(prompt, diff, nonce)
                 instruction = framed_prompt + "\n" + payload
                 if len(instruction.encode()) >= MAX_REQUEST_BYTES:
                     code, error = 1, "Complete Kiro input exceeds argument limit."
@@ -158,8 +157,7 @@ def run(work, tag):
                         "--agent", "inline-review", "--no-interactive", "--wrap", "never",
                     ]
                     for _ in range(attempts):
-                        nonce = secrets.token_hex(16)
-                        framed_prompt, payload = frame_request(prompt, diff, nonce)
+                        nonce, framed_prompt, payload = issue_request(work, tag)
                         command[2] = framed_prompt + "\n" + payload
                         code, output, error = execute(
                             command, cwd, kiro_environment(cwd, environment), "", timeout
@@ -186,8 +184,7 @@ def run(work, tag):
             else:
                 raise ValueError("Unknown specialist")
             for _ in range(attempts):
-                nonce = secrets.token_hex(16)
-                framed_prompt, payload = frame_request(prompt, diff, nonce)
+                nonce, framed_prompt, payload = issue_request(work, tag)
                 if tag == "codex":
                     command[-1] = "-"
                     delivered = framed_prompt + "\n" + payload

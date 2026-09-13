@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "basenames": [
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    ".terraform.lock.hcl"
+  ],
+  "extensions": [
+    ".pptx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".pdf",
+    ".vsix",
+    ".zip"
+  ],
+  "directories": [
+    "node_modules",
+    "dist",
+    "out",
+    "build"
+  ],
+  "prefixes": []
+}

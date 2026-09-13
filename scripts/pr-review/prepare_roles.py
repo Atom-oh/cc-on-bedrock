@@ -62,6 +62,29 @@ def context_at(revision, cap):
     return context
 
 
+def selected_paths(base, paths):
+    """Apply only exclusions committed in the trusted project's scope contract."""
+    source = git_file(base, "scripts/pr-review/role-input-scope.json")
+    if source is None:
+        return paths, [], None
+    policy = strict_json(source)
+    if policy.get("schema_version") != 1:
+        raise ValueError("Invalid input scope policy")
+    for field in ("basenames", "extensions", "directories", "prefixes", "path_regexes"):
+        values = policy.get(field, [])
+        if not isinstance(values, list) or any(not isinstance(x, str) or not x for x in values):
+            raise ValueError("Invalid input scope patterns")
+    def excluded(path):
+        item = Path(path)
+        return (item.name in policy.get("basenames", [])
+                or item.suffix in policy.get("extensions", [])
+                or any(part in policy.get("directories", []) for part in item.parts)
+                or any(path.startswith(prefix) for prefix in policy.get("prefixes", []))
+                or any(re.search(pattern, path) for pattern in policy.get("path_regexes", [])))
+    removed = [path for path in paths if excluded(path)]
+    return [path for path in paths if path not in set(removed)], removed, hashlib.sha256(source.encode()).hexdigest()
+
+
 def prepare(head, base, work, supplied_diff=None):
     if not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (head, base)):
         raise ValueError("Review requires immutable commit SHAs")
@@ -107,14 +130,19 @@ def prepare(head, base, work, supplied_diff=None):
         context = context_at(base, cap)
         context_at(head, cap)  # Candidate bytes never become instructions.
         options = [
-            "git", "-c", "diff.noprefix=false", "diff", "--no-ext-diff",
+            "git", "--literal-pathspecs", "-c", "diff.noprefix=false", "diff", "--no-ext-diff",
             "--no-textconv", "--no-color", "--no-renames", merge_base, head,
         ]
-        diff = command(*options, "--")
-        paths = [path for path in command(*options, "--name-only", "-z", "--").split("\0") if path]
+        raw_diff = command(*options, "--")
+        scope_paths = [path for path in command(*options, "--name-only", "-z", "--").split("\0") if path]
+        paths, excluded, scope_digest = selected_paths(base, scope_paths)
+        diff = command(*options, "--", *paths) if paths else ""
         provenance = {
             "head_sha": head, "base_sha": base, "merge_base_sha": merge_base,
-            "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(), "scope_paths": paths,
+            "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(), "scope_paths": scope_paths,
+            "raw_diff_sha256": hashlib.sha256(raw_diff.encode()).hexdigest(),
+            "excluded_paths": excluded, "input_policy_sha256": scope_digest,
+            "scope_exception": "configured_exclusions_only" if excluded and not paths else None,
         }
     work.mkdir(parents=True, exist_ok=True)
     (work / "project-context.md").write_bytes(context.encode("utf-8"))

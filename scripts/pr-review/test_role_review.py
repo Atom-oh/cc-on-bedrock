@@ -1,5 +1,10 @@
 """Behavioral CLI tests; no network, credentials or model calls."""
 
+from concurrent.futures import ThreadPoolExecutor
+import importlib.util
+import threading
+from types import SimpleNamespace
+from unittest.mock import patch as mock_patch
 import json
 from pathlib import Path
 import subprocess
@@ -79,9 +84,13 @@ class RoleReviewTests(unittest.TestCase):
             self.response(tag) if response is None else response
         ))
         diagnostic.write_text(stderr)
+        receipt = self.work / "slot" / f"{tag}-request.json"
+        if not receipt.exists():
+            self.cli("issue", "--work", self.work, "--tag", tag)
+        nonce = json.loads(receipt.read_text())["invocation_nonce"]
         self.cli(
             "record", "--work", self.work, "--tag", tag, "--output", output,
-            "--stderr", diagnostic, "--exit-code", rc, "--nonce", "c" * 32, expected=expected,
+            "--stderr", diagnostic, "--exit-code", rc, "--nonce", nonce, expected=expected,
         )
         return self.read(f"slot/{tag}-result.json")
 
@@ -138,6 +147,8 @@ class RoleReviewTests(unittest.TestCase):
             patch(after='const origin = "internal-app.ap-northeast-2.elb.amazonaws.com";'),
             patch(after='const resource = "aws_iam_role";'),
             patch("misc/unknown.xyz"),
+            patch("app/src/app/history/page.tsx"),
+            patch("dashboard/frontend/app/page.tsx"),
         ):
             with self.subTest(raw=raw):
                 plan = self.prepare(raw)
@@ -211,6 +222,18 @@ class RoleReviewTests(unittest.TestCase):
             ('client_secret="' + "E" * 35 + '"', "E" * 35),
             ("aws_access_key_id=" + "F" * 35, "F" * 35),
             ("AWS_SESSION_TOKEN=\n" + "G" * 35, "G" * 35),
+            ("postgresql://user:database-private-value@database.local/app", "database-private-value"),
+            ("mongodb+srv://user:document-private-value@database.local/app", "document-private-value"),
+            ("https://hooks.slack.com/services/T123/B123/webhook-private-value", "webhook-private-value"),
+            ('MasterUserPassword = "master-private-value"', "master-private-value"),
+            ('dbPassword: "database-private-value"', "database-private-value"),
+            ("password: |\n  block-private-value\nnext: safe", "block-private-value"),
+            ("- name: DATABASE_PASSWORD\n  value: env-private-value", "env-private-value"),
+            ("mongodb://:empty-user-private@database.local/app", "empty-user-private"),
+            ("Cookie: session=cookie-private-value", "cookie-private-value"),
+            ('originSecret="origin-private-value"', "origin-private-value"),
+            ('mcpToken="mcp-private-value"', "mcp-private-value"),
+            ("x-origin-verify: origin-header-private", "origin-header-private"),
         ]
         for index, (text, secret) in enumerate(cases):
             with self.subTest(kind=text.split("=", 1)[0][:24]):
@@ -218,7 +241,7 @@ class RoleReviewTests(unittest.TestCase):
                 self.prepare()
                 response = self.response("codex")
                 response["checks"][0]["evidence"] = text
-                escaped = json.dumps(response).replace(secret[0], "\\u" + format(ord(secret[0]), "04x"))
+                escaped = json.dumps(response).replace(secret, "".join("\\u" + format(ord(char), "04x") for char in secret))
                 result = self.record("codex", raw=escaped)
                 self.assertNotIn(secret, json.dumps(result))
                 self.record("claude-self")
@@ -249,10 +272,159 @@ class RoleReviewTests(unittest.TestCase):
             patch().rsplit("+new label", 1)[0],
             "diff --git a/new.py b/new.py\nnew file mode 100644\n--- /dev/null\n+++ b/new.py\n",
             "diff --git a/old.py b/old.py\ndeleted file mode 100644\n--- a/old.py\n+++ /dev/null\n",
+            "diff --git a/new.py b/new.py\nnew file mode 100644\nindex 0000000..7898192\n",
+            "diff --git a/new.py b/new.py\nnew file mode 100644\n",
         ):
             with self.subTest(raw=raw):
                 self.prepare(raw, expected=2)
                 self.assert_blocked()
+
+    def test_empty_file_creation_has_explicit_empty_blob_evidence(self):
+        raw = "diff --git a/empty b/empty\nnew file mode 100644\nindex 0000000..e69de29\n"
+        self.assertTrue(self.prepare(raw)["input_complete"])
+
+    def test_reprepare_cannot_reuse_old_successful_results(self):
+        self.prepare()
+        self.finish()
+        self.prepare()
+        self.assertFalse(list((self.work / "slot").glob("*-result.json")))
+        self.assert_blocked()
+
+    def test_reissue_retains_terminal_failure_and_blocks_clean_replacement(self):
+        self.prepare()
+        self.record("codex", stderr="[warn] failed to set model", expected=2)
+        self.cli("issue", "--work", self.work, "--tag", "codex")
+        self.record("codex")
+        self.record("claude-self")
+        self.assert_blocked()
+        history = self.read("slot/codex-attempts.json")
+        self.assertIn("model_selection_diagnostic", history[0]["failure_codes"])
+
+    def test_issued_request_persists_the_exact_framed_payload(self):
+        self.prepare()
+        self.cli("issue", "--work", self.work, "--tag", "codex")
+        request = self.read("slot/codex-request.json")
+        nonce = request["invocation_nonce"]
+        payload = (self.work / "requests/codex.input").read_text()
+        self.assertTrue(payload.startswith(f"BEGIN DIFF {nonce}\n"))
+        self.assertTrue(payload.endswith(f"\nEND DIFF {nonce}\n"))
+        self.assertIn(self.diff.read_text(), payload)
+        self.prepare()
+        self.assertFalse((self.work / "slot/codex-request.json").exists())
+
+    def test_corrupt_attempt_history_produces_a_blocked_summary(self):
+        self.prepare()
+        self.finish()
+        (self.work / "slot/codex-attempts.json").write_text("{broken")
+        self.assert_blocked()
+        self.assertIn("invalid_attempt_history:codex", self.read("role-summary.json")["failures"])
+
+    def test_hunkless_content_changes_cannot_claim_complete_input(self):
+        headers = "diff --git a/file.txt b/file.txt\n"
+        cases = (
+            headers + "new file mode 100644\n",
+            headers + "new file mode 100644\nindex 0000000..1234567\n",
+            headers + "new file mode 100644\nindex 0000000..1234567\n--- /dev/null\n+++ b/file.txt\n",
+            headers + "deleted file mode 100644\nindex 1234567..0000000\n",
+            headers + "old mode 100644\nnew mode 100755\nindex 1234567..abcdef0\n",
+            "diff --git a/old.txt b/new.txt\nsimilarity index 85%\n"
+            "rename from old.txt\nrename to new.txt\nindex 1234567..abcdef0\n",
+            "diff --git a/old.txt b/new.txt\nsimilarity index 85%\n"
+            "copy from old.txt\ncopy to new.txt\n",
+        )
+        for index, raw in enumerate(cases):
+            with self.subTest(index=index):
+                self.work = self.root / f"cut-metadata-{index}"
+                self.prepare(raw, expected=2)
+                self.assert_blocked()
+
+    def test_genuinely_empty_files_and_pure_copies_need_no_hunk(self):
+        for raw, expected_path in (
+            ("diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n"
+             "index 0000000..e69de29\n", "empty.txt"),
+            ("diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\n"
+             "index e69de29..0000000\n", "empty.txt"),
+            ("diff --git a/old.txt b/new.txt\nsimilarity index 100%\n"
+             "copy from old.txt\ncopy to new.txt\n", "new.txt"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.prepare(raw)["paths"], [expected_path])
+
+    def test_unterminated_private_keys_are_removed_from_public_results(self):
+        for index, kind in enumerate(("", "RSA ", "EC ", "OPENSSH ")):
+            with self.subTest(kind=kind):
+                self.work = self.root / f"unterminated-key-{index}"
+                self.prepare()
+                secret = "SYNTHETIC_PRIVATE_FRAGMENT"
+                evidence = f"-----BEGIN {kind}PRIVATE KEY-----\n{secret}\ncut off"
+                response = self.response("codex", findings=[{
+                    "severity": "MINOR", "path": FRONTEND,
+                    "condition": "When diagnostics contain a partial key", "evidence": evidence,
+                }])
+                result = self.record("codex", raw=json.dumps(response))
+                self.assertTrue(result["valid"])
+                self.assertNotIn(secret, json.dumps(result))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                self.assertNotIn(secret, (self.work / "deterministic-review.md").read_text())
+
+    def test_charset_escapes_cannot_split_recoverable_credentials(self):
+        for index, escape in enumerate(("\x1b(B", "\x1b)0", "\x1b#8", "\x1b%G")):
+            with self.subTest(escape=repr(escape)):
+                self.work = self.root / f"charset-{index}"
+                self.prepare()
+                evidence = "ghp_" + "A" * 18 + escape + "B" * 18
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": evidence}])
+                result = self.record("codex", raw=json.dumps(response))
+                self.assertNotIn("B" * 18, json.dumps(result))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                self.assertNotIn("B" * 18, (self.work / "deterministic-review.md").read_text())
+
+    def test_aws_sdk_credential_field_names_are_redacted(self):
+        for index, key in enumerate(("SecretAccessKey", "SessionToken", "AccessKeyId")):
+            with self.subTest(key=key):
+                self.work = self.root / f"sdk-key-{index}"
+                self.prepare()
+                secret = "SYNTHETIC_PRIVATE_SDK_VALUE"
+                evidence = json.dumps({key: secret})
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": evidence}])
+                self.assertNotIn(secret, json.dumps(self.record("codex", response=response)))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                self.assertNotIn(secret, (self.work / "deterministic-review.md").read_text())
+
+    def test_concurrent_record_cannot_overwrite_a_failed_attempt(self):
+        self.prepare()
+        self.record("claude-self")
+        spec = importlib.util.spec_from_file_location("record_race_test", ENGINE)
+        engine = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(engine)
+        output, stderr = self.root / "held-response.json", self.root / "race.stderr"
+        output.write_text(json.dumps(self.response("codex")))
+        stderr.write_text("")
+        nonce, _, _ = engine.issue_request(self.work, "codex")
+        args = dict(work=self.work, tag="codex", output=output, stderr=stderr, nonce=nonce)
+        entered, release = threading.Event(), threading.Event()
+        original = engine.text_file
+
+        def hold_response(path):
+            if Path(path) == output:
+                entered.set()
+                if not release.wait(10):
+                    raise AssertionError("record race did not release the first writer")
+            return original(path)
+
+        with mock_patch.object(engine, "text_file", side_effect=hold_response):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(engine.record, SimpleNamespace(**args, exit_code=0))
+                try:
+                    self.assertTrue(entered.wait(5))
+                    self.assertEqual(engine.record(SimpleNamespace(**args, exit_code=1)), 2)
+                finally:
+                    release.set()
+                self.assertEqual(pending.result(timeout=5), 0)
+        self.assert_blocked()
 
     def test_mode_only_and_git_octal_quoted_paths(self):
         for raw, expected_path in (
@@ -494,7 +666,7 @@ class RoleReviewTests(unittest.TestCase):
 
     def test_failure_flags_override_valid_responses_and_remove_stale_pass(self):
         for name in ("kiro-preflight-failed.flag", "kiro-fallback.flag", "kiro-quota.flag",
-                     "slot/kiro-diff-truncated.flag", "diff-truncated.flag"):
+                     "slot/kiro-diff-truncated.flag", "diff-truncated.flag", "slot/coverage-severe.flag"):
             with self.subTest(name=name):
                 self.work = self.root / name.replace("/", "-")
                 self.prepare()

@@ -57,6 +57,12 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
+      - name: Prepare fresh review workspace
+        run: |
+          test ! -L /tmp/pr-review
+          rm -rf -- /tmp/pr-review
+          mkdir -p /tmp/pr-review
+
       - name: Verify CLIs present (runner image)
         run: |
           command -v claude >/dev/null 2>&1 || { echo "::warning::claude not found"; npm install -g @anthropic-ai/claude-code; }
@@ -167,10 +173,12 @@ jobs:
           name: specialist-review-${{ github.event.pull_request.head.sha }}
           path: |
             /tmp/pr-review/slot/*-result.json
+            /tmp/pr-review/slot/*-request.json
             /tmp/pr-review/slot/*-timing.json
             /tmp/pr-review/slot/*.flag
             /tmp/pr-review/role-plan.json
             /tmp/pr-review/role-summary.json
+            /tmp/pr-review/role-source.json
           if-no-files-found: error
 
       - name: Check for blocking issues

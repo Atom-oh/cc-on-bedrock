@@ -68,6 +68,10 @@ class EndToEndRoleTests(unittest.TestCase):
         self.assertTrue((target / "lib.sh").exists(), "Repository scrubbers must be available")
         (self.repo / "AGENTS.md").write_text("Trusted project context: preserve data and auth.\n")
         (self.repo / "CLAUDE.md").write_text("Project source instructions.\n")
+        (target / "role-input-scope.json").write_text(json.dumps({
+            "schema_version": 1, "basenames": ["package-lock.json"],
+            "extensions": [".png"], "directories": [], "prefixes": [],
+        }))
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Review tests")
         self.git("config", "user.email", "tests@example.invalid")
@@ -104,7 +108,8 @@ class EndToEndRoleTests(unittest.TestCase):
             "--work", str(self.work), "--output", str(self.work / "review.md"),
         ], cwd=self.repo, env=self.environment, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        return [json.loads(line) for line in (self.root / "calls.jsonl").read_text().splitlines()]
+        calls = self.root / "calls.jsonl"
+        return [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 
     def test_frontend_uses_two_reviews_and_no_chair(self):
         calls = self.run_pipeline("frontend/components/Button.tsx")
@@ -128,6 +133,16 @@ class EndToEndRoleTests(unittest.TestCase):
         calls = self.run_pipeline("frontend/components/Button.tsx")
         self.assertEqual(len(calls), 3)
         self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_approved_asset_only_scope_skips_models_without_losing_provenance(self):
+        calls = self.run_pipeline("frontend/public/icon.png")
+        self.assertEqual(calls, [])
+        source = json.loads((self.work / "role-source.json").read_text())
+        self.assertEqual(source["excluded_paths"], ["frontend/public/icon.png"])
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_approved_lockfile_only_scope_skips_models(self):
+        self.assertEqual(self.run_pipeline("frontend/package-lock.json"), [])
 
 
 if __name__ == "__main__":
