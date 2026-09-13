@@ -47,7 +47,7 @@ ROLES = {
 }
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 FRONTEND_PATH = re.compile(
-    r"(?:^|/)(?:frontend|components|pages|styles|ui|web|app|assets|public)/", re.I
+    r"(?:^|/)(?:frontend|components|pages|styles|ui|web|assets|public)/", re.I
 )
 AWS_SIGNAL = re.compile(
     r"\b(?:aws|amazon|iam|vpc|subnet|cloudfront|cloudformation|terraform|"
@@ -79,6 +79,8 @@ FAILURE_CODES = {
     "model_fallback_diagnostic", "quota_diagnostic", "agent_preflight_diagnostic",
     "duplicate_record",
 }
+TERMINAL_CODES = {"model_selection_diagnostic", "model_fallback_diagnostic",
+                  "quota_diagnostic", "agent_preflight_diagnostic"}
 
 
 class Invalid(Exception):
@@ -293,7 +295,9 @@ def diff_paths(text, manifest=None, metadata_only=()):
 
 def routing(paths, diff):
     clear_frontend = bool(paths) and all(
-        FRONTEND_PATH.search(p) and Path(p).suffix.lower() in
+        FRONTEND_PATH.search(p) and not (
+            re.search(r"(?:^|/)app/", p) and Path(p).suffix.lower() in {".tsx", ".jsx"}
+        ) and Path(p).suffix.lower() in
         {".tsx", ".jsx", ".css", ".scss", ".sass", ".less", ".html", ".svg"}
         for p in paths
     )
@@ -363,6 +367,25 @@ def invocation_digest(prepared_digest, nonce):
     return digest({"prepared_request_digest": prepared_digest, "invocation_nonce": nonce})
 
 
+def excluded_only(provenance):
+    if not isinstance(provenance, dict):
+        return False
+    paths = provenance.get("scope_paths")
+    if not isinstance(paths, list) or not paths or any(not isinstance(p, str) for p in paths):
+        return False
+    try:
+        if len({repo_path(p) for p in paths}) != len(paths):
+            return False
+    except Invalid:
+        return False
+    return (
+        provenance.get("scope_exception") == "configured_exclusions_only"
+        and isinstance(provenance.get("input_policy_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", provenance["input_policy_sha256"]) is not None
+        and paths == provenance.get("excluded_paths")
+    )
+
+
 def prepare(args):
     work = Path(args.work)
     failures = []
@@ -392,7 +415,8 @@ def prepare(args):
         metadata_only = scope.get("path_only", []) if isinstance(scope, dict) else []
         if not isinstance(metadata_only, list) or any(not isinstance(x, str) for x in metadata_only):
             raise Invalid("invalid_input_provenance")
-        paths = diff_paths(diff, manifest, metadata_only)
+        empty_scope = not raw and manifest == [] and excluded_only(scope)
+        paths = [] if empty_scope else diff_paths(diff, manifest, metadata_only)
     except Invalid as exc:
         paths = []
         failures.append(str(exc))
@@ -420,6 +444,8 @@ def prepare(args):
         "paths": paths, "roles": {}, "provenance": provenance,
     }
     routes = routing(paths, diff)
+    if not raw and not paths and excluded_only(provenance):
+        routes = {tag: (False, "approved_exclusions_only") for tag in ROLES}
     for tag, (slug, family, model, description) in ROLES.items():
         required, reason = routes[tag]
         role = {"required": required, "role": slug, "family": family, "model": model,
@@ -451,6 +477,9 @@ def prepare(args):
     for pattern in ("*.record-claim", "*-duplicate.flag"):
         for previous in (work / "slot").glob(pattern):
             remove(previous)
+    for tag in ROLES:
+        remove(work / "slot" / f"{tag}-attempts.json")
+        remove(work / "slot" / f"role-{tag}-terminal.flag")
     for name in ("role-summary.json", "responded.txt", "chair-mode.txt",
                  "deterministic-review.md", "coverage-severe.flag"):
         remove(work / name)
@@ -473,7 +502,9 @@ def load_plan(work):
                 raise Invalid("invalid_plan_identity")
             if type(role["required"]) is not bool:
                 raise Invalid("invalid_plan_requirement")
-            if tag in ("codex", "claude-self") and not role["required"]:
+            if (tag in ("codex", "claude-self") and not role["required"]
+                    and not (plan["paths"] == [] and plan["diff_bytes"] == 0
+                             and excluded_only(plan.get("provenance")))):
                 raise Invalid("missing_independent_role")
             if role["paths"] != (plan["paths"] if role["required"] else []):
                 raise Invalid("invalid_plan_scope")
@@ -506,7 +537,19 @@ def issue_request(work, tag):
         "request_digest": invocation_digest(role["request_digest"], nonce),
         "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
     }
-    remove(work / "slot" / f"{tag}-result.json")
+    previous = work / "slot" / f"{tag}-result.json"
+    if previous.exists():
+        prior = strict_json(text_file(previous))
+        history_file = work / "slot" / f"{tag}-attempts.json"
+        history = strict_json(text_file(history_file)) if history_file.exists() else []
+        if not isinstance(history, list) or len(history) >= 32:
+            raise Invalid("attempt_history_limit")
+        history.append(prior)
+        write_json(history_file, history)
+        terminal = TERMINAL_CODES.intersection(prior.get("failure_codes", []))
+        if terminal:
+            write(work / "slot" / f"role-{tag}-terminal.flag", "\n".join(sorted(terminal)) + "\n")
+    remove(previous)
     remove(work / "slot" / f"{tag}.record-claim")
     remove(work / "slot" / f"{tag}-duplicate.flag")
     write(work / "requests" / f"{tag}.prompt", instruction)
@@ -630,11 +673,11 @@ def scrub(value):
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
     value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
-    key = (
-        r"(?i:(?<![A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:password|passwd|api[_-]?key|"
-        r"secret|token|aws_secret_access_key|aws_access_key_id|access[_-]?token|client[_-]?secret|SecretAccessKey|SessionToken|AccessKeyId))"
-        r"""["']?\s*[:=]\s*"""
+    identifier = (
+        r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
+        r"secret|token|credential|passphrase|private[_-]?key|cookie|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_-]*)"
     )
+    key = identifier + r"""["']?\s*[:=]\s*"""
     patterns = (
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
         r"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b",
@@ -645,8 +688,12 @@ def scrub(value):
         r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
         r"(?i:\bBearer\s+)[A-Za-z0-9_.~+/-]+=*",
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
-        r"""[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']+:[^@\s/"']+@""",
+        r"""[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
+        r"""(?im)^[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
+        r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
+        key + r"[|>][-+]?[ \t]*\r?\n(?:[ \t]+[^\r\n]*(?:\r?\n|\Z))+",
+        r"""(?i:\bname)\s*:\s*["']?""" + identifier + r"""["']?[ \t]*\r?\n[ \t]*(?i:value)\s*:[^\r\n]*""",
         key + r"""(?P<quote>["']).*?(?P=quote)""",
         key + r"""[^\s"',;}\]]+""",
     )
@@ -773,6 +820,17 @@ def aggregate(args):
         failures.extend(f"missing_result:{tag}" for tag in sorted(required - seen))
     except Invalid as exc:
         failures.append(str(exc))
+    history = {}
+    for tag in ROLES:
+        path = work / "slot" / f"{tag}-attempts.json"
+        if path.exists():
+            try:
+                attempts = strict_json(text_file(path))
+                if not isinstance(attempts, list) or len(attempts) > 32:
+                    raise Invalid("invalid_attempt_history")
+                history[tag] = scrub(attempts)
+            except Invalid:
+                failures.append(f"invalid_attempt_history:{tag}")
     mode = "blocked" if failures else "review" if uncertainties or any(
         f["severity"] in ("CRITICAL", "MAJOR") for f in findings
     ) else "deterministic"
@@ -783,6 +841,7 @@ def aggregate(args):
         "failures": sorted(set(failures)), "responded": sorted(responded),
         "findings": findings, "uncertainties": uncertainties,
         "provenance": plan.get("provenance", {}) if plan else {},
+        "attempt_history": history,
         "failure_codes": sorted(set(failures)),
         "roles": {tag: {**role, "status": "inactive" if not role["required"] else
                        "validated" if tag in responded else "blocked"}
@@ -814,7 +873,9 @@ def aggregate(args):
                 text = canonical(finding)
                 lines.append("- " + text)
             if not findings:
-                lines.append("No findings reported by all required validated role responses.")
+                lines.append("NOT_APPLICABLE: trusted project policy excludes all changed files; no model review was performed."
+                             if plan and excluded_only(plan.get("provenance")) else
+                             "No findings reported by all required validated role responses.")
         lines += ["", "VERDICT: FAIL" if mode == "blocked" else "VERDICT: PASS", ""]
         write(work / "deterministic-review.md", "\n".join(lines))
     return 2 if mode == "blocked" else 0
@@ -834,8 +895,10 @@ def main(argv=None):
     for name in ("diff", "context", "head", "base", "work"):
         prep.add_argument("--" + name, required=True)
     prep.add_argument("--context-cap", type=context_cap, default=MAX_CONTEXT_BYTES)
-    prep.add_argument("--paths")
-    prep.add_argument("--provenance")
+    prep.add_argument("--paths", help="JSON array of complete repository-relative changed paths")
+    prep.add_argument("--provenance", help=(
+        "JSON object with head_sha, base_sha and raw diff_sha256; optional "
+        "input_failures and approved metadata-only deletion path_only arrays"))
     rec = commands.add_parser("record")
     rec.add_argument("--work", required=True)
     rec.add_argument("--tag", required=True, choices=tuple(ROLES))

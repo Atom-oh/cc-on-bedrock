@@ -10,7 +10,7 @@ Kiro `claude-opus-5` checks AWS; Kiro `gpt-5.6-sol` checks operations; Claude
 `global.anthropic.claude-fable-5-1` checks auth/data/API/ADR requirements. Sol is an
 intentional replacement for the legacy Terra slot when activation occurs. Kiro
 aliases and Bedrock profile IDs are separate namespaces. The `kiro-fable` tag is
-the compatibility name of the Opus slot. Review artifacts are English-only.
+the compatibility name of the Opus slot. Prompts request English-only review artifacts; response language is not mechanically validated.
 
 ## API and files
 
@@ -35,6 +35,40 @@ Start each job with a fresh work directory before collecting current inputs.
 `*.flag` files under the work tree as failures, except its own root
 `coverage-severe.flag`. Upload issued receipts alongside results and safe source
 metadata. `failure_codes` is canonical; `failures` is a compatibility alias.
+
+## Collector input schema
+
+`--paths` names a UTF-8 JSON array of unique repository-relative changed paths,
+for example `["src/api.ts", "docs/architecture.md"]`. It must cover the prepared
+patch exactly. Paths cannot escape the repository. Omit this flag only when the
+patch itself is authoritative and its paths are unambiguous.
+
+`--provenance` names a JSON object with these required fields:
+
+| Field | Value |
+| --- | --- |
+| `head_sha` | The same 40-character lowercase Git SHA as `--head`. |
+| `base_sha` | The same 40-character lowercase Git SHA as `--base`. |
+| `diff_sha256` | SHA-256 of the exact raw `--diff` bytes before framing or scrubbing. |
+
+Optional `input_failures` is an array of static failure codes; any entry blocks
+coverage. Optional `path_only` is an array of collector-approved metadata-only
+deletions. The trusted collector must verify deletion scope before withholding
+bodies; this does not permit omitting arbitrary source changes. MRA uses this
+hook for its existing state-file deletion custody policy.
+
+Minimal provenance (replace all values with the actual supplied revisions/hash):
+
+```json
+{"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","diff_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+```
+
+A configured exclusions-only input additionally requires
+`scope_exception: "configured_exclusions_only"`, a 64-character
+`input_policy_sha256`, and matching nonempty `scope_paths` / `excluded_paths`
+arrays of safe unique paths. Its prepared diff and `--paths` must both be empty.
+The upstream collector verifies the approved policy against the base revision.
+A missing or accidentally empty patch never qualifies as this exception.
 
 ## Coverage and limits
 

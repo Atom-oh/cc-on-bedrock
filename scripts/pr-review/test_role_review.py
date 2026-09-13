@@ -147,6 +147,8 @@ class RoleReviewTests(unittest.TestCase):
             patch(after='const origin = "internal-app.ap-northeast-2.elb.amazonaws.com";'),
             patch(after='const resource = "aws_iam_role";'),
             patch("misc/unknown.xyz"),
+            patch("app/src/app/history/page.tsx"),
+            patch("dashboard/frontend/app/page.tsx"),
         ):
             with self.subTest(raw=raw):
                 plan = self.prepare(raw)
@@ -223,6 +225,15 @@ class RoleReviewTests(unittest.TestCase):
             ("postgresql://user:database-private-value@database.local/app", "database-private-value"),
             ("mongodb+srv://user:document-private-value@database.local/app", "document-private-value"),
             ("https://hooks.slack.com/services/T123/B123/webhook-private-value", "webhook-private-value"),
+            ('MasterUserPassword = "master-private-value"', "master-private-value"),
+            ('dbPassword: "database-private-value"', "database-private-value"),
+            ("password: |\n  block-private-value\nnext: safe", "block-private-value"),
+            ("- name: DATABASE_PASSWORD\n  value: env-private-value", "env-private-value"),
+            ("mongodb://:empty-user-private@database.local/app", "empty-user-private"),
+            ("Cookie: session=cookie-private-value", "cookie-private-value"),
+            ('originSecret="origin-private-value"', "origin-private-value"),
+            ('mcpToken="mcp-private-value"', "mcp-private-value"),
+            ("x-origin-verify: origin-header-private", "origin-header-private"),
         ]
         for index, (text, secret) in enumerate(cases):
             with self.subTest(kind=text.split("=", 1)[0][:24]):
@@ -230,7 +241,7 @@ class RoleReviewTests(unittest.TestCase):
                 self.prepare()
                 response = self.response("codex")
                 response["checks"][0]["evidence"] = text
-                escaped = json.dumps(response).replace(secret[0], "\\u" + format(ord(secret[0]), "04x"))
+                escaped = json.dumps(response).replace(secret, "".join("\\u" + format(ord(char), "04x") for char in secret))
                 result = self.record("codex", raw=escaped)
                 self.assertNotIn(secret, json.dumps(result))
                 self.record("claude-self")
@@ -279,6 +290,16 @@ class RoleReviewTests(unittest.TestCase):
         self.assertFalse(list((self.work / "slot").glob("*-result.json")))
         self.assert_blocked()
 
+    def test_reissue_retains_terminal_failure_and_blocks_clean_replacement(self):
+        self.prepare()
+        self.record("codex", stderr="[warn] failed to set model", expected=2)
+        self.cli("issue", "--work", self.work, "--tag", "codex")
+        self.record("codex")
+        self.record("claude-self")
+        self.assert_blocked()
+        history = self.read("slot/codex-attempts.json")
+        self.assertIn("model_selection_diagnostic", history[0]["failure_codes"])
+
     def test_issued_request_persists_the_exact_framed_payload(self):
         self.prepare()
         self.cli("issue", "--work", self.work, "--tag", "codex")
@@ -290,6 +311,13 @@ class RoleReviewTests(unittest.TestCase):
         self.assertIn(self.diff.read_text(), payload)
         self.prepare()
         self.assertFalse((self.work / "slot/codex-request.json").exists())
+
+    def test_corrupt_attempt_history_produces_a_blocked_summary(self):
+        self.prepare()
+        self.finish()
+        (self.work / "slot/codex-attempts.json").write_text("{broken")
+        self.assert_blocked()
+        self.assertIn("invalid_attempt_history:codex", self.read("role-summary.json")["failures"])
 
     def test_hunkless_content_changes_cannot_claim_complete_input(self):
         headers = "diff --git a/file.txt b/file.txt\n"
