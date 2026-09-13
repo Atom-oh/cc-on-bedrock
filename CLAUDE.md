@@ -51,7 +51,7 @@ tests/             - Container integration tests, E2E tests
 - **환경변수 우선순위**: Terraform variable → SSM Parameter → Secrets Manager → 기본값
 
 ## Conventions
-- Korean for docs/communication, English for code/comments
+- Documentation, ADRs and code comments are English-only. Review output adopts English at ADR-013 activation. Operator conversation may be Korean; historical bilingual records do not require new Korean duplicates.
 - Commit messages: conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`)
 - All subnet CIDRs are deploy-time input parameters
 - CloudFront -> ALB security: Prefix List + X-Custom-Secret header
