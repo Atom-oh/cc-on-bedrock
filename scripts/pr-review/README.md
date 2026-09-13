@@ -57,7 +57,7 @@ Require empty diff/paths, `scope_exception: configured_exclusions_only`, lowerca
 shows exclusions/hash. Accidental empty input never qualifies. New exclusions
 need policy review; project-specific exceptions remain.
 
-Start fresh work before collection. `prepare` clears owned outputs, claims,
+Start fresh work before collection. `prepare` clears owned results/receipts, claims,
 duplicate/terminal flags and histories; upstream flags remain. Issue/record exclude
 each other; interrupted operations require fresh work. Duplicate records retain
 the first result and block. Finish writers before aggregation. Reissue archives
@@ -85,3 +85,12 @@ no live provider execution.
 
 Sol replaces this repository's legacy Terra slot at activation; application
 inference models remain unchanged.
+
+Exclusions-only review requires both `--allow-exclusions-only --policy FILE`.
+The trusted BASE collector supplies a schema-1 policy; its exact bytes must match
+`input_policy_sha256`. The private `exclusions-policy.json` anchor is rechecked
+during aggregation. Missing or mismatched opt-in blocks. The collector, not this
+offline library, must establish complete Git scope and approved exclusions.
+
+A valid result cannot be reissued to discard findings or uncertainty. Start a new
+preparation for a new review; failed attempts retain their diagnostic history.
