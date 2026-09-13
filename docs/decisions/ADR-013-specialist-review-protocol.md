@@ -24,3 +24,6 @@ unconditional chair call. Existing security, source-custody, context, ownership
 and budget decisions remain in force.
 See [the module contract](../../scripts/pr-review/README.md) for current interfaces
 and offline checks. Model access and production execution require separate evidence.
+
+Sol intentionally replaces the legacy Terra review slot for fleet consistency;
+application inference model configuration remains unchanged.

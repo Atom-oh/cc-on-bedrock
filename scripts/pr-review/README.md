@@ -10,7 +10,7 @@ Kiro `claude-opus-5` checks AWS; Kiro `gpt-5.6-sol` checks operations; Claude
 `global.anthropic.claude-fable-5-1` checks auth/data/API/ADR requirements. Sol is an
 intentional replacement for the legacy Terra slot in the active workflow. Kiro
 aliases and Bedrock profile IDs are separate namespaces. The `kiro-fable` tag is
-the compatibility name of the Opus slot. Review artifacts are English-only.
+the compatibility name of the Opus slot. Prompts request English-only review artifacts; response language is not mechanically validated.
 
 ## API and files
 
@@ -35,32 +35,6 @@ Start each job with a fresh work directory before collecting current inputs.
 `*.flag` files under the work tree as failures, except its own root
 `coverage-severe.flag`. Upload issued receipts alongside results and safe source
 metadata. `failure_codes` is canonical; `failures` is a compatibility alias.
-
-## Coverage and limits
-
-Trusted code routes untrusted path/content data conservatively. Codex and Claude
-remain required across families; only clearly irrelevant Kiro roles are inactive.
-Missing/failed/invalid required output is never NOT_APPLICABLE. Structural checks
-reject incomplete hunks and incomplete new/deleted-file records; approved
-metadata-only deletions must be explicitly identified by trusted provenance.
-
-Bounds: 95,000 UTF-8 diff bytes, 3,000 lines, up to 24,000 context bytes and a
-complete request below 128 KiB. Projects may impose smaller limits. The caller
-must retain its own source exclusions, state/secret custody and budget controls.
-Never replace a required project collector with raw Git input. There is no chunk
-coordinator: oversized input blocks; independent PASS results cannot be combined
-to claim coverage of a larger change.
-
-Exit 2 means blocked. After aggregate exit 0, read `chair-mode.txt`: `deterministic`
-permits the prepared clean summary, while `review` requires substantive
-adjudication. Coverage failure produces FAIL and cannot be waived by the chair.
-Scope assertions do not prove that every defect was found.
-
-## Verification
-
-`python3 -m unittest discover -s scripts/pr-review -p test_role_review.py -v`
-uses no provider credentials or model calls. Also verify
-executors, project input preparation, invocation limits and exact-head publishing.
 
 ## Collector input schema
 
@@ -96,7 +70,28 @@ arrays of safe unique paths. Its prepared diff and `--paths` must both be empty.
 The upstream collector verifies the approved policy against the base revision.
 A missing or accidentally empty patch never qualifies as this exception.
 
+## Coverage and limits
 
-Each reissue archives prior results in `slot/TAG-attempts.json`. Model-selection,
-fallback, quota and agent-preflight failures stay blocking until a new preparation.
-Summaries retain attempt history; retries cannot erase terminal diagnostics.
+Trusted code routes untrusted path/content data conservatively. Codex and Claude
+remain required across families; only clearly irrelevant Kiro roles are inactive.
+Missing/failed/invalid required output is never NOT_APPLICABLE. Structural checks
+reject incomplete hunks and incomplete new/deleted-file records; approved
+metadata-only deletions must be explicitly identified by trusted provenance.
+
+Bounds: 95,000 UTF-8 diff bytes, 3,000 lines, up to 24,000 context bytes and a
+complete request below 128 KiB. Projects may impose smaller limits. The caller
+must retain its own source exclusions, state/secret custody and budget controls.
+Never replace a required project collector with raw Git input. There is no chunk
+coordinator: oversized input blocks; independent PASS results cannot be combined
+to claim coverage of a larger change.
+
+Exit 2 means blocked. After aggregate exit 0, read `chair-mode.txt`: `deterministic`
+permits the prepared clean summary, while `review` requires substantive
+adjudication. Coverage failure produces FAIL and cannot be waived by the chair.
+Scope assertions do not prove that every defect was found.
+
+## Verification
+
+`python3 -m unittest discover -s scripts/pr-review -p test_role_review.py -v`
+uses no provider credentials or model calls. Also run all `test_*role*.py` tests
+for executors, project input preparation, invocation limits and exact-head publishing.
