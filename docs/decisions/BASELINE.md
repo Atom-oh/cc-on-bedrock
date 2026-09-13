@@ -52,7 +52,7 @@
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
 | **LIVE** | Documentation language | English for documentation/ADRs/comments; Korean conversation/UI remain supported. Review output changes at protocol activation. | ADR-013 |
-| **GATED** | Specialist review protocol | Library staged; target Astra + Opus + Sol + Fable, activation follows separately | ADR-013 |
+| **GATED** | Specialist review protocol | Design accepted; implementation planned next, then activation; target Astra + Opus + Sol + Fable | ADR-013 |
 | **LIVE** | PR-review 패널 로스터 | Codex + Kiro x2(`claude-opus-5`, `gpt-5.6-terra`), 12 cell (기존 Codex + Kiro x3, 16 cell에서 축소). `glm-5`(kiro-glm)는 오탐률(false-positive) 문제로 제외 | AWS-Demo-Platform 저장소 ADR-015 (cross-repo) |
 
 ---
@@ -60,7 +60,7 @@
 ## §3 결정 인덱스 (Decision Index)
 
 > Eleven consolidated ADRs replace the legacy 34; ADR-012/013 are subsequent records.
-> Historical bodies remain in `../history/ADR-MAPPING.md` and tag `adr-legacy-2026-06-23`.
+> `../history/ADR-MAPPING.md` maps retired decisions; tag `adr-legacy-2026-06-23` retains their bodies.
 > Consolidation is complete. ADR-013's protocol is GATED; its documentation language
 > policy is LIVE. The next ADR number is 014; the earlier reset was a one-time exception.
 

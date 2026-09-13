@@ -66,7 +66,8 @@ each other; interrupted operations require fresh work. Duplicate records retain
 the first result and block. Finish writers before aggregation. Reissue archives
 32 prior results in `slot/TAG-attempts.json`; model-selection/fallback/quota/preflight
 failures block until new preparation. Summaries retain history. All `*.flag` files
-block except root `coverage-severe.flag`. `failure_codes` is canonical; `failures` aliases it.
+block except the aggregator's own root `coverage-severe.flag`, which it rewrites from
+current evidence; upstream flags are never exempt. `failure_codes` is canonical; `failures` aliases it.
 
 Exit 2 means blocked. Aggregate exit 0: `deterministic` permits the report when no
 blocking candidate/uncertainty exists (Minor/Info remain); `review` needs a chair.
@@ -81,8 +82,8 @@ Limits: 95,000 diff bytes (UTF-8), 3,000 lines, 24,000 context bytes, <128 KiB
 request; projects may lower them. Oversize blocks. No chunk coordinator or
 combining partial PASS results; preserve custody/budgets.
 
-Run `python3 -m unittest discover -s scripts/pr-review -p test_role_review.py`.
-Offline CI: `.github/workflows/pr-review-roles-tests.yml`. Activation also needs
+After implementation lands, run `python3 -m unittest discover -s scripts/pr-review -p test_role_review.py`.
+Planned offline CI: `.github/workflows/pr-review-roles-tests.yml` (not installed yet). Activation also needs
 executor/adapter, limit and exact-HEAD publication tests; offline success proves
 no live provider execution.
 
@@ -98,5 +99,5 @@ offline library, must establish complete Git scope and approved exclusions.
 A valid result cannot be reissued to discard findings or uncertainty. Start a new
 preparation for a new review; failed attempts retain their diagnostic history.
 
-The model table targets CI's Bedrock Runtime provider. Local Mantle uses
-`openai.gpt-6-astra` for Astra; provider-specific identifiers are not interchangeable.
+Codex/Claude rows use Bedrock Runtime IDs; Kiro rows use Kiro catalog aliases.
+Local Codex on Mantle uses `openai.gpt-6-astra`; these namespaces are distinct.
