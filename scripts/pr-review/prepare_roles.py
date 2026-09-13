@@ -78,7 +78,7 @@ def selected_paths(base, paths):
         item = Path(path)
         return (item.name in policy.get("basenames", [])
                 or item.suffix in policy.get("extensions", [])
-                or any(part in policy.get("directories", []) for part in item.parts)
+                or any(part in policy.get("directories", []) for part in item.parent.parts)
                 or any(path.startswith(prefix) for prefix in policy.get("prefixes", []))
                 or any(re.search(pattern, path) for pattern in policy.get("path_regexes", [])))
     removed = [path for path in paths if excluded(path)]
@@ -106,6 +106,7 @@ def prepare(head, base, work, supplied_diff=None):
     if not 0 < cap <= 24000:
         raise ValueError("REVIEW_CONTEXT_CAP must be between 1 and 24000 bytes")
     policy = project_policy()
+    exclusion_source = None
     if policy:
         name = policy["input_adapter"]
         file = DIRECTORY / name
@@ -127,8 +128,6 @@ def prepare(head, base, work, supplied_diff=None):
             (DIRECTORY / "role-project.json").read_bytes()
         ).hexdigest()
     else:
-        context = context_at(base, cap)
-        context_at(head, cap)  # Candidate bytes never become instructions.
         options = [
             "git", "--literal-pathspecs", "-c", "diff.noprefix=false", "diff", "--no-ext-diff",
             "--no-textconv", "--no-color", "--no-renames", merge_base, head,
@@ -144,11 +143,36 @@ def prepare(head, base, work, supplied_diff=None):
             "excluded_paths": excluded, "input_policy_sha256": scope_digest,
             "scope_exception": "configured_exclusions_only" if excluded and not paths else None,
         }
+        if excluded and not paths:
+            exclusion_source = git_file(base, "scripts/pr-review/role-input-scope.json")
+        file = DIRECTORY / "prepare_context_roles.py"
+        expected = git_file(base, "scripts/pr-review/prepare_context_roles.py")
+        if expected is None and not file.exists() and not file.is_symlink():
+            context = context_at(base, cap)
+            context_at(head, cap)  # Candidate bytes never become instructions.
+        else:
+            if (file.is_symlink() or not file.is_file() or expected is None
+                    or file.read_bytes() != expected.encode("utf-8")):
+                raise ValueError("Context hook differs from the trusted base")
+            spec = importlib.util.spec_from_file_location("project_scoped_context", file)
+            hook = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(hook)
+            context, manifest, effective_cap = hook.prepare(head, base, paths, diff, cap)
+            if (not isinstance(manifest, dict) or type(effective_cap) is not int
+                    or not 0 < effective_cap <= cap):
+                raise ValueError("Invalid scoped context manifest or increased cap")
+            provenance["scoped_context"] = manifest
+            cap = effective_cap
     work.mkdir(parents=True, exist_ok=True)
     (work / "project-context.md").write_bytes(context.encode("utf-8"))
     (work / "role-diff.txt").write_bytes(diff.encode("utf-8"))
     (work / "role-paths.json").write_text(json.dumps(paths) + "\n")
     (work / "role-source.json").write_text(json.dumps(provenance, sort_keys=True) + "\n")
+    opt_in = []
+    if exclusion_source is not None:
+        source_file = work / "base-input-policy.json"
+        source_file.write_bytes(exclusion_source.encode("utf-8"))
+        opt_in = ["--allow-exclusions-only", "--policy", str(source_file)]
     result = subprocess.run([
         sys.executable, str(DIRECTORY / "role_review.py"), "prepare",
         "--head", head, "--base", base, "--work", str(work),
@@ -157,6 +181,7 @@ def prepare(head, base, work, supplied_diff=None):
         "--paths", str(work / "role-paths.json"),
         "--context-cap", str(cap),
         "--provenance", str(work / "role-source.json"),
+        *opt_in,
     ])
     if result.returncode not in (0, 2):
         raise RuntimeError("Specialist preparation failed")

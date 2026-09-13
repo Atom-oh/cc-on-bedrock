@@ -25,6 +25,8 @@ class RoleExecutionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.final_file = self.root / "final.txt"
+        self.final_file.write_text("{}\n")
 
     def executable(self, text):
         path = self.root / "fake-cli"
@@ -90,6 +92,57 @@ class RoleExecutionTests(unittest.TestCase):
         )
         self.assertTrue(ok, error)
         self.assertEqual(code, 0)
+
+    def test_codex_transport_requires_a_complete_unambiguous_event_stream(self):
+        message = {"type": "item.completed", "item": {
+            "id": "reply", "type": "agent_message", "text": '{"review":"exact"}',
+        }}
+        start = {"type": "turn.started"}
+        done = {"type": "turn.completed", "usage": {
+            "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1,
+        }}
+        self.assertTrue(hasattr(self.runner, "codex_response"))
+        for events in ([start, message], [start, done],
+                       [start, message, {"type": "turn.failed", "error": {"message": "failed"}}],
+                       [start, message, done, message],
+                       [start, message, start, done], [start, message, done, "invalid"]):
+            with self.subTest(events=events):
+                raw = "\n".join(json.dumps(event) for event in events)
+                output, error, valid = self.runner.codex_response(raw, self.final_file)
+                self.assertFalse(valid)
+                self.assertEqual(output, "")
+
+    def test_codex_transport_uses_cli_final_file_without_concatenating_progress(self):
+        self.assertTrue(hasattr(self.runner, "codex_response"))
+        raw = "\n".join(json.dumps(event) for event in [
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {
+                "id": "first", "type": "agent_message", "text": '{"first":true}\n'}},
+            {"type": "item.completed", "item": {
+                "id": "second", "type": "agent_message", "text": '{"second":true}\n'}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}},
+        ])
+        self.final_file.write_text('{"second":true}\n')
+        output, error, valid = self.runner.codex_response(raw, self.final_file)
+        self.assertTrue(valid, error)
+        self.assertEqual(output, '{"second":true}\n')
+        self.assertEqual(error, "")
+
+    def test_codex_recovered_error_is_forwarded_without_invalidating_completed_turn(self):
+        raw = "\n".join(json.dumps(event) for event in [
+            {"type": "turn.started"},
+            {"type": "error", "message": "Reconnecting... stream disconnected before completion"},
+            {"type": "item.completed", "item": {
+                "id": "reply", "type": "agent_message", "text": '{"review":"complete"}'}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}},
+        ])
+        self.final_file.write_text('{"review":"complete"}\n')
+        output, error, valid = self.runner.codex_response(raw, self.final_file)
+        self.assertTrue(valid, error)
+        self.assertEqual(output, '{"review":"complete"}\n')
+        self.assertIn("Reconnecting", error)
 
 
 if __name__ == "__main__":

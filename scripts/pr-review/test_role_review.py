@@ -273,7 +273,8 @@ class RoleReviewTests(unittest.TestCase):
         metadata = self.root / "source.json"
         source = {"head_sha": HEAD, "base_sha": BASE,
                   "diff_sha256": hashlib.sha256(patch().encode()).hexdigest(),
-                  "note": "password=collector-private"}
+                  "note": "password=collector-private",
+                  "nested": {"SecretAccessKey": "collector-private"}}
         metadata.write_text(json.dumps(source))
         self.prepare(extra=("--provenance", metadata))
         self.finish()
@@ -287,18 +288,96 @@ class RoleReviewTests(unittest.TestCase):
 
     def test_excluded_only_report_identifies_the_scope_and_policy(self):
         metadata, paths = self.root / "source.json", self.root / "paths.json"
+        policy = self.root / "policy.json"
+        policy.write_bytes(b'{"schema_version":1,"extensions":[".png"]}\r\n')
+        policy_hash = hashlib.sha256(policy.read_bytes()).hexdigest()
         source = {"head_sha": HEAD, "base_sha": BASE,
                   "diff_sha256": hashlib.sha256(b"").hexdigest(),
                   "scope_exception": "configured_exclusions_only",
-                  "input_policy_sha256": "d" * 64,
+                  "input_policy_sha256": policy_hash,
                   "scope_paths": ["assets/logo.png"], "excluded_paths": ["assets/logo.png"]}
         metadata.write_text(json.dumps(source))
         paths.write_text("[]")
-        self.prepare("", extra=("--provenance", metadata, "--paths", paths))
+        args = ("--provenance", metadata, "--paths", paths)
+        for opt_in in ((), ("--policy", policy), ("--allow-exclusions-only",),
+                       ("--allow-exclusions-only", "--policy", self.root / "missing")):
+            with self.subTest(opt_in=opt_in):
+                self.prepare("", extra=(*args, *opt_in), expected=2)
+                self.assert_blocked()
+        opt_in = ("--allow-exclusions-only", "--policy", policy)
+        self.prepare("", extra=(*args, *opt_in))
         self.finish()
         report = (self.work / "deterministic-review.md").read_text()
         self.assertIn("assets/logo.png", report)
-        self.assertIn("d" * 64, report)
+        self.assertIn(policy_hash, report)
+        self.assertIn("NOT_APPLICABLE", report)
+        anchor = self.work / "exclusions-policy.json"
+        self.assertEqual(anchor.read_bytes(), policy.read_bytes())
+        anchor.write_bytes(anchor.read_bytes() + b" ")
+        self.assert_blocked()
+        policy.write_bytes(policy.read_bytes().replace(b"\r\n", b"\n"))
+        self.prepare("", extra=(*args, *opt_in), expected=2)
+        self.assert_blocked()
+        source["diff_sha256"] = hashlib.sha256(patch().encode()).hexdigest()
+        source["input_policy_sha256"] = hashlib.sha256(policy.read_bytes()).hexdigest()
+        metadata.write_text(json.dumps(source))
+        paths.write_text(json.dumps([FRONTEND]))
+        self.prepare(extra=(*args, *opt_in), expected=2)
+        self.assert_blocked()
+
+    def test_sensitive_key_and_name_value_shapes_never_reach_public_evidence(self):
+        secret = "SYNTHETIC_PRIVATE_SHAPE"
+        cases = [{key: secret} for key in (
+            "spring.datasource.password", "aws.secret_access_key", "X-Origin-Verify",
+            "Authorization", "pwd", "dsn", "connectionString")]
+        cases += [
+            {"name": "DATABASE_PASSWORD", "value": secret},
+            {"HeaderName": "X-Origin-Verify", "HeaderValue": secret},
+            'name = "DB_PASSWORD", value = "' + secret + '"',
+            json.dumps({"name": "DATABASE_PASSWORD", "value": secret}),
+            json.dumps({"SecretString": json.dumps({"password": secret})}),
+            'Evidence: ' + json.dumps({"detail": json.dumps({"password": secret})}),
+            r'{\"password\":\"' + secret + r'\"}',
+        ]
+        metadata = self.root / "source.json"
+        metadata.write_text(json.dumps({
+            "head_sha": HEAD, "base_sha": BASE,
+            "diff_sha256": hashlib.sha256(patch().encode()).hexdigest(),
+            "cases": cases, "safe": "PUBLIC_KEEP",
+        }))
+        self.prepare(extra=("--provenance", metadata))
+        for name in ("role-plan.json", "roles/codex.txt"):
+            self.assertNotIn(secret, (self.work / name).read_text())
+            self.assertIn("PUBLIC_KEEP", (self.work / name).read_text())
+        for index, evidence in enumerate(cases):
+            with self.subTest(index=index):
+                self.work = self.root / f"shapes-{index}"
+                self.prepare()
+                text = evidence if isinstance(evidence, str) else json.dumps(evidence)
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": text}])
+                self.record("codex", response)
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                for name in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
+                    self.assertNotIn(secret, (self.work / name).read_text())
+
+    def test_valid_results_cannot_be_reissued_to_discard_findings_or_uncertainty(self):
+        for kind in ("CRITICAL", "MAJOR", "uncertain", "clean"):
+            with self.subTest(kind=kind):
+                self.work = self.root / kind
+                self.prepare()
+                update = {} if kind == "clean" else (
+                    {"uncertainties": ["Caller contract is unavailable."]} if kind == "uncertain" else
+                    {"findings": [{"severity": kind, "path": FRONTEND,
+                                  "condition": "On concurrent submissions", "evidence": "Update is lost."}]})
+                self.record("codex", self.response("codex", **update))
+                self.record("claude-self")
+                before = {p: p.read_bytes() for p in self.work.rglob("*") if p.is_file()}
+                self.cli("issue", "--work", self.work, "--tag", "codex", expected=2)
+                self.assertEqual(before, {p: p.read_bytes() for p in self.work.rglob("*") if p.is_file()})
+                self.cli("aggregate", "--work", self.work)
+                self.assertEqual(self.read("role-summary.json")["mode"],
+                                 "deterministic" if kind == "clean" else "review")
 
     def test_truncated_patch_or_bare_header_cannot_claim_complete_input(self):
         for raw in (
@@ -436,14 +515,14 @@ class RoleReviewTests(unittest.TestCase):
         spec.loader.exec_module(engine)
         output, stderr = self.root / "held-response.json", self.root / "race.stderr"
         output.write_text(json.dumps(self.response("codex")))
-        stderr.write_text("")
+        stderr.write_text("Quota exceeded")
         nonce, _, _ = engine.issue_request(self.work, "codex")
         args = dict(work=self.work, tag="codex", output=output, stderr=stderr, nonce=nonce)
         entered, release = threading.Event(), threading.Event()
         original = engine.text_file
 
         def hold_response(path):
-            if Path(path) == output:
+            if Path(path) == stderr:
                 entered.set()
                 if not release.wait(10):
                     raise AssertionError("record race did not release the first writer")
@@ -454,10 +533,15 @@ class RoleReviewTests(unittest.TestCase):
                 pending = pool.submit(engine.record, SimpleNamespace(**args, exit_code=0))
                 try:
                     self.assertTrue(entered.wait(5))
+                    with self.assertRaises(engine.Invalid):
+                        engine.issue_request(self.work, "codex")
                     self.assertEqual(engine.record(SimpleNamespace(**args, exit_code=1)), 2)
                 finally:
                     release.set()
-                self.assertEqual(pending.result(timeout=5), 0)
+                self.assertEqual(pending.result(timeout=5), 2)
+        self.assert_blocked()
+        engine.issue_request(self.work, "codex")
+        self.record("codex")
         self.assert_blocked()
 
     def test_mode_only_and_git_octal_quoted_paths(self):
@@ -615,6 +699,9 @@ class RoleReviewTests(unittest.TestCase):
             (0, "Warning: falling back to another model"),
             (0, "Error: quota exceeded for this account"),
             (0, "An error occurred (ThrottlingException) when invoking the model"),
+            (0, "Error: MONTHLY_REQUEST_COUNT"),
+            (0, "Error: UsageLimitReachedError"),
+            (0, "Warning: Json supplied at /agent/profile.json is invalid"),
         )):
             with self.subTest(rc=rc, stderr=stderr):
                 self.work = self.root / f"diagnostic-{index}"

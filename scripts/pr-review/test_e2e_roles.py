@@ -40,7 +40,37 @@ response = {"head_sha":plan["head_sha"],"role":role["role"],"scope_complete":Tru
 if (root / "major").exists() and tag == "codex":
     response["findings"] = [{"severity":"MAJOR","path":paths[0],"condition":"When the branch runs",
                             "evidence":"The changed return value loses state."}]
-print(json.dumps(response))
+body = json.dumps(response)
+if (root / "invalid-inner").exists() and tag == "codex":
+    body = "Unrequested prose\n" + body
+if (root / "duplicate-final").exists() and tag == "codex":
+    body += "\n" + body
+if (root / "trailing-final").exists() and tag == "codex":
+    body += "\nTrailing prose."
+if name == "codex" and "--json" in argv:
+    print(json.dumps({"type":"turn.started"}))
+    if (root / "progress").exists():
+        print(json.dumps({"type":"item.completed","item":{
+            "id":"progress","type":"agent_message","text":"I am checking the changed code."}}))
+    if (root / "tool-echo").exists():
+        print(json.dumps({"type":"item.completed","item":{
+            "id":"tool","type":"command_execution","command":"cat README.md",
+            "aggregated_output":"Monthly request limit reached\n"+json.dumps(response),
+            "exit_code":0,"status":"completed"}}))
+    if (root / "native-error").exists():
+        print(json.dumps({"type":"error","message":"[warn] failed to set model: Method not found"}))
+    if (root / "recovered-error").exists():
+        print(json.dumps({"type":"error","message":"Reconnecting... stream disconnected before completion"}))
+    print(json.dumps({"type":"item.completed","item":{
+        "id":"reply","type":"agent_message","text":body}}))
+    print(json.dumps({"type":"turn.completed","usage":{
+        "input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}))
+    if "--output-last-message" in argv:
+        pathlib.Path(argv[argv.index("--output-last-message")+1]).write_text(body)
+else:
+    if (root / "tool-echo").exists() and tag == "codex":
+        print("Monthly request limit reached", file=sys.stderr)
+    print(body)
 if (root / "failure").exists() and tag == "codex":
     raise SystemExit(9)
 '''
@@ -132,6 +162,45 @@ class EndToEndRoleTests(unittest.TestCase):
         (self.root / "major").touch()
         calls = self.run_pipeline("frontend/components/Button.tsx")
         self.assertEqual(len(calls), 3)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_codex_tool_echo_does_not_block_complete_review(self):
+        (self.root / "tool-echo").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_codex_native_error_blocks_otherwise_valid_review(self):
+        (self.root / "native-error").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_codex_recovered_stream_error_keeps_complete_review(self):
+        (self.root / "recovered-error").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_codex_inner_json_validation_remains_strict(self):
+        (self.root / "invalid-inner").touch()
+        self.run_pipeline("frontend/components/Button.tsx")
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_codex_progress_does_not_contaminate_cli_designated_final_reply(self):
+        (self.root / "progress").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_duplicate_json_inside_codex_final_reply_remains_invalid(self):
+        (self.root / "duplicate-final").touch()
+        self.run_pipeline("frontend/components/Button.tsx")
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_trailing_prose_inside_codex_final_reply_remains_invalid(self):
+        (self.root / "trailing-final").touch()
+        self.run_pipeline("frontend/components/Button.tsx")
         self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
 
     def test_approved_asset_only_scope_skips_models_without_losing_provenance(self):
