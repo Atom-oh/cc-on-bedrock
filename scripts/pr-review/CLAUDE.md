@@ -1,7 +1,15 @@
-# Review protocol module
+# PR review module
 
-[README.md](README.md) owns this module's interfaces, limits and staged rollout.
-The legacy workflow remains active until its separate activation change. Keep
-protocol instructions, documentation and review output in English. Preserve the
-project's trusted context, source-custody and budget constraints when adding an
-executor. Run the documented offline tests; model execution is separate evidence.
+[README.md](README.md) owns this module's interfaces and limits. The live workflow
+still uses `run-panel.sh`, `synthesize.sh` and `lib.sh`; keep their lens definitions
+synchronized until activation replaces that path.
+
+The installed specialist path uses `prepare_roles.py`, `run_role.py`,
+`run-specialists.sh`, `role_review.py`, `synthesize_roles.py` and
+`role-controls.sh`. Executors fetch Git data and call provider CLIs; only the
+protocol library is offline. The README documents BASE policy/context checks,
+optional adapters and environment settings. Workflow activation is separate.
+
+Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py'` and the
+README shell checks. Keep new documentation in English; automated output changes
+at activation. Preserve source custody, configured providers and all budgets.
