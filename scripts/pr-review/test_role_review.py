@@ -120,16 +120,28 @@ class RoleReviewTests(unittest.TestCase):
         tokens = ["ghp_" + "a" * 30, "AKIA" + "A" * 16,
                   "xoxb-" + "b" * 20, "AIza" + "c" * 35,
                   "eyJ" + "d" * 10 + "." + "e" * 12 + "." + "f" * 12]
+        cases = [("_" + token + "_", token) for token in tokens]
+        cases += [(token, token) for token in ("github_pat_" + "g" * 32, "sk-ant-" + "h" * 30)]
+        opaque = "OPAQUE" + "Z" * 24
+        cases += [(key + "=" + quote + opaque + quote, opaque)
+                  for key in ("api_key", "aws_secret_access_key", "aws_access_key_id",
+                              "access_token", "client_secret", "secret", "passwd", "password", "token")
+                  for quote in ("\"", "'", "")]
+        cases += [("X_API_KEY='" + opaque + "'", opaque)]
         path = "fixtures/_ghp_" + "z" * 30 + "_.txt"
         self.prepare(patch(path))
-        evidence = "Wrapped examples: " + " ".join("_" + token + "_" for token in tokens)
-        result = self.record("codex", self.response("codex", checks=[{
-            "path": path, "evidence": evidence}]))
+        result = self.record("codex", self.response("codex", checks=[
+            {"path": path, "evidence": text} for text, _ in cases]))
         self.assertTrue(result["valid"])
         self.assertEqual(result["response"]["reviewed_paths"], [path])
-        for token in tokens:
-            with self.subTest(token=token[:5]):
-                self.assertNotIn(token, json.dumps(result))
+        for (text, secret), check in zip(cases, result["response"]["checks"]):
+            with self.subTest(format=text[:32]):
+                legacy = subprocess.run(["bash", "-c", 'source "$1"; scrub_secrets',
+                    "legacy-scrub", str(ENGINE.with_name("lib.sh"))], input=text + "\n",
+                    text=True, capture_output=True, check=True).stdout
+                self.assertNotIn(secret, legacy, "fixture must exercise an existing shell rule")
+                self.assertNotIn(secret, check["evidence"])
+
 
     def test_named_credential_labels_are_classified_before_redaction(self):
         for index, (name, value, label) in enumerate((

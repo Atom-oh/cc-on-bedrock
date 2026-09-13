@@ -793,6 +793,7 @@ def scrub(value, preserved=frozenset()):
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
         r"(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}",
         r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})",
+        # Match the legacy API-key boundary; word suffixes such as task- are not keys.
         r"\bsk-[A-Za-z0-9_-]{16,}",
         r"xox[abprs]-[A-Za-z0-9-]{10,}",
         r"AIza[0-9A-Za-z_-]{30,}",

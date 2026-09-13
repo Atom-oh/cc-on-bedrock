@@ -30,6 +30,11 @@ step resolves/fetches immutable Git objects and supplies `MERGE_BASE_SHA`.
 Preparation validates the SHA and local commits, then reconstructs the diff
 without network access or a GitHub token. Standalone calls without this trusted
 handoff retain API/fetch compatibility. PR-head code is never checked out.
+GitHub's unauthenticated [repository API](https://api.github.com/repos/Atom-oh/cc-on-bedrock)
+reported `private: false` on 2026-09-13; anonymous Git upload-pack discovery also
+returned HTTP 200. This public-repository setup fetches objects without persisting
+checkout credentials. The verification snapshot is recorded with PR #119.
+
 Inputs use `HEAD_SHA`, `BASE_SHA`, and `GH_REPO` or `GITHUB_REPOSITORY`.
 `REVIEW_CONTEXT_CAP`, `PANEL_TIMEOUT`, `PANEL_RETRIES` and
 `KIRO_PREFLIGHT_TIMEOUT` retain their bounded settings. Chair defaults are
