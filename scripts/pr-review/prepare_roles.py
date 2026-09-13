@@ -90,18 +90,30 @@ def prepare(head, base, work, supplied_diff=None):
         raise ValueError("Review requires immutable commit SHAs")
     if command("git", "rev-parse", "HEAD").strip() != base:
         raise ValueError("Review scripts must run from the pinned base checkout")
-    repository = os.environ.get("GH_REPO") or os.environ["GITHUB_REPOSITORY"]
-    merge_base = command(
-        "gh", "api", f"repos/{repository}/compare/{base}...{head}",
-        "--jq", ".merge_base_commit.sha",
-    ).strip()
+    merge_base = os.environ.get("MERGE_BASE_SHA")
+    prefetched = merge_base is not None
+    if not prefetched:
+        repository = os.environ.get("GH_REPO") or os.environ["GITHUB_REPOSITORY"]
+        merge_base = command(
+            "gh", "api", f"repos/{repository}/compare/{base}...{head}",
+            "--jq", ".merge_base_commit.sha",
+        ).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", merge_base):
-        raise ValueError("GitHub returned an invalid merge base")
-    # Fetch objects as data. Never check out or run PR-head code or hooks.
-    subprocess.run(
-        ["git", "fetch", "--no-tags", "--depth=1", "origin", merge_base, head],
-        check=True, stdout=subprocess.DEVNULL,
-    )
+        raise ValueError("Invalid review merge base")
+    if prefetched:
+        # The trusted token-bearing step resolves/fetches these before reviewers start.
+        try:
+            for revision in (merge_base, head):
+                if command("git", "cat-file", "-t", revision).strip() != "commit":
+                    raise ValueError("Prefetched review objects must be commits")
+        except subprocess.CalledProcessError:
+            raise ValueError("Prefetched review commit is unavailable") from None
+    else:
+        # Standalone compatibility: fetch objects as data, never check out PR-head code.
+        subprocess.run(
+            ["git", "fetch", "--no-tags", "--depth=1", "origin", merge_base, head],
+            check=True, stdout=subprocess.DEVNULL,
+        )
     cap = int(os.environ.get("REVIEW_CONTEXT_CAP", "24000"))
     if not 0 < cap <= 24000:
         raise ValueError("REVIEW_CONTEXT_CAP must be between 1 and 24000 bytes")

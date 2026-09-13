@@ -25,8 +25,11 @@ workflow separately calls `synthesize_roles.py` when adjudication is
 required. `run_role.py` invokes the configured provider; `role-controls.sh` strips
 control bytes. These are executable provider paths, not offline-only utilities.
 
-`prepare_roles.py` requires the trusted BASE checkout, calls `gh api` for the
-merge base and fetches immutable Git objects without checking out PR-head code.
+`prepare_roles.py` requires the trusted BASE checkout. CI's earlier token-bearing
+step resolves/fetches immutable Git objects and supplies `MERGE_BASE_SHA`.
+Preparation validates the SHA and local commits, then reconstructs the diff
+without network access or a GitHub token. Standalone calls without this trusted
+handoff retain API/fetch compatibility. PR-head code is never checked out.
 Inputs use `HEAD_SHA`, `BASE_SHA`, and `GH_REPO` or `GITHUB_REPOSITORY`.
 `REVIEW_CONTEXT_CAP`, `PANEL_TIMEOUT`, `PANEL_RETRIES` and
 `KIRO_PREFLIGHT_TIMEOUT` retain their bounded settings. Chair defaults are

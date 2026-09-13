@@ -75,6 +75,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          MERGE_BASE_SHA=$(gh api "repos/${GH_REPO}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')
+          [[ "$MERGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid merge base"; exit 1; }
+          git fetch --no-tags --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
+          printf 'MERGE_BASE_SHA=%s\n' "$MERGE_BASE_SHA" >> "$GITHUB_ENV"
           gh pr diff "$PR_NUMBER" > /tmp/pr-diff-raw.txt
           awk '
             /^diff --git/ {
@@ -154,7 +158,6 @@ jobs:
 
       - name: Run specialists and conditionally adjudicate findings
         env:
-          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PANEL_TIMEOUT: "300"

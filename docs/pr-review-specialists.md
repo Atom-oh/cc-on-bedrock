@@ -23,9 +23,11 @@ Kiro roles run for applicable AWS and operational changes, including relevant
 documentation. Unfamiliar paths route conservatively. Only deterministic routing
 may record NOT_APPLICABLE; provider failures never do.
 
-`prepare_roles.py` verifies the pinned base checkout, resolves the immutable merge
-base, fetches Git objects and generates a complete diff without executing head
-code. It reads reviewer instructions from the base Git object. Candidate context
+The token-bearing Get PR diff step resolves the immutable merge base, validates
+its SHA, fetches both Git objects and exports `MERGE_BASE_SHA`. `prepare_roles.py`
+verifies the pinned base checkout and local commit objects, then generates the
+complete diff without a GitHub token, network call or head checkout. Standalone
+invocations without this trusted handoff retain the existing API/fetch path. It reads reviewer instructions from the base Git object. Candidate context
 is checked for availability, size and generated-source freshness, then discarded.
 The shared context ceiling is 24,000 bytes; repositories may enforce a smaller one.
 
@@ -50,8 +52,8 @@ environment excludes AWS and GitHub credentials. Errors remain visible; no
 automatic quota or billing changes are made.
 
 Codex retains its read-only sandbox and configured Bedrock provider. Claude's
-specialist has no tools. The chair has bounded local read tools and no GitHub
-token. Review output is scrubbed before becoming a public artifact.
+specialist has no tools. The review step and its reviewer/chair process environments
+carry no GitHub token; the chair retains bounded local read tools. Review output is scrubbed before becoming a public artifact.
 
 Complete, valid results with no Critical/Major candidate or uncertainty receive
 a deterministic summary. Other valid results require chair adjudication. A
