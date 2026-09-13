@@ -116,6 +116,21 @@ class RoleReviewTests(unittest.TestCase):
         self.assertEqual((self.work / "chair-mode.txt").read_text(), "blocked\n")
         self.assertTrue((self.work / "deterministic-review.md").read_text().endswith("VERDICT: FAIL\n"))
 
+    def test_legacy_token_scrubbing_survives_private_response_transport(self):
+        tokens = ["ghp_" + "a" * 30, "AKIA" + "A" * 16,
+                  "xoxb-" + "b" * 20, "AIza" + "c" * 35,
+                  "eyJ" + "d" * 10 + "." + "e" * 12 + "." + "f" * 12]
+        path = "fixtures/_ghp_" + "z" * 30 + "_.txt"
+        self.prepare(patch(path))
+        evidence = "Wrapped examples: " + " ".join("_" + token + "_" for token in tokens)
+        result = self.record("codex", self.response("codex", checks=[{
+            "path": path, "evidence": evidence}]))
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["response"]["reviewed_paths"], [path])
+        for token in tokens:
+            with self.subTest(token=token[:5]):
+                self.assertNotIn(token, json.dumps(result))
+
     def test_named_credential_labels_are_classified_before_redaction(self):
         for index, (name, value, label) in enumerate((
             ("name", "value", "password:admin"),

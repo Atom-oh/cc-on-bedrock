@@ -202,8 +202,8 @@ def preserve_stdout_error(output, error):
     # JSON review evidence and JSONL events are not text-mode CLI diagnostics.
     if first.startswith(("{", "```")):
         return error
-    if first.startswith("You have reached the limit for overages"):
-        first = "UsageLimitReachedError: stdout account limit"
+    if re.match(r"(?:Error:\s*)?(?:You have reached the )?limit for overages\b", first, re.I):
+        first = "UsageLimitReachedError: overage limit reported on stdout"
     return error + "\n" + first if diagnostic_failure(first) else error
 
 

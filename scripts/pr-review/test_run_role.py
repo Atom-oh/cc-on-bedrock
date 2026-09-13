@@ -68,21 +68,6 @@ class RoleExecutionTests(unittest.TestCase):
         self.assertEqual(result["HOME"], str(self.root))
         self.assertFalse(any(k.startswith("AWS_") or k == "GH_TOKEN" for k in result))
 
-    def test_preflight_rejects_quota_or_model_fallback_despite_no_tools_reply(self):
-        for message in (
-            "Monthly request limit reached",
-            "[warn] failed to set model: Method not found",
-            "Falling back to user specified default",
-        ):
-            with self.subTest(message=message):
-                cli = self.executable(
-                    "import sys\nprint('NO_TOOLS')\n"
-                    f"print({message!r}, file=sys.stderr)\n"
-                )
-                ok, code, error = self.runner.preflight(
-                    cli, "claude-opus-5", self.root, os.environ.copy(), 2
-                )
-                self.assertFalse(ok)
 
     def test_preflight_rejects_quota_or_model_fallback_despite_no_tools_reply(self):
         for message in (
@@ -178,6 +163,7 @@ class RoleRecordingTests(unittest.TestCase):
         self.harness = fixture.RoleReviewTests()
         self.harness.setUp()
         self.addCleanup(self.harness.tearDown)
+        self.addCleanup(self.harness.doCleanups)
         self.path = "fixtures/password=abcdefghijklmnop.txt"
         self.harness.prepare(fixture.patch(self.path))
         self.private_value = "synthetic_private_response_value"
@@ -320,6 +306,20 @@ class RoleRecordingTests(unittest.TestCase):
         self.assertTrue(result["valid"], result["failure_codes"])
         self.assert_private_response_removed()
 
+
+    def test_error_prefixed_overage_blocks_retry(self):
+        calls = []
+        def execute(command, *arguments):
+            calls.append(command)
+            if len(calls) == 1:
+                return 1, "Error: You have reached the limit for overages\n", ""
+            return 0, json.dumps(self.harness.response("claude-self")), ""
+        self.run_recording(tag="claude-self", execute=execute)
+        result = self.harness.read("slot/claude-self-result.json")
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(result["valid"])
+        self.assertIn("quota_diagnostic", result["failure_codes"])
+        self.assert_private_response_removed()
 
 if __name__ == "__main__":
     unittest.main()

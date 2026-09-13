@@ -36,5 +36,6 @@ Terraform-only deployment helpers, AMI build scripts, verification scripts, and 
 - 실패 시 명확한 에러 메시지 출력
 - 번호 스크립트는 보조 도구이며, 배포의 기준 순서는 Terraform plan/apply이다.
 
-The staged [review protocol](pr-review/README.md) has its own module guide and
-offline checks; the legacy CI execution path is unchanged until activation.
+The active [review protocol](pr-review/README.md) uses `ROLE_REVIEW=1` in CI.
+Its module guide owns offline checks and provider/custody rules; legacy entrypoints
+remain for compatibility.

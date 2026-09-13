@@ -50,6 +50,8 @@ chair with one full-change responsibility per required role, strict JSON/nonce
 coverage and conditional adjudication. Missing/invalid required roles block;
 legacy permissive dropout counts do not authorize specialist coverage. Existing
 input exclusions, provider security/custody, regions, budgets and runner pins remain.
+The prior cross-repository ADR-015 rationale for excluding `glm-5` remains;
+this decision supersedes its 12-cell execution shape.
 See [the module contract](../../scripts/pr-review/README.md) and
 [project guide](../pr-review-specialists.md).
 
