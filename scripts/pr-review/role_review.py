@@ -3,8 +3,8 @@
 
 CLI:
   prepare --diff RAW --context CONTEXT --head SHA --base SHA --work WORK
-          [--context-cap BYTES] [--paths JSON_LIST]
-  record --work WORK --tag TAG --output FILE --stderr FILE --exit-code RC
+          [--context-cap BYTES] [--paths JSON_FILE] [--provenance JSON_FILE]
+  record --work WORK --tag TAG --output FILE --stderr FILE --exit-code RC --nonce NONCE
   aggregate --work WORK
 
 Schema 1 plans list all four tags; only required roles get roles/TAG.txt and
@@ -211,6 +211,8 @@ def complete_hunks(chunk):
         elif hunk_seen and line and not line.startswith("\\ No newline at end of file"):
             raise Invalid("invalid_diff_hunk")
     if remaining and remaining != [0, 0]:
+        raise Invalid("incomplete_diff_hunk")
+    if not hunk_seen and re.search(r"^(?:---|\+\+\+) ", chunk, re.M):
         raise Invalid("incomplete_diff_hunk")
     if not hunk_seen and not (
         re.search(r"^(?:rename|copy) to ", chunk, re.M) or
@@ -544,7 +546,7 @@ def scrub(value):
         r"""["']?\s*[:=]\s*"""
     )
     patterns = (
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
         r"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b",
         r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
         r"\bsk-[A-Za-z0-9_-]{16,}",
@@ -552,7 +554,7 @@ def scrub(value):
         r"\bAIza[0-9A-Za-z_-]{30,}",
         r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
         r"(?i:\bBearer\s+)[A-Za-z0-9_.~+/-]+=*",
-        r"(?i:\bAuthorization\s*:\s*Basic\s+)[A-Za-z0-9+/=_.~-]{20,}",
+        r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
         key + r"""(?P<quote>["']).*?(?P=quote)""",
         key + r"""[^\s"',;}\]]+""",
     )
