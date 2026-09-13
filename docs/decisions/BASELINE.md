@@ -51,9 +51,9 @@
 | **DEFERRED** | Codex on Bedrock | 후속 확장. 현 타깃은 Claude Code on Bedrock | §0 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
-| **LIVE** | Documentation language | New/substantially rewritten documentation/ADRs/comments use English; existing Korean-only/bilingual content remains until its own maintenance update. Korean conversation/UI remain supported. Review output changes at protocol activation. | ADR-013 |
-| **GATED** | Specialist review protocol | Offline library and executors staged; activation remains separate; target Astra + Opus + Sol + Fable | ADR-013 |
-| **LIVE** | PR-review 패널 로스터 | Codex + Kiro x2(`claude-opus-5`, `gpt-5.6-terra`), 12 cell (기존 Codex + Kiro x3, 16 cell에서 축소). `glm-5`(kiro-glm)는 오탐률(false-positive) 문제로 제외 | AWS-Demo-Platform 저장소 ADR-015 (cross-repo) |
+| **LIVE** | Documentation language | New/substantially rewritten documentation/ADRs/comments use English; existing Korean-only/bilingual content remains until its own maintenance update. Korean conversation/UI remain supported. Review output uses English. | ADR-013 |
+| **LIVE** | Specialist review protocol | Astra implementation + Opus AWS + Sol operations + Fable requirements; strict required-role coverage and conditional chair (`ROLE_REVIEW=1`) | ADR-013 |
+| **LIVE** | PR review roster | Codex Astra, Kiro Opus/Sol and Claude Fable; one responsibility per required role replaces the legacy 12-cell matrix | ADR-013 |
 
 ---
 
@@ -61,8 +61,8 @@
 
 > Eleven consolidated ADRs replace the legacy 34; ADR-012/013 are subsequent records.
 > `../history/ADR-MAPPING.md` maps retired decisions; tag `adr-legacy-2026-06-23` retains their bodies.
-> Consolidation is complete. ADR-013's protocol is GATED; its documentation language
-> policy is LIVE. The next ADR number is 014; the earlier reset was a one-time exception.
+> Consolidation is complete. ADR-013's protocol and language policy are LIVE.
+> The next ADR number is 014; the earlier reset was a one-time exception.
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
@@ -78,7 +78,7 @@
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
 | 012 | DevEnv 헬스 판정 | 직접 8080 probe 제거(SG 격리로 timeout) → EC2 lifecycle 파생(running+privateIp⇒HEALTHY), 낙관적 false-positive trade-off 수용 | (신규) |
-| 013 | Specialist PR review and documentation | Protocol GATED; incremental documentation-language convention LIVE. Terra-to-Sol/Astra targets apply at activation. | New |
+| 013 | Specialist PR review and documentation | Active role protocol and incremental English maintenance policy; preserves remaining security/custody rules | New |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 

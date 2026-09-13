@@ -3,6 +3,10 @@
 # 이식형(portable): 프로젝트별 규칙은 하드코딩하지 않고 repo 의 CLAUDE.md/AGENTS.md 를 읽게
 # 하되, lens 별 짧은 체크리스트(Project rules)를 힌트로 덧붙인다(fleet 의 hybrid 패턴).
 set -euo pipefail
+
+if [ "${ROLE_REVIEW:-0}" = 1 ]; then
+  exec python3 "$(dirname "$0")/synthesize_roles.py" --work "$2" --output "$5"
+fi
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
 SLOT="$WORK/slot"

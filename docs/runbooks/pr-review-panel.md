@@ -1,5 +1,11 @@
 # Runbook: AI PR-Review Panel — Kiro cells
 
+> Current protocol (2026-09-13): CI uses `ROLE_REVIEW=1`; see
+> [specialist review](../pr-review-specialists.md). Earlier matrix counts, dropout floors and
+> unconditional-chair descriptions below are legacy behavior. CLI incident
+> evidence and safety constraints remain applicable within their recorded scope.
+
+
 ## Overview
 Covers the two non-transient ways the Kiro half of the lens×model panel
 (`scripts/pr-review/run-panel.sh`, `.github/workflows/pr-review.yml`) stops contributing,

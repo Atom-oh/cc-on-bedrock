@@ -9,9 +9,9 @@ runtime_required: false
 
 ## Status
 
-Accepted, 2026-09-13. Documentation language convention: **LIVE** with the
-incremental migration rule below. Specialist protocol: **GATED**, library and executors staged; legacy execution and review-output language remain active until a
-separate reviewed activation. Live provider/application behavior is unchanged until activation; installed executors can invoke providers when run.
+Accepted, 2026-09-13. Documentation convention and specialist protocol: **LIVE**
+in the repository workflow (`ROLE_REVIEW=1`). Runtime service availability and
+executed model identity require separate evidence; configuration is not proof.
 
 ## Context
 
@@ -41,19 +41,23 @@ section, retain its current meaning in English and remove the stale duplicate.
 Immutable historical evidence retains its original text; operator conversation
 and product UI localization may remain Korean. Missing Korean duplicates are not defects.
 This documentation convention is active now. Automated review output switches to
-English with protocol activation; the current legacy prompts remain in force until then.
+English with this activation; legacy prompts remain only for compatibility fixtures.
 
 ## Consequences and activation
 
-This records the approved protocol design; it does not supersede the live legacy
-workflow yet. The activation change must identify which older execution/coverage
-rules it replaces and preserve their remaining security and ownership decisions.
-See [the module contract](../../scripts/pr-review/README.md) for library interfaces
-and offline checks. Model access and production execution require separate evidence.
+This activation replaces the legacy 12-cell Codex/Kiro matrix and unconditional
+chair with one full-change responsibility per required role, strict JSON/nonce
+coverage and conditional adjudication. Missing/invalid required roles block;
+legacy permissive dropout counts do not authorize specialist coverage. Existing
+input exclusions, provider security/custody, regions, budgets and runner pins remain.
+The prior cross-repository ADR-015 rationale for excluding `glm-5` remains;
+this decision supersedes its 12-cell execution shape.
+See [the module contract](../../scripts/pr-review/README.md) and
+[project guide](../pr-review-specialists.md).
 
-The target Sol configuration intentionally replaces the legacy Terra review slot
-for consistent fleet configuration. This is an explicit target selection, not a
-claim that Sol is already LIVE or a change to the application inference models.
+Sol intentionally replaces the legacy Terra review slot. This is an explicit
+CI model selection, not a change to application inference models or proof that
+a configured provider/model executed successfully.
 
 A scope containing only files excluded by the existing, base-approved project
 input policy may complete as NOT_APPLICABLE with a PASS gate result. The trusted
@@ -62,14 +66,13 @@ identifies excluded paths and claims no model review. Any reviewable source,
 unknown exclusion, source omission or failed collector remains blocking. New
 exclusions require their own reviewed policy change.
 
-Activation must update the BASELINE live roster row and identify superseded
-execution rules while retaining their remaining security/custody requirements.
+BASELINE records the active roster and this replacement of legacy execution rules.
 The machine tag `kiro-fable` is a compatibility identifier for the Opus AWS role,
 not a model-brand assertion; its requested model is recorded separately. Renaming
 receipt keys is outside this policy change.
 
-Static policy checks and offline protocol tests apply to the staged library.
-Provider access and runtime activation evidence belong to the later activation.
+Static policy, executor and offline protocol tests validate the implementation.
+Real provider access and exact-HEAD publication need runtime evidence.
 
 ## Verification
 
@@ -78,10 +81,10 @@ files:
   - path: docs/decisions/BASELINE.md
     must_contain:
       - "| **LIVE** | Documentation language"
-      - "| **GATED** | Specialist review protocol"
+      - "| **LIVE** | Specialist review protocol"
   - path: scripts/pr-review/README.md
     must_contain:
-      - "The legacy review pipeline remains active."
+      - "CI selects `ROLE_REVIEW=1`"
       - "compatibility identifier"
       - "Terraform/tfvars"
 ```

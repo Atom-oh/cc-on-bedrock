@@ -54,6 +54,42 @@ class PreparationTests(unittest.TestCase):
             prepare.prepare(head, base, self.root / "work")
         return calls
 
+    def test_prefetched_merge_base_uses_local_objects_without_network(self):
+        (self.root / "server.py").write_text("candidate change\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "candidate")
+        head = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "-q", "--detach", self.base)
+        directory = self.root / "scripts/pr-review"
+        directory.mkdir(parents=True)
+        command, run = prepare.command, subprocess.run
+        def offline_command(*args):
+            self.assertNotEqual(args[0], "gh", "prefetched preparation must not call GitHub")
+            return command(*args)
+        def offline_run(args, **kwargs):
+            self.assertNotEqual(args[:2], ["git", "fetch"], "objects were fetched by the trusted step")
+            if len(args) > 1 and args[1].endswith("role_review.py"):
+                return subprocess.CompletedProcess(args, 0)
+            return run(args, **kwargs)
+        with patch.dict(os.environ, {"GH_REPO": "example/repo", "MERGE_BASE_SHA": self.base}), \
+                patch.object(prepare, "DIRECTORY", directory), \
+                patch.object(prepare, "command", side_effect=offline_command), \
+                patch.object(prepare.subprocess, "run", side_effect=offline_run):
+            prepare.prepare(head, self.base, self.root / "work")
+        source = json.loads((self.root / "work/role-source.json").read_text())
+        self.assertEqual(source["merge_base_sha"], self.base)
+        self.assertEqual(source["scope_paths"], ["server.py"])
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.base)
+
+    def test_prefetched_merge_base_rejects_invalid_or_unavailable_objects(self):
+        directory = self.root / "scripts/pr-review"
+        directory.mkdir(parents=True)
+        blob = self.git("rev-parse", self.base + ":AGENTS.md").strip()
+        for value in ("", "main", "a" * 39, "f" * 40, blob, self.base + "\nOTHER=value"):
+            with self.subTest(value=value), patch.dict(os.environ, {"MERGE_BASE_SHA": value}), \
+                    self.assertRaisesRegex(ValueError, "merge base|commit"):
+                self.prepare_locally(self.base, self.base, directory)
+
     def test_committed_context_hook_receives_selected_scope_and_lowers_cap(self):
         directory = self.root / "scripts/pr-review"
         directory.mkdir(parents=True)

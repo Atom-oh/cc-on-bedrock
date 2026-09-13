@@ -116,6 +116,51 @@ class RoleReviewTests(unittest.TestCase):
         self.assertEqual((self.work / "chair-mode.txt").read_text(), "blocked\n")
         self.assertTrue((self.work / "deterministic-review.md").read_text().endswith("VERDICT: FAIL\n"))
 
+    def test_legacy_token_scrubbing_survives_private_response_transport(self):
+        tokens = ["ghp_" + "a" * 30, "AKIA" + "A" * 16,
+                  "xoxb-" + "b" * 20, "AIza" + "c" * 35,
+                  "eyJ" + "d" * 10 + "." + "e" * 12 + "." + "f" * 12]
+        cases = [("_" + token + "_", token) for token in tokens]
+        cases += [(token, token) for token in ("github_pat_" + "g" * 32, "sk-ant-" + "h" * 30)]
+        opaque = "OPAQUE" + "Z" * 24
+        cases += [(key + "=" + quote + opaque + quote, opaque)
+                  for key in ("api_key", "aws_secret_access_key", "aws_access_key_id",
+                              "access_token", "client_secret", "secret", "passwd", "password", "token")
+                  for quote in ("\"", "'", "")]
+        cases += [("X_API_KEY='" + opaque + "'", opaque)]
+        cases = [(prefix + text, secret) for prefix in ("", "토큰", "é", "word\u200b", "word\u2028") for text, secret in cases]
+        path = "fixtures/_ghp_" + "z" * 30 + "_.txt"
+        self.prepare(patch(path))
+        result = self.record("codex", self.response("codex", checks=[
+            {"path": path, "evidence": text} for text, _ in cases]))
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["response"]["reviewed_paths"], [path])
+        for (text, secret), check in zip(cases, result["response"]["checks"]):
+            with self.subTest(format=text[:32]):
+                legacy = subprocess.run(["bash", "-c", 'source "$1"; scrub_secrets',
+                    "legacy-scrub", str(ENGINE.with_name("lib.sh"))], input=text + "\n",
+                    text=True, capture_output=True, check=True).stdout
+                self.assertNotIn(secret, legacy, "fixture must exercise an existing shell rule")
+                self.assertNotIn(secret, check["evidence"])
+
+
+    def test_named_credential_labels_are_classified_before_redaction(self):
+        for index, (name, value, label) in enumerate((
+            ("name", "value", "password:admin"),
+            ("headerName", "headerValue", "token=abc"),
+            ("name", "value", "tok\u200ben"),
+            ("na\u200bme", "value", "DATABASE_PASSWORD"),
+        )):
+            with self.subTest(label=label):
+                self.work = self.root / f"label-{index}"
+                self.prepare()
+                secret = "NAMED_SYNTHETIC_PRIVATE"
+                evidence = json.dumps({name: label, value: secret, "public": "PUBLIC_KEEP"})
+                result = self.record("codex", self.response("codex", checks=[{
+                    "path": FRONTEND, "evidence": evidence}]))
+                self.assertNotIn(secret, json.dumps(result))
+                self.assertIn("PUBLIC_KEEP", json.dumps(result))
+
     def test_validated_paths_survive_scrubbing_without_preserving_private_prose(self):
         paths = ["infra/task-definition-worker.tf", "frontend/surveyJob.test.tsx",
                  "fixtures/password=example.txt"]
