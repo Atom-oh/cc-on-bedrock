@@ -1,5 +1,10 @@
 """Behavioral CLI tests; no network, credentials or model calls."""
 
+from concurrent.futures import ThreadPoolExecutor
+import importlib.util
+import threading
+from types import SimpleNamespace
+from unittest.mock import patch as mock_patch
 import json
 from pathlib import Path
 import subprocess
@@ -285,6 +290,113 @@ class RoleReviewTests(unittest.TestCase):
         self.assertIn(self.diff.read_text(), payload)
         self.prepare()
         self.assertFalse((self.work / "slot/codex-request.json").exists())
+
+    def test_hunkless_content_changes_cannot_claim_complete_input(self):
+        headers = "diff --git a/file.txt b/file.txt\n"
+        cases = (
+            headers + "new file mode 100644\n",
+            headers + "new file mode 100644\nindex 0000000..1234567\n",
+            headers + "new file mode 100644\nindex 0000000..1234567\n--- /dev/null\n+++ b/file.txt\n",
+            headers + "deleted file mode 100644\nindex 1234567..0000000\n",
+            headers + "old mode 100644\nnew mode 100755\nindex 1234567..abcdef0\n",
+            "diff --git a/old.txt b/new.txt\nsimilarity index 85%\n"
+            "rename from old.txt\nrename to new.txt\nindex 1234567..abcdef0\n",
+            "diff --git a/old.txt b/new.txt\nsimilarity index 85%\n"
+            "copy from old.txt\ncopy to new.txt\n",
+        )
+        for index, raw in enumerate(cases):
+            with self.subTest(index=index):
+                self.work = self.root / f"cut-metadata-{index}"
+                self.prepare(raw, expected=2)
+                self.assert_blocked()
+
+    def test_genuinely_empty_files_and_pure_copies_need_no_hunk(self):
+        for raw, expected_path in (
+            ("diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n"
+             "index 0000000..e69de29\n", "empty.txt"),
+            ("diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\n"
+             "index e69de29..0000000\n", "empty.txt"),
+            ("diff --git a/old.txt b/new.txt\nsimilarity index 100%\n"
+             "copy from old.txt\ncopy to new.txt\n", "new.txt"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.prepare(raw)["paths"], [expected_path])
+
+    def test_unterminated_private_keys_are_removed_from_public_results(self):
+        for index, kind in enumerate(("", "RSA ", "EC ", "OPENSSH ")):
+            with self.subTest(kind=kind):
+                self.work = self.root / f"unterminated-key-{index}"
+                self.prepare()
+                secret = "SYNTHETIC_PRIVATE_FRAGMENT"
+                evidence = f"-----BEGIN {kind}PRIVATE KEY-----\n{secret}\ncut off"
+                response = self.response("codex", findings=[{
+                    "severity": "MINOR", "path": FRONTEND,
+                    "condition": "When diagnostics contain a partial key", "evidence": evidence,
+                }])
+                result = self.record("codex", raw=json.dumps(response))
+                self.assertTrue(result["valid"])
+                self.assertNotIn(secret, json.dumps(result))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                self.assertNotIn(secret, (self.work / "deterministic-review.md").read_text())
+
+    def test_charset_escapes_cannot_split_recoverable_credentials(self):
+        for index, escape in enumerate(("\x1b(B", "\x1b)0", "\x1b#8", "\x1b%G")):
+            with self.subTest(escape=repr(escape)):
+                self.work = self.root / f"charset-{index}"
+                self.prepare()
+                evidence = "ghp_" + "A" * 18 + escape + "B" * 18
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": evidence}])
+                result = self.record("codex", raw=json.dumps(response))
+                self.assertNotIn("B" * 18, json.dumps(result))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                self.assertNotIn("B" * 18, (self.work / "deterministic-review.md").read_text())
+
+    def test_aws_sdk_credential_field_names_are_redacted(self):
+        for index, key in enumerate(("SecretAccessKey", "SessionToken", "AccessKeyId")):
+            with self.subTest(key=key):
+                self.work = self.root / f"sdk-key-{index}"
+                self.prepare()
+                secret = "SYNTHETIC_PRIVATE_SDK_VALUE"
+                evidence = json.dumps({key: secret})
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": evidence}])
+                self.assertNotIn(secret, json.dumps(self.record("codex", response=response)))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                self.assertNotIn(secret, (self.work / "deterministic-review.md").read_text())
+
+    def test_concurrent_record_cannot_overwrite_a_failed_attempt(self):
+        self.prepare()
+        self.record("claude-self")
+        spec = importlib.util.spec_from_file_location("record_race_test", ENGINE)
+        engine = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(engine)
+        output, stderr = self.root / "held-response.json", self.root / "race.stderr"
+        output.write_text(json.dumps(self.response("codex")))
+        stderr.write_text("")
+        nonce, _, _ = engine.issue_request(self.work, "codex")
+        args = dict(work=self.work, tag="codex", output=output, stderr=stderr, nonce=nonce)
+        entered, release = threading.Event(), threading.Event()
+        original = engine.text_file
+
+        def hold_response(path):
+            if Path(path) == output:
+                entered.set()
+                if not release.wait(10):
+                    raise AssertionError("record race did not release the first writer")
+            return original(path)
+
+        with mock_patch.object(engine, "text_file", side_effect=hold_response):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(engine.record, SimpleNamespace(**args, exit_code=0))
+                try:
+                    self.assertTrue(entered.wait(5))
+                    self.assertEqual(engine.record(SimpleNamespace(**args, exit_code=1)), 2)
+                finally:
+                    release.set()
+                self.assertEqual(pending.result(timeout=5), 0)
+        self.assert_blocked()
 
     def test_mode_only_and_git_octal_quoted_paths(self):
         for raw, expected_path in (

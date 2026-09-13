@@ -215,22 +215,39 @@ def complete_hunks(chunk, metadata_only=False):
             raise Invalid("invalid_diff_hunk")
     if remaining and remaining != [0, 0]:
         raise Invalid("incomplete_diff_hunk")
-    if not hunk_seen and re.search(r"^(?:---|\+\+\+) ", chunk, re.M):
+    if hunk_seen:
+        return
+    # A prefix ending at file/rename/mode metadata is not proof of a complete
+    # content change. Only metadata that proves no text hunk is needed can pass.
+    if re.search(r"^(?:--- |\+\+\+ )", chunk, re.M):
         raise Invalid("incomplete_diff_hunk")
-    if not hunk_seen and re.search(r"^(?:new file mode|deleted file mode)", chunk, re.M):
-        if metadata_only and re.search(r"^deleted file mode ", chunk, re.M):
+    index = re.search(r"^index ([0-9a-f]{7,64})\.\.([0-9a-f]{7,64})(?: \d+)?$", chunk, re.M)
+    empty_ids = (
+        hashlib.sha1(b"blob 0\0").hexdigest(),
+        hashlib.sha256(b"blob 0\0").hexdigest(),
+    )
+    def empty_blob(oid):
+        return any(full.startswith(oid) for full in empty_ids)
+
+    if metadata_only and re.search(r"^deleted file mode ", chunk, re.M):
+        return
+    if re.search(r"^new file mode ", chunk, re.M):
+        if index and set(index[1]) == {"0"} and empty_blob(index[2]):
             return
-        index = re.search(r"^index ([0-9a-f]+)\.\.([0-9a-f]+)", chunk, re.M)
-        empty = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
-        blob = index[2 if "new file mode" in chunk else 1] if index else ""
-        if len(blob) < 7 or not empty.startswith(blob):
-            raise Invalid("incomplete_diff_hunk")
-    if not hunk_seen and not (
-        re.search(r"^(?:rename|copy) to ", chunk, re.M) or
-        (re.search(r"^old mode ", chunk, re.M) and re.search(r"^new mode ", chunk, re.M)) or
-        re.search(r"^(?:new file mode|deleted file mode|Binary files |GIT binary patch)", chunk, re.M)
-    ):
-        raise Invalid("diff_change_missing")
+    elif re.search(r"^deleted file mode ", chunk, re.M):
+        if index and empty_blob(index[1]) and set(index[2]) == {"0"}:
+            return
+    elif not index or index[1] == index[2]:
+        if re.search(r"^similarity index 100%$", chunk, re.M) and any(
+            re.search(rf"^{kind} from ", chunk, re.M) and re.search(rf"^{kind} to ", chunk, re.M)
+            for kind in ("rename", "copy")
+        ):
+            return
+        if re.search(r"^old mode ", chunk, re.M) and re.search(r"^new mode ", chunk, re.M):
+            return
+    if re.search(r"^(?:Binary files |GIT binary patch)", chunk, re.M):
+        return  # Preparation separately rejects unsupported binary input.
+    raise Invalid("diff_change_missing")
 
 
 def diff_paths(text, manifest=None, metadata_only=()):
@@ -431,6 +448,9 @@ def prepare(args):
     for pattern in ("*-result.json", "*-timing.json", "*-request.json"):
         for previous in (work / "slot").glob(pattern):
             remove(previous)
+    for pattern in ("*.record-claim", "*-duplicate.flag"):
+        for previous in (work / "slot").glob(pattern):
+            remove(previous)
     for name in ("role-summary.json", "responded.txt", "chair-mode.txt",
                  "deterministic-review.md", "coverage-severe.flag"):
         remove(work / name)
@@ -487,6 +507,8 @@ def issue_request(work, tag):
         "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
     }
     remove(work / "slot" / f"{tag}-result.json")
+    remove(work / "slot" / f"{tag}.record-claim")
+    remove(work / "slot" / f"{tag}-duplicate.flag")
     write(work / "requests" / f"{tag}.prompt", instruction)
     write(work / "requests" / f"{tag}.input", payload)
     write_json(work / "slot" / f"{tag}-request.json", receipt)
@@ -606,10 +628,11 @@ def scrub(value):
         return value
     value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
+    value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
     value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
     key = (
         r"(?i:(?<![A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:password|passwd|api[_-]?key|"
-        r"secret|token|aws_secret_access_key|aws_access_key_id|access[_-]?token|client[_-]?secret))"
+        r"secret|token|aws_secret_access_key|aws_access_key_id|access[_-]?token|client[_-]?secret|SecretAccessKey|SessionToken|AccessKeyId))"
         r"""["']?\s*[:=]\s*"""
     )
     patterns = (
@@ -634,6 +657,20 @@ def scrub(value):
 
 def record(args):
     work = Path(args.work)
+    if args.tag not in ROLES:
+        return 2
+    slot = work / "slot"
+    slot.mkdir(parents=True, exist_ok=True)
+    result_path = slot / f"{args.tag}-result.json"
+    try:
+        with (slot / f"{args.tag}.record-claim").open("x"):
+            pass
+    except FileExistsError:
+        write(slot / f"{args.tag}-duplicate.flag", "duplicate_record\n")
+        return 2
+    if result_path.exists():
+        write(slot / f"{args.tag}-duplicate.flag", "duplicate_record\n")
+        return 2
     result = {"schema_version": 1, "tag": args.tag, "valid": False, "failure_codes": [], "response": None}
     try:
         plan = load_plan(work)
@@ -651,8 +688,6 @@ def record(args):
             raise Invalid("plan_input_incomplete")
         if not role["required"]:
             raise Invalid("inactive_role")
-        if (work / "slot" / f"{args.tag}-result.json").exists():
-            raise Invalid("duplicate_record")
         if args.exit_code != 0:
             result["failure_codes"].append("cli_nonzero_exit")
         stderr = text_file(args.stderr)
@@ -669,7 +704,7 @@ def record(args):
     except Invalid as exc:
         if str(exc) not in result["failure_codes"]:
             result["failure_codes"].append(str(exc))
-    write_json(work / "slot" / f"{args.tag}-result.json", result)
+    write_json(result_path, result)
     return 0 if result["valid"] else 2
 
 
