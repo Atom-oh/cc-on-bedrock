@@ -273,7 +273,8 @@ class RoleReviewTests(unittest.TestCase):
         metadata = self.root / "source.json"
         source = {"head_sha": HEAD, "base_sha": BASE,
                   "diff_sha256": hashlib.sha256(patch().encode()).hexdigest(),
-                  "note": "password=collector-private"}
+                  "note": "password=collector-private",
+                  "nested": {"SecretAccessKey": "collector-private"}}
         metadata.write_text(json.dumps(source))
         self.prepare(extra=("--provenance", metadata))
         self.finish()
@@ -436,14 +437,14 @@ class RoleReviewTests(unittest.TestCase):
         spec.loader.exec_module(engine)
         output, stderr = self.root / "held-response.json", self.root / "race.stderr"
         output.write_text(json.dumps(self.response("codex")))
-        stderr.write_text("")
+        stderr.write_text("Quota exceeded")
         nonce, _, _ = engine.issue_request(self.work, "codex")
         args = dict(work=self.work, tag="codex", output=output, stderr=stderr, nonce=nonce)
         entered, release = threading.Event(), threading.Event()
         original = engine.text_file
 
         def hold_response(path):
-            if Path(path) == output:
+            if Path(path) == stderr:
                 entered.set()
                 if not release.wait(10):
                     raise AssertionError("record race did not release the first writer")
@@ -454,10 +455,15 @@ class RoleReviewTests(unittest.TestCase):
                 pending = pool.submit(engine.record, SimpleNamespace(**args, exit_code=0))
                 try:
                     self.assertTrue(entered.wait(5))
+                    with self.assertRaises(engine.Invalid):
+                        engine.issue_request(self.work, "codex")
                     self.assertEqual(engine.record(SimpleNamespace(**args, exit_code=1)), 2)
                 finally:
                     release.set()
-                self.assertEqual(pending.result(timeout=5), 0)
+                self.assertEqual(pending.result(timeout=5), 2)
+        self.assert_blocked()
+        engine.issue_request(self.work, "codex")
+        self.record("codex")
         self.assert_blocked()
 
     def test_mode_only_and_git_octal_quoted_paths(self):
@@ -615,6 +621,9 @@ class RoleReviewTests(unittest.TestCase):
             (0, "Warning: falling back to another model"),
             (0, "Error: quota exceeded for this account"),
             (0, "An error occurred (ThrottlingException) when invoking the model"),
+            (0, "Error: MONTHLY_REQUEST_COUNT"),
+            (0, "Error: UsageLimitReachedError"),
+            (0, "Warning: Json supplied at /agent/profile.json is invalid"),
         )):
             with self.subTest(rc=rc, stderr=stderr):
                 self.work = self.root / f"diagnostic-{index}"

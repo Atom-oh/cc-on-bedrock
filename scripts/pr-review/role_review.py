@@ -20,6 +20,7 @@ not proof of model honesty or of the provider's actual executed weights.
 
 import argparse
 import ast
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -77,7 +78,7 @@ FAILURE_CODES = {
     "invalid_findings", "invalid_finding", "invalid_uncertainties",
     "invalid_json_wrapper", "empty_response", "model_selection_diagnostic",
     "model_fallback_diagnostic", "quota_diagnostic", "agent_preflight_diagnostic",
-    "duplicate_record",
+    "duplicate_record", "invalid_invocation_nonce", "invalid_issued_request",
 }
 TERMINAL_CODES = {"model_selection_diagnostic", "model_fallback_diagnostic",
                   "quota_diagnostic", "agent_preflight_diagnostic"}
@@ -525,7 +526,28 @@ def load_plan(work):
     return plan
 
 
+@contextmanager
+def slot_operation(work, tag):
+    if tag not in ROLES:
+        raise Invalid("inactive_role")
+    lock = Path(work) / "slot" / f".{tag}-operation-lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lock.mkdir()
+    except FileExistsError:
+        raise Invalid("record_in_flight") from None
+    try:
+        yield
+    finally:
+        lock.rmdir()
+
+
 def issue_request(work, tag):
+    with slot_operation(work, tag):
+        return _issue_request(work, tag)
+
+
+def _issue_request(work, tag):
     work = Path(work)
     plan = load_plan(work)
     role = plan["roles"][tag]
@@ -655,15 +677,22 @@ def diagnostic_failure(stderr):
         if re.search(r"^failed to set model\b|^(?:invalid|unknown|unsupported)\s+model\b|"
                      r"^model\s+.{0,100}\s+(?:not found|not available|unsupported)\b", body, re.I):
             return "model_selection_diagnostic"
-        if re.search(r"^no agent with name\b.*\bfound\b", body, re.I):
+        if re.search(r"^no agent with name\b.*\bfound\b|^Json supplied at .* is invalid\b", body, re.I):
             return "agent_preflight_diagnostic"
         if re.search(r"^(?:falling back|using (?:a )?fallback|fallback model)\b", body, re.I):
             return "model_fallback_diagnostic"
-        if re.search(r"^(?:quota exceeded|rate limit exceeded|insufficient credits|"
+        if re.search(r"^(?:MONTHLY_REQUEST_COUNT|UsageLimitReachedError|"
+                     r"quota exceeded|rate limit exceeded|insufficient credits|"
                      r"monthly request limit (?:reached|exceeded)|"
                      r"usage limit (?:reached|exceeded)|billing hard limit reached)\b", body, re.I):
             return "quota_diagnostic"
     return None
+
+
+SENSITIVE_KEY = re.compile(
+    r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
+    r"secret|token|credential|passphrase|private[_-]?key|cookie|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_-]*)"
+)
 
 
 def scrub(value):
@@ -671,17 +700,15 @@ def scrub(value):
     if isinstance(value, list):
         return [scrub(x) for x in value]
     if isinstance(value, dict):
-        return {k: scrub(v) for k, v in value.items()}
+        return {k: "[REDACTED]" if isinstance(k, str) and SENSITIVE_KEY.fullmatch(k)
+                else scrub(v) for k, v in value.items()}
     if not isinstance(value, str):
         return value
     value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
     value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
-    identifier = (
-        r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
-        r"secret|token|credential|passphrase|private[_-]?key|cookie|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_-]*)"
-    )
+    identifier = SENSITIVE_KEY.pattern
     key = identifier + r"""["']?\s*[:=]\s*"""
     patterns = (
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
@@ -708,6 +735,19 @@ def scrub(value):
 
 
 def record(args):
+    if args.tag not in ROLES:
+        return 2
+    try:
+        with slot_operation(args.work, args.tag):
+            return _record(args)
+    except Invalid as exc:
+        if str(exc) != "record_in_flight":
+            raise
+        write(Path(args.work) / "slot" / f"{args.tag}-duplicate.flag", "record_in_flight\n")
+        return 2
+
+
+def _record(args):
     work = Path(args.work)
     if args.tag not in ROLES:
         return 2
