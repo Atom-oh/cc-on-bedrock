@@ -1,7 +1,13 @@
-# Review protocol module
+# PR review module
 
-[README.md](README.md) owns this module's interfaces, limits and staged rollout.
-The legacy workflow remains active until its separate activation change. Keep
-protocol instructions, documentation and review output in English. Preserve the
-project's trusted context, source-custody and budget constraints when adding an
-executor. Run the documented offline tests; model execution is separate evidence.
+The live CI entrypoints are `run-panel.sh` (legacy panel), `synthesize.sh` (chair)
+and `lib.sh` (shared helpers). `agents/pr-review-notools.json` defines the Kiro
+no-tools profile. Their current behavior remains authoritative until activation.
+See [the runbook](../../docs/runbooks/pr-review-panel.md) and
+[legacy tests](../../tests/unit/test-pr-review-panel.sh).
+
+[README.md](README.md) defines the staged specialist contract. The Python library,
+its tests and its offline test workflow are installed. Executors and activation
+remain separate; run the documented protocol tests. Keep new documentation in English; planned protocol
+output becomes English at activation. Preserve source custody, budgets and
+current safety controls when integrating the executors.
