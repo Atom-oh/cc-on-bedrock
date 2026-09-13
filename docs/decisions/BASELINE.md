@@ -78,3 +78,8 @@
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 
 새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 §3(또는 §2) 갱신 필수**(anti-drift, §1).
+
+## Staged specialist protocol
+
+[ADR-013](ADR-013-specialist-review-protocol.md) records the inactive protocol library. The LIVE
+legacy panel row remains authoritative until a separate activation change.

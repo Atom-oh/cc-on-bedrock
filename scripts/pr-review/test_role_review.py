@@ -81,7 +81,7 @@ class RoleReviewTests(unittest.TestCase):
         diagnostic.write_text(stderr)
         self.cli(
             "record", "--work", self.work, "--tag", tag, "--output", output,
-            "--stderr", diagnostic, "--exit-code", rc, expected=expected,
+            "--stderr", diagnostic, "--exit-code", rc, "--nonce", "c" * 32, expected=expected,
         )
         return self.read(f"slot/{tag}-result.json")
 
@@ -134,6 +134,9 @@ class RoleReviewTests(unittest.TestCase):
     def test_aws_semantics_in_frontend_and_unknown_paths_are_conservative(self):
         for raw in (
             patch(after='import { S3Client } from "@aws-sdk/client-s3";'),
+            patch(after='const region = "us-west-2";'),
+            patch(after='const origin = "internal-app.ap-northeast-2.elb.amazonaws.com";'),
+            patch(after='const resource = "aws_iam_role";'),
             patch("misc/unknown.xyz"),
         ):
             with self.subTest(raw=raw):
@@ -161,6 +164,18 @@ class RoleReviewTests(unittest.TestCase):
         self.prepare(extra=("--paths", manifest), expected=2)
         self.assert_blocked()
 
+    def test_regular_file_to_symlink_has_two_blocks_for_one_path(self):
+        raw = (
+            "diff --git a/link b/link\ndeleted file mode 100644\n"
+            "--- a/link\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n"
+            "diff --git a/link b/link\nnew file mode 120000\n"
+            "--- /dev/null\n+++ b/link\n@@ -0,0 +1 @@\n+target\n"
+        )
+        manifest = self.root / "paths.json"
+        manifest.write_text('["link"]')
+        self.assertEqual(self.prepare(raw, extra=("--paths", manifest))["paths"], ["link"])
+        self.assertEqual(self.prepare(raw)["paths"], ["link"])
+
     def test_context_default_supports_24000_bytes_and_lower_configured_cap(self):
         self.context.write_text("x" * 22892)
         self.prepare()
@@ -186,11 +201,36 @@ class RoleReviewTests(unittest.TestCase):
         self.cli("aggregate", "--work", self.work)
         self.assertNotIn(secret, (self.work / "deterministic-review.md").read_text())
 
+    def test_decoded_values_cover_existing_repository_credential_patterns(self):
+        cases = [
+            ("xox" + "b-" + "A" * 35, "A" * 35),
+            ("AI" + "za" + "B" * 35, "B" * 35),
+            ("Authorization: Basic " + "C" * 40, "C" * 40),
+            ('access_token="' + "D" * 35 + '"', "D" * 35),
+            ('client_secret="' + "E" * 35 + '"', "E" * 35),
+            ("aws_access_key_id=" + "F" * 35, "F" * 35),
+            ("AWS_SESSION_TOKEN=\n" + "G" * 35, "G" * 35),
+        ]
+        for index, (text, secret) in enumerate(cases):
+            with self.subTest(kind=text.split("=", 1)[0][:24]):
+                self.work = self.root / f"decoded-pattern-{index}"
+                self.prepare()
+                response = self.response("codex")
+                response["checks"][0]["evidence"] = text
+                escaped = json.dumps(response).replace(secret[0], "\\u" + format(ord(secret[0]), "04x"))
+                result = self.record("codex", raw=escaped)
+                self.assertNotIn(secret, json.dumps(result))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                self.assertNotIn(secret, (self.work / "deterministic-review.md").read_text())
+
     def test_decoded_multiline_and_control_split_credentials_are_scrubbed(self):
         cases = [
             ("-----BEGIN PRIVATE KEY-----\nPRIVATE_MATERIAL\n-----END PRIVATE KEY-----", "PRIVATE_MATERIAL"),
             ("ghp_" + "A" * 18 + "\x1b[31m" + "B" * 18, "B" * 18),
             ("ghp_" + "A" * 18 + "\u200b" + "B" * 18, "B" * 18),
+            ("ghp_" + "A" * 18 + "\x9b;31m" + "B" * 18, "B" * 18),
+            ("ghp_" + "A" * 18 + "\x9dhidden\x9c" + "B" * 18, "B" * 18),
             ("AWS_SECRET_ACCESS_KEY=PRIVATE_ACCESS_SECRET", "PRIVATE_ACCESS_SECRET"),
         ]
         for index, (credential, secret) in enumerate(cases):
