@@ -11,7 +11,7 @@ every review lens. The trusted workflow enables this protocol with
 | `kiro-sol` | `gpt-5.6-sol` | Deployment order, component contracts, lifecycle and recovery |
 | `claude-self` | `global.anthropic.claude-fable-5-1` | Authentication, data boundaries, requirements, API and ADR consistency |
 
-The legacy `kiro-fable` tag identifies the Opus slot. Kiro catalog aliases differ
+The shared `kiro-fable` tag identifies the Opus slot. Kiro catalog aliases differ
 from Bedrock inference-profile IDs. These are configured model identities, not
 attestation of the provider's internal routing or weights.
 
@@ -86,3 +86,7 @@ source path cannot disappear through an artifact rename. A verified exclusions-
 only change is explicitly NOT_APPLICABLE and invokes no model; missing inputs,
 unknown exclusions and truncated required source remain blocked. The policy does
 not authorize excluding additional source merely to obtain a pass.
+
+Approved exclusions-only input explicitly supplies `--allow-exclusions-only` and
+a private `--policy` file copied from Git BASE. The engine checks its byte hash
+and retains an anchor through aggregation; arbitrary provenance cannot opt in.
