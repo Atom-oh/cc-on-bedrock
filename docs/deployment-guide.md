@@ -336,3 +336,4 @@ DNS 검증 CNAME가 Route 53에 생성됐는지 확인 (ADR-016: CloudFront는 u
 | 완전 teardown + 재배포 | `docs/runbooks/full-teardown-redeploy.md` |
 | Local Governance 온보딩 | `docs/runbooks/local-governance-onboarding.md` |
 | 인스턴스 복구 | `docs/runbooks/instance-recovery.md` |
+| AI PR-review 패널 Kiro 셀 장애(한도 소진·무툴 계약 위반) | `docs/runbooks/pr-review-panel.md` |
