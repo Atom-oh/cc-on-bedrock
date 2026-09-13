@@ -432,10 +432,15 @@ def prepare(args):
                     or provenance.get("diff_sha256") != digest(raw)):
                 raise Invalid("invalid_input_provenance")
             declared = provenance.get("input_failures", [])
-            if not isinstance(declared, list) or any(not isinstance(x, str) for x in declared):
+            if not isinstance(declared, list) or any(
+                not isinstance(x, str) or not re.fullmatch(r"[a-z][a-z0-9_:.-]{0,63}", x)
+                for x in declared
+            ):
                 raise Invalid("invalid_input_provenance")
             failures.extend(declared)
+            provenance = scrub(provenance)
         except Invalid:
+            provenance = {}
             failures.append("invalid_input_provenance")
     plan = {
         "schema_version": 1, "head_sha": args.head, "base_sha": args.base,
@@ -690,10 +695,10 @@ def scrub(value):
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
         r"""[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
-        r"""(?im)^[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
+        r"""(?im)^[ \t]*[+-]?[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
-        key + r"[|>][-+]?[ \t]*\r?\n(?:[ \t]+[^\r\n]*(?:\r?\n|\Z))+",
-        r"""(?i:\bname)\s*:\s*["']?""" + identifier + r"""["']?[ \t]*\r?\n[ \t]*(?i:value)\s*:[^\r\n]*""",
+        key + r"[|>][-+]?[ \t]*\r?\n(?:[+-]?[ \t]+[^\r\n]*(?:\r?\n|\Z))+",
+        r"""(?i:\bname)\s*:\s*["']?""" + identifier + r"""["']?[ \t]*\r?\n[+-]?[ \t]*(?i:value)\s*:[^\r\n]*""",
         key + r"""(?P<quote>["']).*?(?P=quote)""",
         key + r"""[^\s"',;}\]]+""",
     )
@@ -864,6 +869,12 @@ def aggregate(args):
             lines.append(f"| {tag} | {role['role']} | {str(role['required']).lower()} | "
                          f"{role['status']} | {role['reason']} |")
         lines.append("")
+        provenance = summary["provenance"]
+        if provenance.get("excluded_paths"):
+            lines += ["Excluded paths: " + canonical(provenance["excluded_paths"]),
+                      "Input policy SHA-256: " + canonical(provenance.get("input_policy_sha256")), ""]
+        if provenance.get("path_only"):
+            lines += ["Content withheld by collector policy: " + canonical(provenance["path_only"]), ""]
         if failures:
             lines += ["Review blocked: required input or response validation failed.", "",
                       "Failure codes:"] + [f"- `{code}`" for code in sorted(set(failures))]
