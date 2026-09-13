@@ -32,7 +32,7 @@ English with protocol activation; the current legacy prompts remain in force unt
 
 ## Consequences and activation
 
-This records intent and the planned library; it does not supersede the live legacy
+This records the approved protocol design; it does not supersede the live legacy
 workflow yet. The activation change must identify which older execution/coverage
 rules it replaces and preserve their remaining security and ownership decisions.
 See [the module contract](../../scripts/pr-review/README.md) for current interfaces
