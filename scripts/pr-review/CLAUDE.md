@@ -1,13 +1,15 @@
 # PR review module
 
-The live CI entrypoints are `run-panel.sh` (legacy panel), `synthesize.sh` (chair)
-and `lib.sh` (shared helpers). `agents/pr-review-notools.json` defines the Kiro
-no-tools profile. Their current behavior remains authoritative until activation.
-See [the runbook](../../docs/runbooks/pr-review-panel.md) and
-[legacy tests](../../tests/unit/test-pr-review-panel.sh).
+[README.md](README.md) owns this module's interfaces and limits. The live workflow
+still uses `run-panel.sh`, `synthesize.sh` and `lib.sh`; keep their lens definitions
+synchronized until activation replaces that path.
 
-[README.md](README.md) defines the staged specialist contract. The Python library,
-its tests and its offline test workflow are installed. Executors and activation
-remain separate; run the documented protocol tests. Keep new documentation in English; planned protocol
-output becomes English at activation. Preserve source custody, budgets and
-current safety controls when integrating the executors.
+The installed specialist path uses `prepare_roles.py`, `run_role.py`,
+`run-specialists.sh`, `role_review.py`, `synthesize_roles.py` and
+`role-controls.sh`. Executors fetch Git data and call provider CLIs; only the
+protocol library is offline. The README documents BASE policy/context checks,
+optional adapters and environment settings. Workflow activation is separate.
+
+Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py'` and the
+README shell checks. Keep new documentation in English; automated output changes
+at activation. Preserve source custody, configured providers and all budgets.

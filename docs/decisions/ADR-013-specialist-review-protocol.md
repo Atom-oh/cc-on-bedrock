@@ -10,8 +10,8 @@ runtime_required: false
 ## Status
 
 Accepted, 2026-09-13. Documentation language convention: **LIVE** with the
-incremental migration rule below. Specialist protocol: **GATED**, offline library staged; legacy execution and review-output language remain active until a
-separate reviewed activation. No provider or application behavior changes here.
+incremental migration rule below. Specialist protocol: **GATED**, library and executors staged; legacy execution and review-output language remain active until a
+separate reviewed activation. Live provider/application behavior is unchanged until activation; installed executors can invoke providers when run.
 
 ## Context
 
