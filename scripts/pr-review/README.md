@@ -1,38 +1,63 @@
 # Specialist review protocol
 
-This change introduces the protocol library, `role_review.py`, and its offline
-regression tests. The current `pr-review.yml` still runs the legacy panel. Provider
-execution, project input adapters and activation follow in a separate reviewed
-change; this library alone changes no live review or deployment behavior.
+This phase adds the standalone protocol and offline tests. The live workflow
+still uses its legacy panel. Executors, approved project input adapters and
+activation follow in a separate reviewed change. This library neither invokes
+models nor verifies GitHub/Git provenance on the caller's behalf.
 
-The approved target roles are Codex (`global.openai.gpt-6-astra`) for correctness,
-Kiro Opus (`claude-opus-5`) for AWS, Kiro Sol (`gpt-5.6-sol`) for operations, and
-Claude (`global.anthropic.claude-fable-5-1`) for auth/data/API/ADR requirements.
-Kiro aliases differ from Bedrock profile IDs. A configured identity does not prove
-provider routing. English is the language of this protocol and its review output.
+Target responsibilities: Codex `global.openai.gpt-6-astra` checks correctness;
+Kiro `claude-opus-5` checks AWS; Kiro `gpt-5.6-sol` checks operations; Claude
+`global.anthropic.claude-fable-5-1` checks auth/data/API/ADR requirements. Sol is an
+intentional replacement for the legacy Terra slot when activation occurs. Kiro
+aliases and Bedrock profile IDs are separate namespaces. The `kiro-fable` tag is
+the compatibility name of the Opus slot. Review artifacts are English-only.
 
-`prepare --diff FILE --context FILE --head SHA --base SHA --work DIR` validates
-complete input and writes role prompts and fingerprints. Optional `--paths FILE`
-provides an authoritative JSON path manifest; `--provenance FILE` binds the
-trusted collector's scope and exclusions. Limits are 95,000 UTF-8 diff bytes,
-3,000 lines, at most 24,000 context bytes and a complete bounded request. Projects
-may require smaller limits. Oversize input is blocked, never awarded prefix credit.
+## API and files
 
-The executor must call `frame_request` with a fresh random 32-hex nonce for each
-attempt. `record --work DIR --tag TAG --output FILE --stderr FILE --exit-code RC
---nonce NONCE` validates the response and binds that nonce into its request digest.
-Missing, malformed, failed, stale or incomplete required responses block.
-`aggregate --work DIR` writes `role-summary.json` and `chair-mode.txt`: complete
-uncontroversial reports can use deterministic synthesis; substantive findings need
-adjudication; coverage failure cannot be waived. `failure_codes` is the diagnostic
-field; `failures` is a compatibility alias. These are scope attestations, not proof
-that a model found every defect.
+Run `python3 scripts/pr-review/role_review.py COMMAND --help` for exact flags.
 
-Before activation, preserve each project's approved input filtering, state/secret
-custody, context, no-tools checks, invocation budgets and publishing safeguards.
-Never feed a filtered-input workflow through a raw Git fallback. Project exceptions
-need explicit provenance. Runtime and workflow changes use the trusted PR base;
-head code and instructions remain untrusted review data.
+| Command | Contract |
+| --- | --- |
+| `prepare` | Accept approved diff/context files, HEAD/base SHAs and work directory; optional authoritative paths/provenance. Write `role-plan.json` and `roles/TAG.txt/.diff`. Invalidate old result, request and timing records. |
+| `issue` | Given work directory and required tag, generate a fresh nonce and persist exact `requests/TAG.prompt/.input` plus `slot/TAG-request.json`. Call before every provider attempt. |
+| `record` | Given tag, output/stderr files, exit code and issued `--nonce`, require the matching issued receipt and validate/scrub the response. Write `slot/TAG-result.json`. |
+| `aggregate` | Require matching receipts and valid complete results. Write `role-summary.json`, `responded.txt`, `chair-mode.txt`, and applicable `coverage-severe.flag`/`deterministic-review.md`. |
 
-Run `python3 -m unittest discover -s scripts/pr-review -p test_role_review.py -v`.
-These tests use no provider credentials or model calls.
+The executor sends the issued framed bytes and retains their receipt with the
+result. A result cannot nominate a different nonce. Hashes bind prepared inputs,
+provenance, issued frames and results; they are not provider signatures or proof
+of a model's identity, honesty or transport. The trusted executor and upstream
+collector remain responsible for actual execution and complete source selection.
+
+Start each job with a fresh work directory before collecting current inputs.
+`prepare` removes prior `*-result.json`, `*-request.json` and timing files from
+`slot/`; current upstream failure flags remain. Aggregation treats upstream
+`*.flag` files under the work tree as failures, except its own root
+`coverage-severe.flag`. Upload issued receipts alongside results and safe source
+metadata. `failure_codes` is canonical; `failures` is a compatibility alias.
+
+## Coverage and limits
+
+Trusted code routes untrusted path/content data conservatively. Codex and Claude
+remain required across families; only clearly irrelevant Kiro roles are inactive.
+Missing/failed/invalid required output is never NOT_APPLICABLE. Structural checks
+reject incomplete hunks and incomplete new/deleted-file records; approved
+metadata-only deletions must be explicitly identified by trusted provenance.
+
+Bounds: 95,000 UTF-8 diff bytes, 3,000 lines, up to 24,000 context bytes and a
+complete request below 128 KiB. Projects may impose smaller limits. The caller
+must retain its own source exclusions, state/secret custody and budget controls.
+Never replace a required project collector with raw Git input. There is no chunk
+coordinator: oversized input blocks; independent PASS results cannot be combined
+to claim coverage of a larger change.
+
+Exit 2 means blocked. After aggregate exit 0, read `chair-mode.txt`: `deterministic`
+permits the prepared clean summary, while `review` requires substantive
+adjudication. Coverage failure produces FAIL and cannot be waived by the chair.
+Scope assertions do not prove that every defect was found.
+
+## Verification
+
+`python3 -m unittest discover -s scripts/pr-review -p test_role_review.py -v`
+uses no provider credentials or model calls. Activation must additionally verify
+executors, project input preparation, invocation limits and exact-head publishing.

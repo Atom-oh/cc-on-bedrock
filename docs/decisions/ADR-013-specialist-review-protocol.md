@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted design, 2026-09-13. Protocol library staged; the legacy workflow is still
+Accepted, 2026-09-13 (design; not live activation). Protocol library staged; the legacy workflow is still
 active. Activation must be reviewed separately with its input and runner controls.
 
 ## Decision
@@ -24,3 +24,7 @@ workflow yet. The activation change must identify which older execution/coverage
 rules it replaces and preserve their remaining security and ownership decisions.
 See [the module contract](../../scripts/pr-review/README.md) for current interfaces
 and offline checks. Model access and production execution require separate evidence.
+
+The target Sol configuration intentionally replaces the legacy Terra review slot
+for consistent fleet configuration. This is an explicit target selection, not a
+claim that Sol is already LIVE or a change to the application inference models.

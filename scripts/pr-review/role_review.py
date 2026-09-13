@@ -4,6 +4,7 @@
 CLI:
   prepare --diff RAW --context CONTEXT --head SHA --base SHA --work WORK
           [--context-cap BYTES] [--paths JSON_FILE] [--provenance JSON_FILE]
+  issue --work WORK --tag TAG
   record --work WORK --tag TAG --output FILE --stderr FILE --exit-code RC --nonce NONCE
   aggregate --work WORK
 
@@ -12,7 +13,8 @@ roles/TAG.diff. Response ``role`` is the stable role slug, not the tag. Result
 envelopes obtain tag, configured family/model and fingerprints from the plan.
 Exit 2 means blocked. Aggregate exit 0 means deterministic PASS or chair handoff;
 read chair-mode.txt to distinguish them. No networking or model invocation.
-Use a fresh work directory per bounded diff/chunk. These are scope attestations,
+Use a fresh work directory per complete reviewed diff. This library does not
+coordinate chunks. These are scope attestations,
 not proof of model honesty or of the provider's actual executed weights.
 """
 
@@ -23,6 +25,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import sys
 import tempfile
 import unicodedata
@@ -186,7 +189,7 @@ def header_path(header):
     return candidates[0] if len(candidates) == 1 else None
 
 
-def complete_hunks(chunk):
+def complete_hunks(chunk, metadata_only=False):
     """Reject cut-off hunks; mode/rename/copy and empty-file changes need no hunk."""
     remaining = None
     hunk_seen = False
@@ -214,6 +217,14 @@ def complete_hunks(chunk):
         raise Invalid("incomplete_diff_hunk")
     if not hunk_seen and re.search(r"^(?:---|\+\+\+) ", chunk, re.M):
         raise Invalid("incomplete_diff_hunk")
+    if not hunk_seen and re.search(r"^(?:new file mode|deleted file mode)", chunk, re.M):
+        if metadata_only and re.search(r"^deleted file mode ", chunk, re.M):
+            return
+        index = re.search(r"^index ([0-9a-f]+)\.\.([0-9a-f]+)", chunk, re.M)
+        empty = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        blob = index[2 if "new file mode" in chunk else 1] if index else ""
+        if len(blob) < 7 or not empty.startswith(blob):
+            raise Invalid("incomplete_diff_hunk")
     if not hunk_seen and not (
         re.search(r"^(?:rename|copy) to ", chunk, re.M) or
         (re.search(r"^old mode ", chunk, re.M) and re.search(r"^new mode ", chunk, re.M)) or
@@ -222,14 +233,13 @@ def complete_hunks(chunk):
         raise Invalid("diff_change_missing")
 
 
-def diff_paths(text, manifest=None):
+def diff_paths(text, manifest=None, metadata_only=()):
     starts = list(re.finditer(r"^diff --git .+$", text, re.M))
     if not starts or text[:starts[0].start()].strip():
         raise Invalid("unparseable_diff")
     paths, headers = [], []
     for i, start in enumerate(starts):
         chunk = text[start.start():starts[i + 1].start() if i + 1 < len(starts) else len(text)]
-        complete_hunks(chunk)
         # Headers end at the first hunk; added content may itself contain +++.
         metadata = chunk.split("\n@@", 1)[0].splitlines()
         old = new = renamed = None
@@ -244,6 +254,7 @@ def diff_paths(text, manifest=None):
             elif line.startswith("copy to "):
                 renamed = repo_path(unquote_path(line[len("copy to "):]))
         path = (new or old) if saw_new else (renamed or header_path(metadata[0]))
+        complete_hunks(chunk, metadata_only=path in metadata_only)
         paths.append(path)
         headers.append(metadata[0])
     if manifest is not None:
@@ -360,7 +371,11 @@ def prepare(args):
         failures.append("context_size")
     try:
         manifest = strict_json(text_file(args.paths)) if args.paths else None
-        paths = diff_paths(diff, manifest)
+        scope = strict_json(text_file(args.provenance)) if args.provenance else {}
+        metadata_only = scope.get("path_only", []) if isinstance(scope, dict) else []
+        if not isinstance(metadata_only, list) or any(not isinstance(x, str) for x in metadata_only):
+            raise Invalid("invalid_input_provenance")
+        paths = diff_paths(diff, manifest, metadata_only)
     except Invalid as exc:
         paths = []
         failures.append(str(exc))
@@ -411,6 +426,11 @@ def prepare(args):
     plan["plan_digest"] = digest(plan)
     write_json(work / "role-plan.json", plan)
     (work / "slot").mkdir(parents=True, exist_ok=True)
+    # A new preparation invalidates prior execution records, including identical-input runs.
+    # Current upstream failure flags remain intact and still block aggregation.
+    for pattern in ("*-result.json", "*-timing.json", "*-request.json"):
+        for previous in (work / "slot").glob(pattern):
+            remove(previous)
     for name in ("role-summary.json", "responded.txt", "chair-mode.txt",
                  "deterministic-review.md", "coverage-severe.flag"):
         remove(work / name)
@@ -447,6 +467,53 @@ def load_plan(work):
     except (KeyError, TypeError, OSError):
         raise Invalid("invalid_plan_structure") from None
     return plan
+
+
+def issue_request(work, tag):
+    work = Path(work)
+    plan = load_plan(work)
+    role = plan["roles"][tag]
+    if not plan["input_complete"] or not role["required"]:
+        raise Invalid("inactive_or_incomplete_request")
+    nonce = secrets.token_hex(16)
+    prompt_text = (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8")
+    diff_text = (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8")
+    instruction, payload = frame_request(prompt_text, diff_text, nonce)
+    receipt = {
+        "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
+        "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
+        "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
+        "request_digest": invocation_digest(role["request_digest"], nonce),
+        "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
+    }
+    remove(work / "slot" / f"{tag}-result.json")
+    write(work / "requests" / f"{tag}.prompt", instruction)
+    write(work / "requests" / f"{tag}.input", payload)
+    write_json(work / "slot" / f"{tag}-request.json", receipt)
+    return nonce, instruction, payload
+
+
+def issued_request(work, plan, tag):
+    try:
+        receipt = strict_json(text_file(work / "slot" / f"{tag}-request.json"))
+        role = plan["roles"][tag]
+        nonce = receipt["invocation_nonce"]
+        instruction, payload = frame_request(
+            (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"),
+            (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8"), nonce,
+        )
+        expected = {
+            "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
+            "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
+            "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
+            "request_digest": invocation_digest(role["request_digest"], nonce),
+            "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
+        }
+        if receipt != expected:
+            raise Invalid("invalid_issued_request")
+        return receipt
+    except (KeyError, TypeError, OSError):
+        raise Invalid("invalid_issued_request") from None
 
 
 def nonempty(value):
@@ -555,6 +622,8 @@ def scrub(value):
         r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
         r"(?i:\bBearer\s+)[A-Za-z0-9_.~+/-]+=*",
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
+        r"""[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']+:[^@\s/"']+@""",
+        r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
         key + r"""(?P<quote>["']).*?(?P=quote)""",
         key + r"""[^\s"',;}\]]+""",
     )
@@ -569,6 +638,9 @@ def record(args):
     try:
         plan = load_plan(work)
         role = plan["roles"][args.tag]
+        receipt = issued_request(work, plan, args.tag)
+        if args.nonce != receipt["invocation_nonce"]:
+            raise Invalid("invalid_invocation_nonce")
         result.update({k: plan[k] for k in ("head_sha", "base_sha", "plan_digest")})
         result.update({k: role[k] for k in ("role", "family", "model")})
         result.update(
@@ -604,7 +676,7 @@ def record(args):
 def blocking_flags(work):
     codes = set()
     for path in work.rglob("*.flag"):
-        if path.name == "coverage-severe.flag":  # This engine's output, not an upstream input.
+        if path == work / "coverage-severe.flag":  # Only this engine's own output is excluded.
             continue
         name = path.name.lower()
         kind = next((word for word in ("preflight", "fallback", "quota", "truncat", "omission")
@@ -633,9 +705,12 @@ def aggregate(args):
             try:
                 result = strict_json(text_file(file))
                 role = plan["roles"][tag]
+                receipt = issued_request(work, plan, tag)
                 if not isinstance(result, dict):
                     raise Invalid("invalid_role_result")
                 nonce = result.get("invocation_nonce", "")
+                if nonce != receipt["invocation_nonce"]:
+                    raise Invalid("invalid_invocation_nonce")
                 expected = {"schema_version": 1, "tag": tag, **{
                     k: plan[k] for k in ("head_sha", "base_sha", "plan_digest")
                 }, **{k: role[k] for k in ("role", "family", "model")},
@@ -733,10 +808,16 @@ def main(argv=None):
     rec.add_argument("--stderr", required=True)
     rec.add_argument("--exit-code", type=int, required=True)
     rec.add_argument("--nonce", required=True)
+    issue = commands.add_parser("issue")
+    issue.add_argument("--work", required=True)
+    issue.add_argument("--tag", required=True, choices=tuple(ROLES))
     agg = commands.add_parser("aggregate")
     agg.add_argument("--work", required=True)
     args = parser.parse_args(argv)
     try:
+        if args.command == "issue":
+            issue_request(args.work, args.tag)
+            return 0
         return {"prepare": prepare, "record": record, "aggregate": aggregate}[args.command](args)
     except (OSError, Invalid, UnicodeError):
         print("role-review: local input/output validation failed", file=sys.stderr)

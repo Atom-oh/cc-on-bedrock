@@ -79,9 +79,13 @@ class RoleReviewTests(unittest.TestCase):
             self.response(tag) if response is None else response
         ))
         diagnostic.write_text(stderr)
+        receipt = self.work / "slot" / f"{tag}-request.json"
+        if not receipt.exists():
+            self.cli("issue", "--work", self.work, "--tag", tag)
+        nonce = json.loads(receipt.read_text())["invocation_nonce"]
         self.cli(
             "record", "--work", self.work, "--tag", tag, "--output", output,
-            "--stderr", diagnostic, "--exit-code", rc, "--nonce", "c" * 32, expected=expected,
+            "--stderr", diagnostic, "--exit-code", rc, "--nonce", nonce, expected=expected,
         )
         return self.read(f"slot/{tag}-result.json")
 
@@ -211,6 +215,9 @@ class RoleReviewTests(unittest.TestCase):
             ('client_secret="' + "E" * 35 + '"', "E" * 35),
             ("aws_access_key_id=" + "F" * 35, "F" * 35),
             ("AWS_SESSION_TOKEN=\n" + "G" * 35, "G" * 35),
+            ("postgresql://user:database-private-value@database.local/app", "database-private-value"),
+            ("mongodb+srv://user:document-private-value@database.local/app", "document-private-value"),
+            ("https://hooks.slack.com/services/T123/B123/webhook-private-value", "webhook-private-value"),
         ]
         for index, (text, secret) in enumerate(cases):
             with self.subTest(kind=text.split("=", 1)[0][:24]):
@@ -249,10 +256,35 @@ class RoleReviewTests(unittest.TestCase):
             patch().rsplit("+new label", 1)[0],
             "diff --git a/new.py b/new.py\nnew file mode 100644\n--- /dev/null\n+++ b/new.py\n",
             "diff --git a/old.py b/old.py\ndeleted file mode 100644\n--- a/old.py\n+++ /dev/null\n",
+            "diff --git a/new.py b/new.py\nnew file mode 100644\nindex 0000000..7898192\n",
+            "diff --git a/new.py b/new.py\nnew file mode 100644\n",
         ):
             with self.subTest(raw=raw):
                 self.prepare(raw, expected=2)
                 self.assert_blocked()
+
+    def test_empty_file_creation_has_explicit_empty_blob_evidence(self):
+        raw = "diff --git a/empty b/empty\nnew file mode 100644\nindex 0000000..e69de29\n"
+        self.assertTrue(self.prepare(raw)["input_complete"])
+
+    def test_reprepare_cannot_reuse_old_successful_results(self):
+        self.prepare()
+        self.finish()
+        self.prepare()
+        self.assertFalse(list((self.work / "slot").glob("*-result.json")))
+        self.assert_blocked()
+
+    def test_issued_request_persists_the_exact_framed_payload(self):
+        self.prepare()
+        self.cli("issue", "--work", self.work, "--tag", "codex")
+        request = self.read("slot/codex-request.json")
+        nonce = request["invocation_nonce"]
+        payload = (self.work / "requests/codex.input").read_text()
+        self.assertTrue(payload.startswith(f"BEGIN DIFF {nonce}\n"))
+        self.assertTrue(payload.endswith(f"\nEND DIFF {nonce}\n"))
+        self.assertIn(self.diff.read_text(), payload)
+        self.prepare()
+        self.assertFalse((self.work / "slot/codex-request.json").exists())
 
     def test_mode_only_and_git_octal_quoted_paths(self):
         for raw, expected_path in (
@@ -494,7 +526,7 @@ class RoleReviewTests(unittest.TestCase):
 
     def test_failure_flags_override_valid_responses_and_remove_stale_pass(self):
         for name in ("kiro-preflight-failed.flag", "kiro-fallback.flag", "kiro-quota.flag",
-                     "slot/kiro-diff-truncated.flag", "diff-truncated.flag"):
+                     "slot/kiro-diff-truncated.flag", "diff-truncated.flag", "slot/coverage-severe.flag"):
             with self.subTest(name=name):
                 self.work = self.root / name.replace("/", "-")
                 self.prepare()
