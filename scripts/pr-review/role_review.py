@@ -729,10 +729,14 @@ def diagnostic_failure(stderr):
 
 
 SENSITIVE_KEY = re.compile(
-    r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_.:-]*(?:password|passwd|pwd|dsn|api[_-]?key|"
+    r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_.:/()\[\],\t -]*(?:password|passwd|pwd|dsn|api[_\t -]*key|"
     r"secret|token|credential|passphrase|private[_-]?key|cookie|authorization|"
-    r"connection[_-]?string|origin[_-]?verify|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_.:-]*)"
+    r"connection[_-]?string|origin[_-]?verify|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_.:/()\[\],\t -]*)"
 )
+
+def sensitive_key(value):
+    return isinstance(value, str) and SENSITIVE_KEY.fullmatch(re.sub(r"[^A-Za-z0-9]+", "_", value))
+
 
 
 API_KEY_PATTERN = re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{16,}")
@@ -764,7 +768,7 @@ def scrub(value, preserved=frozenset()):
                    and SENSITIVE_KEY.search(strip_controls(item)) for key, _, item in items)}
         result, suffix = {}, 1
         for original, key, item in items:
-            hidden = any(isinstance(k, str) and (SENSITIVE_KEY.fullmatch(k)
+            hidden = any(isinstance(k, str) and (sensitive_key(k)
                          or k.lower() in sensitive_values) for k in (original, key))
             if key != original and (key in value or key in result):
                 while f"[REDACTED-KEY-{suffix}]" in value or f"[REDACTED-KEY-{suffix}]" in result:
@@ -820,6 +824,8 @@ def scrub(value, preserved=frozenset()):
         + rf"(?:{quote})?[\s,]*[+-]?[ \t]*(?:{quote})?(?i:(?:header)?value)(?:{quote})?\s*[:=]\s*"
         + rf"(?:(?P<named>{quote}).*?(?P=named)|[^\s,}}\]]+)",
         key + rf"(?P<quote>{quote}).*?(?P=quote)",
+        # Keep the complete same-line fallback inside a sensitive assignment.
+        key + r"[^\r\n]*(?:\|\||\?\?|\bor\b)[^\r\n]*",
         key + r"""[^\s"',;}\]]+""",
     )
     for pattern in patterns:

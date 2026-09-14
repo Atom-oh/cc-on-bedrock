@@ -30,6 +30,47 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_publication_redacts_expression_defaults_and_punctuated_keys(self):
+        import run_role
+        import synthesize_roles
+
+        canary = "SYNTHETIC_ROLLOUT_CANARY"
+        cases = [f'password = settings.PASSWORD {operator} "{canary}"\nPUBLIC_AFTER'
+                 for operator in ("||", "??", "or")]
+        cases += [prefix + json.dumps({key: canary}) + suffix
+                  for key in ("/prod/db/password", "password[0]", "api key (prod)")
+                  for prefix, suffix in (("", ""), ("Evidence: ", "\nPUBLIC_AFTER"))]
+        for index, evidence in enumerate(cases):
+            with self.subTest(case=index):
+                self.work = self.root / f"publication-{index}"
+                plan = self.prepare()
+                response = self.response("claude-self", findings=[{
+                    "severity": "MINOR", "path": FRONTEND,
+                    "condition": "When quoting a configuration example", "evidence": evidence,
+                }])
+                with mock_patch.object(run_role, "execute", return_value=(0, json.dumps(response), "")):
+                    run_role.run(self.work, "claude-self")
+                result = self.read("slot/claude-self-result.json")
+                self.assertTrue(result["valid"], result["failure_codes"])
+                self.assertEqual(result["response"]["reviewed_paths"], [FRONTEND])
+                self.assertEqual(result["response"]["findings"][0]["path"], FRONTEND)
+                for tag, role in plan["roles"].items():
+                    if role["required"] and tag != "claude-self":
+                        self.record(tag)
+                self.cli("aggregate", "--work", self.work)
+                self.assertEqual(self.read("role-summary.json")["mode"], "deterministic")
+                with mock_patch.dict(synthesize_roles.os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                        mock_patch.object(synthesize_roles, "execute",
+                                          side_effect=AssertionError("Unexpected chair call")):
+                    synthesize_roles.synthesize(self.work, self.work / "review.md")
+                for name in ("slot/claude-self-result.json", "role-summary.json",
+                             "deterministic-review.md", "review.md"):
+                    self.assertNotIn(canary, (self.work / name).read_text())
+                    if evidence.endswith("PUBLIC_AFTER"):
+                        self.assertIn("PUBLIC_AFTER", (self.work / name).read_text())
+                self.assertTrue((self.work / "review.md").read_text().rstrip().endswith("VERDICT: PASS"))
+
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
