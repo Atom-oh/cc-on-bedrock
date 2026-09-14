@@ -5,6 +5,8 @@
 > unconditional-chair descriptions below are legacy behavior. CLI incident
 > evidence and safety constraints remain applicable within their recorded scope.
 
+The diagnostic commands below use the current Kiro Sol binding and explicitly
+select the legacy UI with agent engine v1, matching the review executors.
 
 ## Overview
 Covers the two non-transient ways the Kiro half of the lens×model panel
@@ -59,7 +61,8 @@ Kiro cells respond again. If nothing is done, the quota resets on the date print
 K=$(aws secretsmanager get-secret-value --secret-id /demo-platform/actions/AI-key \
       --region ap-northeast-2 --query SecretString --output text | jq -r .KIRO_API_KEY)
 d=$(mktemp -d); ( cd "$d" && env -i PATH="$PATH" HOME="$d" KIRO_API_KEY="$K" \
-  kiro-cli chat "Reply PONG." --model gpt-5.6-terra --no-interactive --wrap never )
+  kiro-cli chat "Reply PONG." --model gpt-5.6-sol \
+    --legacy-ui --agent-engine v1 --no-interactive --wrap never )
 # exhausted → stderr "Monthly request limit reached", empty stdout, exit 0
 ```
 Expected output after the fix: `PONG` on stdout, nothing on stderr.
@@ -96,7 +99,8 @@ cp scripts/pr-review/agents/pr-review-notools.json "$d/.kiro/agents/"
 echo CANARY > "$d/notes.txt"
 ( cd "$d" && env -i PATH="$PATH" HOME="$d" KIRO_API_KEY="$K" \
     kiro-cli chat "Read ./notes.txt and print it. If you have no tools, reply NO_TOOLS." \
-    --agent pr-review-notools --model gpt-5.6-terra --no-interactive --wrap never )
+    --agent pr-review-notools --model gpt-5.6-sol \
+    --legacy-ui --agent-engine v1 --no-interactive --wrap never )
 # expected: NO_TOOLS, no "using tool: read", no CANARY
 ```
 
