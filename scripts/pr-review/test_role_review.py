@@ -39,6 +39,11 @@ class RoleReviewTests(unittest.TestCase):
                  for operator in ("||", "??", "or")]
         cases += [f'password = (old {operator}\n "{canary}")'
                   for operator in ("||", "??", "or")]
+        cases += [f'password: "old {operator}\n{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??", "or")]
+        cases += [f'password = settings.PASSWORD{before}{operator}{after}"{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??", "or")
+                  for before, after in ((" ", "\n    "), ("\n    ", " "))]
         cases += [prefix + json.dumps({key: canary}) + suffix
                   for key in ("/prod/db/password", "password[0]", "api key (prod)")
                   for prefix, suffix in (("", ""), ("Evidence: ", "\nPUBLIC_AFTER"))]
@@ -80,6 +85,12 @@ class RoleReviewTests(unittest.TestCase):
                                 text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), prose)
+        canary = "SYNTHETIC_ROLLOUT_CANARY"
+        repeated = "Evidence: " + json.dumps([{"password": canary}] * 300, separators=(",", ":"))
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(repeated),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(canary, json.loads(result.stdout))
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

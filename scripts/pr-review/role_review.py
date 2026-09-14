@@ -841,6 +841,64 @@ def _scrub_parenthesized(value, key):
     return "".join(pieces)
 
 
+def _scrub_fallback_values(value, key):
+    """Consume complete fallback values without losing quoted continuation lines."""
+    operator = re.compile(r"\|\||\?\?|\bor\b")
+    if not operator.search(value):
+        return value
+    opening = {"(": ")", "[": "]", "{": "}"}
+    def next_content(index):
+        while index < len(value) and value[index].isspace():
+            index += 1
+        return index
+    pieces, cursor = [], 0
+    for match in re.finditer(key, value):
+        if match.start() < cursor:
+            continue
+        newline = value.find("\n", match.end())
+        line_end = len(value) if newline < 0 else newline
+        following = next_content(line_end)
+        if not operator.search(value, match.end(), line_end) and not operator.match(value, following):
+            continue
+        index, quote, escaped, stack = match.end(), None, False, []
+        line_start = index
+        while index < len(value):
+            char = value[index]
+            if escaped:
+                escaped = False
+            elif quote:
+                if char == "\\":
+                    escaped = True
+                elif value.startswith(quote, index):
+                    index += len(quote)
+                    quote = None
+                    continue
+            elif char in "\"'`":
+                quote = char * 3 if char != "`" and value.startswith(char * 3, index) else char
+                index += len(quote)
+                continue
+            elif char in opening:
+                stack.append(opening[char])
+            elif char in ")]}" and stack:
+                if char != stack.pop():
+                    index = len(value)
+                    break
+            elif char == "\n" and not stack:
+                previous = value[line_start:index].rstrip()
+                following = next_content(index)
+                if not (re.search(r"(?:\|\||\?\?|\bor|\\)$", previous) or operator.match(value, following)):
+                    break
+                index = line_start = following
+                continue
+            if char == "\n":
+                line_start = index + 1
+            index += 1
+        pieces.extend((value[cursor:match.start()], "[REDACTED]"))
+        cursor = index
+    pieces.append(value[cursor:])
+    return "".join(pieces)
+
+
 def scrub(value, preserved=frozenset()):
     """Scrub decoded strings too: raw-JSON sanitizers miss escaped credentials."""
     if isinstance(value, list):
@@ -884,10 +942,6 @@ def scrub(value, preserved=frozenset()):
     quote = r"""\\*["']"""
     key = identifier + rf"(?:{quote})?\s*[:=]\s*"
     value = _scrub_parenthesized(value, key)
-    # Run after multiline containers and consume each candidate line once.
-    def fallback(match):
-        return "[REDACTED]" if re.search(r"\|\||\?\?|\bor\b", match.group()) else match.group()
-    value = re.sub(key + r"[^\r\n]*", fallback, value)
     patterns = (
         key + r"<<-?(?P<heredoc>[^\s\"'<>]+)[ \t]*(?:\r\n?|\n).*?"
         + r"(?:(?<![^\r\n])[+-]?[ \t]*(?P=heredoc)[ \t]*(?=\r|\n|\Z)|\Z)",
@@ -910,6 +964,7 @@ def scrub(value, preserved=frozenset()):
         r"""(?im)^[ \t]*[+-]?[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         key + r"[|>][-+]?[ \t]*\r?\n(?:[+-]?[ \t]+[^\r\n]*(?:\r?\n|\Z))+",
+        _scrub_fallback_values,
         rf"(?i:\b(?:header)?name)(?:{quote})?\s*[:=]\s*(?:{quote})?" + identifier
         + rf"(?:{quote})?[\s,]*[+-]?[ \t]*(?:{quote})?(?i:(?:header)?value)(?:{quote})?\s*[:=]\s*"
         + rf"(?:(?P<named>{quote}).*?(?P=named)|[^\s,}}\]]+)",
@@ -917,7 +972,10 @@ def scrub(value, preserved=frozenset()):
         key + r"""[^\s"',;}\]]+""",
     )
     for pattern in patterns:
-        value = re.sub(pattern, "[REDACTED]", value, flags=re.S)
+        if pattern is _scrub_fallback_values:
+            value = _scrub_fallback_values(value, key)
+        else:
+            value = re.sub(pattern, "[REDACTED]", value, flags=re.S)
     return value
 
 
