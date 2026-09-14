@@ -37,6 +37,8 @@ class RoleReviewTests(unittest.TestCase):
         canary = "SYNTHETIC_ROLLOUT_CANARY"
         cases = [f'password = settings.PASSWORD {operator} "{canary}"\nPUBLIC_AFTER'
                  for operator in ("||", "??", "or")]
+        cases += [f'password = (old {operator}\n "{canary}")'
+                  for operator in ("||", "??", "or")]
         cases += [prefix + json.dumps({key: canary}) + suffix
                   for key in ("/prod/db/password", "password[0]", "api key (prod)")
                   for prefix, suffix in (("", ""), ("Evidence: ", "\nPUBLIC_AFTER"))]
@@ -70,6 +72,14 @@ class RoleReviewTests(unittest.TestCase):
                         self.assertIn("PUBLIC_AFTER", (self.work / name).read_text())
                 self.assertTrue((self.work / "review.md").read_text().rstrip().endswith("VERDICT: PASS"))
 
+
+    def test_ordinary_prose_scrub_has_bounded_runtime(self):
+        prose = "The password is required and the token is optional. " * 80
+        script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(prose),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), prose)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
