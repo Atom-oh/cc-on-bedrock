@@ -41,42 +41,94 @@ ec2_client = boto3.client("ec2")
 cognito_client = boto3.client("cognito-idp")
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 
-# Bedrock pricing (ap-northeast-2, per 1M tokens).
-# Exact per-version entries allow overriding a specific version if its price
-# diverges from its family. New versions that are NOT listed here fall back to
-# FAMILY_PRICING below (see get_model_pricing) — so e.g. a future claude-opus-5
-# is priced as Opus, not silently as the Sonnet-level "default".
+# Bedrock pricing (USD per 1M tokens, Standard tier, Global cross-Region inference,
+# short context). Sources (verified 2026-10-18): AWS Price List API
+# (AmazonBedrockFoundationModels, regionCode=ap-northeast-2, *_global_standard
+# usage types) for Claude + GPT-6 Astra; Bedrock model cards (Global CRIS row) for
+# the other OpenAI GPT models. GPT-5.5 / GPT-5.4 cards list only In-Region rates
+# (which carry a 10% premium) — their entries are the In-Region rate / 1.1.
+#
+# Each entry carries explicit cache rates because vendors differ: Anthropic
+# cache read = 0.1x input, GPT-6.1 Sol = 0.05x, Claude Fable 5.1 = 0.025x, …
+# An entry without cache rates falls back to CACHE_*_MULTIPLIER below.
+#
+# Exact per-version entries are matched longest-key-first (so "gpt-6.1-sol" wins
+# over "gpt-6-sol"). Versions NOT listed fall back to FAMILY_PRICING (see
+# get_model_pricing) — so a future claude-opus-6 is priced as Opus and a future
+# gpt-7-sol as a GPT model, not silently as the Sonnet-level "default".
 PRICING = {
-    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
-    "claude-opus-4-8": {"input": 15.0, "output": 75.0},
-    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-opus-4-6": {"input": 15.0, "output": 75.0},
-    "claude-haiku-4-5": {"input": 0.80, "output": 4.0},
-    "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
-    "claude-opus-4-5": {"input": 15.0, "output": 75.0},
+    # Anthropic Claude (Claude Code)
+    "claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_read": 0.20, "cache_write": 5.0},
+    "claude-opus-5": {"input": 5.0, "output": 25.0, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-opus-4-8": {"input": 5.0, "output": 25.0, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-opus-4-7": {"input": 5.0, "output": 25.0, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-opus-4-6": {"input": 5.0, "output": 25.0, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-opus-4-5": {"input": 5.0, "output": 25.0, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_read": 0.10, "cache_write": 2.5},
+    "claude-sonnet-5": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.5},
+    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0, "cache_read": 0.30, "cache_write": 3.75},
+    "claude-sonnet-4-5": {"input": 3.0, "output": 15.0, "cache_read": 0.30, "cache_write": 3.75},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+    "claude-haiku-4-5": {"input": 1.0, "output": 5.0, "cache_read": 0.10, "cache_write": 1.25},
+    "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5},
+    "claude-fable-5": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5},
+    # OpenAI GPT (Codex CLI, ADR-014)
+    "gpt-6.1-sol": {"input": 2.0, "output": 10.0, "cache_read": 0.10, "cache_write": 2.5},
+    "gpt-6-astra": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5},
+    "gpt-6-sol": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.5},
+    "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+    "gpt-5.6-sol": {"input": 4.0, "output": 20.0, "cache_read": 0.40, "cache_write": 5.0},
+    "gpt-5.6-terra": {"input": 2.0, "output": 12.0, "cache_read": 0.20, "cache_write": 2.5},
+    "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cache_read": 0.02, "cache_write": 0.25},
+    "gpt-5.5": {"input": 5.0, "output": 30.0, "cache_read": 0.50, "cache_write": 0.0},
+    "gpt-5.4": {"input": 2.5, "output": 15.0, "cache_read": 0.25, "cache_write": 0.0},
     "default": {"input": 3.0, "output": 15.0},
 }
 
-# Family-level fallback (version-agnostic). Mirrors the opus/sonnet/haiku family
-# matching in token-limit-enforcer.py so cost pricing stays correct for future
-# model versions (opus-4-8, sonnet-4-7, opus-5, …) without a code change.
+# Family-level fallback (version-agnostic). Mirrors the family matching in
+# token-limit-enforcer.py so cost pricing stays correct for future model
+# versions without a code change. Rates = the current flagship of each family.
 FAMILY_PRICING = {
-    "opus": {"input": 15.0, "output": 75.0},
-    "sonnet": {"input": 3.0, "output": 15.0},
-    "haiku": {"input": 0.80, "output": 4.0},
+    "opus": {"input": 5.0, "output": 25.0, "cache_read": 0.50, "cache_write": 6.25},
+    "sonnet": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.5},
+    "haiku": {"input": 1.0, "output": 5.0, "cache_read": 0.10, "cache_write": 1.25},
+    "fable": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5},
+    # OpenAI tiers: astra (frontier) > sol (default) > terra > luna (small).
+    "astra": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5},
+    "luna": {"input": 0.20, "output": 1.20, "cache_read": 0.02, "cache_write": 0.25},
+    "sol": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.5},
+    "terra": {"input": 2.0, "output": 12.0, "cache_read": 0.20, "cache_write": 2.5},
+    # Unknown GPT tier → GPT-5.6 Sol rate (conservative: highest non-frontier tier).
+    "gpt": {"input": 4.0, "output": 20.0, "cache_read": 0.40, "cache_write": 5.0},
     # Bedrock embeddings (Titan/Cohere) are input-only — no output tokens. Rate is a
     # conservative representative (~$0.02-0.10/1M across Titan v2/v1/Cohere); without
     # this, embeddings fall to the Sonnet $3/$15 default and over-count cost/budget.
     "embed": {"input": 0.10, "output": 0.0},
 }
 
-# Anthropic prompt-cache pricing multipliers (relative to base input rate).
-# Claude Code's /usage applies these to align with API billing — without them
-# dashboard cost runs lower than /usage on cache-heavy sessions.
+# Prompt-cache multipliers (relative to base input rate) — used only for an entry
+# that has no explicit cache_read / cache_write rate (e.g. "default").
 #   - cache read  : 0.1× input  (cache hit)
 #   - cache write : 1.25× input (5-minute TTL cache create, default for Claude Code)
 CACHE_READ_MULTIPLIER = 0.1
 CACHE_WRITE_MULTIPLIER = 1.25
+
+# Client attribution (ADR-014): the invocation log carries no user agent, so the
+# CLI is derived from the model vendor — Claude Code calls Anthropic models,
+# Codex calls OpenAI models. Anything else (embeddings, other vendors) = "other".
+TOOL_CLAUDE_CODE = "claude-code"
+TOOL_CODEX = "codex"
+TOOL_OTHER = "other"
+
+
+def tool_for_model(model: str) -> str:
+    m = (model or "").lower()
+    if "claude" in m or "anthropic" in m:
+        return TOOL_CLAUDE_CODE
+    if "gpt" in m or "openai" in m:
+        return TOOL_CODEX
+    return TOOL_OTHER
+
 
 # Cache: identity_arn → (email, subdomain, department)
 _task_cache: dict = {}
@@ -300,15 +352,18 @@ def get_model_pricing(model_id: str) -> dict:
 
     Resolution order:
       1) exact per-version match in PRICING (lets a version override its family),
-      2) family fallback (opus/sonnet/haiku) — version-agnostic, so new versions
-         like claude-opus-4-8 are priced as Opus instead of the generic default,
+      2) family fallback (opus/sonnet/haiku/fable, astra/luna/terra/gpt) —
+         version-agnostic, so new versions are priced by family instead of the
+         generic default,
       3) generic default (Sonnet-level) for anything unrecognized.
     """
     model_lower = model_id.lower()
-    # 1) exact version match (skip the generic "default" sentinel)
-    for key, price in PRICING.items():
+    # 1) exact version match (skip the generic "default" sentinel). Longest key
+    #    first so "gpt-6.1-sol" is not swallowed by "gpt-6-sol"-style prefixes and
+    #    "claude-opus-5-5" wins over "claude-opus-5".
+    for key in sorted(PRICING, key=len, reverse=True):
         if key != "default" and key in model_lower:
-            return price
+            return PRICING[key]
     # 2) family fallback
     for family, price in FAMILY_PRICING.items():
         if family in model_lower:
@@ -324,6 +379,7 @@ def normalize_model(model_id: str) -> str:
       - ARN: arn:aws:bedrock:region:account:inference-profile/global.anthropic.claude-sonnet-5
       - Prefixed: global.anthropic.claude-sonnet-5
       - Plain: claude-sonnet-5
+      - OpenAI (Codex, ADR-014): inference-profile/global.openai.gpt-6.1-sol → gpt-6.1-sol
     """
     if not model_id or model_id == "unknown":
         return "unknown"
@@ -336,7 +392,10 @@ def normalize_model(model_id: str) -> str:
         arn_parts = model_id.split(":")
         model_id = arn_parts[-1] if len(arn_parts) > 5 else "unknown"
     # Remove region/vendor prefixes
-    for prefix in ["global.anthropic.", "apac.anthropic.", "us.anthropic.", "eu.anthropic.", "anthropic."]:
+    for prefix in [
+        "global.anthropic.", "apac.anthropic.", "us.anthropic.", "eu.anthropic.", "anthropic.",
+        "global.openai.", "apac.openai.", "us.openai.", "eu.openai.", "openai.",
+    ]:
         model_id = model_id.replace(prefix, "")
     # Remove colon suffix (e.g., ":0")
     model_id = model_id.split(":")[0]
@@ -361,11 +420,13 @@ def estimate_cost(
 ) -> float:
     """Estimate cost in USD, including prompt-cache tokens when present."""
     pricing = get_model_pricing(model_id)
+    cache_read_rate = pricing.get("cache_read", pricing["input"] * CACHE_READ_MULTIPLIER)
+    cache_write_rate = pricing.get("cache_write", pricing["input"] * CACHE_WRITE_MULTIPLIER)
     return (
         input_tokens * pricing["input"]
         + output_tokens * pricing["output"]
-        + cache_read_tokens * pricing["input"] * CACHE_READ_MULTIPLIER
-        + cache_write_tokens * pricing["input"] * CACHE_WRITE_MULTIPLIER
+        + cache_read_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
     ) / 1_000_000
 
 
@@ -381,12 +442,13 @@ def upsert_usage(email: str, subdomain: str | None, department: str, date_str: s
     email = (email or "").strip().lower()
     try:
         set_clause = (
-            "SET department = :dept, model = :model, #dt = :date, updatedAt = :now"
+            "SET department = :dept, model = :model, #tool = :tool, #dt = :date, updatedAt = :now"
         )
-        names = {"#dt": "date"}
+        names = {"#dt": "date", "#tool": "tool"}
         values = {
             ":dept": department,
             ":model": model,
+            ":tool": tool_for_model(model),
             ":date": date_str,
             ":now": datetime.utcnow().isoformat(),
             ":inp": input_tokens,

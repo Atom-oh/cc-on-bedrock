@@ -1,74 +1,110 @@
 """
 Prompt Audit Logger Lambda
-Triggered by: EventBridge rule (CloudTrail Bedrock InvokeModel events)
+Triggered by: EventBridge rule (CloudTrail Bedrock inference events)
 
-Stores audit records in DynamoDB:
-- user_id, timestamp, model_id, input_tokens, output_tokens, prompt_hash
-- Prompt content is NOT stored (privacy) - only hash for dedup
+Stores one audit record per Bedrock inference call in DynamoDB (cc-prompt-audit):
+- user_id (subdomain), timestamp (`{eventTime}#{eventID}` — unique, sortable),
+  mode (ec2|local), client_tool (claude-code|codex|other), api, model_id,
+  user_agent, source_ip
+- Prompt content is NOT stored (privacy). Token counts come from the usage table
+  (invocation logs, ADR-005); CloudTrail carries no usage for these calls.
+
+ADR-014: Codex on bedrock-runtime emits a `Responses` event (with modelId) plus a
+shadow `InvokeModelWithResponseStream` event whose requestParameters is null.
+The shadow is skipped so each Codex turn is audited once.
 """
-import boto3
-import json
 import os
-import hashlib
 from datetime import datetime
+
+import boto3
 
 REGION = os.environ.get('REGION', 'ap-northeast-2')
 AUDIT_TABLE = os.environ.get('AUDIT_TABLE', 'cc-prompt-audit')
+
+INFERENCE_EVENTS = (
+    'InvokeModel', 'InvokeModelWithResponseStream',
+    'Converse', 'ConverseStream',
+    'Responses',  # OpenAI Responses API on bedrock-runtime (Codex, ADR-014)
+)
+ROLE_PREFIXES = (
+    ('cc-on-bedrock-task-', 'ec2'),
+    ('cc-on-bedrock-local-user-', 'local'),
+)
 
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
 table = dynamodb.Table(AUDIT_TABLE)
 
 
-def handler(event, context):
-    """Process CloudTrail Bedrock InvokeModel events."""
-    records = event.get('detail', {})
+def client_tool(user_agent: str, model_id: str) -> str:
+    """Which CLI made the call. CloudTrail userAgent is authoritative
+    (`claude-cli/…`, `codex_exec/…`, `codex_cli_rs/…`); fall back to the model
+    vendor when the agent string is absent or unrecognized."""
+    ua = (user_agent or '').lower()
+    if 'codex' in ua:
+        return 'codex'
+    if 'claude-cli' in ua or 'claude-code' in ua:
+        return 'claude-code'
+    m = (model_id or '').lower()
+    if 'openai' in m or 'gpt' in m:
+        return 'codex'
+    if 'anthropic' in m or 'claude' in m:
+        return 'claude-code'
+    return 'other'
 
-    # CloudTrail event structure
-    event_name = records.get('eventName', '')
-    if event_name not in ('InvokeModel', 'InvokeModelWithResponseStream', 'Converse', 'ConverseStream'):
+
+def user_from_role(role_name: str):
+    """(subdomain, mode) from a platform role name, or (None, None)."""
+    for prefix, mode in ROLE_PREFIXES:
+        if role_name.startswith(prefix):
+            return role_name[len(prefix):], mode
+    return None, None
+
+
+def handler(event, context):
+    """Process CloudTrail Bedrock inference events."""
+    detail = event.get('detail', {}) or {}
+
+    event_name = detail.get('eventName', '')
+    if event_name not in INFERENCE_EVENTS:
         return {'statusCode': 200, 'body': 'Skipped: not a Bedrock invocation'}
 
-    user_identity = records.get('userIdentity', {})
-    request_params = records.get('requestParameters', {})
-    response_elements = records.get('responseElements', {})
+    request_params = detail.get('requestParameters')
+    if not isinstance(request_params, dict) or not request_params:
+        # Error event or the Responses API's shadow stream event — no model to audit.
+        return {'statusCode': 200, 'body': f'Skipped: no requestParameters in {event_name}'}
 
-    # Extract user info from assumed role ARN
-    # Format: arn:aws:sts::123456:assumed-role/cc-on-bedrock-task-{subdomain}/...
-    session_context = user_identity.get('sessionContext', {})
-    session_issuer = session_context.get('sessionIssuer', {})
-    role_arn = session_issuer.get('arn', '')
+    issuer = ((detail.get('userIdentity') or {}).get('sessionContext') or {}).get('sessionIssuer') or {}
+    user_id, mode = user_from_role(issuer.get('userName', ''))
+    if user_id is None:
+        return {'statusCode': 200, 'body': 'Skipped: not a cc-on-bedrock user role'}
 
-    user_id = 'unknown'
-    if 'cc-on-bedrock-task-' in role_arn:
-        user_id = role_arn.split('cc-on-bedrock-task-')[-1].split('/')[0]
-
-    # Extract model info
     model_id = request_params.get('modelId', 'unknown')
-
-    # Extract token usage (varies by API)
-    usage = response_elements.get('usage', {})
-    input_tokens = usage.get('inputTokens', 0)
-    output_tokens = usage.get('outputTokens', 0)
-
-    # Create audit record
-    timestamp = records.get('eventTime', datetime.utcnow().isoformat())
-    event_id = records.get('eventID', '')
+    user_agent = detail.get('userAgent', '') or ''
+    event_time = detail.get('eventTime') or datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+    event_id = detail.get('eventID', '')
 
     audit_record = {
         'user_id': user_id,
-        'timestamp': timestamp,
+        # eventID suffix: two calls in the same second must not overwrite each other.
+        'timestamp': f"{event_time}#{event_id}",
+        'event_time': event_time,
         'event_id': event_id,
-        'model_id': model_id,
-        'input_tokens': input_tokens,
-        'output_tokens': output_tokens,
-        'total_tokens': input_tokens + output_tokens,
         'event_name': event_name,
-        'source_ip': records.get('sourceIPAddress', ''),
+        'mode': mode,
+        'client_tool': client_tool(user_agent, model_id),
+        'model_id': model_id,
+        'user_agent': user_agent[:256],
+        'source_ip': detail.get('sourceIPAddress', ''),
+        'aws_region': detail.get('awsRegion', ''),
     }
+    inference_region = (detail.get('additionalEventData') or {}).get('inferenceRegion')
+    if inference_region:
+        audit_record['inference_region'] = inference_region
 
     try:
         table.put_item(Item=audit_record)
-        print(f"Audit logged: user={user_id} model={model_id} tokens={input_tokens}+{output_tokens}")
+        print(f"Audit logged: user={user_id} mode={mode} tool={audit_record['client_tool']} "
+              f"api={event_name} model={model_id}")
     except Exception as e:
         print(f"Error writing audit record: {e}")
         raise

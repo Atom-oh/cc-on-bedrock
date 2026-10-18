@@ -36,12 +36,29 @@ SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 DENY_POLICY_NAME = os.environ.get("DENY_POLICY_NAME", "cc-bedrock-local-token-deny")
 WARNING_THRESHOLDS = [float(x) for x in os.environ.get("WARNING_THRESHOLDS", "0.8,0.95").split(",")]
 
-# Default normalized weights (env override possible)
+# Default normalized weights (env override possible). Scale: 1.0 = $15 per 1M
+# tokens (same basis as the dashboard NORMALIZED_PER_USD=66667). The Claude rows
+# are the historical admin-facing quota units and are intentionally NOT rescaled
+# to current list prices (that would silently loosen existing limits); dollar
+# budgets use the exact per-model prices in bedrock-usage-tracker.py.
+# OpenAI rows (Codex, ADR-014) = Global CRIS list price / $15.
 DEFAULT_WEIGHTS = {
     "opus": {"in": 1.0, "out": 5.0},
     "sonnet": {"in": 0.2, "out": 1.0},
     "haiku": {"in": 0.053, "out": 0.267},
+    "fable": {"in": 0.667, "out": 3.333},
+    "astra": {"in": 0.667, "out": 3.333},  # gpt-6-astra   $10/$50
+    "5.6-sol": {"in": 0.267, "out": 1.333},  # gpt-5.6-sol $4/$20 (priced above newer Sols)
+    "sol": {"in": 0.133, "out": 0.667},    # gpt-6.1-sol   $2/$10
+    "terra": {"in": 0.133, "out": 0.8},    # gpt-5.6-terra $2/$12
+    "luna": {"in": 0.013, "out": 0.08},    # gpt-5.6-luna  $0.20/$1.20
+    "gpt": {"in": 0.333, "out": 2.0},      # gpt-5.5       $5/$30 (untiered GPT)
 }
+
+# Match order matters: specific tiers before generic ones ("5.6-sol" before "sol",
+# GPT tiers before the bare "gpt" family). Keep aligned with FAMILY_PRICING in
+# bedrock-usage-tracker.py so token limits and dollar budgets agree.
+_FAMILY_ORDER = ("opus", "sonnet", "haiku", "fable", "astra", "5.6-sol", "sol", "terra", "luna", "gpt")
 
 ROLE_PREFIX = "cc-on-bedrock-local-user-"
 PERIODS = ("daily", "weekly", "monthly")
@@ -65,7 +82,7 @@ KST = timezone(timedelta(hours=9))
 
 def _model_family(model: str) -> str:
     m = (model or "").lower()
-    for fam in ("opus", "sonnet", "haiku"):
+    for fam in _FAMILY_ORDER:
         if fam in m:
             return fam
     return "sonnet"  # safe default
