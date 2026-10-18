@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { clientTool } from "@/lib/client-tool";
 import {
   Route53ResolverClient,
   ListFirewallRuleGroupAssociationsCommand,
@@ -180,18 +181,22 @@ export async function GET(req: NextRequest) {
         ]);
 
         const formatEvents = (events: typeof bedrockEvents.Events, source: string) =>
-          (events ?? []).map((e) => ({
-            time: e.EventTime?.toISOString() ?? "",
-            source,
-            event: e.EventName ?? "",
-            user: e.Username ?? "",
-            sourceIp: (() => {
-              try { return e.CloudTrailEvent ? JSON.parse(e.CloudTrailEvent).sourceIPAddress : ""; } catch { return ""; }
-            })(),
-            errorCode: (() => {
-              try { return e.CloudTrailEvent ? JSON.parse(e.CloudTrailEvent).errorCode : ""; } catch { return ""; }
-            })(),
-          }));
+          (events ?? []).map((e) => {
+            let ct: { sourceIPAddress?: string; errorCode?: string; userAgent?: string;
+              requestParameters?: { modelId?: string } | null } = {};
+            try { ct = e.CloudTrailEvent ? JSON.parse(e.CloudTrailEvent) : {}; } catch { /* keep {} */ }
+            const model = ct.requestParameters?.modelId ?? "";
+            return {
+              time: e.EventTime?.toISOString() ?? "",
+              source,
+              event: e.EventName ?? "",
+              user: e.Username ?? "",
+              sourceIp: ct.sourceIPAddress ?? "",
+              errorCode: ct.errorCode ?? "",
+              // ADR-014: Claude Code vs Codex attribution for Bedrock inference events.
+              ...(source === "Bedrock" ? { model, tool: clientTool(ct.userAgent, model) } : {}),
+            };
+          });
 
         const allEvents = [
           ...formatEvents(bedrockEvents.Events, "Bedrock"),

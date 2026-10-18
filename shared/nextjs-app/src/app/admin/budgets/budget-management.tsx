@@ -6,11 +6,14 @@ import StatCard from "@/components/cards/stat-card";
 import DonutChart from "@/components/charts/donut-chart";
 import HorizontalBarChart from "@/components/charts/horizontal-bar-chart";
 import LimitManagement from "@/app/admin/limits/limit-management";
+import { BUDGET_PERIODS, resolvePeriodBudget, type BudgetPeriod } from "@/lib/budget-periods";
 
 interface DepartmentBudget {
   department: string;
   monthlyBudget: number;
-  perUserMonthlyBudget: number;   // ADR-023
+  perUserDailyBudget: number;     // ADR-008/023 per-member defaults
+  perUserWeeklyBudget: number;
+  perUserMonthlyBudget: number;
   currentSpend: number;
   updatedAt: string;
 }
@@ -19,8 +22,18 @@ interface UserBudget {
   userId: string;
   department: string;
   dailyTokenLimit: number;
+  dailyBudget: number;
+  weeklyBudget: number;
   monthlyBudget: number;
   currentSpend: number;
+  currentDailySpend: number;
+  currentWeeklySpend: number;
+  currentMonthlySpend: number;
+  effectiveDailyBudget: number;
+  effectiveWeeklyBudget: number;
+  effectiveMonthlyBudget: number;
+  budgetExceeded: string[];
+  budgetReleaseAt: string;
   updatedAt: string;
 }
 
@@ -28,9 +41,49 @@ interface EditModal {
   type: "department" | "user";
   id: string;
   currentBudget: number;
-  currentPerUser?: number;
   currentLimit?: number;
   currentDept?: string;
+}
+
+type PeriodInputs = Record<BudgetPeriod, string>;
+const EMPTY_PERIODS: PeriodInputs = { daily: "", weekly: "", monthly: "" };
+const PERIOD_LABEL: Record<BudgetPeriod, string> = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" };
+const USER_FIELD: Record<BudgetPeriod, "dailyBudget" | "weeklyBudget" | "monthlyBudget"> = {
+  daily: "dailyBudget", weekly: "weeklyBudget", monthly: "monthlyBudget",
+};
+const DEPT_FIELD: Record<BudgetPeriod, "perUserDailyBudget" | "perUserWeeklyBudget" | "perUserMonthlyBudget"> = {
+  daily: "perUserDailyBudget", weekly: "perUserWeeklyBudget", monthly: "perUserMonthlyBudget",
+};
+
+// ADR-008: three independent USD caps; exceeding ANY one blocks the user.
+function PeriodBudgetInputs({ idPrefix, values, onChange, hint }: {
+  idPrefix: string;
+  values: PeriodInputs;
+  onChange: (v: PeriodInputs) => void;
+  hint: string;
+}) {
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-2">
+        {BUDGET_PERIODS.map((p) => (
+          <div key={p}>
+            <label htmlFor={`${idPrefix}-${p}`} className="block text-xs font-medium text-gray-400 mb-1">{PERIOD_LABEL[p]} (USD)</label>
+            <input
+              id={`${idPrefix}-${p}`}
+              type="number"
+              value={values[p]}
+              onChange={(e) => onChange({ ...values, [p]: e.target.value })}
+              className="w-full px-2 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="0"
+              min="0"
+              step="0.01"
+            />
+          </div>
+        ))}
+      </div>
+      <p className="mt-1 text-xs text-gray-500">{hint}</p>
+    </div>
+  );
 }
 
 const DEPT_COLORS = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#f97316", "#6366f1"];
@@ -46,7 +99,7 @@ export default function BudgetManagement() {
   const [createId, setCreateId] = useState("");
   const [createDept, setCreateDept] = useState("");
   const [newBudget, setNewBudget] = useState("");
-  const [newPerUser, setNewPerUser] = useState("");   // ADR-023 dept perUserMonthlyBudget
+  const [periodInputs, setPeriodInputs] = useState<PeriodInputs>(EMPTY_PERIODS);  // user caps or dept per-user defaults
   const [newLimit, setNewLimit] = useState("");
   const [showAdvancedTokenLimit, setShowAdvancedTokenLimit] = useState(false);
   const [activeSection, setActiveSection] = useState<"departments" | "users" | "limits">("departments");
@@ -76,23 +129,34 @@ export default function BudgetManagement() {
     type: "department" | "user",
     id: string,
     currentBudget: number,
-    extra?: { currentPerUser?: number; currentLimit?: number; currentDept?: string },
+    extra?: { periods?: Partial<Record<BudgetPeriod, number>>; currentLimit?: number; currentDept?: string },
   ) => {
-    setEditModal({ type, id, currentBudget, ...extra });
+    const { periods, ...rest } = extra ?? {};
+    setEditModal({ type, id, currentBudget, ...rest });
     setNewBudget(String(currentBudget));
-    setNewPerUser(extra?.currentPerUser !== undefined ? String(extra.currentPerUser) : "");
+    setPeriodInputs({
+      daily: periods?.daily ? String(periods.daily) : "",
+      weekly: periods?.weekly ? String(periods.weekly) : "",
+      monthly: periods?.monthly ? String(periods.monthly) : "",
+    });
     setNewLimit(extra?.currentLimit !== undefined ? String(extra.currentLimit) : "");
+  };
+
+  // Empty input = 0 = inherit (user) / no per-user default (dept).
+  const periodBody = (type: "department" | "user"): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const p of BUDGET_PERIODS) {
+      out[type === "user" ? USER_FIELD[p] : DEPT_FIELD[p]] = Number(periodInputs[p]) || 0;
+    }
+    return out;
   };
 
   const handleSave = async () => {
     if (!editModal) return;
     setSaving(true);
     try {
-      const body: Record<string, unknown> = { type: editModal.type, id: editModal.id };
-      if (newBudget !== "") body.monthlyBudget = Number(newBudget);
-      if (editModal.type === "department" && newPerUser !== "") {
-        body.perUserMonthlyBudget = Number(newPerUser);
-      }
+      const body: Record<string, unknown> = { type: editModal.type, id: editModal.id, ...periodBody(editModal.type) };
+      if (editModal.type === "department" && newBudget !== "") body.monthlyBudget = Number(newBudget);
       if (editModal.type === "user" && showAdvancedTokenLimit && newLimit) {
         body.dailyTokenLimit = Number(newLimit);
       }
@@ -116,13 +180,17 @@ export default function BudgetManagement() {
     }
   };
 
-  // ADR-023 mirror of Lambda `_effective_user_budget`.
-  const getEffectiveUserBudget = (user: UserBudget): { value: number; source: "user" | "dept" | "global" } => {
-    if (user.monthlyBudget > 0) return { value: user.monthlyBudget, source: "user" };
+  // Resolved cap per period: the value budget-check last enforced (effective*Budget, which
+  // includes the global env default) when present, else the client-side mirror.
+  const getEffectiveUserBudget = (user: UserBudget, period: BudgetPeriod) => {
     const dept = departments.find(d => d.department === user.department);
-    if (dept && dept.perUserMonthlyBudget > 0) return { value: dept.perUserMonthlyBudget, source: "dept" };
-    return { value: 0, source: "global" };
+    const mirror = resolvePeriodBudget(period, user, dept);
+    const enforced = { daily: user.effectiveDailyBudget, weekly: user.effectiveWeeklyBudget, monthly: user.effectiveMonthlyBudget }[period];
+    if (mirror.source === "none" && enforced > 0) return { value: enforced, source: "global" as const };
+    return mirror;
   };
+  const periodSpend = (user: UserBudget, period: BudgetPeriod) =>
+    ({ daily: user.currentDailySpend, weekly: user.currentWeeklySpend, monthly: user.currentMonthlySpend })[period];
 
   const handleCreate = async () => {
     if (!createModal || !createId.trim()) return;
@@ -131,11 +199,9 @@ export default function BudgetManagement() {
       const body: Record<string, unknown> = {
         type: createModal.type,
         id: createId.trim(),
-        monthlyBudget: Number(newBudget) || 0,
+        ...periodBody(createModal.type),
       };
-      if (createModal.type === "department" && newPerUser) {
-        body.perUserMonthlyBudget = Number(newPerUser);
-      }
+      if (createModal.type === "department") body.monthlyBudget = Number(newBudget) || 0;
       if (createModal.type === "user" && showAdvancedTokenLimit && newLimit) {
         body.dailyTokenLimit = Number(newLimit) || 100000;
       }
@@ -151,7 +217,7 @@ export default function BudgetManagement() {
         setCreateId("");
         setCreateDept("");
         setNewBudget("");
-        setNewPerUser("");
+        setPeriodInputs(EMPTY_PERIODS);
         setNewLimit("");
         void fetchData();
       } else {
@@ -328,7 +394,7 @@ export default function BudgetManagement() {
                             </td>
                             <td className="py-3 text-right">
                               <button
-                                onClick={() => openEditModal("department", dept.department, dept.monthlyBudget)}
+                                onClick={() => openEditModal("department", dept.department, dept.monthlyBudget, { periods: { daily: dept.perUserDailyBudget, weekly: dept.perUserWeeklyBudget, monthly: dept.perUserMonthlyBudget } })}
                                 className="px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
                               >
                                 Edit
@@ -348,9 +414,9 @@ export default function BudgetManagement() {
           {activeSection === "users" && (
             <>
               <div className="flex items-center justify-between mb-4">
-                <p className="text-sm text-gray-500">{users.length === 0 ? "No user budgets configured yet." : "Per-user daily token limits and monthly budgets."}</p>
+                <p className="text-sm text-gray-500">{users.length === 0 ? "No user budgets configured yet." : "Per-user daily / weekly / monthly USD caps — exceeding any one blocks Bedrock (Claude Code + Codex)."}</p>
                 <button
-                  onClick={() => { setCreateModal({ type: "user" }); setNewBudget(""); setNewLimit("100000"); setCreateId(""); setCreateDept(""); }}
+                  onClick={() => { setCreateModal({ type: "user" }); setNewBudget(""); setPeriodInputs(EMPTY_PERIODS); setNewLimit("100000"); setCreateId(""); setCreateDept(""); }}
                   className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
                 >
                   + Add User Budget
@@ -360,50 +426,55 @@ export default function BudgetManagement() {
               {users.length > 0 && (
                 <div className="overflow-x-auto">
                   <p className="text-xs text-gray-500 mb-2">
-                    <strong className="text-gray-400">Effective Budget</strong> = explicit individual override (blue) or department per-user default (purple).
-                    Empty individual override means the user inherits the dept default automatically (ADR-023).
+                    Each cell is <strong className="text-gray-400">spend / effective cap</strong>. Cap source: blue = individual override,
+                    purple = department per-user default, gray = global default. Empty override = inherit (ADR-008/023).
                   </p>
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-gray-500 border-b border-gray-700">
                         <th className="pb-2 font-medium">User</th>
                         <th className="pb-2 font-medium">Department</th>
-                        <th className="pb-2 font-medium text-right">Effective Budget</th>
-                        <th className="pb-2 font-medium text-right">Individual Override</th>
-                        <th className="pb-2 font-medium text-right">Current Spend</th>
+                        {BUDGET_PERIODS.map((p) => (
+                          <th key={p} className="pb-2 font-medium text-right">{PERIOD_LABEL[p]}</th>
+                        ))}
+                        <th className="pb-2 font-medium text-right">Status</th>
                         <th className="pb-2 font-medium text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {users.map((user) => {
-                        const isOver = user.monthlyBudget > 0 && user.currentSpend >= user.monthlyBudget;
+                        const blocked = user.budgetExceeded.length > 0;
                         return (
-                          <tr key={user.userId} className={`border-b border-gray-800 ${isOver ? "bg-red-900/10" : ""}`}>
-                            <td className="py-3">
-                              <span className="text-gray-200">{user.userId}</span>
-                              {isOver && <span className="ml-2 text-xs text-red-400 font-medium">OVER</span>}
-                            </td>
+                          <tr key={user.userId} className={`border-b border-gray-800 ${blocked ? "bg-red-900/10" : ""}`}>
+                            <td className="py-3"><span className="text-gray-200">{user.userId}</span></td>
                             <td className="py-3 text-gray-400">{user.department}</td>
-                            <td className="py-3 text-right">
-                              {(() => {
-                                const eff = getEffectiveUserBudget(user);
-                                return (
-                                  <span className="text-gray-300">
-                                    {eff.value > 0 ? formatCurrency(eff.value) : <span className="text-gray-600">unlimited</span>}
-                                    {eff.source !== "global" && (
-                                      <span className={`ml-2 text-[10px] uppercase tracking-wide ${eff.source === "user" ? "text-blue-400" : "text-purple-400"}`}>
-                                        {eff.source === "user" ? "override" : "dept default"}
-                                      </span>
-                                    )}
-                                  </span>
-                                );
-                              })()}
+                            {BUDGET_PERIODS.map((p) => {
+                              const eff = getEffectiveUserBudget(user, p);
+                              const spend = periodSpend(user, p);
+                              const over = eff.value > 0 && spend >= eff.value;
+                              const srcColor = eff.source === "user" ? "text-blue-400" : eff.source === "dept" ? "text-purple-400" : "text-gray-500";
+                              return (
+                                <td key={p} className={`py-3 text-right ${over ? "text-red-400" : "text-gray-300"}`}>
+                                  {formatCurrency(spend)}
+                                  <span className="text-gray-600"> / </span>
+                                  {eff.value > 0
+                                    ? <span className={srcColor}>{formatCurrency(eff.value)}</span>
+                                    : <span className="text-gray-600">∞</span>}
+                                </td>
+                              );
+                            })}
+                            <td className="py-3 text-right text-xs">
+                              {blocked ? (
+                                <span className="text-red-400 font-medium" title={user.budgetReleaseAt}>
+                                  BLOCKED ({user.budgetExceeded.join(", ")}) until {user.budgetReleaseAt ? new Date(user.budgetReleaseAt).toLocaleString() : "-"}
+                                </span>
+                              ) : (
+                                <span className="text-green-400">OK</span>
+                              )}
                             </td>
-                            <td className="py-3 text-right text-gray-300">{user.monthlyBudget > 0 ? formatCurrency(user.monthlyBudget) : <span className="text-gray-600">—</span>}</td>
-                            <td className="py-3 text-right text-gray-300">{formatCurrency(user.currentSpend)}</td>
                             <td className="py-3 text-right">
                               <button
-                                onClick={() => openEditModal("user", user.userId, user.monthlyBudget, { currentLimit: user.dailyTokenLimit, currentDept: user.department })}
+                                onClick={() => openEditModal("user", user.userId, user.monthlyBudget, { periods: { daily: user.dailyBudget, weekly: user.weeklyBudget, monthly: user.monthlyBudget }, currentLimit: user.dailyTokenLimit, currentDept: user.department })}
                                 className="px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
                               >
                                 Edit
@@ -445,37 +516,29 @@ export default function BudgetManagement() {
                   placeholder={createModal.type === "department" ? "engineering" : "user-subdomain"}
                 />
               </div>
-              <div>
-                <label htmlFor="create-budget" className="block text-sm font-medium text-gray-400 mb-1">
-                  {createModal.type === "department" ? "Total Budget (USD, dept-wide cap)" : "Monthly Budget Override (USD)"}
-                </label>
-                <input
-                  id="create-budget"
-                  type="number"
-                  value={newBudget}
-                  onChange={(e) => setNewBudget(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder={createModal.type === "department" ? "1000.00" : "0 (inherit dept default)"}
-                  min="0"
-                  step="0.01"
-                />
-              </div>
               {createModal.type === "department" && (
                 <div>
-                  <label htmlFor="create-peruser" className="block text-sm font-medium text-gray-400 mb-1">Per-User Default (USD)</label>
+                  <label htmlFor="create-budget" className="block text-sm font-medium text-gray-400 mb-1">Total Budget (USD / month, dept-wide cap)</label>
                   <input
-                    id="create-peruser"
+                    id="create-budget"
                     type="number"
-                    value={newPerUser}
-                    onChange={(e) => setNewPerUser(e.target.value)}
+                    value={newBudget}
+                    onChange={(e) => setNewBudget(e.target.value)}
                     className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="200.00"
+                    placeholder="1000.00"
                     min="0"
                     step="0.01"
                   />
-                  <p className="mt-1 text-xs text-gray-500">Auto-applied to each member with no explicit override.</p>
                 </div>
               )}
+              <PeriodBudgetInputs
+                idPrefix="create-period"
+                values={periodInputs}
+                onChange={setPeriodInputs}
+                hint={createModal.type === "department"
+                  ? "Per-user defaults for every member without an override. Any one exceeded blocks that member."
+                  : "Example: monthly $200, weekly $100, daily $50. Any one exceeded blocks the user; 0 / empty inherits the dept default."}
+              />
               {createModal.type === "user" && (
                 <div>
                   <button
@@ -526,44 +589,29 @@ export default function BudgetManagement() {
               {editModal.type === "department" ? "Department" : "User"}: <span className="text-gray-200">{editModal.id}</span>
             </p>
             <div className="space-y-4">
-              <div>
-                <label htmlFor="edit-budget" className="block text-sm font-medium text-gray-400 mb-1">
-                  {editModal.type === "department" ? "Total Budget (USD, dept-wide cap)" : "Monthly Budget Override (USD)"}
-                </label>
-                <input
-                  id="edit-budget"
-                  type="number"
-                  value={newBudget}
-                  onChange={(e) => setNewBudget(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder={editModal.type === "department" ? "1000.00" : "0 (inherit dept default)"}
-                  min="0"
-                  step="0.01"
-                />
-                {editModal.type === "user" && (
-                  <p className="mt-1 text-xs text-gray-500">
-                    Empty / 0 → inherits the department per-user default (ADR-023).
-                  </p>
-                )}
-              </div>
               {editModal.type === "department" && (
                 <div>
-                  <label htmlFor="edit-peruser" className="block text-sm font-medium text-gray-400 mb-1">Per-User Default (USD)</label>
+                  <label htmlFor="edit-budget" className="block text-sm font-medium text-gray-400 mb-1">Total Budget (USD / month, dept-wide cap)</label>
                   <input
-                    id="edit-peruser"
+                    id="edit-budget"
                     type="number"
-                    value={newPerUser}
-                    onChange={(e) => setNewPerUser(e.target.value)}
+                    value={newBudget}
+                    onChange={(e) => setNewBudget(e.target.value)}
                     className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="200.00"
+                    placeholder="1000.00"
                     min="0"
                     step="0.01"
                   />
-                  <p className="mt-1 text-xs text-gray-500">
-                    Example — <code className="text-gray-400">engineering</code>: total $1000, per-user $200 → every engineering member auto-capped at $200.
-                  </p>
                 </div>
               )}
+              <PeriodBudgetInputs
+                idPrefix="edit-period"
+                values={periodInputs}
+                onChange={setPeriodInputs}
+                hint={editModal.type === "department"
+                  ? "Per-user defaults — e.g. engineering: total $1000/month, each member $200/month, $100/week, $50/day."
+                  : "Any one exceeded blocks the user until every period is back under its cap. 0 / empty inherits the dept default."}
+              />
               {editModal.type === "user" && (
                 <div>
                   <button

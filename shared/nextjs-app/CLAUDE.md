@@ -96,7 +96,7 @@
   - `listCognitoUsers()`, `createCognitoUser()`, `deleteCognitoUser()` 등
   - `mirrorCustomRoutes()` (settings PUT의 version-guarded customRoutes 미러, ADR-027) / `deregisterContainerRoute()` (resetUserEnvironment) — 인스턴스 시작 시 라우팅 등록은 `ec2-clients.ts`의 `registerRoute()`
 - `src/lib/ec2-clients.ts` - EC2 인스턴스 관리 (start/stop, RunInstances, password sync, gateway policy)
-  - **UserData boot script** — `startInstance` / `restoreFromSnapshot`에서 systemd unit `cc-cli-update.service`(oneshot, every boot)를 생성·enable해 Claude Code/Kiro CLI를 자동 업데이트. `User=coder`로 실행하되 `ExecStartPost`에 `+` prefix를 붙여 `/usr/local/bin` symlink 갱신만 root로 수행 (CWAgent, MCP config sync 포함)
+  - **UserData boot script** — `startInstance` / `restoreFromSnapshot`에서 systemd unit `cc-cli-update.service`(oneshot, every boot)를 생성·enable해 Claude Code/Kiro CLI를 자동 업데이트. `User=coder`로 실행하되 `ExecStartPost`에 `+` prefix를 붙여 `/usr/local/bin` symlink 갱신만 root로 수행 (CWAgent, MCP config sync 포함). ADR-014: the same unit refreshes `@openai/codex` (root `ExecStartPost=+`); `codexUserData()` writes `/etc/codex/config.toml` from `codexConfigToml()` (`CODEX_MODEL_ID` env, default `global.openai.gpt-6.1-sol`) on create/restore and in `postStartSetup`; the restart path re-upserts the per-user role inline policy (`ensureUserInstanceProfile`) so legacy roles gain the OpenAI/project ARNs
 - `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 (EC2 CPU/Memory/Network/Disk)
 - `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용). `buildUserDailyTrend` (순수 pivot: user×date, Top-N+others, 전구간 zero-fill) + `getUserDailyTrend` (fetch wrapper) — per-user 일별 트렌드 차트용
 - `src/lib/slack-client.ts` - Slack API 클라이언트 (알림, 명령 처리)
