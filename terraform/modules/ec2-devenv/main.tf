@@ -17,6 +17,11 @@ locals {
   bedrock_resources = [
     "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
     "arn:aws:bedrock:*:${local.account_id}:inference-profile/*anthropic.claude-*",
+    # ADR-014 Codex on Bedrock: OpenAI GPT via bedrock-runtime Responses API, which
+    # also authorizes bedrock:InvokeModel on the account default project (project/default).
+    "arn:aws:bedrock:*::foundation-model/*openai.gpt-*",
+    "arn:aws:bedrock:*:${local.account_id}:inference-profile/*openai.gpt-*",
+    "arn:aws:bedrock:*:${local.account_id}:project/default",
     "arn:aws:bedrock:*::foundation-model/*embed*",
     "arn:aws:bedrock:*:${local.account_id}:inference-profile/*embed*",
     "arn:aws:bedrock:*:${local.account_id}:application-inference-profile/*",

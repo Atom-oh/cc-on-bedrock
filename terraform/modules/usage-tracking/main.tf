@@ -393,6 +393,21 @@ data "aws_iam_policy_document" "tracker_policy" {
     actions   = ["iam:GetRole"]
     resources = ["arn:aws:iam::${local.account_id}:role/cc-on-bedrock-local-user-*"]
   }
+  # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
+  # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
+  # fails with "KMS key access denied" (usage metering + budget enforcement silently
+  # stop). The same CMK also encrypts the budget-alert SNS topic, so sns:Publish
+  # needs it too. ViaService pins the grant to DynamoDB + SNS in this region.
+  statement {
+    sid       = "DynamoDbCmk"
+    actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+    resources = [var.kms_key_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["dynamodb.${local.region}.amazonaws.com", "sns.${local.region}.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "tracker_policy" {
@@ -551,6 +566,21 @@ data "aws_iam_policy_document" "budget_check_policy" {
     actions   = ["sns:Publish"]
     resources = [aws_sns_topic.budget_alerts.arn]
   }
+  # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
+  # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
+  # fails with "KMS key access denied" (usage metering + budget enforcement silently
+  # stop). The same CMK also encrypts the budget-alert SNS topic, so sns:Publish
+  # needs it too. ViaService pins the grant to DynamoDB + SNS in this region.
+  statement {
+    sid       = "DynamoDbCmk"
+    actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+    resources = [var.kms_key_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["dynamodb.${local.region}.amazonaws.com", "sns.${local.region}.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "budget_check_policy" {
@@ -580,6 +610,8 @@ resource "aws_lambda_function" "budget_check" {
       DEPT_BUDGETS_TABLE   = var.department_budgets_table_name
       ECS_CLUSTER_NAME     = var.ecs_cluster_name
       DAILY_BUDGET_USD     = tostring(var.daily_budget_usd)
+      WEEKLY_BUDGET_USD    = tostring(var.weekly_budget_usd)
+      MONTHLY_BUDGET_USD   = tostring(var.monthly_budget_usd)
       USER_BUDGETS_TABLE   = aws_dynamodb_table.user_budgets.name
       LIMITS_TABLE         = "${var.project_prefix}-limits"
       SNS_TOPIC_ARN        = aws_sns_topic.budget_alerts.arn
@@ -816,8 +848,10 @@ resource "aws_lambda_function" "audit_logger" {
 
   environment {
     variables = {
-      REGION      = local.region
-      AUDIT_TABLE = aws_dynamodb_table.prompt_audit.name
+      REGION            = local.region
+      AUDIT_TABLE       = aws_dynamodb_table.prompt_audit.name
+      TASK_ROLE_PREFIX  = "${var.project_prefix}-task-"
+      LOCAL_ROLE_PREFIX = "${var.project_prefix}-local-user-"
     }
   }
 
@@ -830,7 +864,20 @@ resource "aws_cloudwatch_event_rule" "bedrock_audit" {
     source        = ["aws.bedrock"]
     "detail-type" = ["AWS API Call via CloudTrail"]
     detail = {
-      eventName = ["InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream"]
+      eventSource = ["bedrock.amazonaws.com"]
+      # "Responses" = OpenAI Responses API on bedrock-runtime (Codex, ADR-014).
+      eventName = ["InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream", "Responses"]
+      # Platform user roles only (EC2 task + Local Mode) — same scope as the usage tracker rule.
+      userIdentity = {
+        sessionContext = {
+          sessionIssuer = {
+            userName = [
+              { prefix = "${var.project_prefix}-task-" },
+              { prefix = "${var.project_prefix}-local-user-" },
+            ]
+          }
+        }
+      }
     }
   })
 }
@@ -1004,6 +1051,21 @@ data "aws_iam_policy_document" "gateway_manager_policy" {
     sid       = "LambdaInvoke"
     actions   = ["lambda:GetFunction", "lambda:InvokeFunction"]
     resources = ["arn:aws:lambda:${local.region}:${local.account_id}:function:cc-on-bedrock-mcp-*"]
+  }
+  # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
+  # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
+  # fails with "KMS key access denied" (usage metering + budget enforcement silently
+  # stop). The same CMK also encrypts the budget-alert SNS topic, so sns:Publish
+  # needs it too. ViaService pins the grant to DynamoDB + SNS in this region.
+  statement {
+    sid       = "DynamoDbCmk"
+    actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+    resources = [var.kms_key_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["dynamodb.${local.region}.amazonaws.com", "sns.${local.region}.amazonaws.com"]
+    }
   }
 }
 

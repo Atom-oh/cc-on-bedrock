@@ -4,7 +4,7 @@
 > ADRs in `docs/decisions/` are the *decision log* (why); the decision baseline is
 > `docs/decisions/BASELINE.md`. Anything under `docs/decisions/archive/` or `docs/history/`
 > is **historical / superseded — NOT current**.
-> Last reconciled: 2026-06-24 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry).
+> Last reconciled: 2026-10-18 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry; Codex on Bedrock, ADR-014).
 
 ## What this is
 멀티유저 Claude Code 개발환경 플랫폼 on AWS Bedrock. 사용자는 per-user EC2 DevEnv(브라우저 IDE)
@@ -38,9 +38,12 @@ graph LR
 
 ## Canonical decisions (the 9 pillars)
 
-1. **Tools on Bedrock.** Claude Code on Bedrock is the first target; Codex on Bedrock is a later
-   extension. Kiro is installed by default but uses IAM Identity Center licensing — **not** part of
-   Cognito/Bedrock usage governance.
+1. **Tools on Bedrock.** Claude Code and the **OpenAI Codex CLI** both run on Bedrock under the same
+   governance (ADR-014). Codex uses only the `amazon-bedrock-runtime` provider (bedrock-runtime
+   Responses API, `global.openai.*` profiles; never bedrock-mantle) with the same per-user role
+   credentials (IMDS on EC2, `credential_process` in Local Mode — `cc-bedrock-local codex` / `ccx`).
+   DevEnv ships governed defaults in `/etc/codex/config.toml` (system layer). Kiro is installed by
+   default but uses IAM Identity Center licensing — **not** part of Cognito/Bedrock usage governance.
 2. **Two access paths.** EC2 Mode (CloudFront→NLB→nginx ECS→EC2) + Local Mode (`cc-bedrock-local`
    → Cognito public client → Dashboard `/api/local/credentials` → STS issuer; STS returns 1h creds,
    the CLI calls Bedrock). The Local credential path works in a full deploy; the **GATED** label in
@@ -51,8 +54,15 @@ graph LR
    Lambda aggregates per-user (`enduser.id` email) daily KPIs into DynamoDB
    (`PROD#`/`SKILL#`/`AGENT#`/`TOOL#`/`ACTIVE#`). Bedrock token/cost stays authoritative in
    the 005 usage pipeline. (ADR-009; P1 rewrite 2026-06-26 — supersedes the custom emitter.)
+   Codex productivity telemetry is not rolled up yet (follow-up); Codex cost/tokens are fully
+   covered by pillar 4.
 4. **Usage metering.** Bedrock **Application Inference Profiles** + **Invocation Logs** → **DynamoDB**
-   (not CloudWatch AWS/Bedrock account-wide metrics).
+   (not CloudWatch AWS/Bedrock account-wide metrics). Codex Responses calls land in the same
+   invocation log (`operation = "Responses"`) and are attributed by the per-user role identity
+   (the Responses API rejects application inference profiles). Rows carry `tool`
+   (`claude-code`|`codex`|`other`); cost uses explicit per-model rates incl. cache read/write
+   (ADR-014). Audit: CloudTrail management events → `audit-logger` → `cc-prompt-audit` with
+   `client_tool` from the userAgent.
 5. **Shared credential model.** EC2 and Local attribute usage through the **same Application Inference
    Profile**; they do **not** share one literal IAM role (share policy shape, permission boundary,
    tags, inference-profile attribution).
@@ -64,7 +74,8 @@ graph LR
    a permission boundary authored in Terraform (boundary X = AllowInAccount; the DenyEscalation
    63-action floor's full TF port is a **follow-up** tracked by ADR-007 — not yet complete).
 8. **Budget enforcement.** Per-department and per-user budgets/limits ($ + normalized token);
-   **EventBridge** drives IAM deny-policy updates.
+   **EventBridge** drives IAM deny-policy updates. Claude Code and Codex spend count against the
+   same budgets (no per-tool budget); the deny covers the Responses API.
 9. **Path/port routing.** code-server reached by path (`?folder=`), stays on port **8080** (reserved);
    extra user ports mapped path→port via nginx. Custom ports must not use 8080/well-known.
    The dashboard does **not** directly probe devenv:8080 (the devenv SG admits only the nginx SG, so a
@@ -92,6 +103,7 @@ docs/decisions/     BASELINE.md + active ADRs · archive/ = historical
 - DevEnv data lives on the persistent data EBS, not the OS root (a Terminate must not destroy it).
 - Keep port 8080 reserved for code-server.
 - Keep Kiro out of Cognito and Bedrock token-limit enforcement.
+- Never grant `bedrock-mantle:*`; Codex stays on bedrock-runtime (ADR-014).
 
 ## Where decisions live
 - **Current truth:** this file + `docs/decisions/BASELINE.md`.

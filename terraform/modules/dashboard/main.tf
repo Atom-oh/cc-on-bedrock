@@ -15,6 +15,7 @@ locals {
     COGNITO_CLIENT_ID     = var.user_pool_client_id
     COGNITO_ISSUER        = "https://cognito-idp.${data.aws_region.current.name}.amazonaws.com/${var.user_pool_id}"
     COGNITO_USER_POOL_ID  = var.user_pool_id
+    CODEX_MODEL_ID        = var.codex_model_id
     # DevEnv edge auth reads the dashboard session cookie, then strips NextAuth
     # cookies before forwarding to user-controlled origins.
     COOKIE_DOMAIN               = ".${var.domain_name}"

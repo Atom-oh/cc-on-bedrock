@@ -36,12 +36,46 @@ SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 DENY_POLICY_NAME = os.environ.get("DENY_POLICY_NAME", "cc-bedrock-local-token-deny")
 WARNING_THRESHOLDS = [float(x) for x in os.environ.get("WARNING_THRESHOLDS", "0.8,0.95").split(",")]
 
-# Default normalized weights (env override possible)
+# Default normalized weights (env override possible). Scale: 1.0 = $15 per 1M
+# tokens (same basis as the dashboard NORMALIZED_PER_USD=66667). The Claude rows
+# are the historical admin-facing quota units and are intentionally NOT rescaled
+# to current list prices (that would silently loosen existing limits); dollar
+# budgets use the exact per-model prices in bedrock-usage-tracker.py.
+# OpenAI weights (Codex, ADR-014) = Global CRIS list price / $15, kept aligned with
+# PRICING (exact per-model, -> MODEL_WEIGHTS) and FAMILY_PRICING (family fallback,
+# -> DEFAULT_WEIGHTS) in bedrock-usage-tracker.py so token limits and dollar
+# budgets agree.
 DEFAULT_WEIGHTS = {
     "opus": {"in": 1.0, "out": 5.0},
     "sonnet": {"in": 0.2, "out": 1.0},
     "haiku": {"in": 0.053, "out": 0.267},
+    "fable": {"in": 0.667, "out": 3.333},
+    "astra": {"in": 0.6667, "out": 3.3333},  # FAMILY_PRICING astra $10/$50
+    "sol": {"in": 0.1333, "out": 0.6667},    # FAMILY_PRICING sol   $2/$10
+    "terra": {"in": 0.1333, "out": 0.8},     # FAMILY_PRICING terra $2/$12
+    "luna": {"in": 0.0133, "out": 0.08},     # FAMILY_PRICING luna  $0.20/$1.20
+    "gpt": {"in": 0.2667, "out": 1.3333},    # FAMILY_PRICING gpt   $4/$20 (untiered GPT)
 }
+
+# Exact per-model weights for known OpenAI models = PRICING (bedrock-usage-tracker.py)
+# list price / $15, round(..., 4). Matched longest-key-first by substring so
+# "gpt-6.1-sol" wins over "gpt-6-sol".
+MODEL_WEIGHTS = {
+    "gpt-6.1-sol": {"in": 0.1333, "out": 0.6667},   # $2/$10
+    "gpt-6-astra": {"in": 0.6667, "out": 3.3333},   # $10/$50
+    "gpt-6-sol": {"in": 0.1333, "out": 0.6667},     # $2/$10
+    "gpt-6-luna": {"in": 0.0067, "out": 0.0333},    # $0.10/$0.50
+    "gpt-5.6-sol": {"in": 0.2667, "out": 1.3333},   # $4/$20
+    "gpt-5.6-terra": {"in": 0.1333, "out": 0.8},    # $2/$12
+    "gpt-5.6-luna": {"in": 0.0133, "out": 0.08},    # $0.20/$1.20
+    "gpt-5.5": {"in": 0.3333, "out": 2.0},          # $5/$30
+    "gpt-5.4": {"in": 0.1667, "out": 1.0},          # $2.50/$15
+}
+_MODEL_WEIGHT_KEYS = tuple(sorted(MODEL_WEIGHTS, key=len, reverse=True))
+
+# Match order matters: GPT tiers before the bare "gpt" family. Keep aligned with
+# FAMILY_PRICING in bedrock-usage-tracker.py.
+_FAMILY_ORDER = ("opus", "sonnet", "haiku", "fable", "astra", "sol", "terra", "luna", "gpt")
 
 ROLE_PREFIX = "cc-on-bedrock-local-user-"
 PERIODS = ("daily", "weekly", "monthly")
@@ -65,7 +99,7 @@ KST = timezone(timedelta(hours=9))
 
 def _model_family(model: str) -> str:
     m = (model or "").lower()
-    for fam in ("opus", "sonnet", "haiku"):
+    for fam in _FAMILY_ORDER:
         if fam in m:
             return fam
     return "sonnet"  # safe default
@@ -73,7 +107,15 @@ def _model_family(model: str) -> str:
 
 def _normalize(model: str, input_tokens: int, output_tokens: int, override_weights: dict | None = None) -> Decimal:
     fam = _model_family(model)
-    weights = (override_weights or {}).get(fam) or DEFAULT_WEIGHTS[fam]
+    weights = (override_weights or {}).get(fam)
+    if not weights:
+        m = (model or "").lower()
+        for key in _MODEL_WEIGHT_KEYS:
+            if key in m:
+                weights = MODEL_WEIGHTS[key]
+                break
+    if not weights:
+        weights = DEFAULT_WEIGHTS[fam]
     raw = input_tokens * weights["in"] + output_tokens * weights["out"]
     return Decimal(str(round(raw, 4)))
 

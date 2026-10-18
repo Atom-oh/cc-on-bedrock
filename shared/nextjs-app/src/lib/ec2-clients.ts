@@ -4,6 +4,7 @@
  * Stop/Start preserves all state — no snapshot/restore needed.
  */
 
+import { codexModelId, codexCliVersion, DEFAULT_CODEX_MODEL_ID } from "./codex-model";
 import {
   EC2Client,
   RunInstancesCommand,
@@ -267,6 +268,60 @@ function otelToolsUserData(): string[] {
   return [];
 }
 
+export { DEFAULT_CODEX_MODEL_ID };
+
+/**
+ * ADR-014: Codex CLI on Bedrock. Writes the *system* config layer
+ * (/etc/codex/config.toml — lowest precedence, so a user's ~/.codex/config.toml
+ * can still override individual keys) pointing Codex at the bedrock-runtime
+ * provider in this region. Credentials come from the instance role via the AWS
+ * SDK chain (no API key, no OpenAI account), so the same IAM allow-list,
+ * invocation-log metering and budget deny that govern Claude Code apply.
+ * analytics off = no Codex product telemetry leaves the VPC to OpenAI.
+ */
+export function codexConfigToml(region: string, rawModel: string | undefined = process.env.CODEX_MODEL_ID): string {
+  if (!/^[a-z]{2}(-[a-z]+)+-\d+$/.test(region)) {
+    throw new Error(`invalid AWS region for Codex config: ${region}`);
+  }
+  const model = codexModelId(rawModel);
+  return [
+    `# Managed by CC-on-Bedrock (ADR-014). Override per-user in ~/.codex/config.toml.`,
+    `model_provider = "amazon-bedrock-runtime"`,
+    `model = "${model}"`,
+    // bedrock-runtime has no server-side tools (web search) — avoid a 400 per turn.
+    `web_search = "disabled"`,
+    ``,
+    `[model_providers.amazon-bedrock-runtime.aws]`,
+    `region = "${region}"`,
+    ``,
+    `[analytics]`,
+    `enabled = false`,
+  ].join("\n");
+}
+
+function codexUserData(region: string): string[] {
+  let toml: string;
+  try {
+    toml = codexConfigToml(region);
+  } catch (err) {
+    // Never abort the whole DevEnv boot script for the optional Codex step.
+    console.warn("[EC2] skipping Codex config:", err);
+    return [`# Codex config skipped: invalid region`];
+  }
+  return [
+    `# Codex CLI on Bedrock (ADR-014): governed system config + npm install`,
+    `mkdir -p /etc/codex`,
+    `cat > /etc/codex/config.toml << 'CODEXCFG'`,
+    toml,
+    `CODEXCFG`,
+    `chmod 0644 /etc/codex/config.toml`,
+    `mkdir -p /home/coder/.codex && chown -R coder:coder /home/coder/.codex`,
+    // flock: cc-cli-update.service and postStartSetup (SSM) can both run this at boot.
+    // Version is pinned (CODEX_CLI_VERSION, default 0.163.0) — root install, never @latest.
+    `command -v npm >/dev/null 2>&1 && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1 || true`,
+  ];
+}
+
 function cliWrapperUserData(): string[] {
   return [
     `cat > /usr/local/sbin/cc-install-cli-wrappers << 'WRAPEOF'`,
@@ -341,6 +396,15 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         }
       } catch (err) {
         console.warn(`[EC2] SG re-apply on restart failed for ${input.subdomain}:`, err);
+      }
+
+      // Re-upsert the per-user role's inline policy so roles created before a policy
+      // change (e.g. ADR-014 Codex/OpenAI ARNs) pick it up on a plain restart — the
+      // create/restore paths already do this. Best-effort: never block the start.
+      try {
+        await ensureUserInstanceProfile(input.subdomain, input.username, input.department);
+      } catch (err) {
+        console.warn(`[EC2] role policy refresh on restart failed for ${input.subdomain}:`, err);
       }
 
       console.log(`[EC2] Starting existing instance ${existing.instanceId} for ${input.subdomain}`);
@@ -592,17 +656,21 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `# Upgrade Claude Code + Kiro CLI (first boot)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
       `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>/dev/null || true`,
+      ...codexUserData(region),
       ...cliWrapperUserData(),
       `# Auto-update Claude Code + Kiro on every boot (start/restart)`,
       `cat > /etc/systemd/system/cc-cli-update.service << 'SVCEOF'`,
       `[Unit]`,
-      `Description=Auto-update Claude Code and Kiro CLI`,
+      `Description=Auto-update Claude Code, Kiro and Codex CLI`,
       `After=network-online.target`,
       `Wants=network-online.target`,
       `[Service]`,
       `Type=oneshot`,
       `User=coder`,
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
+      // Codex is a global npm package (root-owned prefix) → `+` runs it as root.
+      // Version is pinned (CODEX_CLI_VERSION, default 0.163.0).
+      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1; true'`,
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
@@ -1124,17 +1192,21 @@ export async function restoreFromSnapshot(
       `# Upgrade Claude Code + Kiro CLI (first boot)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
       `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>/dev/null || true`,
+      ...codexUserData(region),
       ...cliWrapperUserData(),
       `# Auto-update Claude Code + Kiro on every boot (start/restart)`,
       `cat > /etc/systemd/system/cc-cli-update.service << 'SVCEOF'`,
       `[Unit]`,
-      `Description=Auto-update Claude Code and Kiro CLI`,
+      `Description=Auto-update Claude Code, Kiro and Codex CLI`,
       `After=network-online.target`,
       `Wants=network-online.target`,
       `[Service]`,
       `Type=oneshot`,
       `User=coder`,
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
+      // Codex is a global npm package (root-owned prefix) → `+` runs it as root.
+      // Version is pinned (CODEX_CLI_VERSION, default 0.163.0).
+      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1; true'`,
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
@@ -1735,6 +1807,8 @@ async function postStartSetup(instanceId: string): Promise<void> {
           `# Upgrade Claude Code + Kiro CLI (as coder user, symlink to /usr/local/bin)`,
           `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1 || true`,
           `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>&1 || true`,
+          // ADR-014: also heals instances provisioned before Codex support (user-data ran once).
+          ...codexUserData(region),
           `if [ -x /usr/local/sbin/cc-install-cli-wrappers ]; then /usr/local/sbin/cc-install-cli-wrappers; elif [ -x /usr/local/bin/cc-otel-code-metrics ] && [ -x /home/coder/.local/bin/claude ]; then /usr/local/bin/cc-otel-code-metrics install-claude-wrapper /usr/local/bin/claude /home/coder/.local/bin/claude 2>/dev/null || true; else [ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude; fi`,
           `[ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
           `# Start CWAgent for memory/disk metrics`,
@@ -1938,10 +2012,14 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
           // lambda/user-role-provisioner.py:_ec2_task_inline_policy and
           // Terraform task permission boundary — otherwise
           // EC2-mode users get AccessDenied on `global.anthropic.claude-*`
-          // direct InvokeModel.
+          // direct InvokeModel. ADR-014: + OpenAI GPT (Codex) and the
+          // account default project (project/default) for the bedrock-runtime Responses API.
           Resource: [
             `arn:aws:bedrock:*::foundation-model/*anthropic.claude-*`,
             `arn:aws:bedrock:*:${accountId}:inference-profile/*anthropic.claude-*`,
+            `arn:aws:bedrock:*::foundation-model/*openai.gpt-*`,
+            `arn:aws:bedrock:*:${accountId}:inference-profile/*openai.gpt-*`,
+            `arn:aws:bedrock:*:${accountId}:project/default`,
             `arn:aws:bedrock:*::foundation-model/*embed*`,
             `arn:aws:bedrock:*:${accountId}:inference-profile/*embed*`,
             `arn:aws:bedrock:*:${accountId}:application-inference-profile/*`,

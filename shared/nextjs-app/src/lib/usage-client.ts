@@ -19,11 +19,17 @@ const MAX_PAGES = 100;
 
 // ─── Types ───
 
+// ADR-014: which CLI produced the usage. Written by the tracker on new rows;
+// derived from the model vendor for rows written before the attribute existed.
+import { toolForModel, type UsageTool } from "./client-tool";
+export { toolForModel, type UsageTool };
+
 export interface UsageRecord {
   userId: string;
   department: string;
   date: string;
   model: string;
+  tool: UsageTool;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -32,6 +38,18 @@ export interface UsageRecord {
   requests: number;
   estimatedCost: number;
   latencySumMs: number;
+}
+
+export interface ToolSummary {
+  tool: UsageTool;
+  totalCost: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  requests: number;
+  userCount: number;
+  models: string[];
 }
 
 export interface UserUsageSummary {
@@ -193,6 +211,9 @@ function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
     department: u.department ?? "default",
     date: u.date ?? (u.SK as string).split("#")[0],
     model: u.model ?? (u.SK as string).split("#")[1] ?? "unknown",
+    tool: (["claude-code", "codex", "other"] as const).includes(u.tool)
+      ? u.tool
+      : toolForModel(u.model ?? (u.SK as string).split("#")[1] ?? ""),
     inputTokens: u.inputTokens ?? 0,
     outputTokens: u.outputTokens ?? 0,
     cacheReadTokens: u.cacheReadTokens ?? 0,
@@ -339,6 +360,42 @@ export async function getDepartmentSummaries(params?: {
   return Array.from(deptMap.values())
     .map(({ users, ...rest }) => rest)
     .sort((a, b) => b.totalCost - a.totalCost);
+}
+
+/** Pure: aggregate usage rows per CLI tool, highest cost first. */
+export function buildToolSummaries(records: UsageRecord[]): ToolSummary[] {
+  const map = new Map<UsageTool, ToolSummary & { users: Set<string>; modelSet: Set<string> }>();
+  for (const r of records) {
+    const t = map.get(r.tool) ?? {
+      tool: r.tool, totalCost: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0,
+      cacheReadTokens: 0, requests: 0, userCount: 0, models: [],
+      users: new Set<string>(), modelSet: new Set<string>(),
+    };
+    t.totalCost += r.estimatedCost;
+    t.totalTokens += r.totalTokens;
+    t.inputTokens += r.inputTokens;
+    t.outputTokens += r.outputTokens;
+    t.cacheReadTokens += r.cacheReadTokens;
+    t.requests += r.requests;
+    t.users.add(r.userId);
+    t.modelSet.add(r.model);
+    map.set(r.tool, t);
+  }
+  return Array.from(map.values())
+    .map(({ users, modelSet, ...rest }) => ({
+      ...rest,
+      userCount: users.size,
+      models: Array.from(modelSet).sort(),
+    }))
+    .sort((a, b) => b.totalCost - a.totalCost);
+}
+
+export async function getToolSummaries(params?: {
+  startDate?: string;
+  endDate?: string;
+  userId?: string;
+}): Promise<ToolSummary[]> {
+  return buildToolSummaries(await getUsageRecords(params));
 }
 
 export async function getModelSummaries(params?: {

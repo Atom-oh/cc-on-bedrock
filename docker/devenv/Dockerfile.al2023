@@ -18,6 +18,7 @@ RUN /opt/devenv/scripts/setup-claude-code.sh
 
 # Install Kiro CLI
 RUN /opt/devenv/scripts/setup-kiro.sh
+RUN /opt/devenv/scripts/setup-codex.sh
 
 # Pre-install approved extensions
 RUN while IFS= read -r ext || [ -n "$ext" ]; do \
