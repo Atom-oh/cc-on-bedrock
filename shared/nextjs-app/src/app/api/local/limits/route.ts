@@ -13,6 +13,17 @@ const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 
 const dynamo = new DynamoDBClient({ region });
 
+const PERIOD_SPEND_FIELD: Record<string, string> = {
+  daily: "currentDailySpend",
+  weekly: "currentWeeklySpend",
+  monthly: "currentMonthlySpend",
+};
+const PERIOD_CAP_FIELD: Record<string, string> = {
+  daily: "effectiveDailyBudget",
+  weekly: "effectiveWeeklyBudget",
+  monthly: "effectiveMonthlyBudget",
+};
+
 type PeriodSummary = {
   period: "daily" | "weekly" | "monthly";
   userUsed: number;
@@ -139,8 +150,8 @@ export async function GET(_req: NextRequest) {
         const periods: string[] = Array.isArray(b.budgetExceeded) ? b.budgetExceeded.map(String) : [];
         if (periods.length > 0) {
           const first = periods[0];
-          const spendKey = { daily: "currentDailySpend", weekly: "currentWeeklySpend", monthly: "currentMonthlySpend" }[first] ?? "currentSpend";
-          const capKey = { daily: "effectiveDailyBudget", weekly: "effectiveWeeklyBudget", monthly: "effectiveMonthlyBudget" }[first] ?? "monthlyBudget";
+          const spendKey = PERIOD_SPEND_FIELD[first] ?? "currentSpend";
+          const capKey = PERIOD_CAP_FIELD[first] ?? "monthlyBudget";
           budgetDeny = {
             active: true,
             currentSpend: Number(b[spendKey] ?? 0),
@@ -148,7 +159,7 @@ export async function GET(_req: NextRequest) {
             releaseAt: String(b.budgetReleaseAt || nextUtcMidnightIso()),
             periods,
           };
-        } else if (b.budgetExceeded === undefined) {
+        } else if (!Array.isArray(b.budgetExceeded)) {
           // Row not yet written by the period-aware budget-check — legacy evaluation.
           const budget = Number(b.monthlyBudget ?? 0);
           const spend = Number(b.currentSpend ?? 0);

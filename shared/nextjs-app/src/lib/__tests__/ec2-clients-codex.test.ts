@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { codexConfigToml, DEFAULT_CODEX_MODEL_ID } from "../ec2-clients";
+import { codexCliVersion, DEFAULT_CODEX_CLI_VERSION } from "../codex-model";
 
 // ADR-014: the DevEnv system config must keep the shape verified live against
 // codex-cli 0.163 on bedrock-runtime (ap-northeast-2, 2026-10-18).
@@ -24,5 +25,21 @@ describe("codexConfigToml", () => {
     for (const bad of ["global.openai.gpt-6\nCODEXCFG\nrm -rf /", 'global.openai.gpt-6"', "anthropic.claude-opus-4-8", ""]) {
       expect(codexConfigToml("ap-northeast-2", bad)).toContain(`model = "${DEFAULT_CODEX_MODEL_ID}"`);
     }
+  });
+
+  it("throws on a region that could break out of the user-data heredoc", () => {
+    expect(() => codexConfigToml("ap-northeast-2\nCODEXCFG", undefined)).toThrow();
+  });
+
+  it("falls back to the default model for non-commercial (us-gov) profiles", () => {
+    expect(codexConfigToml("ap-northeast-2", "us-gov.openai.gpt-6")).toContain(`model = "${DEFAULT_CODEX_MODEL_ID}"`);
+  });
+});
+
+describe("codexCliVersion", () => {
+  it("accepts only a plain semver, else the pinned default", () => {
+    expect(codexCliVersion("1.2.3")).toBe("1.2.3");
+    expect(codexCliVersion("latest")).toBe(DEFAULT_CODEX_CLI_VERSION);
+    expect(codexCliVersion("1.2.3; rm -rf /")).toBe(DEFAULT_CODEX_CLI_VERSION);
   });
 });

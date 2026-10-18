@@ -4,7 +4,7 @@
  * Stop/Start preserves all state — no snapshot/restore needed.
  */
 
-import { codexModelId, DEFAULT_CODEX_MODEL_ID } from "./codex-model";
+import { codexModelId, codexCliVersion, DEFAULT_CODEX_MODEL_ID } from "./codex-model";
 import {
   EC2Client,
   RunInstancesCommand,
@@ -280,6 +280,9 @@ export { DEFAULT_CODEX_MODEL_ID };
  * analytics off = no Codex product telemetry leaves the VPC to OpenAI.
  */
 export function codexConfigToml(region: string, rawModel: string | undefined = process.env.CODEX_MODEL_ID): string {
+  if (!/^[a-z]{2}(-[a-z]+)+-\d+$/.test(region)) {
+    throw new Error(`invalid AWS region for Codex config: ${region}`);
+  }
   const model = codexModelId(rawModel);
   return [
     `# Managed by CC-on-Bedrock (ADR-014). Override per-user in ~/.codex/config.toml.`,
@@ -306,7 +309,8 @@ function codexUserData(region: string): string[] {
     `chmod 0644 /etc/codex/config.toml`,
     `mkdir -p /home/coder/.codex && chown -R coder:coder /home/coder/.codex`,
     // flock: cc-cli-update.service and postStartSetup (SSM) can both run this at boot.
-    `command -v npm >/dev/null 2>&1 && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@latest >/dev/null 2>&1 || true`,
+    // Version is pinned (CODEX_CLI_VERSION, default 0.163.0) — root install, never @latest.
+    `command -v npm >/dev/null 2>&1 && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1 || true`,
   ];
 }
 
@@ -657,7 +661,8 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `User=coder`,
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
       // Codex is a global npm package (root-owned prefix) → `+` runs it as root.
-      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@latest >/dev/null 2>&1; true'`,
+      // Version is pinned (CODEX_CLI_VERSION, default 0.163.0).
+      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1; true'`,
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
@@ -1192,7 +1197,8 @@ export async function restoreFromSnapshot(
       `User=coder`,
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
       // Codex is a global npm package (root-owned prefix) → `+` runs it as root.
-      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@latest >/dev/null 2>&1; true'`,
+      // Version is pinned (CODEX_CLI_VERSION, default 0.163.0).
+      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1; true'`,
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
@@ -1999,13 +2005,13 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
           // Terraform task permission boundary — otherwise
           // EC2-mode users get AccessDenied on `global.anthropic.claude-*`
           // direct InvokeModel. ADR-014: + OpenAI GPT (Codex) and the
-          // default Responses project (bedrock-runtime Responses API).
+          // account default project (project/default) for the bedrock-runtime Responses API.
           Resource: [
             `arn:aws:bedrock:*::foundation-model/*anthropic.claude-*`,
             `arn:aws:bedrock:*:${accountId}:inference-profile/*anthropic.claude-*`,
             `arn:aws:bedrock:*::foundation-model/*openai.gpt-*`,
             `arn:aws:bedrock:*:${accountId}:inference-profile/*openai.gpt-*`,
-            `arn:aws:bedrock:*:${accountId}:project/*`,
+            `arn:aws:bedrock:*:${accountId}:project/default`,
             `arn:aws:bedrock:*::foundation-model/*embed*`,
             `arn:aws:bedrock:*:${accountId}:inference-profile/*embed*`,
             `arn:aws:bedrock:*:${accountId}:application-inference-profile/*`,

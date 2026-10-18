@@ -56,6 +56,7 @@ export interface UserBudget {
   effectiveMonthlyBudget: number;
   budgetExceeded: string[];      // periods currently over cap ([] = not blocked by USD budget)
   budgetReleaseAt: string;       // ISO time the USD deny can lift ("" when not blocked)
+  periodAware: boolean; // budget-check has written per-period evaluation (budgetExceeded present)
   updatedAt: string;
 }
 
@@ -141,6 +142,7 @@ export async function GET(req: NextRequest) {
             effectiveMonthlyBudget: Number(u.effectiveMonthlyBudget ?? 0),
             budgetExceeded: Array.isArray(u.budgetExceeded) ? u.budgetExceeded.map(String) : [],
             budgetReleaseAt: String(u.budgetReleaseAt ?? ""),
+            periodAware: Array.isArray(u.budgetExceeded),
             updatedAt: u.updatedAt ?? "",
           };
         })

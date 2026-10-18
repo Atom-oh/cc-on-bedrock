@@ -34,6 +34,7 @@ interface UserBudget {
   effectiveMonthlyBudget: number;
   budgetExceeded: string[];
   budgetReleaseAt: string;
+  periodAware: boolean;
   updatedAt: string;
 }
 
@@ -346,7 +347,7 @@ export default function BudgetManagement() {
                 <p className="text-sm text-gray-500">{departments.length === 0 ? "No department budgets configured yet." : "Monthly budget limits per department."}</p>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => { setCreateModal({ type: "department" }); setNewBudget(""); setCreateId(""); }}
+                    onClick={() => { setCreateModal({ type: "department" }); setNewBudget(""); setCreateId(""); setPeriodInputs(EMPTY_PERIODS); }}
                     className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
                   >
                     + Add Department
@@ -443,7 +444,7 @@ export default function BudgetManagement() {
                     </thead>
                     <tbody>
                       {users.map((user) => {
-                        const blocked = user.budgetExceeded.length > 0;
+                        const blocked = user.budgetExceeded.length > 0 || (!user.periodAware && user.monthlyBudget > 0 && user.currentSpend >= user.monthlyBudget);
                         return (
                           <tr key={user.userId} className={`border-b border-gray-800 ${blocked ? "bg-red-900/10" : ""}`}>
                             <td className="py-3"><span className="text-gray-200">{user.userId}</span></td>
@@ -466,7 +467,7 @@ export default function BudgetManagement() {
                             <td className="py-3 text-right text-xs">
                               {blocked ? (
                                 <span className="text-red-400 font-medium" title={user.budgetReleaseAt}>
-                                  BLOCKED ({user.budgetExceeded.join(", ")}) until {user.budgetReleaseAt ? new Date(user.budgetReleaseAt).toLocaleString() : "-"}
+                                  BLOCKED ({(user.budgetExceeded.length ? user.budgetExceeded : ["monthly"]).join(", ")}) until {user.budgetReleaseAt ? new Date(user.budgetReleaseAt).toLocaleString() : "-"}
                                 </span>
                               ) : (
                                 <span className="text-green-400">OK</span>
