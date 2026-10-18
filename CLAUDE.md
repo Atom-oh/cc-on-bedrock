@@ -120,8 +120,10 @@ Offline review checks: `python3 -m unittest discover -s scripts/pr-review -p 'te
 
 ## Specialist PR review
 
-CI enables `ROLE_REVIEW=1`: one applicable responsibility per model instead of
-repeating every lens. See [the current review contract](docs/pr-review-specialists.md).
+CI runs the simplified lens panel → chair `VERDICT` path (`ROLE_REVIEW=0`, 12,000-line
+diff cap; owner decision 2026-10-18, matching the other projects). The specialist
+protocol below is retained and re-enabled with `ROLE_REVIEW=1`: one applicable
+responsibility per model instead of repeating every lens. See [the current review contract](docs/pr-review-specialists.md).
 Codex and Claude retain full change-boundary checks from independent model families;
 Kiro covers AWS and operational responsibilities when applicable. Trusted routing
 owns NOT_APPLICABLE. Failed or incomplete required output is never a clean review.

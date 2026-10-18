@@ -15,7 +15,9 @@ on:
     types: [opened, synchronize]
 
 env:
-  ROLE_REVIEW: "1"
+  # Simplified (2026-10-18, owner decision): legacy lens panel → chair VERDICT path,
+  # the same shape as the other projects. ROLE_REVIEW=1 re-enables the specialist protocol.
+  ROLE_REVIEW: "0"
   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   BASE_SHA: ${{ github.event.pull_request.base.sha }}
   GH_REPO: ${{ github.repository }}
@@ -98,7 +100,7 @@ jobs:
       - name: Build lens prompts (L2-L5 — each self-contained, one lens only)
         run: |
           set -euo pipefail
-          MAX_LINES=3000
+          MAX_LINES=12000
           head -"$MAX_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-truncated.txt
           rm -rf /tmp/pr-review/lenses
           mkdir -p /tmp/pr-review/lenses
@@ -170,7 +172,7 @@ jobs:
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
       - name: Preserve specialist scope and execution evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.ROLE_REVIEW == '1' }}
         uses: actions/upload-artifact@v4
         with:
           name: specialist-review-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
