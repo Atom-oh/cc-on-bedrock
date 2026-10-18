@@ -128,6 +128,10 @@ esac ; }
 
 run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
+  # 2026-10-18: CI now runs this legacy path (ROLE_REVIEW=0) under pull_request_target with
+  # runner credentials, so the chair runs with NO tools (`--tools ""`) and no MCP servers
+  # (`--strict-mcp-config`) — a prompt-injected diff cannot read files or run commands.
+  # The chair only needs stdin (diff + panel output). Note below is historical context.
   # 잔여 위험(cc-on-bedrock PR#107 리뷰 M3): Kiro 셀은 `--agent pr-review-notools`(`tools: []`
   # 에이전트)로 무툴화해
   # "diff 인젝션 → 절대경로 read → 공개 유출" 체인을 구조적으로 끊었지만, 이 chair 호출은
@@ -137,6 +141,7 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
   # 대조 검증을 수행하는 것과 충돌할 수 있어 이 PR 범위에서는 보류 — 잔여 위험만 문서화.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
+    --tools "" --strict-mcp-config \
     < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT" || true
 }
 
