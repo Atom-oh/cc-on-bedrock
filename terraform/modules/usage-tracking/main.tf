@@ -580,6 +580,8 @@ resource "aws_lambda_function" "budget_check" {
       DEPT_BUDGETS_TABLE   = var.department_budgets_table_name
       ECS_CLUSTER_NAME     = var.ecs_cluster_name
       DAILY_BUDGET_USD     = tostring(var.daily_budget_usd)
+      WEEKLY_BUDGET_USD    = tostring(var.weekly_budget_usd)
+      MONTHLY_BUDGET_USD   = tostring(var.monthly_budget_usd)
       USER_BUDGETS_TABLE   = aws_dynamodb_table.user_budgets.name
       LIMITS_TABLE         = "${var.project_prefix}-limits"
       SNS_TOPIC_ARN        = aws_sns_topic.budget_alerts.arn
@@ -830,7 +832,20 @@ resource "aws_cloudwatch_event_rule" "bedrock_audit" {
     source        = ["aws.bedrock"]
     "detail-type" = ["AWS API Call via CloudTrail"]
     detail = {
-      eventName = ["InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream"]
+      eventSource = ["bedrock.amazonaws.com"]
+      # "Responses" = OpenAI Responses API on bedrock-runtime (Codex, ADR-014).
+      eventName = ["InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream", "Responses"]
+      # Platform user roles only (EC2 task + Local Mode) — same scope as the usage tracker rule.
+      userIdentity = {
+        sessionContext = {
+          sessionIssuer = {
+            userName = [
+              { prefix = "cc-on-bedrock-task-" },
+              { prefix = "cc-on-bedrock-local-user-" },
+            ]
+          }
+        }
+      }
     }
   })
 }

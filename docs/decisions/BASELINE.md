@@ -12,7 +12,8 @@
 ### 목표 (Goal)
 > **CC-on-Bedrock은 AWS Bedrock 위에 안전하고 거버넌스된 멀티유저 Claude Code 개발환경을 제공한다.**
 > per-user EC2 DevEnv(브라우저 IDE) 또는 로컬 PC에서 Bedrock 접근을 주되,
-> **사용량·예산·IAM 권한을 중앙에서 통제**한다. (Codex on Bedrock은 후속 확장.)
+> **사용량·예산·IAM 권한을 중앙에서 통제**한다.
+> Claude Code and the **OpenAI Codex CLI** (OpenAI GPT models on Bedrock) are governed identically (→ ADR-014).
 
 ### 가치 (Value)
 - **즉시 쓰는 개발환경** — 로그인하면 Bedrock이 붙은 IDE(EC2) 또는 로컬 CLI가 바로 동작.
@@ -37,6 +38,7 @@
 - **EBS 영속성 (2-볼륨)** — DevEnv는 ephemeral OS root(`DeleteOnTermination=true`) + persistent 데이터 EBS(`/home/coder`, `DeleteOnTermination=false`, subdomain 태그로 재연결). Terminate가 사용자 데이터를 파괴하면 안 됨 (ADR-032).
 - **code-server 포트 8080 예약** — custom route 포트는 8080(및 well-known) 사용 금지.
 - **Kiro 거버넌스 제외** — Kiro는 IAM Identity Center 구독 라이선스; Cognito/Bedrock 토큰 한도 집행 대상 아님.
+- **Codex = bedrock-runtime only** — Codex CLI calls Bedrock only via the `amazon-bedrock-runtime` provider (Responses API). Never grant `bedrock-mantle:*` (it escapes invocation-log metering, management-event audit and the IAM deny). Every per-user Bedrock allow-list copy includes the OpenAI GPT and default-project ARNs (`tests/unit/test_bedrock_iam_codex_parity.py`) (ADR-014).
 - **anti-drift** — 새 ADR/flag/status 변경은 **같은 PR에서 이 §3(또는 §2)를 갱신**. 갱신 없으면 "not live". 옛 ADR 본문은 트리에서 제거(git tag + `../history/ADR-MAPPING.md` 보존), **번호 재사용 금지** (2026-06-23 BASELINE reset의 일괄 재번호는 일회성 예외; 이후 신규 ADR에 적용).
 
 ---
@@ -48,7 +50,7 @@
 | **GATED** | Local Governance Mode | `governanceOnly` 동등 변수로 EC2 없이 거버넌스 레이어만 배포 가능 | ADR-006 |
 | **LIVE(flag)** | EC2 Hibernation | `HIBERNATE_ENABLED=true`. 유휴 stop/hibernate + 만료 회전, 암호화 root | ADR-002 |
 | **GATED** | 셀프서비스 IAM 권한 확장 | UI 신청 → **admin 승인** 필수 + permission boundary 내 | ADR-007 |
-| **DEFERRED** | Codex on Bedrock | 후속 확장. 현 타깃은 Claude Code on Bedrock | §0 |
+| **LIVE** | Codex on Bedrock | Codex CLI preinstalled on EC2 DevEnv + Local `cc-bedrock-local codex` / `ccx`; bedrock-runtime Responses API sharing usage, budget and audit. Codex OTEL productivity rollup is a follow-up | ADR-014 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
 | **LIVE** | Documentation language | New/substantially rewritten documentation/ADRs/comments use English; existing Korean-only/bilingual content remains until its own maintenance update. Korean conversation/UI remain supported. Review output uses English. | ADR-013 |
@@ -59,10 +61,10 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> Eleven consolidated ADRs replace the legacy 34; ADR-012/013 are subsequent records.
+> Eleven consolidated ADRs replace the legacy 34; ADR-012/013/014 are subsequent records.
 > `../history/ADR-MAPPING.md` maps retired decisions; tag `adr-legacy-2026-06-23` retains their bodies.
 > Consolidation is complete. ADR-013's protocol and language policy are LIVE.
-> The next ADR number is 014; the earlier reset was a one-time exception.
+> The next ADR number is 015; the earlier reset was a one-time exception.
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
@@ -73,12 +75,13 @@
 | 005 | 사용량 집계 | Inference Profile + Invocation Log → DynamoDB, email canonical key, 모델 정규화 | 011·019·031 · ~~025~~ |
 | 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신 | 014·029 |
 | 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude | 005·020·021·030·034 · ~~026~~ |
-| 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny | 006·015·023 |
+| 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18) | 006·015·023 |
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
 | 012 | DevEnv 헬스 판정 | 직접 8080 probe 제거(SG 격리로 timeout) → EC2 lifecycle 파생(running+privateIp⇒HEALTHY), 낙관적 false-positive trade-off 수용 | (신규) |
 | 013 | Specialist PR review and documentation | Active role protocol and incremental English maintenance policy; preserves remaining security/custody rules | New |
+| 014 | Codex on Bedrock | OpenAI Codex CLI → bedrock-runtime Responses API (`global.openai.*`), per-user role attribution; IAM adds OpenAI GPT + default project (no mantle); explicit per-model cache rates + corrected Claude prices (Price List API); usage `tool` attribute + per-tool dashboard; audit-logger `Responses` / Local roles / `client_tool`; `/etc/codex/config.toml` system layer | New |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 

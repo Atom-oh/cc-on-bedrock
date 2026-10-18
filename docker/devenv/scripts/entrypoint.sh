@@ -81,6 +81,7 @@ mkdir -p "$USER_CONFIG_DIR"
 mkdir -p "$EFS_USER_DIR/.bashrc.d"
 mkdir -p "$EFS_USER_DIR/.claude"
 mkdir -p "$EFS_USER_DIR/.kiro/settings"
+mkdir -p "$EFS_USER_DIR/.codex"  # Codex CLI state (ADR-014)
 
 # Ensure correct ownership (ignore errors: AP enforces uid/gid, symlinks may be root-owned)
 chown -R coder:coder "$EFS_USER_DIR" 2>/dev/null || true
@@ -153,7 +154,7 @@ fi
 # code-server and Claude Code expect configs in $HOME
 # Skip when STORAGE_ISOLATED (Access Point: EFS_USER_DIR == USER_HOME, no symlink needed)
 if [ "$EFS_USER_DIR" != "$USER_HOME" ]; then
-  for item in .bashrc .bashrc.d .claude .kiro .config; do
+  for item in .bashrc .bashrc.d .claude .codex .kiro .config; do
     src="$EFS_USER_DIR/$item"
     dst="$USER_HOME/$item"
     if [ -e "$src" ] && [ ! -L "$dst" ]; then
@@ -266,6 +267,23 @@ export AWS_CONTAINER_AUTHORIZATION_TOKEN="${ECS_CREDS_TOKEN}"
 ${OTEL_ENV_BLOCK}
 ENVEOF
 chmod 644 /etc/profile.d/claude-env.sh
+
+# Codex CLI on Bedrock (ADR-014): system config layer (users may override per key in
+# ~/.codex/config.toml). Credentials = ECS task role via the AWS SDK chain above.
+mkdir -p /etc/codex
+cat > /etc/codex/config.toml << CODEXEOF
+# Managed by CC-on-Bedrock (ADR-014). Override per-user in ~/.codex/config.toml.
+model_provider = "amazon-bedrock-runtime"
+model = "${CODEX_MODEL_ID:-global.openai.gpt-6.1-sol}"
+web_search = "disabled"
+
+[model_providers.amazon-bedrock-runtime.aws]
+region = "${AWS_DEFAULT_REGION:-ap-northeast-2}"
+
+[analytics]
+enabled = false
+CODEXEOF
+chmod 644 /etc/codex/config.toml
 if ! grep -q "profile.d/claude-env" "$USER_BASHRC" 2>/dev/null; then
   echo '[ -f /etc/profile.d/claude-env.sh ] && source /etc/profile.d/claude-env.sh' >> "$USER_BASHRC"
 fi

@@ -130,3 +130,9 @@ variable "otel_collector_endpoint" {
 variable "dns_firewall_rule_group_id" {
   type = string
 }
+
+variable "codex_model_id" {
+  description = "Default Codex CLI model written to DevEnv /etc/codex/config.toml (ADR-014)"
+  type        = string
+  default     = "global.openai.gpt-6.1-sol"
+}

@@ -73,6 +73,9 @@ interface AuditEvent {
   user: string;
   sourceIp: string;
   errorCode: string;
+  // Bedrock inference events only (ADR-014): model + which CLI made the call.
+  model?: string;
+  tool?: "claude-code" | "codex" | "other";
 }
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
@@ -579,7 +582,17 @@ export default function SecurityDashboard() {
                         <td className="px-4 py-2">
                           <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${sourceColor}`}>{log.source}</span>
                         </td>
-                        <td className="px-4 py-2 text-xs text-gray-300 font-mono">{log.event}</td>
+                        <td className="px-4 py-2 text-xs text-gray-300 font-mono">
+                          {log.event}
+                          {log.tool && log.tool !== "other" && (
+                            <span
+                              className={`ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-medium ${log.tool === "codex" ? "bg-emerald-900/30 text-emerald-400" : "bg-amber-900/30 text-amber-400"}`}
+                              title={log.model || undefined}
+                            >
+                              {log.tool === "codex" ? "Codex" : "Claude Code"}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-[10px] text-gray-400 max-w-[200px] truncate" title={log.user}>{log.user || "-"}</td>
                         <td className="px-4 py-2 text-[10px] text-gray-500 font-mono">{log.sourceIp || "-"}</td>
                         <td className="px-4 py-2">

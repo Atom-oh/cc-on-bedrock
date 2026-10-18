@@ -122,7 +122,9 @@ export async function GET(_req: NextRequest) {
     // table, so read the budget row and surface a release estimate to the user.
     // ADR-031 (B′): cc-user-budgets is keyed by email; legacy rows may still be
     // keyed by subdomain, so fall back to it.
-    let budgetDeny: { active: boolean; currentSpend: number; budget: number; releaseAt: string } | null = null;
+    let budgetDeny: {
+      active: boolean; currentSpend: number; budget: number; releaseAt: string; periods: string[];
+    } | null = null;
     const subdomain = (session.user as { subdomain?: string }).subdomain;
     const budgetKeys = [userKey, ...(subdomain && subdomain !== userKey ? [subdomain] : [])];
     try {
@@ -133,10 +135,26 @@ export async function GET(_req: NextRequest) {
         }));
         if (!r.Item) continue;
         const b = unmarshall(r.Item);
-        const budget = Number(b.monthlyBudget ?? 0);
-        const spend = Number(b.currentSpend ?? 0);
-        if (budget > 0 && spend >= budget) {
-          budgetDeny = { active: true, currentSpend: spend, budget, releaseAt: nextUtcMidnightIso() };
+        // ADR-008: budget-check writes the exceeded periods + release time; prefer them.
+        const periods: string[] = Array.isArray(b.budgetExceeded) ? b.budgetExceeded.map(String) : [];
+        if (periods.length > 0) {
+          const first = periods[0];
+          const spendKey = { daily: "currentDailySpend", weekly: "currentWeeklySpend", monthly: "currentMonthlySpend" }[first] ?? "currentSpend";
+          const capKey = { daily: "effectiveDailyBudget", weekly: "effectiveWeeklyBudget", monthly: "effectiveMonthlyBudget" }[first] ?? "monthlyBudget";
+          budgetDeny = {
+            active: true,
+            currentSpend: Number(b[spendKey] ?? 0),
+            budget: Number(b[capKey] ?? 0),
+            releaseAt: String(b.budgetReleaseAt || nextUtcMidnightIso()),
+            periods,
+          };
+        } else if (b.budgetExceeded === undefined) {
+          // Row not yet written by the period-aware budget-check — legacy evaluation.
+          const budget = Number(b.monthlyBudget ?? 0);
+          const spend = Number(b.currentSpend ?? 0);
+          if (budget > 0 && spend >= budget) {
+            budgetDeny = { active: true, currentSpend: spend, budget, releaseAt: nextUtcMidnightIso(), periods: [] };
+          }
         }
         break; // first existing row wins (canonical email key preferred)
       }

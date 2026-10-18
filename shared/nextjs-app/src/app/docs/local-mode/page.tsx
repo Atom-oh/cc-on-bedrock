@@ -200,7 +200,10 @@ ANTHROPIC_MODEL=opusplan
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
 ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
 ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
-CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5`}
+CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5
+
+# Codex CLI 모델 (ADR-014) — global./us. cross-Region 프로파일만 사용 가능
+CODEX_MODEL=global.openai.gpt-6.1-sol`}
       </CodeBlock>
 
       <SubTitle>{ko ? "2.3 하루 사용 흐름" : "2.3 Daily workflow"}</SubTitle>
@@ -210,6 +213,10 @@ cc-bedrock-local login
 
 # claude 실행 — 만료 10분 전이면 자동 재발급
 cc-bedrock-local claude
+
+# OpenAI Codex 실행 (ADR-014) — 같은 세션/IAM/사용량/예산 한도 적용
+# 사전 설치: npm install -g @openai/codex
+cc-bedrock-local codex
 
 # 현재 잔여 시간 + 한도 상태 확인
 cc-bedrock-local status
@@ -234,7 +241,8 @@ cc-bedrock-local logout`}
               ["logout", ko ? "refresh token + state 캐시 삭제" : "Clear refresh token + state cache"],
               ["status", ko ? "남은 TTL + 활성 Deny / 한도 상태 출력" : "Remaining TTL + Deny / limit state"],
               ["claude [args]", ko ? "세션 확보 + 모델 env 주입 후 claude 실행" : "Ensure session + apply model env, then run claude"],
-              ["set-model K=V", ko ? "sonnet/opus/haiku/subagent/pin 별칭으로 모델 ID 교체" : "Update model env (sonnet/opus/haiku/subagent/pin)"],
+              ["codex [args]", ko ? "세션 확보 후 OpenAI codex를 Bedrock(bedrock-runtime)으로 실행 — provider/region 강제 고정 (ADR-014)" : "Ensure session, run OpenAI codex on Bedrock (bedrock-runtime) — provider/region pinned (ADR-014)"],
+              ["set-model K=V", ko ? "sonnet/opus/haiku/subagent/pin/codex 별칭으로 모델 ID 교체" : "Update model env (sonnet/opus/haiku/subagent/pin/codex)"],
               ["models", ko ? "현재 모델 매핑 + 사용 가능한 추천 ID 출력" : "Print current model env + suggested IDs"],
               ["run -- <cmd>", ko ? "자격증명만 확보하고 임의 명령 실행" : "Refresh credentials then exec any command"],
               ["config", ko ? "현재 설정 파일 + 경로 출력" : "Print current config + file paths"],

@@ -29,6 +29,16 @@ variable "daily_budget_usd" {
   default = 50
 }
 
+variable "weekly_budget_usd" {
+  type    = number
+  default = 0
+}
+
+variable "monthly_budget_usd" {
+  type    = number
+  default = 0
+}
+
 variable "task_permission_boundary_name" {
   description = "Name of the cc-on-bedrock-task-boundary managed policy"
   type        = string

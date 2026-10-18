@@ -52,7 +52,7 @@ EventBridge (5분) → budget-check
 | Deny policy 이름 | 부착 주체 | 사유 | 해제 조건 |
 |---|---|---|---|
 | `cc-bedrock-dept-budget-deny` | `budget-check` | 부서 월간 달러 예산 초과 | 예산 증액 또는 월 reset |
-| `cc-bedrock-user-daily-deny` | `budget-check` | 사용자 일일 달러 한도 초과 | 일일 자동 reset (UTC 자정) |
+| `cc-bedrock-user-daily-deny` | `budget-check` | User USD cap exceeded — daily, weekly **or** monthly (amendment 2026-10-18; name kept for compatibility) | Every period back under its cap (period rollover at UTC midnight / Monday 00:00 UTC / 1st 00:00 UTC, or a raised cap) |
 | `cc-bedrock-local-token-deny` | `token-limit-enforcer` | normalized 토큰 한도 초과 | period reset cron (`limit-reset`) |
 
 - 세 정책은 **공존 가능**하고 IAM은 하나라도 있으면 호출 거부. 해제는 **부착 주체가 자신의 정책만** detach한다.
@@ -66,14 +66,33 @@ EventBridge (5분) → budget-check
 - `monthlyBudget` — 부서 **누적** 한도. 도달 시 부서 **모든 멤버**에 `cc-bedrock-dept-budget-deny` 부착.
 - `perUserMonthlyBudget` — 각 멤버의 **기본** per-user cap. 도달 시 **그 멤버만** 차단.
 
-effective per-user budget은 3-tier 우선순위로 결정한다:
+### Amendment 2026-10-18 — per-user daily / weekly / monthly USD caps
+
+Owner decision: admins set **three independent per-user USD caps** in Admin → Budgets —
+daily, weekly and monthly (e.g. $50 / $100 / $200). **Exceeding any one blocks** the
+user (`cc-bedrock-user-daily-deny`); the deny lifts only when every period is back under
+its cap. This replaces the previous behavior, where the single effective budget
+(`monthlyBudget` first) was compared with *today's* spend and so acted as a daily cap.
+
+- Windows are UTC, matching the usage rows' `{YYYY-MM-DD}#{model}` keys: day, ISO week
+  (Monday 00:00 UTC) and calendar month. Spend includes every AI CLI (Claude Code and
+  Codex, ADR-014) because both write the same usage table.
+- Each period resolves independently (`_effective_user_limits`):
 
 ```
-effective_user_budget(user, dept) =
-    user.monthlyBudget          if > 0   # 명시적 override
-    else dept.perUserMonthlyBudget if > 0   # 부서 기본값 (레거시 023)
-    else DAILY_BUDGET env                   # 전역 fallback
+cap(period) =
+    user.{daily|weekly|monthly}Budget                 if > 0   # explicit override
+    else dept.perUser{Daily|Weekly|Monthly}Budget     if > 0   # dept per-member default (legacy 023)
+    else {DAILY|WEEKLY|MONTHLY}_BUDGET_USD env        if > 0   # global default (TF daily/weekly/monthly_budget_usd)
+    else no cap for that period
 ```
+
+- Defaults: `DAILY_BUDGET_USD=50`, `WEEKLY_BUDGET_USD=0`, `MONTHLY_BUDGET_USD=0`.
+- `budget-check` writes `currentDaily/Weekly/MonthlySpend`, `effective*Budget`,
+  `budgetExceeded` (period list) and `budgetReleaseAt` to `cc-user-budgets`;
+  `currentSpend` is month-to-date. The dashboard and Local Mode status read them.
+- The USD→token mirror below still applies to `monthlyBudget` only (daily/weekly token
+  limits are set separately in Admin → Limits and are not overwritten).
 
 - "engineering 인당 $200, 총 $1000" = dept row 하나(`monthlyBudget:1000`, `perUserMonthlyBudget:200`)로 표현. 멤버 5명이 각자 $200 → 부서 $1000 도달 → dept-deny로 전원 차단. 한 명만 $200 도달 → 그 멤버만 차단.
 - 신규 입사자는 user row 없이도 부서 기본값을 **집행 시점에** 자동 상속(수동 bulk-apply 불필요). override는 outlier에게만 user row로 부여.
@@ -125,6 +144,8 @@ files:
   - path: lambda/budget-check.py
     must_contain:
       - "perUserMonthlyBudget"
+      - "perUserWeeklyBudget"
+      - "def evaluate_user_budget"
       - "cc-bedrock-dept-budget-deny"
       - "cc-bedrock-user-daily-deny"
   - path: shared/nextjs-app/src/app/api/admin/budgets/route.ts
@@ -133,7 +154,7 @@ files:
 
 # Tier 2: Semantic
 semantic:
-  - claim: "budget-check Lambda가 effective_user_budget(user, dept) 3-tier 우선순위(user.monthlyBudget > dept.perUserMonthlyBudget > DAILY_BUDGET env)를 따르고, 부서 total cap 초과 시 전 멤버에 cc-bedrock-dept-budget-deny를 부착한다"
+  - claim: "budget-check enforces per-user daily, weekly and monthly USD caps independently (each resolved user > dept per-user default > global env) and blocks when any one is exceeded; a department total cap breach attaches cc-bedrock-dept-budget-deny to every member"
     context_files:
       - lambda/budget-check.py
   - claim: "달러 예산과 normalized 토큰 한도는 독립 OR 평가되며, 각 사유는 별도 deny policy 이름(cc-bedrock-dept-budget-deny / cc-bedrock-user-daily-deny / cc-bedrock-local-token-deny)으로 구분되고 부착 주체만 자기 정책을 detach한다"
