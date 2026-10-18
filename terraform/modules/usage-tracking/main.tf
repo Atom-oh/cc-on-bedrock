@@ -393,6 +393,20 @@ data "aws_iam_policy_document" "tracker_policy" {
     actions   = ["iam:GetRole"]
     resources = ["arn:aws:iam::${local.account_id}:role/cc-on-bedrock-local-user-*"]
   }
+  # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
+  # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
+  # fails with "KMS key access denied" (usage metering + budget enforcement silently
+  # stop). ViaService pins the grant to DynamoDB in this region.
+  statement {
+    sid       = "DynamoDbCmk"
+    actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+    resources = [var.kms_key_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["dynamodb.${local.region}.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "tracker_policy" {
@@ -550,6 +564,20 @@ data "aws_iam_policy_document" "budget_check_policy" {
   statement {
     actions   = ["sns:Publish"]
     resources = [aws_sns_topic.budget_alerts.arn]
+  }
+  # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
+  # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
+  # fails with "KMS key access denied" (usage metering + budget enforcement silently
+  # stop). ViaService pins the grant to DynamoDB in this region.
+  statement {
+    sid       = "DynamoDbCmk"
+    actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+    resources = [var.kms_key_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["dynamodb.${local.region}.amazonaws.com"]
+    }
   }
 }
 
@@ -1019,6 +1047,20 @@ data "aws_iam_policy_document" "gateway_manager_policy" {
     sid       = "LambdaInvoke"
     actions   = ["lambda:GetFunction", "lambda:InvokeFunction"]
     resources = ["arn:aws:lambda:${local.region}:${local.account_id}:function:cc-on-bedrock-mcp-*"]
+  }
+  # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
+  # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
+  # fails with "KMS key access denied" (usage metering + budget enforcement silently
+  # stop). ViaService pins the grant to DynamoDB in this region.
+  statement {
+    sid       = "DynamoDbCmk"
+    actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+    resources = [var.kms_key_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["dynamodb.${local.region}.amazonaws.com"]
+    }
   }
 }
 
