@@ -354,10 +354,10 @@ data "aws_iam_policy_document" "bedrock" {
       "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
       # ADR-014 Codex on Bedrock: OpenAI GPT via bedrock-runtime Responses API, which
-      # also authorizes bedrock:InvokeModel on the account default project.
+      # also authorizes bedrock:InvokeModel on the account default project (project/default).
       "arn:aws:bedrock:*::foundation-model/*openai.gpt-*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*openai.gpt-*",
-      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:project/*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:project/default",
       "arn:aws:bedrock:*::foundation-model/*embed*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*embed*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
@@ -373,10 +373,10 @@ data "aws_iam_policy_document" "task_permission_boundary" {
       "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
       # ADR-014 Codex on Bedrock: OpenAI GPT via bedrock-runtime Responses API, which
-      # also authorizes bedrock:InvokeModel on the account default project.
+      # also authorizes bedrock:InvokeModel on the account default project (project/default).
       "arn:aws:bedrock:*::foundation-model/*openai.gpt-*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*openai.gpt-*",
-      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:project/*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:project/default",
       "arn:aws:bedrock:*::foundation-model/*embed*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*embed*",
       "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",

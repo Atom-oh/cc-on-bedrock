@@ -229,13 +229,13 @@ def _ec2_task_inline_policy() -> dict:
                 # role_factory.allowed_model_arns() and the Terraform task
                 # permission boundary — otherwise EC2-mode users get
                 # AccessDenied on `global.anthropic.claude-*` direct InvokeModel.
-                # ADR-014: + OpenAI GPT (Codex) and the default Responses project.
+                # ADR-014: + OpenAI GPT (Codex) and the account default project (project/default).
                 "Resource": [
                     "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
                     "arn:aws:bedrock:*::foundation-model/*openai.gpt-*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*openai.gpt-*",
-                    f"arn:aws:bedrock:*:{ACCOUNT_ID}:project/*",
+                    f"arn:aws:bedrock:*:{ACCOUNT_ID}:project/default",
                     "arn:aws:bedrock:*::foundation-model/*embed*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*embed*",
                     f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",

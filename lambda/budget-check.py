@@ -115,8 +115,13 @@ def get_user_period_usage(now: datetime | None = None) -> dict:
                 _subdomain_by_user[user] = sd  # for IAM role-name construction
             entry = user_spend.setdefault(user, {
                 "daily": 0.0, "weekly": 0.0, "monthly": 0.0, "cost": 0.0,
-                "department": item.get("department", "default"),
+                "department": "default", "_dept_date": "",
             })
+            # Scan order is arbitrary: take the department from the most recent row.
+            dept = item.get("department")
+            if dept and row_date >= entry["_dept_date"]:
+                entry["department"] = dept
+                entry["_dept_date"] = row_date
             if row_date == today:
                 entry["daily"] += cost
                 entry["cost"] += cost
@@ -126,8 +131,13 @@ def get_user_period_usage(now: datetime | None = None) -> dict:
                 entry["monthly"] += cost
         last_key = result.get("LastEvaluatedKey")
         pages += 1
-        if not last_key or pages >= MAX_SCAN_PAGES:
+        if not last_key:
             break
+        if pages >= MAX_SCAN_PAGES:
+            print("[BUDGET] usage scan truncated at MAX_SCAN_PAGES — weekly/monthly totals may be under-counted")
+            break
+    for entry in user_spend.values():
+        entry.pop("_dept_date", None)
     return user_spend
 
 

@@ -83,6 +83,26 @@ def test_period_usage_scan_buckets_claude_and_codex_rows():
     assert bc._subdomain_by_user["a@x.com"] == "a"
 
 
+def test_department_taken_from_most_recent_row():
+    bc._valid_user_keys = set()  # fail-open
+    bc._subdomain_by_user = {}
+    rows = [
+        # older row listed FIRST — scan order must not decide the department
+        {"PK": "USER#d@x.com", "SK": "2026-10-02#claude-sonnet-5", "estimatedCost": 1, "department": "old"},
+        {"PK": "USER#d@x.com", "SK": "2026-10-18#claude-opus-4-8", "estimatedCost": 2, "department": "new"},
+    ]
+
+    def scan(**kw):
+        lo = kw["ExpressionAttributeValues"][":from"]
+        hi = kw["ExpressionAttributeValues"][":to"]
+        return {"Items": [r for r in rows if lo <= r["SK"] <= hi]}
+
+    with mock.patch.object(bc.table, "scan", side_effect=scan):
+        out = bc.get_user_period_usage(NOW)
+    assert out["d@x.com"]["department"] == "new"
+    assert "_dept_date" not in out["d@x.com"]
+
+
 def test_handler_blocks_on_weekly_and_releases_others():
     spend = {
         "a@x.com": {"daily": 5.0, "weekly": 120.0, "monthly": 150.0, "cost": 5.0, "department": "eng"},

@@ -27,8 +27,8 @@ INFERENCE_EVENTS = (
     'Responses',  # OpenAI Responses API on bedrock-runtime (Codex, ADR-014)
 )
 ROLE_PREFIXES = (
-    ('cc-on-bedrock-task-', 'ec2'),
-    ('cc-on-bedrock-local-user-', 'local'),
+    (os.environ.get('TASK_ROLE_PREFIX', 'cc-on-bedrock-task-'), 'ec2'),
+    (os.environ.get('LOCAL_ROLE_PREFIX', 'cc-on-bedrock-local-user-'), 'local'),
 )
 
 dynamodb = boto3.resource('dynamodb', region_name=REGION)

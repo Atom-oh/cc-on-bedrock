@@ -396,7 +396,8 @@ data "aws_iam_policy_document" "tracker_policy" {
   # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
   # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
   # fails with "KMS key access denied" (usage metering + budget enforcement silently
-  # stop). ViaService pins the grant to DynamoDB in this region.
+  # stop). The same CMK also encrypts the budget-alert SNS topic, so sns:Publish
+  # needs it too. ViaService pins the grant to DynamoDB + SNS in this region.
   statement {
     sid       = "DynamoDbCmk"
     actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
@@ -404,7 +405,7 @@ data "aws_iam_policy_document" "tracker_policy" {
     condition {
       test     = "StringEquals"
       variable = "kms:ViaService"
-      values   = ["dynamodb.${local.region}.amazonaws.com"]
+      values   = ["dynamodb.${local.region}.amazonaws.com", "sns.${local.region}.amazonaws.com"]
     }
   }
 }
@@ -568,7 +569,8 @@ data "aws_iam_policy_document" "budget_check_policy" {
   # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
   # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
   # fails with "KMS key access denied" (usage metering + budget enforcement silently
-  # stop). ViaService pins the grant to DynamoDB in this region.
+  # stop). The same CMK also encrypts the budget-alert SNS topic, so sns:Publish
+  # needs it too. ViaService pins the grant to DynamoDB + SNS in this region.
   statement {
     sid       = "DynamoDbCmk"
     actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
@@ -576,7 +578,7 @@ data "aws_iam_policy_document" "budget_check_policy" {
     condition {
       test     = "StringEquals"
       variable = "kms:ViaService"
-      values   = ["dynamodb.${local.region}.amazonaws.com"]
+      values   = ["dynamodb.${local.region}.amazonaws.com", "sns.${local.region}.amazonaws.com"]
     }
   }
 }
@@ -846,8 +848,10 @@ resource "aws_lambda_function" "audit_logger" {
 
   environment {
     variables = {
-      REGION      = local.region
-      AUDIT_TABLE = aws_dynamodb_table.prompt_audit.name
+      REGION            = local.region
+      AUDIT_TABLE       = aws_dynamodb_table.prompt_audit.name
+      TASK_ROLE_PREFIX  = "${var.project_prefix}-task-"
+      LOCAL_ROLE_PREFIX = "${var.project_prefix}-local-user-"
     }
   }
 
@@ -868,8 +872,8 @@ resource "aws_cloudwatch_event_rule" "bedrock_audit" {
         sessionContext = {
           sessionIssuer = {
             userName = [
-              { prefix = "cc-on-bedrock-task-" },
-              { prefix = "cc-on-bedrock-local-user-" },
+              { prefix = "${var.project_prefix}-task-" },
+              { prefix = "${var.project_prefix}-local-user-" },
             ]
           }
         }
@@ -1051,7 +1055,8 @@ data "aws_iam_policy_document" "gateway_manager_policy" {
   # The governance tables (usage, limits, budgets, …) are SSE-KMS with the platform
   # CMK, whose key policy delegates to IAM: without this every DynamoDB read/write
   # fails with "KMS key access denied" (usage metering + budget enforcement silently
-  # stop). ViaService pins the grant to DynamoDB in this region.
+  # stop). The same CMK also encrypts the budget-alert SNS topic, so sns:Publish
+  # needs it too. ViaService pins the grant to DynamoDB + SNS in this region.
   statement {
     sid       = "DynamoDbCmk"
     actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
@@ -1059,7 +1064,7 @@ data "aws_iam_policy_document" "gateway_manager_policy" {
     condition {
       test     = "StringEquals"
       variable = "kms:ViaService"
-      values   = ["dynamodb.${local.region}.amazonaws.com"]
+      values   = ["dynamodb.${local.region}.amazonaws.com", "sns.${local.region}.amazonaws.com"]
     }
   }
 }

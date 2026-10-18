@@ -84,8 +84,8 @@ variable "codex_model_id" {
   default     = "global.openai.gpt-6.1-sol"
 
   validation {
-    condition     = can(regex("^(global|us|us-gov|eu|apac)\\.openai\\.gpt-[A-Za-z0-9.-]+$", var.codex_model_id))
-    error_message = "codex_model_id must be a cross-Region OpenAI GPT inference profile ID, e.g. global.openai.gpt-6.1-sol."
+    condition     = can(regex("^(global|us|eu|apac)\\.openai\\.gpt-[A-Za-z0-9.-]+$", var.codex_model_id))
+    error_message = "codex_model_id must be a cross-Region OpenAI GPT inference profile ID (prefix global|us|eu|apac), e.g. global.openai.gpt-6.1-sol."
   }
 }
 
@@ -99,18 +99,33 @@ variable "daily_budget_usd" {
   description = "Global default daily per-user USD budget (used when neither the user nor the department sets one)"
   type        = number
   default     = 50
+
+  validation {
+    condition     = var.daily_budget_usd >= 0
+    error_message = "daily_budget_usd must be >= 0."
+  }
 }
 
 variable "weekly_budget_usd" {
   description = "Global default weekly (ISO week, UTC) per-user USD budget; 0 = no global weekly cap"
   type        = number
   default     = 0
+
+  validation {
+    condition     = var.weekly_budget_usd >= 0
+    error_message = "weekly_budget_usd must be >= 0 (0 = no global cap)."
+  }
 }
 
 variable "monthly_budget_usd" {
   description = "Global default monthly (calendar month, UTC) per-user USD budget; 0 = no global monthly cap"
   type        = number
   default     = 0
+
+  validation {
+    condition     = var.monthly_budget_usd >= 0
+    error_message = "monthly_budget_usd must be >= 0 (0 = no global cap)."
+  }
 }
 
 variable "governance_only" {

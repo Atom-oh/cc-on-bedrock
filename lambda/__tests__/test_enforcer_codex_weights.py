@@ -33,12 +33,44 @@ def test_claude_weights_not_rescaled():
 def test_codex_normalized_tokens_price_proportional():
     # gpt-6.1-sol: $2/$10 per 1M → 2/15, 10/15 normalized units per token
     n = enf._normalize("gpt-6.1-sol", 1_000_000, 1_000_000)
-    assert n == Decimal(str(round(1_000_000 * 0.133 + 1_000_000 * 0.667, 4)))
+    assert n == Decimal(str(round(1_000_000 * 0.1333 + 1_000_000 * 0.6667, 4)))
     # A luna call is far cheaper than an astra call of the same size.
     assert enf._normalize("gpt-6-luna", 1000, 1000) < enf._normalize("gpt-6-astra", 1000, 1000)
 
 
-def test_gpt_5_6_sol_weighted_at_its_price_not_newer_sol():
-    # gpt-5.6-sol is $4/$20 (tracker PRICING) — must not inherit the $2/$10 Sol weight.
-    assert enf._model_family("gpt-5.6-sol") == "5.6-sol"
-    assert enf._model_family("gpt-7-sol") == "sol"
+def test_gpt_5_6_sol_uses_exact_weight_not_family():
+    # gpt-5.6-sol is $4/$20 (tracker PRICING) — family is "sol", but the exact
+    # per-model weight (0.2667) wins over the family's 0.1333.
+    assert enf._model_family("gpt-5.6-sol") == "sol"
+    assert enf._normalize("gpt-5.6-sol", 1_000_000, 0) == Decimal(str(round(1_000_000 * 0.2667, 4)))
+
+
+# Local copy of tracker list prices (USD per 1M tokens: input, output).
+_TRACKER_PRICES = {
+    "gpt-6.1-sol": (2, 10),
+    "gpt-6-astra": (10, 50),
+    "gpt-6-sol": (2, 10),
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-5.6-sol": (4, 20),
+    "gpt-5.6-terra": (2, 12),
+    "gpt-5.6-luna": (0.20, 1.20),
+    "gpt-5.5": (5, 30),
+    "gpt-5.4": (2.5, 15),
+}
+
+
+def test_model_weights_match_tracker_prices():
+    assert set(enf.MODEL_WEIGHTS) == set(_TRACKER_PRICES)
+    for model, w in enf.MODEL_WEIGHTS.items():
+        p_in, p_out = _TRACKER_PRICES[model]
+        assert w["in"] == round(p_in / 15, 4), model
+        assert w["out"] == round(p_out / 15, 4), model
+
+
+def test_luna_and_gpt_5_4_exact_weights():
+    assert enf._normalize("gpt-6-luna", 1_000_000, 1_000_000) == Decimal(
+        str(round(1_000_000 * 0.0067 + 1_000_000 * 0.0333, 4))
+    )
+    assert enf._normalize("gpt-5.4", 1_000_000, 1_000_000) == Decimal(
+        str(round(1_000_000 * 0.1667 + 1_000_000 * 1.0, 4))
+    )
