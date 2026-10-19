@@ -867,17 +867,7 @@ resource "aws_cloudwatch_event_rule" "bedrock_audit" {
       eventSource = ["bedrock.amazonaws.com"]
       # "Responses" = OpenAI Responses API on bedrock-runtime (Codex, ADR-014).
       eventName = ["InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream", "Responses"]
-      # Platform user roles only (EC2 task + Local Mode) — same scope as the usage tracker rule.
-      userIdentity = {
-        sessionContext = {
-          sessionIssuer = {
-            userName = [
-              { prefix = "${var.project_prefix}-task-" },
-              { prefix = "${var.project_prefix}-local-user-" },
-            ]
-          }
-        }
-      }
+      # Account-wide: every principal is audited (platform roles get ec2/local, others mode=other).
     }
   })
 }

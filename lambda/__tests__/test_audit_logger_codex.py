@@ -53,8 +53,20 @@ def test_claude_code_ec2_event():
     assert items[0]["client_tool"] == "claude-code"
 
 
-def test_non_platform_role_skipped():
-    assert _run(_event("Responses", {"modelId": "x"}, role="some-admin")) == []
+def test_non_platform_role_recorded_as_other():
+    ev = _event("Responses", {"modelId": "x"}, role="some-admin")
+    ev["detail"]["userIdentity"]["sessionContext"]["sessionIssuer"]["arn"] = "arn:aws:iam::1:role/some-admin"
+    items = _run(ev)
+    assert len(items) == 1 and items[0]["mode"] == "other"
+    assert items[0]["user_id"] == "arn:aws:iam::1:role/some-admin"
+
+
+def test_error_event_without_params_is_audited():
+    ev = _event("InvokeModel", None)
+    ev["detail"]["errorCode"] = "AccessDenied"
+    items = _run(ev)
+    assert len(items) == 1 and items[0]["error_code"] == "AccessDenied"
+    assert items[0]["model_id"] == "unknown"
 
 
 def test_tool_falls_back_to_model_vendor():

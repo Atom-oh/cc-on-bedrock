@@ -5,7 +5,8 @@ echo "=== Setting up Codex CLI (ADR-014: Codex on Bedrock) ==="
 
 # OpenAI Codex CLI — talks to Amazon Bedrock (bedrock-runtime Responses API) via
 # the AWS SDK credential chain; no OpenAI account or API key is used.
-npm install -g @openai/codex || {
+# Pinned (root install): keep in sync with shared/nextjs-app/src/lib/codex-model.ts.
+npm install -g "@openai/codex@${CODEX_CLI_VERSION:-0.163.0}" || {
   echo "WARN: Codex CLI install failed. It is retried on every boot by cc-cli-update.service."
 }
 

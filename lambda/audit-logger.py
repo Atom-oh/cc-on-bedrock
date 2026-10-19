@@ -11,7 +11,8 @@ Stores one audit record per Bedrock inference call in DynamoDB (cc-prompt-audit)
 
 ADR-014: Codex on bedrock-runtime emits a `Responses` event (with modelId) plus a
 shadow `InvokeModelWithResponseStream` event whose requestParameters is null.
-The shadow is skipped so each Codex turn is audited once.
+The shadow is skipped so each Codex turn is audited once. Error events are always
+recorded, and non-platform principals are recorded with mode='other' (account-wide audit).
 """
 import os
 from datetime import datetime
@@ -69,14 +70,19 @@ def handler(event, context):
         return {'statusCode': 200, 'body': 'Skipped: not a Bedrock invocation'}
 
     request_params = detail.get('requestParameters')
-    if not isinstance(request_params, dict) or not request_params:
-        # Error event or the Responses API's shadow stream event — no model to audit.
-        return {'statusCode': 200, 'body': f'Skipped: no requestParameters in {event_name}'}
+    error_code = detail.get('errorCode') or ''
+    if (not isinstance(request_params, dict) or not request_params) and not error_code:
+        # Only the Responses API's shadow stream event (no params, no error) is skipped —
+        # error events are always audited (e.g. AccessDenied from a budget deny).
+        return {'statusCode': 200, 'body': f'Skipped: shadow {event_name} without requestParameters'}
+    request_params = request_params if isinstance(request_params, dict) else {}
 
-    issuer = ((detail.get('userIdentity') or {}).get('sessionContext') or {}).get('sessionIssuer') or {}
+    identity = detail.get('userIdentity') or {}
+    issuer = (identity.get('sessionContext') or {}).get('sessionIssuer') or {}
     user_id, mode = user_from_role(issuer.get('userName', ''))
     if user_id is None:
-        return {'statusCode': 200, 'body': 'Skipped: not a cc-on-bedrock user role'}
+        # Non-platform principal (admin, CI, other workloads): still audited, keyed by ARN.
+        user_id, mode = (issuer.get('arn') or identity.get('arn') or 'unknown'), 'other'
 
     model_id = request_params.get('modelId', 'unknown')
     user_agent = detail.get('userAgent', '') or ''
@@ -97,6 +103,8 @@ def handler(event, context):
         'source_ip': detail.get('sourceIPAddress', ''),
         'aws_region': detail.get('awsRegion', ''),
     }
+    if error_code:
+        audit_record['error_code'] = error_code
     inference_region = (detail.get('additionalEventData') or {}).get('inferenceRegion')
     if inference_region:
         audit_record['inference_region'] = inference_region

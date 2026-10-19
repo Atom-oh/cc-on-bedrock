@@ -129,3 +129,28 @@ def test_handler_blocks_on_weekly_and_releases_others():
     removed = {c.args[0] for c in remove.call_args_list}
     assert "b@x.com" in removed and "a@x.com" not in removed
     assert written["a@x.com"]["evaluation"]["exceeded"] == ["weekly"]
+
+
+def test_truncated_scan_keeps_existing_denies():
+    spend = {"b@x.com": {"daily": 1.0, "weekly": 1.0, "monthly": 1.0, "cost": 1.0, "department": "eng"}}
+
+    def fake_usage(*a, **k):
+        bc._usage_scan_truncated = True
+        return spend
+
+    with mock.patch.object(bc, "_load_valid_user_keys", return_value=set()), \
+            mock.patch.object(bc, "get_user_period_usage", side_effect=fake_usage), \
+            mock.patch.object(bc, "get_user_budgets", return_value={"b@x.com": {}}), \
+            mock.patch.object(bc, "get_department_budgets", return_value={}), \
+            mock.patch.object(bc, "get_monthly_usage_by_department", return_value={}), \
+            mock.patch.object(bc, "write_current_spend"), \
+            mock.patch.object(bc, "attach_deny_policy", return_value=True), \
+            mock.patch.object(bc, "remove_deny_policy", return_value=True) as remove, \
+            mock.patch.object(bc, "set_cognito_budget_flag"), \
+            mock.patch.object(bc, "check_department_budgets", return_value=([], [])), \
+            mock.patch.object(bc, "remove_dept_deny_policy", return_value=False), \
+            mock.patch.object(bc, "check_token_limits_backup", return_value={}), \
+            mock.patch.object(bc, "SNS_TOPIC_ARN", ""):
+        bc.handler({}, None)
+    remove.assert_not_called()
+    bc._usage_scan_truncated = False

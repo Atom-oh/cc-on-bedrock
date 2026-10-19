@@ -62,6 +62,11 @@ cognito_client = boto3.client("cognito-idp")
 sns_client = boto3.client("sns")
 
 
+# Set by get_user_period_usage when the scan stops at MAX_SCAN_PAGES; the handler then
+# keeps existing denies instead of releasing them on incomplete totals (fail closed).
+_usage_scan_truncated = False
+
+
 def period_bounds(now: datetime | None = None) -> dict:
     """UTC period windows as {period: (start_date_str, next_reset_datetime)}.
     Usage rows are keyed `{YYYY-MM-DD}#{model}` by the invocation's UTC date."""
@@ -88,6 +93,8 @@ def get_user_period_usage(now: datetime | None = None) -> dict:
     Returns {user: {"daily": $, "weekly": $, "monthly": $, "cost": today $, "department": str}}.
     `cost` mirrors the legacy today-only field used by callers/logs.
     """
+    global _usage_scan_truncated
+    _usage_scan_truncated = False
     bounds = period_bounds(now)
     today = bounds["daily"][0]
     scan_from = min(bounds["weekly"][0], bounds["monthly"][0])
@@ -134,7 +141,9 @@ def get_user_period_usage(now: datetime | None = None) -> dict:
         if not last_key:
             break
         if pages >= MAX_SCAN_PAGES:
-            print("[BUDGET] usage scan truncated at MAX_SCAN_PAGES — weekly/monthly totals may be under-counted")
+            _usage_scan_truncated = True
+            print("[BUDGET] usage scan truncated at MAX_SCAN_PAGES — totals may be under-counted; "
+                  "existing denies are kept (fail closed)")
             break
     for entry in user_spend.values():
         entry.pop("_dept_date", None)
@@ -985,6 +994,10 @@ def handler(event, context):
     # Fine for dozens of users; for very large fleets, gate on a `denied` marker.
     over_budget_users = {o["user"] for o in over_budget}
     release_candidates = all_known_users | set(user_budgets.keys())
+    if _usage_scan_truncated:
+        # Incomplete totals must never lift a deny (fail closed).
+        print("[BUDGET] skipping deny release this run: usage scan was truncated")
+        release_candidates = set()
     for user in release_candidates:
         if user not in over_budget_users:
             # Deny-deadlock fix (PR #68 review): a denied/idle user isn't in the usage scans, so

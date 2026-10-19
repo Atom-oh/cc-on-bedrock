@@ -93,7 +93,7 @@ per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is no
 8. **Audit.** `audit-logger` accepts `Responses`, skips the shadow event, resolves Local
    Mode roles (previously `unknown`), records `client_tool` from the CloudTrail userAgent
    (vendor fallback), and keys rows `{eventTime}#{eventID}` so same-second calls no longer
-   overwrite each other. Its EventBridge rule is scoped to platform roles. The Security
+   overwrite each other. Audit stays account-wide: non-platform principals are recorded with `mode=other`, and error events are kept with `error_code`. The Security
    page tags Bedrock audit rows Claude Code / Codex with the model.
 
 ## Consequences

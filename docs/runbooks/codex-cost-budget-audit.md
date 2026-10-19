@@ -106,9 +106,11 @@ cc-bedrock-local status     # deny active / reason / reset_at
   `Responses` (userAgent `codex_exec/…` or `codex_cli_rs/…`, `requestParameters.modelId`,
   `additionalEventData.inferenceRegion`) plus a shadow `InvokeModelWithResponseStream`
   whose `requestParameters` is empty.
-- **`cc-prompt-audit` (DynamoDB):** one row per call by a platform role
-  (`cc-on-bedrock-task-*`, `cc-on-bedrock-local-user-*`): `user_id` (subdomain),
-  `timestamp` (`{eventTime}#{eventID}`), `mode` (ec2|local), `client_tool`
+- **`cc-prompt-audit` (DynamoDB):** one row per Bedrock inference call in the account.
+  Platform roles (`cc-on-bedrock-task-*`, `cc-on-bedrock-local-user-*`) get `user_id`
+  (subdomain) and `mode` ec2|local; any other principal gets `user_id` = its role/user ARN
+  and `mode` other. Error events (e.g. `AccessDenied` from a budget deny) are kept with
+  `error_code`. Fields: `timestamp` (`{eventTime}#{eventID}`), `client_tool`
   (claude-code|codex|other), `event_name`, `model_id`, `user_agent`, `source_ip`,
   `inference_region`. Shadow events are skipped. **Prompt text is never stored**
   (invocation logging is metadata-only too).
