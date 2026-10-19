@@ -65,7 +65,9 @@ graph LR
    `client_tool` from the userAgent.
 5. **Shared credential model.** EC2 and Local attribute usage through the **same Application Inference
    Profile**; they do **not** share one literal IAM role (share policy shape, permission boundary,
-   tags, inference-profile attribution).
+   tags, inference-profile attribution). Exception: Codex (ADR-014) cannot use application
+   inference profiles (the Responses API rejects them), so Codex usage is attributed by the
+   per-user role identity in the invocation log.
 6. **DevEnv compute & storage.** Per-user EC2; OS = **Ubuntu** or **Amazon Linux 2023**. **2-volume
    model (ADR-002):** ephemeral OS root EBS (`DeleteOnTermination=true`, replaceable via new AMI) +
    **persistent data EBS** for `/home/coder` (GP3, `DeleteOnTermination=false`, subdomain-tagged,
@@ -74,7 +76,9 @@ graph LR
    a permission boundary authored in Terraform (boundary X = AllowInAccount; the DenyEscalation
    63-action floor's full TF port is a **follow-up** tracked by ADR-007 — not yet complete).
 8. **Budget enforcement.** Per-department and per-user budgets/limits ($ + normalized token);
-   **EventBridge** drives IAM deny-policy updates. Claude Code and Codex spend count against the
+   **EventBridge** drives IAM deny-policy updates. Per-user USD budgets are three independent
+   caps — daily / weekly / monthly (UTC windows; token limits use KST) — and any one exceeded
+   blocks (ADR-008 amendment 2026-10-18). Claude Code and Codex spend count against the
    same budgets (no per-tool budget); the deny covers the Responses API.
 9. **Path/port routing.** code-server reached by path (`?folder=`), stays on port **8080** (reserved);
    extra user ports mapped path→port via nginx. Custom ports must not use 8080/well-known.

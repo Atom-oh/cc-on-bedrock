@@ -118,7 +118,7 @@ resource "aws_dynamodb_table" "dlp_domain_lists" {
   tags = { Name = "cc-dlp-domain-lists" }
 }
 
-# ADR-014: CLI bearer tokens (issued by Dashboard, verified by /api/local/credentials)
+# ADR-006 (legacy ADR-014): CLI bearer tokens (issued by Dashboard, verified by /api/local/credentials)
 resource "aws_dynamodb_table" "cli_tokens" {
   name         = "${var.project_prefix}-cli-tokens"
   billing_mode = "PAY_PER_REQUEST"

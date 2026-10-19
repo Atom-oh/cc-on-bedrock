@@ -1,5 +1,5 @@
 """
-Limit Reset Lambda — Local Governance Mode (ADR-014, ADR-015)
+Limit Reset Lambda — Local Governance Mode (ADR-006 (legacy ADR-014), ADR-015)
 
 Triggered by EventBridge cron at KST period boundaries:
   daily   : 15:00 UTC every day      ( == 00:00 KST next day )

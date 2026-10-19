@@ -231,6 +231,9 @@ export async function getUsageRecords(params?: {
   userId?: string;
   department?: string;
 }): Promise<UsageRecord[]> {
+  // An explicitly empty user key never means "all users" (that would leak every user's
+  // usage to a caller whose scoping produced ""). Admin-wide reads pass undefined.
+  if (params && params.userId !== undefined && params.userId.trim() === "") return [];
   // When userId is known, use Query (single partition) instead of Scan
   if (params?.userId) {
     const keyParts = ["PK = :pk"];

@@ -86,8 +86,10 @@ fields identity.arn as who, modelId, input.inputTokenCount as inTok, output.outp
 - **User USD caps (ADR-008 amendment 2026-10-18):** set daily, weekly and monthly caps
   per user (e.g. $50 / $100 / $200) or as department per-user defaults. Exceeding **any
   one** blocks; the block lifts only when every period is back under its cap. Windows are
-  UTC: day, ISO week (Monday 00:00 UTC), calendar month. 0 / empty = inherit (user) or
-  no cap (dept/global). The Budgets → Users table shows `spend / cap` per period and
+  UTC: day, ISO week (Monday 00:00 UTC), calendar month — the normalized-token limits
+  (`limit-reset`) roll over on KST, 9 h apart. 0 / empty on a user falls back to the dept
+  per-user default, then to the global env value; only when all three are 0 is there no cap
+  for that period (the global daily default is $50, so "no daily cap" needs `DAILY_BUDGET_USD=0`). The Budgets → Users table shows `spend / cap` per period and
   `BLOCKED (period) until …`; `cc-bedrock-local status` and the Local page show the same.
 - Claude token weights keep their legacy units (Opus 1/5, Sonnet 0.2/1, Haiku
   0.053/0.267) so the ADR-014 price correction does not change what existing token

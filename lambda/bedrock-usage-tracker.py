@@ -32,7 +32,7 @@ _RESERVED_USERNAMES = {"execution", "boundary", "runner", "service", "system", "
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task-"
-LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # Local Governance Mode (ADR-014)
+LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # Local Governance Mode (ADR-006 (legacy ADR-014))
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
@@ -80,8 +80,8 @@ PRICING = {
     "gpt-5.6-sol": {"input": 4.0, "output": 20.0, "cache_read": 0.40, "cache_write": 5.0},
     "gpt-5.6-terra": {"input": 2.0, "output": 12.0, "cache_read": 0.20, "cache_write": 2.5},
     "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cache_read": 0.02, "cache_write": 0.25},
-    "gpt-5.5": {"input": 5.0, "output": 30.0, "cache_read": 0.50, "cache_write": 0.0},
-    "gpt-5.4": {"input": 2.5, "output": 15.0, "cache_read": 0.25, "cache_write": 0.0},
+    "gpt-5.5": {"input": 5.0, "output": 30.0, "cache_read": 0.50},  # card lists no cache-write rate → 1.25x fallback
+    "gpt-5.4": {"input": 2.5, "output": 15.0, "cache_read": 0.25},
     "default": {"input": 3.0, "output": 15.0},
 }
 
@@ -295,7 +295,7 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
         print(f"Resolved {role_name} → email={email} subdomain={subdomain}({dept})")
         return email, subdomain, dept
 
-    # Local Governance Mode (ADR-014): role name is cc-on-bedrock-local-user-{subdomain}.
+    # Local Governance Mode (ADR-006 (legacy ADR-014)): role name is cc-on-bedrock-local-user-{subdomain}.
     # email/subdomain/department come from role tags set by sts-issuer.py.
     if role_name.startswith(LOCAL_ROLE_PREFIX):
         (email_tag, sub_tag, dept_tag), cacheable = _resolve_user_dept_from_role_tags(role_name)

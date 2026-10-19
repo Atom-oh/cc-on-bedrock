@@ -1,5 +1,5 @@
 """
-STS Issuer Lambda — Local Governance Mode (ADR-014)
+STS Issuer Lambda — Local Governance Mode (ADR-006 (legacy ADR-014))
 
 Invoked by the Dashboard (`/api/local/credentials`) after NextAuth has authenticated
 the user. Authentication boundary is the Lambda Function URL IAM auth: only the
@@ -14,7 +14,7 @@ Behavior:
      - Inline policy: Bedrock InvokeModel on allowed models + inference profile
      - Tags: username/department/project/mode=local (ADR-011 cost allocation)
   3. AssumeRole with DurationSeconds=3600 (1h) — this Lambda assumes another role
-     (role-chaining), which AWS hard-caps at 1h, so the ADR-014 8h intent is not
+     (role-chaining), which AWS hard-caps at 1h, so the ADR-006 (legacy ADR-014) 8h intent is not
      attainable. In-session continuity is the CLI's job (ADR-029): the AWS SDK
      profile uses `credential_process = cc-bedrock-local.sh credential-process`,
      which the SDK re-invokes before each Expiration — sessions of any length

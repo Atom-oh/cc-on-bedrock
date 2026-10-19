@@ -1,5 +1,5 @@
 """
-Shared role-factory helpers for Local Governance Mode (ADR-014).
+Shared role-factory helpers for Local Governance Mode (ADR-006 (legacy ADR-014)).
 
 Used by:
   - sts-issuer.py        — lazy fallback when a role is missing at AssumeRole time

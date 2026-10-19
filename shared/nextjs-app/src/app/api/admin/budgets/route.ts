@@ -16,7 +16,7 @@ const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budg
 const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 
-// USD → normalized-token conversion for syncing $ budgets into the ADR-014/015
+// USD → normalized-token conversion for syncing $ budgets into the ADR-006(legacy 014)/015
 // cc-on-bedrock-limits table. Default 66667 ≈ 1_000_000 / $15 per 1M output tokens
 // (Sonnet output reference). This ratio holds approximately across Claude model
 // families because token-limit-enforcer's normalize-weights are calibrated to be
@@ -41,7 +41,7 @@ export interface DepartmentBudget {
 export interface UserBudget {
   userId: string;
   department: string;
-  dailyTokenLimit: number;       // legacy: token-based limit, kept for backward compat (ADR-014 normalized tokens)
+  dailyTokenLimit: number;       // legacy: token-based limit, kept for backward compat (ADR-006 (legacy ADR-014) normalized tokens)
   // ADR-008: explicit per-user USD caps per period; 0 = inherit (dept per-user default → global env).
   // Exceeding ANY one period blocks the user until every period is back under its cap.
   dailyBudget: number;
@@ -259,7 +259,7 @@ export async function PUT(req: NextRequest) {
         ExpressionAttributeValues: exprValues,
       }));
 
-      // ADR-014/015: mirror $ monthlyBudget into cc-on-bedrock-limits LIMIT#monthly so
+      // ADR-006(legacy 014)/015: mirror $ monthlyBudget into cc-on-bedrock-limits LIMIT#monthly so
       // the Stream-driven token-limit-enforcer (near-real-time) can enforce it on the
       // Local Governance role. Without this, the only enforcement path is budget-check
       // (5-min cron) which used to silently skip Local-only users.

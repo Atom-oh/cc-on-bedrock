@@ -1,5 +1,5 @@
 ###############################################################################
-# Local Governance Module (ADR-014, ADR-015, ADR-021)
+# Local Governance Module (ADR-006 (legacy ADR-014), ADR-015, ADR-021)
 # Resources:
 #   - cc-on-bedrock-limits DynamoDB table (per-user / per-dept normalized-token state)
 #   - STS Issuer Lambda + Function URL (IAM auth)

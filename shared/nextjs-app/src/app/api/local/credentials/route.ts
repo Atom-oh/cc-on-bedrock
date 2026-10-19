@@ -9,7 +9,7 @@ import {
 } from "@aws-sdk/client-cognito-identity-provider";
 import { createHash } from "crypto";
 
-// ADR-014: Local Governance Mode credentials API.
+// ADR-006 (legacy ADR-014): Local Governance Mode credentials API.
 //
 // Two auth paths converge here:
 //   1. NextAuth session cookie (browser /local page) — preferred when human is at the keyboard.
@@ -22,7 +22,7 @@ import { createHash } from "crypto";
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const STS_ISSUER_FUNCTION = process.env.STS_ISSUER_FUNCTION_NAME ?? "cc-on-bedrock-sts-issuer";
 const CLI_TOKENS_TABLE = process.env.CLI_TOKENS_TABLE ?? "cc-on-bedrock-cli-tokens";
-// ADR-014: only access tokens issued by the cc-bedrock-local CLI public client
+// ADR-006 (legacy ADR-014): only access tokens issued by the cc-bedrock-local CLI public client
 // are accepted on the JWT Bearer path. Any other client in the same user pool
 // (admin tools, future federated apps, misconfigured public clients) MUST NOT
 // be able to call /api/local/credentials via Cognito access tokens.

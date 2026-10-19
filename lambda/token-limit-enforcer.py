@@ -1,5 +1,5 @@
 """
-Token Limit Enforcer Lambda — Local Governance Mode (ADR-014, ADR-015)
+Token Limit Enforcer Lambda — Local Governance Mode (ADR-006 (legacy ADR-014), ADR-015)
 
 Consumes the `cc-on-bedrock-usage` DynamoDB Stream (NEW_AND_OLD_IMAGES).
 For each USER# update:

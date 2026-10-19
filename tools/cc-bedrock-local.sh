@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cc-bedrock-local — Local Governance Mode CLI (ADR-014)
+# cc-bedrock-local — Local Governance Mode CLI (ADR-006 (legacy ADR-014))
 #
 # Subcommands:
 #   login         password prompt → Cognito USER_PASSWORD_AUTH → STS issue
@@ -671,7 +671,7 @@ EOF
 
 do_usage() {
   cat <<EOF
-cc-bedrock-local — Local Governance Mode CLI (ADR-014)
+cc-bedrock-local — Local Governance Mode CLI (ADR-006 (legacy ADR-014))
 
 Subcommands:
   login                       prompt password (email from config) → login + STS issue

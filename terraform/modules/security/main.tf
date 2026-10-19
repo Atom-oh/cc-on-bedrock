@@ -346,7 +346,7 @@ resource "aws_ssm_parameter" "nextauth_secret" {
 
 # Bedrock policy document (shared)
 # ADR-021: wildcard Claude family — covers anthropic./global./us./apac./eu./future region prefixes.
-# Per-model spend control is delegated to runtime enforcers (ADR-014 token limits, ADR-015 dollar budget).
+# Per-model spend control is delegated to runtime enforcers (ADR-006 (legacy ADR-014) token limits, ADR-015 dollar budget).
 data "aws_iam_policy_document" "bedrock" {
   statement {
     actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"]

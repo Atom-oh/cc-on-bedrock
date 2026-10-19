@@ -100,7 +100,7 @@ export default function LocalModePage() {
       {/* Header */}
       <div className="mb-8 pb-6 border-b border-white/5">
         <div className="flex items-center gap-2 mb-2">
-          <Tag color="cyan">ADR-014</Tag>
+          <Tag color="cyan">ADR-006 (legacy ADR-014)</Tag>
           <Tag color="emerald">{ko ? "추천" : "Recommended"}</Tag>
           <Tag color="amber">{ko ? "비용 0" : "Zero infra"}</Tag>
         </div>
@@ -512,8 +512,8 @@ POST   /api/admin/limits/reset     — force-reset + detach Deny policy`}
           </a>
         </li>
         <li>
-          <a href="https://github.com/Atom-oh/cc-on-bedrock/blob/main/docs/decisions/ADR-014-local-governance-mode.md" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">
-            ADR-014 — Local Governance Mode
+          <a href="https://github.com/Atom-oh/cc-on-bedrock/blob/main/docs/decisions/ADR-006 (legacy ADR-014)-local-governance-mode.md" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">
+            ADR-006 (legacy ADR-014) — Local Governance Mode
           </a>
         </li>
         <li>
@@ -534,7 +534,7 @@ POST   /api/admin/limits/reset     — force-reset + detach Deny policy`}
       </ul>
 
       <div className="mt-12 pt-6 border-t border-white/5 flex justify-between text-xs text-gray-500">
-        <span>{ko ? "이 문서는 ADR-014/015/021/022 기반 구현을 반영합니다" : "This page reflects ADR-014/015/021/022 implementations"}</span>
+        <span>{ko ? "이 문서는 ADR-006(legacy 014)/015/021/022 기반 구현을 반영합니다" : "This page reflects ADR-006(legacy 014)/015/021/022 implementations"}</span>
         <span>cc-on-bedrock · Local Governance Mode</span>
       </div>
     </div>

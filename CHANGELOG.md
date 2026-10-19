@@ -4,6 +4,9 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ## [Unreleased]
 
+### Review pipeline (ADR-013 amendment, #125)
+- AI PR review simplified to the lens panel → chair `VERDICT` path (`ROLE_REVIEW=0`, 12,000-line cap); chair runs with no tools / no MCP; non-zero panel cells are not credited. ADR Compliance CI (`adr-verify-pr.yml` / `adr-verify-main.yml`) removed; ADR `## Verification` blocks are documentation-only.
+
 ### Codex on Bedrock (ADR-014)
 - **OpenAI Codex CLI on Bedrock** — Codex runs through the `amazon-bedrock-runtime` provider (bedrock-runtime Responses API, `global.openai.*` profiles) with the same per-user role credentials as Claude Code. EC2 DevEnv installs `@openai/codex` (AMI `setup-codex.sh`, boot-time refresh, `postStartSetup` heal) and writes governed defaults to `/etc/codex/config.toml`; Local Mode adds `cc-bedrock-local codex` and the installer's `ccx` function, pinning provider/region as session overrides. New Terraform variable `codex_model_id` (default `global.openai.gpt-6.1-sol`).
 - **IAM** — per-user Bedrock allow-lists and the task permission boundary add `*openai.gpt-*` foundation-model/inference-profile ARNs and `project/default` (Responses API default project). No `bedrock-mantle:*`. The EC2 restart path now re-upserts the role inline policy so existing roles pick up policy changes.

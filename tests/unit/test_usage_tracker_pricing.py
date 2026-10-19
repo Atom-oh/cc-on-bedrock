@@ -96,3 +96,17 @@ def test_unknown_sol_tier_matches_enforcer_sol_weight():
     m = _load()
     assert m.get_model_pricing("gpt-7-sol") == m.FAMILY_PRICING["sol"]
     assert m.FAMILY_PRICING["sol"]["input"] == 2.0 and m.FAMILY_PRICING["sol"]["output"] == 10.0
+
+
+def test_claude_5_5_cache_read_rates_pinned():
+    # Price List API (APN2 *_global_standard, 2026-10-18): Opus 5.5 cache read $0.20 on $4.00
+    # input and Sonnet 5.5 $0.10 on $2.00 (0.05x) — intentionally not the 0.1x Anthropic default.
+    m = _load()
+    assert m.get_model_pricing("claude-opus-5-5")["cache_read"] == 0.20
+    assert m.get_model_pricing("claude-sonnet-5-5")["cache_read"] == 0.10
+
+
+def test_gpt_5_5_cache_write_falls_back_not_free():
+    m = _load()
+    assert "cache_write" not in m.PRICING["gpt-5.5"]
+    assert m.estimate_cost("gpt-5.5", 0, 0, cache_write_tokens=1_000_000) == 5.0 * 1.25

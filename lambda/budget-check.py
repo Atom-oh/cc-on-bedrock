@@ -25,7 +25,7 @@ from decimal import Decimal
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 DEPT_BUDGETS_TABLE = os.environ.get("DEPT_BUDGETS_TABLE", "cc-department-budgets")
 USER_BUDGETS_TABLE = os.environ.get("USER_BUDGETS_TABLE", "cc-user-budgets")
-LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")  # ADR-014
+LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")  # ADR-006 (legacy ADR-014)
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
 DAILY_BUDGET = float(os.environ.get("DAILY_BUDGET_USD", "50"))
 # 0 = no global cap for that period (only user / dept per-user values apply).
@@ -36,7 +36,7 @@ _GLOBAL_BUDGETS = {"daily": DAILY_BUDGET, "weekly": WEEKLY_BUDGET, "monthly": MO
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task"
-LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # ADR-014 Local Governance Mode
+LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # ADR-006 (legacy ADR-014) Local Governance Mode
 MAX_SCAN_PAGES = 100
 # ADR-015 canonical policy names (attach path). Legacy names below are still
 # detached on every attach/remove so roles denied under the old names get
@@ -309,6 +309,8 @@ def get_user_budgets():
                         "dailyBudget": float(item.get("dailyBudget", 0) or 0),
                         "weeklyBudget": float(item.get("weeklyBudget", 0) or 0),
                         "monthlyBudget": float(item.get("monthlyBudget", 0) or 0),
+                        "department": item.get("department", "default"),
+                        "blocked": bool(item.get("budgetExceeded")),
                     }
             last_key = result.get("LastEvaluatedKey")
             pages += 1
@@ -640,7 +642,7 @@ def check_deny_exists(subdomain: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────
-# ADR-014 / ADR-015 — Local Governance Mode helpers
+# ADR-006 (legacy ADR-014) / ADR-015 — Local Governance Mode helpers
 # ──────────────────────────────────────────────────────────
 
 
@@ -944,6 +946,20 @@ def handler(event, context):
             over_budget.append({**entry, "periods": ev["exceeded"], "release_at": ev["release_at"]})
         elif ev["warned"]:
             warnings.append({**entry, "periods": ev["warned"]})
+
+    # Budgeted users with no usage in the scan window (e.g. after a period rollover) get a
+    # zero-spend evaluation written too — otherwise a stale budgetExceeded keeps rendering
+    # them as BLOCKED after the deny was released. Only rows that currently show a block
+    # are rewritten, to keep writes bounded. Skipped on a truncated scan (fail closed).
+    if not _usage_scan_truncated:
+        for user, b in user_budgets.items():
+            if user in user_spend or not b.get("blocked"):
+                continue
+            stale = {"daily": 0.0, "weekly": 0.0, "monthly": 0.0, "cost": 0.0,
+                     "department": b.get("department", "default")}
+            stale["limits"] = _effective_user_limits(user_budgets, dept_budgets, user, stale["department"])
+            stale["evaluation"] = evaluate_user_budget(stale, stale["limits"])
+            user_spend[user] = stale
 
     # Write per-period spend + evaluation to budget tables for dashboard display
     dept_monthly = get_monthly_usage_by_department()

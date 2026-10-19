@@ -491,7 +491,7 @@ export default function BudgetManagement() {
             </>
           )}
 
-          {/* Normalized Token Limits (Local Governance Mode, ADR-014) */}
+          {/* Normalized Token Limits (Local Governance Mode, ADR-006 (legacy ADR-014)) */}
           {activeSection === "limits" && <LimitManagement />}
         </div>
       </div>
@@ -552,7 +552,7 @@ export default function BudgetManagement() {
                   {showAdvancedTokenLimit && (
                     <div className="mt-2">
                       <label htmlFor="create-limit" className="block text-sm font-medium text-gray-400 mb-1">
-                        Daily Token Limit <span className="text-gray-600">(ADR-014 normalized tokens)</span>
+                        Daily Token Limit <span className="text-gray-600">(ADR-006 (legacy ADR-014) normalized tokens)</span>
                       </label>
                       <input
                         id="create-limit"
@@ -625,7 +625,7 @@ export default function BudgetManagement() {
                   {showAdvancedTokenLimit && (
                     <div className="mt-2">
                       <label htmlFor="edit-limit" className="block text-sm font-medium text-gray-400 mb-1">
-                        Daily Token Limit <span className="text-gray-600">(ADR-014 normalized tokens)</span>
+                        Daily Token Limit <span className="text-gray-600">(ADR-006 (legacy ADR-014) normalized tokens)</span>
                       </label>
                       <input
                         id="edit-limit"

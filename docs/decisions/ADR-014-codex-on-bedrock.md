@@ -12,8 +12,9 @@ builds_on: ADR-005
 ## Status
 
 Accepted, 2026-10-18. Lifts the BASELINE §2 `DEFERRED · Codex on Bedrock` entry.
-Static verification below; a live call through a provisioned per-user role (the
-narrowed ARN set) is a post-deploy check (see Runtime).
+Runtime-verified 2026-10-18 through a provisioned per-user Local role
+(`cc-on-bedrock-local-user-demo`): Codex + Claude Code usage rows, audit rows, budget deny
+attach → explicit deny → release, and the `project/default` narrowing. Static checks below.
 
 ## Context
 

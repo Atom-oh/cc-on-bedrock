@@ -12,7 +12,7 @@
 
 ## 검증 파이프라인
 
-> **Removed 2026-10-18 (ADR-013 amendment, owner decision):** the ADR Compliance CI (`adr-verify-pr.yml` / `adr-verify-main.yml`) no longer runs. `## Verification` blocks remain as documentation; check them locally with `.adr-verify/` (`python -m adrverify.tier1_static`). The description below is the historical pipeline.
+> **Removed 2026-10-18 (owner decision; recorded in ADR-013 "Amendment 2026-10-18" and the BASELINE §2 `REMOVED · ADR Compliance CI` row, merged in #125):** the ADR Compliance CI (`adr-verify-pr.yml` / `adr-verify-main.yml`) no longer runs. `## Verification` blocks remain as documentation; check them locally with `.adr-verify/` (`python -m adrverify.tier1_static`). The description below is the historical pipeline.
 
 (Historical) 각 PR push마다 `.github/workflows/adr-verify-pr.yml`이 실행되어:
 

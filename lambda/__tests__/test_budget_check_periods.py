@@ -154,3 +154,24 @@ def test_truncated_scan_keeps_existing_denies():
         bc.handler({}, None)
     remove.assert_not_called()
     bc._usage_scan_truncated = False
+
+
+def test_stale_block_cleared_for_user_without_usage():
+    written = {}
+    with mock.patch.object(bc, "_load_valid_user_keys", return_value=set()), \
+            mock.patch.object(bc, "get_user_period_usage", return_value={}), \
+            mock.patch.object(bc, "get_user_budgets", return_value={"z@x.com": {"blocked": True, "department": "eng"}}), \
+            mock.patch.object(bc, "get_department_budgets", return_value={}), \
+            mock.patch.object(bc, "get_monthly_usage_by_department", return_value={}), \
+            mock.patch.object(bc, "write_current_spend", side_effect=lambda u, d: written.update(u)), \
+            mock.patch.object(bc, "attach_deny_policy", return_value=True), \
+            mock.patch.object(bc, "remove_deny_policy", return_value=True), \
+            mock.patch.object(bc, "set_cognito_budget_flag"), \
+            mock.patch.object(bc, "check_department_budgets", return_value=([], [])), \
+            mock.patch.object(bc, "remove_dept_deny_policy", return_value=False), \
+            mock.patch.object(bc, "check_token_limits_backup", return_value={}), \
+            mock.patch.object(bc, "SNS_TOPIC_ARN", ""):
+        bc._usage_scan_truncated = False
+        bc.handler({}, None)
+    assert written["z@x.com"]["evaluation"]["exceeded"] == []
+    assert written["z@x.com"]["evaluation"]["release_at"] == ""

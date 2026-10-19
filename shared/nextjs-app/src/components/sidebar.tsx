@@ -35,14 +35,14 @@ interface NavItem {
   localModeOnly?: boolean;
 }
 
-// ADR-014: Local Governance Mode menu items only render when the env flag is set.
+// ADR-006 (legacy ADR-014): Local Governance Mode menu items only render when the env flag is set.
 const LOCAL_MODE_ENABLED =
   (process.env.NEXT_PUBLIC_LOCAL_MODE_ENABLED ?? "").toLowerCase() === "true";
 
 const navItems: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home },
   { href: "/user", labelKey: "nav.myEnv", icon: Terminal, showForAll: true },
-  // ADR-014: Local Mode is now merged into the /user Environment tab; no separate sidebar entry.
+  // ADR-006 (legacy ADR-014): Local Mode is now merged into the /user Environment tab; no separate sidebar entry.
   { href: "/dept", labelKey: "nav.department", icon: Building2, deptManagerOnly: true },
   { href: "/ai", labelKey: "nav.ai", icon: Sparkles },
   { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },

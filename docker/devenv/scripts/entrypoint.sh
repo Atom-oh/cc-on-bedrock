@@ -81,7 +81,7 @@ mkdir -p "$USER_CONFIG_DIR"
 mkdir -p "$EFS_USER_DIR/.bashrc.d"
 mkdir -p "$EFS_USER_DIR/.claude"
 mkdir -p "$EFS_USER_DIR/.kiro/settings"
-mkdir -p "$EFS_USER_DIR/.codex"  # Codex CLI state (ADR-014)
+install -d -m 700 "$EFS_USER_DIR/.codex"  # Codex CLI state (ADR-014): sessions/auth, owner-only
 
 # Ensure correct ownership (ignore errors: AP enforces uid/gid, symlinks may be root-owned)
 chown -R coder:coder "$EFS_USER_DIR" 2>/dev/null || true

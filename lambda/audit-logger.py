@@ -79,7 +79,7 @@ def handler(event, context):
 
     identity = detail.get('userIdentity') or {}
     issuer = (identity.get('sessionContext') or {}).get('sessionIssuer') or {}
-    user_id, mode = user_from_role(issuer.get('userName', ''))
+    user_id, mode = user_from_role(issuer.get('userName') or '')
     if user_id is None:
         # Non-platform principal (admin, CI, other workloads): still audited, keyed by ARN.
         user_id, mode = (issuer.get('arn') or identity.get('arn') or 'unknown'), 'other'

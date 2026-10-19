@@ -73,3 +73,10 @@ def test_tool_falls_back_to_model_vendor():
     assert audit.client_tool("", "global.openai.gpt-6-luna") == "codex"
     assert audit.client_tool("aws-sdk-go/1.0", "global.anthropic.claude-sonnet-5") == "claude-code"
     assert audit.client_tool("", "amazon.titan-embed-text-v2:0") == "other"
+
+
+def test_null_user_name_does_not_crash():
+    ev = _event("Responses", {"modelId": "global.openai.gpt-6.1-sol"})
+    ev["detail"]["userIdentity"]["sessionContext"]["sessionIssuer"]["userName"] = None
+    items = _run(ev)
+    assert items[0]["mode"] == "other"

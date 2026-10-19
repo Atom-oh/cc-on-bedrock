@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { DynamoDBClient, ScanCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
-// ADR-014: returns the current normalized-token usage and limits for the logged-in user
+// ADR-006 (legacy ADR-014): returns the current normalized-token usage and limits for the logged-in user
 // across daily / weekly / monthly periods, plus department aggregates.
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
