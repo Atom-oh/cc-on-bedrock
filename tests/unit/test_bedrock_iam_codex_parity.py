@@ -43,3 +43,10 @@ def test_dashboard_role_stays_claude_only():
     i = tf.index('"BedrockAccess"')
     block = tf[i:tf.index("statement", i)]
     assert "openai.gpt" not in block
+
+
+def test_no_bedrock_mantle_grant_anywhere():
+    # ADR-014: Codex stays on bedrock-runtime; a bedrock-mantle grant would escape
+    # invocation-log metering, management-event audit and the IAM deny.
+    hits = [rel for rel, _ in COPIES if "bedrock-mantle:" in (REPO / rel).read_text()]
+    assert not hits, f"bedrock-mantle:* must never be granted (found in {hits})"

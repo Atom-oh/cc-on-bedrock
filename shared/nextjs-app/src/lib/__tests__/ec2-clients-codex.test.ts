@@ -43,3 +43,12 @@ describe("codexCliVersion", () => {
     expect(codexCliVersion("1.2.3; rm -rf /")).toBe(DEFAULT_CODEX_CLI_VERSION);
   });
 });
+
+describe("Codex root install", () => {
+  it("runs npm with a clean environment, never the tenant npmrc", async () => {
+    const src = (await import("fs")).readFileSync(require("path").join(__dirname, "../ec2-clients.ts"), "utf8");
+    expect(src).toContain("/usr/bin/env -i HOME=/root");
+    expect(src).toContain("npm_config_userconfig=/dev/null");
+    expect(src).not.toMatch(/bash -lc '[^']*npm install -g @openai\/codex/);
+  });
+});

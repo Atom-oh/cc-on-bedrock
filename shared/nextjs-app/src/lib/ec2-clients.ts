@@ -299,6 +299,12 @@ export function codexConfigToml(region: string, rawModel: string | undefined = p
   ].join("\n");
 }
 
+// Pinned Codex CLI install run as root. `env -i` + HOME=/root + npm_config_userconfig=/dev/null
+// keeps every tenant-controlled input (~/.npmrc registry=, ~/.profile) out of the root step.
+const CODEX_ROOT_NPM =
+  `flock -w 300 /var/lock/cc-codex-npm /usr/bin/env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin ` +
+  `npm_config_userconfig=/dev/null npm install -g @openai/codex@${codexCliVersion()}`;
+
 function codexUserData(region: string): string[] {
   let toml: string;
   try {
@@ -318,7 +324,9 @@ function codexUserData(region: string): string[] {
     `mkdir -p /home/coder/.codex && chown -R coder:coder /home/coder/.codex`,
     // flock: cc-cli-update.service and postStartSetup (SSM) can both run this at boot.
     // Version is pinned (CODEX_CLI_VERSION, default 0.163.0) — root install, never @latest.
-    `command -v npm >/dev/null 2>&1 && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1 || true`,
+    // Root install with a clean environment: never read the tenant's ~/.npmrc or login
+    // profile (a user-controlled registry= would otherwise steer a root install).
+    `${CODEX_ROOT_NPM} >/dev/null 2>&1 || true`,
   ];
 }
 
@@ -670,7 +678,8 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
       // Codex is a global npm package (root-owned prefix) → `+` runs it as root.
       // Version is pinned (CODEX_CLI_VERSION, default 0.163.0).
-      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1; true'`,
+      // Root (`+`) with a clean env: no login shell, HOME=/root, no user npmrc.
+      `ExecStartPost=+/bin/sh -c '${CODEX_ROOT_NPM} >/dev/null 2>&1; true'`,
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
@@ -1206,7 +1215,8 @@ export async function restoreFromSnapshot(
       `ExecStart=/bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash; curl -fsSL https://cli.kiro.dev/install | bash'`,
       // Codex is a global npm package (root-owned prefix) → `+` runs it as root.
       // Version is pinned (CODEX_CLI_VERSION, default 0.163.0).
-      `ExecStartPost=+/bin/bash -lc 'command -v npm >/dev/null && flock -w 300 /var/lock/cc-codex-npm npm install -g @openai/codex@${codexCliVersion()} >/dev/null 2>&1; true'`,
+      // Root (`+`) with a clean env: no login shell, HOME=/root, no user npmrc.
+      `ExecStartPost=+/bin/sh -c '${CODEX_ROOT_NPM} >/dev/null 2>&1; true'`,
       // `+` prefix runs the command as root, bypassing the unit's `User=coder`.
       // Required because /usr/local/bin is root-owned and the symlink update
       // would otherwise silently fail (with `; true` swallowing the error).
