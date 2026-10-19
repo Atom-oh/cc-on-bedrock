@@ -24,10 +24,34 @@ def test_gpt_tiers_resolve_to_their_family():
     assert enf._model_family("claude-haiku-4-5") == "haiku"
 
 
-def test_claude_weights_not_rescaled():
-    # Existing admin quotas are expressed in these units — must stay stable.
-    assert enf.DEFAULT_WEIGHTS["opus"] == {"in": 1.0, "out": 5.0}
-    assert enf.DEFAULT_WEIGHTS["sonnet"] == {"in": 0.2, "out": 1.0}
+def _tracker():
+    import types, importlib.util
+    from unittest import mock as _m
+    spec = importlib.util.spec_from_file_location(
+        "tracker_for_weights", os.path.join(os.path.dirname(__file__), "..", "bedrock-usage-tracker.py"))
+    t = importlib.util.module_from_spec(spec)
+    with _m.patch("boto3.resource"), _m.patch("boto3.client"):
+        spec.loader.exec_module(t)
+    return t
+
+
+def test_all_weights_derive_from_tracker_prices():
+    # Weights = list price / $15 so the admin USD→token mirror (NORMALIZED_PER_USD=66667)
+    # agrees with the USD budget — compared against the tracker itself, not a copy.
+    t = _tracker()
+    for model, p in t.PRICING.items():
+        if model == "default":
+            continue
+        assert enf.MODEL_WEIGHTS[model] == {"in": round(p["input"] / 15, 4), "out": round(p["output"] / 15, 4)}, model
+    for fam in enf._FAMILY_ORDER:
+        p = t.FAMILY_PRICING[fam]
+        assert enf.DEFAULT_WEIGHTS[fam] == {"in": round(p["input"] / 15, 4), "out": round(p["output"] / 15, 4)}, fam
+
+
+def test_usd_mirror_matches_usd_cost():
+    # $200 of Opus 4.8 output at $25/1M = 8M tokens; mirror = 200 * 66667 ≈ 13.33M units.
+    units = enf._normalize("claude-opus-4-8", 0, 8_000_000)
+    assert abs(float(units) - 200 * 66667) / (200 * 66667) < 0.001
 
 
 def test_codex_normalized_tokens_price_proportional():
@@ -43,28 +67,6 @@ def test_gpt_5_6_sol_uses_exact_weight_not_family():
     # per-model weight (0.2667) wins over the family's 0.1333.
     assert enf._model_family("gpt-5.6-sol") == "sol"
     assert enf._normalize("gpt-5.6-sol", 1_000_000, 0) == Decimal(str(round(1_000_000 * 0.2667, 4)))
-
-
-# Local copy of tracker list prices (USD per 1M tokens: input, output).
-_TRACKER_PRICES = {
-    "gpt-6.1-sol": (2, 10),
-    "gpt-6-astra": (10, 50),
-    "gpt-6-sol": (2, 10),
-    "gpt-6-luna": (0.10, 0.50),
-    "gpt-5.6-sol": (4, 20),
-    "gpt-5.6-terra": (2, 12),
-    "gpt-5.6-luna": (0.20, 1.20),
-    "gpt-5.5": (5, 30),
-    "gpt-5.4": (2.5, 15),
-}
-
-
-def test_model_weights_match_tracker_prices():
-    assert set(enf.MODEL_WEIGHTS) == set(_TRACKER_PRICES)
-    for model, w in enf.MODEL_WEIGHTS.items():
-        p_in, p_out = _TRACKER_PRICES[model]
-        assert w["in"] == round(p_in / 15, 4), model
-        assert w["out"] == round(p_out / 15, 4), model
 
 
 def test_luna_and_gpt_5_4_exact_weights():

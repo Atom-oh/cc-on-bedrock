@@ -80,3 +80,12 @@ def test_null_user_name_does_not_crash():
     ev["detail"]["userIdentity"]["sessionContext"]["sessionIssuer"]["userName"] = None
     items = _run(ev)
     assert items[0]["mode"] == "other"
+
+
+def test_non_shadow_event_without_params_still_audited():
+    items = _run(_event("Converse", {}))
+    assert len(items) == 1 and items[0]["model_id"] == "unknown"
+
+
+def test_bare_prefix_role_is_not_platform():
+    assert audit.user_from_role("cc-on-bedrock-task-") == (None, None)

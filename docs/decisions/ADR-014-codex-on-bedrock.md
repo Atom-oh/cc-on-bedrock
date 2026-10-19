@@ -89,8 +89,10 @@ per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is no
 7. **Budgets and limits (ADR-008).** Dollar budgets use the per-model cost unchanged, so
    Codex spend counts against the same user/department budgets. The existing deny
    policies (`Resource: "*"`, `bedrock:InvokeModel*`) already block Responses calls.
-   Normalized-token weights gain GPT tiers (list price ÷ $15). **Claude weights are not
-   rescaled** — that would silently loosen admin-configured token limits.
+   All normalized-token weights (Claude and GPT) = list price ÷ $15, derived from the tracker's
+   `PRICING` / `FAMILY_PRICING`, so the USD→token mirror (`NORMALIZED_PER_USD=66667`) agrees
+   with the USD budget it mirrors. Claude weights were rescaled with the price correction;
+   production had no normalized-token `LIMIT#` rows, so no configured limit changed meaning.
 8. **Audit.** `audit-logger` accepts `Responses`, skips the shadow event, resolves Local
    Mode roles (previously `unknown`), records `client_tool` from the CloudTrail userAgent
    (vendor fallback), and keys rows `{eventTime}#{eventID}` so same-second calls no longer

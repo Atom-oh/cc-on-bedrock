@@ -37,7 +37,7 @@ records sources and the verification date). Excerpt as of 2026-10-18:
 | gpt-6.1-sol (Codex default) | 2.00 | 10.00 | 0.10 | 2.50 |
 | gpt-6-luna | 0.10 | 0.50 | 0.01 | 0.125 |
 | gpt-6-astra | 10.00 | 50.00 | 1.00 | 12.50 |
-| gpt-5.5 | 5.00 | 30.00 | 0.50 | — |
+| gpt-5.5 | 5.00 | 30.00 | 0.50 | 6.25 (1.25× fallback; card lists none) |
 
 Caveats:
 - Requests above 272K input tokens bill at long-context rates (about 2×); the dashboard
@@ -91,9 +91,9 @@ fields identity.arn as who, modelId, input.inputTokenCount as inTok, output.outp
   per-user default, then to the global env value; only when all three are 0 is there no cap
   for that period (the global daily default is $50, so "no daily cap" needs `DAILY_BUDGET_USD=0`). The Budgets → Users table shows `spend / cap` per period and
   `BLOCKED (period) until …`; `cc-bedrock-local status` and the Local page show the same.
-- Claude token weights keep their legacy units (Opus 1/5, Sonnet 0.2/1, Haiku
-  0.053/0.267) so the ADR-014 price correction does not change what existing token
-  limits mean.
+- Token weights for every model are list price ÷ $15 (e.g. Opus 4.8 0.3333/1.6667,
+  GPT-6.1 Sol 0.1333/0.6667), derived from the tracker prices, so a USD budget mirrored
+  into a monthly token limit allows the same spend on either axis.
 
 ### 2.2 User-side check
 ```bash

@@ -13,7 +13,7 @@ Current truth: `docs/decisions/BASELINE.md` + `docs/architecture.md` (SSOT).
 - `devenv-session-validator/` — CloudFront viewer-request edge auth (NextAuth JWE; ADR-003/004).
 - `audit-logger.py` — CloudTrail Bedrock inference events → `cc-prompt-audit` (one row per call, `{eventTime}#{eventID}` key, `client_tool` claude-code|codex from userAgent, Local + EC2 roles plus account-wide `mode=other`, error events kept, Responses shadow event skipped; ADR-014).
 - `gateway-manager.py` — supporting handler.
-- ADR-014 (Codex on Bedrock): `bedrock-usage-tracker.py` normalizes `*.openai.` IDs, prices GPT models with explicit cache rates and writes a `tool` attribute; `token-limit-enforcer.py` has GPT tier weights (Claude weights intentionally unchanged); `role_factory.py`/`user-role-provisioner.py` grant OpenAI GPT + `project/default`.
+- ADR-014 (Codex on Bedrock): `bedrock-usage-tracker.py` normalizes `*.openai.` IDs, prices GPT models with explicit cache rates and writes a `tool` attribute; `token-limit-enforcer.py` weights = tracker list price ÷ $15 for every model (Claude + GPT, test-enforced); `role_factory.py`/`user-role-provisioner.py` grant OpenAI GPT + `project/default`.
 
 ## Rules
 - Lambda source lives here (repo root `lambda/`), Terraform packages it. Do not move under `terraform/`.

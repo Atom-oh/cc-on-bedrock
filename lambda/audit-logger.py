@@ -56,7 +56,7 @@ def client_tool(user_agent: str, model_id: str) -> str:
 def user_from_role(role_name: str):
     """(subdomain, mode) from a platform role name, or (None, None)."""
     for prefix, mode in ROLE_PREFIXES:
-        if role_name.startswith(prefix):
+        if role_name.startswith(prefix) and len(role_name) > len(prefix):
             return role_name[len(prefix):], mode
     return None, None
 
@@ -71,7 +71,8 @@ def handler(event, context):
 
     request_params = detail.get('requestParameters')
     error_code = detail.get('errorCode') or ''
-    if (not isinstance(request_params, dict) or not request_params) and not error_code:
+    if (event_name == 'InvokeModelWithResponseStream'
+            and (not isinstance(request_params, dict) or not request_params) and not error_code):
         # Only the Responses API's shadow stream event (no params, no error) is skipped —
         # error events are always audited (e.g. AccessDenied from a budget deny).
         return {'statusCode': 200, 'body': f'Skipped: shadow {event_name} without requestParameters'}

@@ -36,40 +36,51 @@ SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 DENY_POLICY_NAME = os.environ.get("DENY_POLICY_NAME", "cc-bedrock-local-token-deny")
 WARNING_THRESHOLDS = [float(x) for x in os.environ.get("WARNING_THRESHOLDS", "0.8,0.95").split(",")]
 
-# Default normalized weights (env override possible). Scale: 1.0 = $15 per 1M
-# tokens (same basis as the dashboard NORMALIZED_PER_USD=66667). The Claude rows
-# are the historical admin-facing quota units and are intentionally NOT rescaled
-# to current list prices (that would silently loosen existing limits); dollar
-# budgets use the exact per-model prices in bedrock-usage-tracker.py.
-# OpenAI weights (Codex, ADR-014) = Global CRIS list price / $15, kept aligned with
-# PRICING (exact per-model, -> MODEL_WEIGHTS) and FAMILY_PRICING (family fallback,
-# -> DEFAULT_WEIGHTS) in bedrock-usage-tracker.py so token limits and dollar
-# budgets agree.
+# Default normalized weights (env override possible). Scale: 1.0 = $15 per 1M tokens
+# (same basis as the dashboard NORMALIZED_PER_USD=66667), i.e. every weight = list
+# price / $15, so the USD→token mirror written by /api/admin/budgets agrees with the
+# USD budget it mirrors. Kept aligned with PRICING (exact per-model → MODEL_WEIGHTS)
+# and FAMILY_PRICING (family fallback → DEFAULT_WEIGHTS) in bedrock-usage-tracker.py
+# (tests import the tracker and compare). Claude rows were rescaled to current list
+# prices on 2026-10-18 (ADR-014; production had no normalized-token LIMIT rows).
 DEFAULT_WEIGHTS = {
-    "opus": {"in": 1.0, "out": 5.0},
-    "sonnet": {"in": 0.2, "out": 1.0},
-    "haiku": {"in": 0.053, "out": 0.267},
-    "fable": {"in": 0.667, "out": 3.333},
-    "astra": {"in": 0.6667, "out": 3.3333},  # FAMILY_PRICING astra $10/$50
-    "sol": {"in": 0.1333, "out": 0.6667},    # FAMILY_PRICING sol   $2/$10
-    "terra": {"in": 0.1333, "out": 0.8},     # FAMILY_PRICING terra $2/$12
-    "luna": {"in": 0.0133, "out": 0.08},     # FAMILY_PRICING luna  $0.20/$1.20
-    "gpt": {"in": 0.2667, "out": 1.3333},    # FAMILY_PRICING gpt   $4/$20 (untiered GPT)
+    "opus": {"in": 0.3333, "out": 1.6667},  # FAMILY_PRICING $5.0/$25.0
+    "sonnet": {"in": 0.1333, "out": 0.6667},  # FAMILY_PRICING $2.0/$10.0
+    "haiku": {"in": 0.0667, "out": 0.3333},  # FAMILY_PRICING $1.0/$5.0
+    "fable": {"in": 0.6667, "out": 3.3333},  # FAMILY_PRICING $10.0/$50.0
+    "astra": {"in": 0.6667, "out": 3.3333},  # FAMILY_PRICING $10.0/$50.0
+    "sol": {"in": 0.1333, "out": 0.6667},  # FAMILY_PRICING $2.0/$10.0
+    "terra": {"in": 0.1333, "out": 0.8},  # FAMILY_PRICING $2.0/$12.0
+    "luna": {"in": 0.0133, "out": 0.08},  # FAMILY_PRICING $0.2/$1.2
+    "gpt": {"in": 0.2667, "out": 1.3333},  # FAMILY_PRICING $4.0/$20.0
 }
 
-# Exact per-model weights for known OpenAI models = PRICING (bedrock-usage-tracker.py)
-# list price / $15, round(..., 4). Matched longest-key-first by substring so
-# "gpt-6.1-sol" wins over "gpt-6-sol".
+# Exact per-model weights, matched longest-key-first by substring so "gpt-6.1-sol"
+# wins over "gpt-6-sol" and "claude-opus-5-5" over "claude-opus-5".
 MODEL_WEIGHTS = {
-    "gpt-6.1-sol": {"in": 0.1333, "out": 0.6667},   # $2/$10
-    "gpt-6-astra": {"in": 0.6667, "out": 3.3333},   # $10/$50
-    "gpt-6-sol": {"in": 0.1333, "out": 0.6667},     # $2/$10
-    "gpt-6-luna": {"in": 0.0067, "out": 0.0333},    # $0.10/$0.50
-    "gpt-5.6-sol": {"in": 0.2667, "out": 1.3333},   # $4/$20
-    "gpt-5.6-terra": {"in": 0.1333, "out": 0.8},    # $2/$12
-    "gpt-5.6-luna": {"in": 0.0133, "out": 0.08},    # $0.20/$1.20
-    "gpt-5.5": {"in": 0.3333, "out": 2.0},          # $5/$30
-    "gpt-5.4": {"in": 0.1667, "out": 1.0},          # $2.50/$15
+    "claude-opus-5-5": {"in": 0.2667, "out": 1.3333},  # $4.0/$20.0
+    "claude-opus-5": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-8": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-7": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-6": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-5": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-sonnet-5-5": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "claude-sonnet-5": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "claude-sonnet-4-6": {"in": 0.2, "out": 1.0},  # $3.0/$15.0
+    "claude-sonnet-4-5": {"in": 0.2, "out": 1.0},  # $3.0/$15.0
+    "claude-haiku-5-5": {"in": 0.0067, "out": 0.0333},  # $0.1/$0.5
+    "claude-haiku-4-5": {"in": 0.0667, "out": 0.3333},  # $1.0/$5.0
+    "claude-fable-5-1": {"in": 0.6667, "out": 3.3333},  # $10.0/$50.0
+    "claude-fable-5": {"in": 0.6667, "out": 3.3333},  # $10.0/$50.0
+    "gpt-6.1-sol": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "gpt-6-astra": {"in": 0.6667, "out": 3.3333},  # $10.0/$50.0
+    "gpt-6-sol": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "gpt-6-luna": {"in": 0.0067, "out": 0.0333},  # $0.1/$0.5
+    "gpt-5.6-sol": {"in": 0.2667, "out": 1.3333},  # $4.0/$20.0
+    "gpt-5.6-terra": {"in": 0.1333, "out": 0.8},  # $2.0/$12.0
+    "gpt-5.6-luna": {"in": 0.0133, "out": 0.08},  # $0.2/$1.2
+    "gpt-5.5": {"in": 0.3333, "out": 2.0},  # $5.0/$30.0
+    "gpt-5.4": {"in": 0.1667, "out": 1.0},  # $2.5/$15.0
 }
 _MODEL_WEIGHT_KEYS = tuple(sorted(MODEL_WEIGHTS, key=len, reverse=True))
 

@@ -187,6 +187,10 @@ def get_monthly_usage_by_department():
                 dept_spend[dept] = {"cost": cost, "users": {user}}
         last_key = result.get("LastEvaluatedKey")
         pages += 1
+        if last_key and pages >= MAX_SCAN_PAGES:
+            global _usage_scan_truncated
+            _usage_scan_truncated = True
+            print("[BUDGET] dept usage scan truncated at MAX_SCAN_PAGES — dept denies kept (fail closed)")
         if not last_key or pages >= MAX_SCAN_PAGES:
             break
     return dept_spend
@@ -961,9 +965,14 @@ def handler(event, context):
             stale["evaluation"] = evaluate_user_budget(stale, stale["limits"])
             user_spend[user] = stale
 
-    # Write per-period spend + evaluation to budget tables for dashboard display
+    # Write per-period spend + evaluation to budget tables for dashboard display. A
+    # truncated scan writes nothing: partial totals must not flip a shown block to OK
+    # while the IAM deny stays attached (fail closed).
     dept_monthly = get_monthly_usage_by_department()
-    write_current_spend(user_spend, dept_monthly)
+    if _usage_scan_truncated:
+        print("[BUDGET] skipping budget-table writes this run: usage scan was truncated")
+    else:
+        write_current_spend(user_spend, dept_monthly)
 
     def _fmt(o):
         return ", ".join(f"{p} ${o['spend'][p]:.2f}/${o['limits'][p]:.2f}" for p in o["periods"])
@@ -1075,7 +1084,7 @@ def handler(event, context):
 
     # Release dept deny for users whose department is now under budget
     over_budget_depts = {d["department"] for d in dept_over_budget}
-    for user, data in user_spend.items():
+    for user, data in (user_spend.items() if not _usage_scan_truncated else ()):
         if data["department"] not in over_budget_depts and user not in blocked_by_dept:
             if remove_dept_deny_policy(user):
                 dept_released += 1

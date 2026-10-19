@@ -512,7 +512,7 @@ POST   /api/admin/limits/reset     — force-reset + detach Deny policy`}
           </a>
         </li>
         <li>
-          <a href="https://github.com/Atom-oh/cc-on-bedrock/blob/main/docs/decisions/ADR-006 (legacy ADR-014)-local-governance-mode.md" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">
+          <a href="https://github.com/Atom-oh/cc-on-bedrock/blob/main/docs/decisions/ADR-006-shared-credentials.md" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">
             ADR-006 (legacy ADR-014) — Local Governance Mode
           </a>
         </li>

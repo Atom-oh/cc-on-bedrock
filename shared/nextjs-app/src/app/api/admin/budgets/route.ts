@@ -17,12 +17,10 @@ const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 
 // USD → normalized-token conversion for syncing $ budgets into the ADR-006(legacy 014)/015
-// cc-on-bedrock-limits table. Default 66667 ≈ 1_000_000 / $15 per 1M output tokens
-// (Sonnet output reference). This ratio holds approximately across Claude model
-// families because token-limit-enforcer's normalize-weights are calibrated to be
-// roughly $-proportional (Opus weight 5.0 ↔ $75/1M, Haiku 0.267 ↔ $4/1M, Sonnet
-// 1.0 ↔ $15/1M output). Override NORMALIZED_PER_USD when adding non-Anthropic
-// models or when AWS Bedrock pricing shifts materially.
+// cc-on-bedrock-limits table. Default 66667 = 1_000_000 / $15: token-limit-enforcer
+// weights are exactly list price / $15 for every model (Claude and OpenAI GPT,
+// derived from bedrock-usage-tracker PRICING and test-enforced), so N USD mirrors to
+// the same spend on the token axis. Only change this together with that $15 basis.
 const NORMALIZED_PER_USD = Number(process.env.NORMALIZED_PER_USD ?? "66667");
 
 const dynamodb = new DynamoDBClient({ region });
