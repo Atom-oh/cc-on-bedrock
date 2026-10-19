@@ -1,6 +1,8 @@
 # Runbook: AI PR-Review Panel — Kiro cells
 
-> Current protocol (2026-09-13): CI uses `ROLE_REVIEW=1`; see
+> Current protocol (2026-10-18, ADR-013 amendment): CI uses the simplified `ROLE_REVIEW=0`
+> panel → chair VERDICT path — the path this runbook describes. The specialist protocol
+> (`ROLE_REVIEW=1`, 2026-09-13) is retained but inactive; see
 > [specialist review](../pr-review-specialists.md). Earlier matrix counts, dropout floors and
 > unconditional-chair descriptions below are legacy behavior. CLI incident
 > evidence and safety constraints remain applicable within their recorded scope.
