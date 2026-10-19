@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cc-bedrock-local — Local Governance Mode CLI (ADR-014)
+# cc-bedrock-local — Local Governance Mode CLI (ADR-006 (legacy ADR-014))
 #
 # Subcommands:
 #   login         password prompt → Cognito USER_PASSWORD_AUTH → STS issue
@@ -16,8 +16,11 @@
 #   status        remaining TTL + Deny / limit state
 #   claude [args] ensure session + apply model env, emit lightweight OTEL if configured,
 #                 then run 'claude'
+#   codex [args]  ensure session, then run OpenAI 'codex' against Bedrock
+#                 (ADR-014: amazon-bedrock-runtime provider, same credential_process
+#                 profile → same IAM / metering / budget deny as claude)
 #   set-model K=V (or K V) — update model env in config. Keys (aliases ok):
-#                 sonnet | opus | haiku | subagent | pin
+#                 sonnet | opus | haiku | subagent | pin | codex
 #                 (full: ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
 #                  ANTHROPIC_DEFAULT_HAIKU_MODEL, CLAUDE_CODE_SUBAGENT_MODEL,
 #                  ANTHROPIC_MODEL [defaults to opusplan; set a raw model id to
@@ -66,6 +69,9 @@ ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.c
 # ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
 ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${ANTHROPIC_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}}"
 CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-5}"
+# Codex CLI model (ADR-014) — must be a cross-Region OpenAI profile (global./us.):
+# the bedrock-runtime Responses API rejects foundation-model IDs.
+CODEX_MODEL="${CODEX_MODEL:-global.openai.gpt-6.1-sol}"
 
 die() { echo "cc-bedrock-local: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -462,6 +468,26 @@ do_run() {
     exec "${args[@]}"
 }
 
+# ─── codex (ensure session + exec codex on Bedrock, ADR-014) ─
+do_codex() {
+  have codex || die "codex CLI not found — install: npm install -g @openai/codex@0.163.0"
+  # Provider + region are pinned as session overrides (highest user-reachable
+  # layer) so a personal ~/.codex/config.toml pointing at api.openai.com cannot
+  # silently route around Bedrock governance. Model only when the user didn't
+  # pick one (-m/--model or -c model=...).
+  local model_set=0 a
+  for a in "$@"; do
+    case "${a}" in -m|--model|--model=*|model=*) model_set=1 ;; esac
+  done
+  local overrides=(
+    -c 'model_provider="amazon-bedrock-runtime"'
+    -c "model_providers.amazon-bedrock-runtime.aws.region=\"${AWS_REGION}\""
+    -c 'web_search="disabled"'
+  )
+  (( model_set )) || overrides+=(-c "model=\"${CODEX_MODEL}\"")
+  do_run -- codex "${overrides[@]}" "$@"
+}
+
 # ─── claude (ensure session + apply model env + exec claude) ─
 do_claude() {
   # Ensure credentials before exec (reuse run's logic)
@@ -564,7 +590,8 @@ do_set_model() {
                                                          key="ANTHROPIC_DEFAULT_HAIKU_MODEL" ;;
     subagent|CLAUDE_CODE_SUBAGENT_MODEL)                 key="CLAUDE_CODE_SUBAGENT_MODEL" ;;
     pin|model|ANTHROPIC_MODEL)                           key="ANTHROPIC_MODEL" ;;
-    *) die "unknown model key: ${key} (use sonnet|opus|haiku|subagent|pin)" ;;
+    codex|gpt|CODEX_MODEL)                               key="CODEX_MODEL" ;;
+    *) die "unknown model key: ${key} (use sonnet|opus|haiku|subagent|pin|codex)" ;;
   esac
   config_set "${key}" "${val}"
   echo "✓ ${key}=${val} (saved to ${CFG_FILE})"
@@ -579,14 +606,17 @@ Current model env (from ${CFG_FILE} or defaults):
   ANTHROPIC_DEFAULT_HAIKU_MODEL  = ${ANTHROPIC_DEFAULT_HAIKU_MODEL}   # /model Haiku + background
   CLAUDE_CODE_SUBAGENT_MODEL     = ${CLAUDE_CODE_SUBAGENT_MODEL}   # subagent dispatch
   ANTHROPIC_MODEL                = ${ANTHROPIC_MODEL:-(unset — picker shows Default)}
+  CODEX_MODEL                    = ${CODEX_MODEL}   # codex (OpenAI on Bedrock)
 
 Examples:
   cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5'
   cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8'
   cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
   cc-bedrock-local set-model pin    global.anthropic.claude-opus-4-8   # force Custom slot
+  cc-bedrock-local set-model codex  global.openai.gpt-6.1-sol          # codex default
+  cc-bedrock-local set-model codex  global.openai.gpt-6-luna           # cheaper codex
 
-Aliases: sonnet|default | opus | haiku|fast|small | subagent | pin|model
+Aliases: sonnet|default | opus | haiku|fast|small | subagent | pin|model | codex|gpt
 EOF
 }
 
@@ -641,7 +671,7 @@ EOF
 
 do_usage() {
   cat <<EOF
-cc-bedrock-local — Local Governance Mode CLI (ADR-014)
+cc-bedrock-local — Local Governance Mode CLI (ADR-006 (legacy ADR-014))
 
 Subcommands:
   login                       prompt password (email from config) → login + STS issue
@@ -653,7 +683,8 @@ Subcommands:
   status                      session state + limit/deny state
   claude [args]               ensure session + apply model env from config, exec claude
                               emits lightweight OTEL session/git metrics when configured
-  set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin)
+  codex [args]                ensure session, exec OpenAI codex on Bedrock (ADR-014)
+  set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin|codex)
   models                      show current model env + valid keys
   run -- <cmd> [args]         generic: ensure session, exec <cmd> (no claude env)
   config                      print config / file paths
@@ -672,6 +703,7 @@ case "${sub}" in
   status)       do_status "$@" ;;
   run)          do_run "$@" ;;
   claude)       do_claude "$@" ;;
+  codex)        do_codex "$@" ;;
   set-model|set_model) do_set_model "$@" ;;
   models)       do_models ;;
   config)       do_config ;;

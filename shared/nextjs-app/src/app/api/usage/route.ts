@@ -13,6 +13,7 @@ import {
   getDailyUsage,
   getTotalUsage,
   getUserDailyTrend,
+  getToolSummaries,
 } from "@/lib/usage-client";
 
 export async function GET(req: NextRequest) {
@@ -36,6 +37,11 @@ export async function GET(req: NextRequest) {
         const effectiveUserId = session.user.isAdmin
           ? userId?.trim().toLowerCase()
           : (session.user.email ?? "").trim().toLowerCase();
+        // An empty key would make getUsageRecords fall back to an unscoped Scan
+        // (every user's rows) — never allow that for a non-admin.
+        if (!session.user.isAdmin && !effectiveUserId) {
+          return NextResponse.json({ error: "no email on account" }, { status: 403 });
+        }
         const records = await getUsageRecords({
           startDate,
           endDate,
@@ -76,7 +82,15 @@ export async function GET(req: NextRequest) {
       }
 
       case "spend_per_day": {
-        const effectiveUserId = session.user.isAdmin ? userId : session.user.subdomain;
+        // ADR-031: rows are keyed USER#{email.lower()} — a subdomain never matches.
+        const effectiveUserId = session.user.isAdmin
+          ? userId?.trim().toLowerCase()
+          : (session.user.email ?? "").trim().toLowerCase();
+        // An empty key would make getUsageRecords fall back to an unscoped Scan
+        // (every user's rows) — never allow that for a non-admin.
+        if (!session.user.isAdmin && !effectiveUserId) {
+          return NextResponse.json({ error: "no email on account" }, { status: 403 });
+        }
         const daily = await getDailyUsage({ startDate, endDate, userId: effectiveUserId });
         return NextResponse.json({ success: true, data: daily });
       }
@@ -87,6 +101,21 @@ export async function GET(req: NextRequest) {
         }
         const total = await getTotalUsage({ startDate, endDate });
         return NextResponse.json({ success: true, data: total });
+      }
+
+      // ADR-014: cost/tokens split by CLI (Claude Code vs Codex). Admins see all
+      // users; everyone else only their own rows.
+      case "tool_summaries": {
+        const effectiveUserId = session.user.isAdmin
+          ? userId?.trim().toLowerCase()
+          : (session.user.email ?? "").trim().toLowerCase();
+        // An empty key would make getUsageRecords fall back to an unscoped Scan
+        // (every user's rows) — never allow that for a non-admin.
+        if (!session.user.isAdmin && !effectiveUserId) {
+          return NextResponse.json({ error: "no email on account" }, { status: 403 });
+        }
+        const tools = await getToolSummaries({ startDate, endDate, userId: effectiveUserId });
+        return NextResponse.json({ success: true, data: tools });
       }
 
       case "user_summaries": {
@@ -154,10 +183,12 @@ export async function GET(req: NextRequest) {
           }
           scope = { department: session.user.department };
         } else {
-          if (!session.user.subdomain) {
-            return NextResponse.json({ error: "no subdomain on account" }, { status: 403 });
+          // ADR-031: usage PK is the lowercased email, not the subdomain.
+          const email = (session.user.email ?? "").trim().toLowerCase();
+          if (!email) {
+            return NextResponse.json({ error: "no email on account" }, { status: 403 });
           }
-          scope = { userId: session.user.subdomain };
+          scope = { userId: email };
         }
 
         const trend = await getUserDailyTrend({ startDate, endDate, topN, ...scope });

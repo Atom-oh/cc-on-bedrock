@@ -2,6 +2,27 @@
 
 All notable changes to CC-on-Bedrock are documented in this file.
 
+## [Unreleased]
+
+### Review pipeline (ADR-013 amendment, #125)
+- AI PR review simplified to the lens panel → chair `VERDICT` path (`ROLE_REVIEW=0`, 12,000-line cap); chair runs with no tools / no MCP; non-zero panel cells are not credited. ADR Compliance CI (`adr-verify-pr.yml` / `adr-verify-main.yml`) removed; ADR `## Verification` blocks are documentation-only.
+
+### Codex on Bedrock (ADR-014)
+- **OpenAI Codex CLI on Bedrock** — Codex runs through the `amazon-bedrock-runtime` provider (bedrock-runtime Responses API, `global.openai.*` profiles) with the same per-user role credentials as Claude Code. EC2 DevEnv installs `@openai/codex` (AMI `setup-codex.sh`, boot-time refresh, `postStartSetup` heal) and writes governed defaults to `/etc/codex/config.toml`; Local Mode adds `cc-bedrock-local codex` and the installer's `ccx` function, pinning provider/region as session overrides. New Terraform variable `codex_model_id` (default `global.openai.gpt-6.1-sol`).
+- **IAM** — per-user Bedrock allow-lists and the task permission boundary add `*openai.gpt-*` foundation-model/inference-profile ARNs and `project/default` (Responses API default project). No `bedrock-mantle:*`. The EC2 restart path now re-upserts the role inline policy so existing roles pick up policy changes.
+- **Cost** — usage tracker normalizes `*.openai.` IDs, prices GPT models with explicit per-model cache read/write rates, and stores a `tool` attribute (`claude-code`|`codex`|`other`). Claude rates corrected to AWS Price List API values (ap-northeast-2 Global CRIS): Opus 4.8 $5/$25 (was $15/$75), Sonnet 5 $2/$10 (was $3/$15), Haiku 4.5 $1/$5 (was $0.80/$4). Displayed Opus cost drops to about a third.
+- **Budgets** — Codex spend counts against the existing user/department USD budgets; all normalized-token weights (Claude + GPT) are now list price ÷ $15 derived from the tracker prices, so the USD→token mirror matches the USD budget (Claude weights rescaled; production had no token LIMIT rows).
+- **Audit** — `audit-logger` records Codex `Responses` calls, Local Mode users (previously `unknown`), and `client_tool` from the CloudTrail userAgent; rows keyed `{eventTime}#{eventID}` so same-second calls no longer overwrite each other; account-wide (non-platform principals recorded as `mode=other`, error events kept with `error_code`). Security page tags Bedrock audit rows Claude Code / Codex.
+- **Dashboard** — Analytics "Usage by Tool (Claude Code vs Codex)" section (`/api/usage?action=tool_summaries`).
+
+### Budgets (ADR-008 amendment)
+- **Per-user daily / weekly / monthly USD caps** — Admin → Budgets sets three caps per user (and per-user defaults per department); exceeding any one blocks Bedrock (Claude Code + Codex) until every period is back under its cap (UTC day, ISO week, calendar month). New Terraform variables `weekly_budget_usd` / `monthly_budget_usd` (default 0 = no global cap) alongside `daily_budget_usd`. `budget-check` writes per-period spend, resolved caps, exceeded periods and release time to `cc-user-budgets`. **Behavior change:** previously the single effective budget (`monthlyBudget` first) was compared with today's spend, i.e. it acted as a daily cap.
+
+### Fixes
+- **Usage metering and budget enforcement were dead in production (KMS).** The governance DynamoDB tables are SSE-KMS with the platform CMK, but the `usage-tracker`, `budget-check`, `limit-reset`, `sts-issuer`, `token-limit-enforcer` and `gateway-manager` roles had no `kms:*` grant, so every read/write failed with "KMS key access denied" (0 usage rows tracked in the 14 days checked; budget/limit checks errored). Each policy now has a `DynamoDbCmk` statement (`kms:Decrypt/Encrypt/GenerateDataKey/DescribeKey` on the CMK, `kms:ViaService = dynamodb.<region>.amazonaws.com`).
+- `/api/usage` `spend_per_day` and `user_daily_trend` scoped non-admin users by subdomain while usage rows are keyed by email (ADR-031), returning empty data; both now use the lowercased session email.
+- `/api/usage` `spend_logs` / `spend_per_day` / `tool_summaries`: a non-admin session without an email produced an empty user key, which `getUsageRecords` treats as "no filter" (full-table scan of every user's usage). Now rejected with 403.
+
 ## [1.3.0] - 2026-05-28 (Local Governance Mode + CloudFront Split + Self-Healing CI)
 
 ### Architecture

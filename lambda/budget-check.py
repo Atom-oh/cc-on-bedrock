@@ -1,11 +1,15 @@
 """
 Budget Check Lambda (runs every 5 minutes)
-Checks DynamoDB for users exceeding daily budget AND department monthly budget.
+Checks DynamoDB for users exceeding their daily / weekly / monthly USD budgets AND
+department monthly budgets. Usage from every AI CLI (Claude Code, Codex — ADR-014)
+counts, since both land in the same usage table.
 Actions:
-  Per-user daily budget:
+  Per-user USD budgets (ADR-008): three independent caps — daily (UTC day), weekly
+  (ISO week, Mon 00:00 UTC) and monthly (calendar month, UTC). Exceeding ANY one blocks.
     80%: SNS warning alert
-    100%: Attach IAM Deny Policy to per-user Task Role + Cognito flag + SNS alert
-    Next day: Remove Deny Policy automatically
+    100%: Attach IAM Deny Policy to per-user roles + Cognito flag + SNS alert
+    Released automatically once every period is back under its cap (period rollover
+    or a raised budget). Each cap resolves user value > dept per-user default > env.
   Department monthly budget:
     80%: SNS warning alert to dept managers
     100%: Block all department users via IAM Deny Policy
@@ -14,20 +18,25 @@ from __future__ import annotations
 import os
 import json
 import boto3
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from decimal import Decimal
 
 
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 DEPT_BUDGETS_TABLE = os.environ.get("DEPT_BUDGETS_TABLE", "cc-department-budgets")
 USER_BUDGETS_TABLE = os.environ.get("USER_BUDGETS_TABLE", "cc-user-budgets")
-LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")  # ADR-014
+LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")  # ADR-006 (legacy ADR-014)
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
 DAILY_BUDGET = float(os.environ.get("DAILY_BUDGET_USD", "50"))
+# 0 = no global cap for that period (only user / dept per-user values apply).
+WEEKLY_BUDGET = float(os.environ.get("WEEKLY_BUDGET_USD", "0"))
+MONTHLY_BUDGET = float(os.environ.get("MONTHLY_BUDGET_USD", "0"))
+BUDGET_PERIODS = ("daily", "weekly", "monthly")
+_GLOBAL_BUDGETS = {"daily": DAILY_BUDGET, "weekly": WEEKLY_BUDGET, "monthly": MONTHLY_BUDGET}
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task"
-LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # ADR-014 Local Governance Mode
+LOCAL_ROLE_PREFIX = "cc-on-bedrock-local-user-"  # ADR-006 (legacy ADR-014) Local Governance Mode
 MAX_SCAN_PAGES = 100
 # ADR-015 canonical policy names (attach path). Legacy names below are still
 # detached on every attach/remove so roles denied under the old names get
@@ -53,16 +62,51 @@ cognito_client = boto3.client("cognito-idp")
 sns_client = boto3.client("sns")
 
 
-def get_today_usage():
-    """Scan DynamoDB for all USER# entries today (with pagination)."""
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    user_spend = {}
+# Set by get_user_period_usage when the scan stops at MAX_SCAN_PAGES; the handler then
+# keeps existing denies instead of releasing them on incomplete totals (fail closed).
+_usage_scan_truncated = False
+
+
+def period_bounds(now: datetime | None = None) -> dict:
+    """UTC period windows as {period: (start_date_str, next_reset_datetime)}.
+    Usage rows are keyed `{YYYY-MM-DD}#{model}` by the invocation's UTC date."""
+    now = now or datetime.utcnow()
+    today = now.date()
+    week_start = today - timedelta(days=today.weekday())  # ISO week: Monday
+    month_start = today.replace(day=1)
+    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+    def at_midnight(d: date) -> datetime:
+        return datetime(d.year, d.month, d.day)
+
+    return {
+        "daily": (today.isoformat(), at_midnight(today + timedelta(days=1))),
+        "weekly": (week_start.isoformat(), at_midnight(week_start + timedelta(days=7))),
+        "monthly": (month_start.isoformat(), at_midnight(next_month)),
+    }
+
+
+def get_user_period_usage(now: datetime | None = None) -> dict:
+    """Scan USER# usage rows from the earliest open period start through today and
+    sum cost per user into daily / weekly / monthly buckets (with pagination).
+
+    Returns {user: {"daily": $, "weekly": $, "monthly": $, "cost": today $, "department": str}}.
+    `cost` mirrors the legacy today-only field used by callers/logs.
+    """
+    global _usage_scan_truncated
+    _usage_scan_truncated = False
+    bounds = period_bounds(now)
+    today = bounds["daily"][0]
+    scan_from = min(bounds["weekly"][0], bounds["monthly"][0])
+    user_spend: dict = {}
     last_key = None
     pages = 0
     while True:
         params = {
-            "FilterExpression": "begins_with(PK, :prefix) AND begins_with(SK, :today)",
-            "ExpressionAttributeValues": {":prefix": "USER#", ":today": today},
+            # Upper bound keeps non-usage rows under USER# (PROD#/SKILL#/… OTEL rollups,
+            # whose SK sorts after any date) out of the window.
+            "FilterExpression": "begins_with(PK, :prefix) AND SK BETWEEN :from AND :to",
+            "ExpressionAttributeValues": {":prefix": "USER#", ":from": scan_from, ":to": today + "#\uffff"},
         }
         if last_key:
             params["ExclusiveStartKey"] = last_key
@@ -71,20 +115,45 @@ def get_today_usage():
             user = item["PK"].replace("USER#", "").strip().lower()  # ADR-031: email
             if not _is_valid_user(user):
                 continue  # stale non-Cognito identity (e.g. raw IAM principal) — skip
+            row_date = str(item.get("SK", ""))[:10]
             cost = float(item.get("estimatedCost", 0))
-            dept = item.get("department", "default")
             sd = item.get("subdomain")
             if sd:
                 _subdomain_by_user[user] = sd  # for IAM role-name construction
-            if user in user_spend:
-                user_spend[user]["cost"] += cost
-            else:
-                user_spend[user] = {"cost": cost, "department": dept}
+            entry = user_spend.setdefault(user, {
+                "daily": 0.0, "weekly": 0.0, "monthly": 0.0, "cost": 0.0,
+                "department": "default", "_dept_date": "",
+            })
+            # Scan order is arbitrary: take the department from the most recent row.
+            dept = item.get("department")
+            if dept and row_date >= entry["_dept_date"]:
+                entry["department"] = dept
+                entry["_dept_date"] = row_date
+            if row_date == today:
+                entry["daily"] += cost
+                entry["cost"] += cost
+            if row_date >= bounds["weekly"][0]:
+                entry["weekly"] += cost
+            if row_date >= bounds["monthly"][0]:
+                entry["monthly"] += cost
         last_key = result.get("LastEvaluatedKey")
         pages += 1
-        if not last_key or pages >= MAX_SCAN_PAGES:
+        if not last_key:
             break
+        if pages >= MAX_SCAN_PAGES:
+            _usage_scan_truncated = True
+            print("[BUDGET] usage scan truncated at MAX_SCAN_PAGES — totals may be under-counted; "
+                  "existing denies are kept (fail closed)")
+            break
+    for entry in user_spend.values():
+        entry.pop("_dept_date", None)
     return user_spend
+
+
+def get_today_usage():
+    """Back-compat: {user: {"cost": today $, "department": str}} (today = UTC day)."""
+    return {u: {"cost": d["daily"], "department": d["department"]}
+            for u, d in get_user_period_usage().items()}
 
 
 def get_monthly_usage_by_department():
@@ -118,6 +187,10 @@ def get_monthly_usage_by_department():
                 dept_spend[dept] = {"cost": cost, "users": {user}}
         last_key = result.get("LastEvaluatedKey")
         pages += 1
+        if last_key and pages >= MAX_SCAN_PAGES:
+            global _usage_scan_truncated
+            _usage_scan_truncated = True
+            print("[BUDGET] dept usage scan truncated at MAX_SCAN_PAGES — dept denies kept (fail closed)")
         if not last_key or pages >= MAX_SCAN_PAGES:
             break
     return dept_spend
@@ -144,6 +217,8 @@ def get_department_budgets():
                 dept_id = item.get("dept_id", item.get("department", "default"))
                 budgets[dept_id] = {
                     "monthlyBudget": float(item.get("monthlyBudget", item.get("monthly_limit", 0)) or 0),
+                    "perUserDailyBudget": float(item.get("perUserDailyBudget", 0) or 0),
+                    "perUserWeeklyBudget": float(item.get("perUserWeeklyBudget", 0) or 0),
                     "perUserMonthlyBudget": float(item.get("perUserMonthlyBudget", 0) or 0),
                 }
             last_key = result.get("LastEvaluatedKey")
@@ -174,16 +249,49 @@ def _dept_per_user_default(dept_budgets: dict, dept: str) -> float:
     return float(entry.get("perUserMonthlyBudget", 0) or 0)
 
 
+def _effective_user_limits(user_budgets: dict, dept_budgets: dict, user: str, dept: str) -> dict:
+    """ADR-008: per-period USD caps {daily, weekly, monthly}; 0 = no cap for that period.
+    Each period resolves independently: user explicit > dept per-user default > global env."""
+    u = user_budgets.get(user, {}) or {}
+    d = dept_budgets.get(dept) if isinstance(dept_budgets.get(dept), dict) else {}
+    limits = {}
+    for period in BUDGET_PERIODS:
+        cap = period.capitalize()  # daily → Daily
+        limits[period] = (
+            float(u.get(f"{period}Budget", 0) or 0)
+            or float(d.get(f"perUser{cap}Budget", 0) or 0)
+            or float(_GLOBAL_BUDGETS[period])
+        )
+    return limits
+
+
 def _effective_user_budget(user_budgets: dict, dept_budgets: dict, user: str, dept: str) -> float:
-    """ADR-023: resolve per-user effective USD budget for daily over-budget check.
-    Priority: user explicit > dept perUserMonthlyBudget > global DAILY_BUDGET env."""
-    user_explicit = float(user_budgets.get(user, {}).get("monthlyBudget", 0) or 0)
-    if user_explicit > 0:
-        return user_explicit
-    dept_default = _dept_per_user_default(dept_budgets, dept)
-    if dept_default > 0:
-        return dept_default
-    return float(DAILY_BUDGET)
+    """Back-compat accessor: the effective DAILY cap."""
+    return _effective_user_limits(user_budgets, dept_budgets, user, dept)["daily"]
+
+
+def evaluate_user_budget(spend: dict, limits: dict, now: datetime | None = None) -> dict:
+    """Pure: which periods are exceeded / at warning level, the max utilization, and
+    when the deny can lift (latest reset among exceeded periods — all must clear)."""
+    bounds = period_bounds(now)
+    exceeded, warned, pct = [], [], 0.0
+    for period in BUDGET_PERIODS:
+        cap = limits.get(period, 0) or 0
+        if cap <= 0:
+            continue
+        p = (spend.get(period, 0.0) / cap) * 100
+        pct = max(pct, p)
+        if p >= 100:
+            exceeded.append(period)
+        elif p >= 80:
+            warned.append(period)
+    release_at = max((bounds[p][1] for p in exceeded), default=None)
+    return {
+        "exceeded": exceeded,
+        "warned": warned,
+        "pct": pct,
+        "release_at": release_at.strftime("%Y-%m-%dT%H:%M:%SZ") if release_at else "",
+    }
 
 
 def get_user_budgets():
@@ -202,7 +310,11 @@ def get_user_budgets():
                 if user_id:
                     budgets[user_id] = {
                         "dailyTokenLimit": float(item.get("dailyTokenLimit", 0)),
-                        "monthlyBudget": float(item.get("monthlyBudget", 0)),
+                        "dailyBudget": float(item.get("dailyBudget", 0) or 0),
+                        "weeklyBudget": float(item.get("weeklyBudget", 0) or 0),
+                        "monthlyBudget": float(item.get("monthlyBudget", 0) or 0),
+                        "department": item.get("department", "default"),
+                        "blocked": bool(item.get("budgetExceeded")),
                     }
             last_key = result.get("LastEvaluatedKey")
             pages += 1
@@ -218,14 +330,31 @@ def write_current_spend(user_spend, dept_spend):
     """Write computed currentSpend back to budget tables for dashboard display."""
     now = datetime.utcnow().isoformat()
 
-    # Write per-user spend to cc-user-budgets
+    # Write per-user spend to cc-user-budgets. currentSpend = month-to-date (the
+    # admin UI compares it with monthlyBudget); per-period spend + the evaluation
+    # (exceeded periods, release time) drive the dashboard / Local Mode status.
     for user, data in user_spend.items():
         try:
+            ev = data.get("evaluation") or {}
+            limits = data.get("limits") or {}
             user_budgets_table.update_item(
                 Key={"user_id": user},
-                UpdateExpression="SET currentSpend = :spend, lastChecked = :ts, department = :dept",
+                UpdateExpression=(
+                    "SET currentSpend = :spend, currentDailySpend = :d, currentWeeklySpend = :w, "
+                    "currentMonthlySpend = :m, effectiveDailyBudget = :ld, effectiveWeeklyBudget = :lw, "
+                    "effectiveMonthlyBudget = :lm, budgetExceeded = :ex, budgetReleaseAt = :rel, "
+                    "lastChecked = :ts, department = :dept"
+                ),
                 ExpressionAttributeValues={
-                    ":spend": Decimal(str(round(data["cost"], 6))),
+                    ":spend": Decimal(str(round(data.get("monthly", data["cost"]), 6))),
+                    ":d": Decimal(str(round(data.get("daily", data["cost"]), 6))),
+                    ":w": Decimal(str(round(data.get("weekly", 0.0), 6))),
+                    ":m": Decimal(str(round(data.get("monthly", 0.0), 6))),
+                    ":ld": Decimal(str(limits.get("daily", 0))),
+                    ":lw": Decimal(str(limits.get("weekly", 0))),
+                    ":lm": Decimal(str(limits.get("monthly", 0))),
+                    ":ex": list(ev.get("exceeded", [])),
+                    ":rel": ev.get("release_at", ""),
                     ":ts": now,
                     ":dept": data["department"],
                 },
@@ -349,11 +478,13 @@ def _candidate_role_names(user: str) -> list:
 
     ADR-031 (B′): usage/limits rows are keyed by email, and ALL IAM role names use
     the subdomain. Both `cc-on-bedrock-local-user-{subdomain}` and
-    `cc-on-bedrock-task-{subdomain}` are built from the row's `subdomain` attribute
-    (captured during the usage scans). The email is NEVER used as a role name
+    `cc-on-bedrock-task-{subdomain}` use the current Cognito subdomain when known.
+    Historical usage metadata is only a fallback: monthly scans can include an
+    obsolete subdomain and return rows in arbitrary order.
+    The email is NEVER used as a role name
     suffix (`local-user-{email}` would be a wrong/non-existent role → fail-safe).
     """
-    subdomain = _subdomain_by_user.get(user)
+    subdomain = _email_subdomain_map.get(user) or _subdomain_by_user.get(user)
     if not subdomain:
         # No subdomain known → cannot construct a valid role name. Fail-safe: emit
         # nothing rather than local-user-{email}.
@@ -517,7 +648,7 @@ def check_deny_exists(subdomain: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────
-# ADR-014 / ADR-015 — Local Governance Mode helpers
+# ADR-006 (legacy ADR-014) / ADR-015 — Local Governance Mode helpers
 # ──────────────────────────────────────────────────────────
 
 
@@ -799,41 +930,60 @@ def handler(event, context):
     _valid_user_keys = _load_valid_user_keys()
     print(f"[VALID-USERS] loaded {len(_valid_user_keys)} Cognito identity keys")
 
-    user_spend = get_today_usage()
+    user_spend = get_user_period_usage()
     all_known_users = set(user_spend.keys())
     user_budgets = get_user_budgets()
-    dept_budgets = get_department_budgets()  # ADR-023: needed for perUserMonthlyBudget fallback
+    dept_budgets = get_department_budgets()  # ADR-023: dept per-user defaults
     over_budget = []
     warnings = []
     denied = 0
     released = 0
 
-    # Write currentSpend to budget tables for dashboard display
-    dept_monthly = get_monthly_usage_by_department()
-    write_current_spend(user_spend, dept_monthly)
-
-    # ─── Per-user daily budget check ───
+    # ─── Per-user daily / weekly / monthly budget check (ADR-008) ───
     for user, data in user_spend.items():
-        # ADR-023: user explicit > dept.perUserMonthlyBudget > global DAILY_BUDGET
-        effective_budget = _effective_user_budget(user_budgets, dept_budgets, user, data["department"])
-        pct = (data["cost"] / effective_budget) * 100 if effective_budget > 0 else 0
+        limits = _effective_user_limits(user_budgets, dept_budgets, user, data["department"])
+        ev = evaluate_user_budget(data, limits)
+        data["limits"], data["evaluation"] = limits, ev
+        entry = {
+            "user": user, "department": data["department"], "pct": ev["pct"],
+            "spend": {p: data[p] for p in BUDGET_PERIODS}, "limits": limits,
+        }
+        if ev["exceeded"]:
+            over_budget.append({**entry, "periods": ev["exceeded"], "release_at": ev["release_at"]})
+        elif ev["warned"]:
+            warnings.append({**entry, "periods": ev["warned"]})
 
-        if pct >= 100:
-            over_budget.append({
-                "user": user, "cost": data["cost"],
-                "department": data["department"], "pct": pct,
-            })
-        elif pct >= 80:
-            warnings.append({
-                "user": user, "cost": data["cost"],
-                "department": data["department"], "pct": pct,
-            })
+    # Budgeted users with no usage in the scan window (e.g. after a period rollover) get a
+    # zero-spend evaluation written too — otherwise a stale budgetExceeded keeps rendering
+    # them as BLOCKED after the deny was released. Only rows that currently show a block
+    # are rewritten, to keep writes bounded. Skipped on a truncated scan (fail closed).
+    if not _usage_scan_truncated:
+        for user, b in user_budgets.items():
+            if user in user_spend or not b.get("blocked"):
+                continue
+            stale = {"daily": 0.0, "weekly": 0.0, "monthly": 0.0, "cost": 0.0,
+                     "department": b.get("department", "default")}
+            stale["limits"] = _effective_user_limits(user_budgets, dept_budgets, user, stale["department"])
+            stale["evaluation"] = evaluate_user_budget(stale, stale["limits"])
+            user_spend[user] = stale
+
+    # Write per-period spend + evaluation to budget tables for dashboard display. A
+    # truncated scan writes nothing: partial totals must not flip a shown block to OK
+    # while the IAM deny stays attached (fail closed).
+    dept_monthly = get_monthly_usage_by_department()
+    if _usage_scan_truncated:
+        print("[BUDGET] skipping budget-table writes this run: usage scan was truncated")
+    else:
+        write_current_spend(user_spend, dept_monthly)
+
+    def _fmt(o):
+        return ", ".join(f"{p} ${o['spend'][p]:.2f}/${o['limits'][p]:.2f}" for p in o["periods"])
 
     # 80%: Send warning alert
     if warnings and SNS_TOPIC_ARN:
-        msg = f"CC-on-Bedrock Budget Warnings (daily limit: ${DAILY_BUDGET}):\n\n"
+        msg = "CC-on-Bedrock Budget Warnings (>=80% of a daily/weekly/monthly cap):\n\n"
         msg += "\n".join(
-            f"- {w['user']} ({w['department']}): ${w['cost']:.4f} ({w['pct']:.1f}%)"
+            f"- {w['user']} ({w['department']}): {_fmt(w)} ({w['pct']:.1f}%)"
             for w in warnings
         )
         try:
@@ -844,7 +994,7 @@ def handler(event, context):
     # 100%: Attach IAM Deny Policy + Cognito flag
     for item in over_budget:
         user = item["user"]
-        print(f"OVER BUDGET: {user} ({item['department']}) ${item['cost']:.4f} ({item['pct']:.1f}%)")
+        print(f"OVER BUDGET: {user} ({item['department']}) {_fmt(item)} ({item['pct']:.1f}%) until {item['release_at']}")
 
         if attach_deny_policy(user):
             denied += 1
@@ -853,7 +1003,7 @@ def handler(event, context):
     if over_budget and SNS_TOPIC_ARN:
         msg = f"CC-on-Bedrock Budget EXCEEDED - Bedrock Access Denied:\n\n"
         msg += "\n".join(
-            f"- {o['user']} ({o['department']}): ${o['cost']:.4f} ({o['pct']:.1f}% of ${DAILY_BUDGET})"
+            f"- {o['user']} ({o['department']}): {_fmt(o)} — blocked until {o['release_at']}"
             for o in over_budget
         )
         try:
@@ -871,6 +1021,10 @@ def handler(event, context):
     # Fine for dozens of users; for very large fleets, gate on a `denied` marker.
     over_budget_users = {o["user"] for o in over_budget}
     release_candidates = all_known_users | set(user_budgets.keys())
+    if _usage_scan_truncated:
+        # Incomplete totals must never lift a deny (fail closed).
+        print("[BUDGET] skipping deny release this run: usage scan was truncated")
+        release_candidates = set()
     for user in release_candidates:
         if user not in over_budget_users:
             # Deny-deadlock fix (PR #68 review): a denied/idle user isn't in the usage scans, so
@@ -932,7 +1086,7 @@ def handler(event, context):
 
     # Release dept deny for users whose department is now under budget
     over_budget_depts = {d["department"] for d in dept_over_budget}
-    for user, data in user_spend.items():
+    for user, data in (user_spend.items() if not _usage_scan_truncated else ()):
         if data["department"] not in over_budget_depts and user not in blocked_by_dept:
             if remove_dept_deny_policy(user):
                 dept_released += 1
@@ -951,6 +1105,8 @@ def handler(event, context):
         "released": released,
         "warnings": len(warnings),
         "daily_budget_usd": DAILY_BUDGET,
+        "weekly_budget_usd": WEEKLY_BUDGET,
+        "monthly_budget_usd": MONTHLY_BUDGET,
         "dept_warnings": len(dept_warnings),
         "dept_over_budget": len(dept_over_budget),
         "dept_denied": dept_denied,

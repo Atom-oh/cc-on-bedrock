@@ -75,6 +75,20 @@ variable "sonnet_model_id" {
   default = "global.anthropic.claude-sonnet-5"
 }
 
+# ADR-014 Codex on Bedrock: default OpenAI model for the Codex CLI. Must be a
+# system-defined cross-Region profile (global./us.) — the bedrock-runtime
+# Responses API rejects foundation-model IDs and application inference profiles.
+variable "codex_model_id" {
+  description = "Default Codex CLI model (bedrock-runtime Responses API, global CRIS profile)"
+  type        = string
+  default     = "global.openai.gpt-6.1-sol"
+
+  validation {
+    condition     = can(regex("^(global|us|eu|apac)\\.openai\\.gpt-[A-Za-z0-9.-]+$", var.codex_model_id))
+    error_message = "codex_model_id must be a cross-Region OpenAI GPT inference profile ID (prefix global|us|eu|apac), e.g. global.openai.gpt-6.1-sol."
+  }
+}
+
 variable "ecs_cluster_name" {
   description = "ECS cluster name for the Nginx routing path"
   type        = string
@@ -82,9 +96,36 @@ variable "ecs_cluster_name" {
 }
 
 variable "daily_budget_usd" {
-  description = "Default daily per-user budget used by the budget-check Lambda"
+  description = "Global default daily per-user USD budget (used when neither the user nor the department sets one)"
   type        = number
   default     = 50
+
+  validation {
+    condition     = var.daily_budget_usd >= 0
+    error_message = "daily_budget_usd must be >= 0."
+  }
+}
+
+variable "weekly_budget_usd" {
+  description = "Global default weekly (ISO week, UTC) per-user USD budget; 0 = no global weekly cap"
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.weekly_budget_usd >= 0
+    error_message = "weekly_budget_usd must be >= 0 (0 = no global cap)."
+  }
+}
+
+variable "monthly_budget_usd" {
+  description = "Global default monthly (calendar month, UTC) per-user USD budget; 0 = no global monthly cap"
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.monthly_budget_usd >= 0
+    error_message = "monthly_budget_usd must be >= 0 (0 = no global cap)."
+  }
 }
 
 variable "governance_only" {

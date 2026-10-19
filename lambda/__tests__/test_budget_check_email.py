@@ -16,6 +16,37 @@ os.environ.setdefault("COGNITO_USER_POOL_ID", "pool-1")
 bc = importlib.import_module("budget-check")
 
 
+def test_deny_targets_current_cognito_roles_despite_historical_usage():
+    iam = mock.Mock()
+    with mock.patch.object(bc, "_email_subdomain_map", {"alice@example.com": "alice-current"}), \
+            mock.patch.object(bc, "_subdomain_by_user", {"alice@example.com": "alice-old"}), \
+            mock.patch.object(bc, "iam_client", iam):
+        assert bc.attach_deny_policy("alice@example.com")
+    assert {call.kwargs["RoleName"] for call in iam.put_role_policy.call_args_list} == {
+        "cc-on-bedrock-local-user-alice-current",
+        "cc-on-bedrock-task-alice-current",
+    }
+    assert iam.put_role_policy.call_count == 2
+
+
+def test_current_cognito_identity_resolves_roles_without_usage_rows():
+    with mock.patch.object(bc, "_email_subdomain_map", {"alice@example.com": "alice-current"}), \
+            mock.patch.object(bc, "_subdomain_by_user", {}):
+        assert bc._candidate_role_names("alice@example.com") == [
+            "cc-on-bedrock-local-user-alice-current",
+            "cc-on-bedrock-task-alice-current",
+        ]
+
+
+def test_role_resolution_keeps_usage_fallback_when_cognito_identity_unavailable():
+    with mock.patch.object(bc, "_email_subdomain_map", {}), \
+            mock.patch.object(bc, "_subdomain_by_user", {"alice@example.com": "alice"}):
+        assert bc._candidate_role_names("alice@example.com") == [
+            "cc-on-bedrock-local-user-alice",
+            "cc-on-bedrock-task-alice",
+        ]
+
+
 def test_candidate_role_names_from_subdomain_not_email():
     bc._subdomain_by_user = {"alice@example.com": "alice"}
     names = bc._candidate_role_names("alice@example.com")

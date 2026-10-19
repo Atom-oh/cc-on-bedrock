@@ -4,7 +4,7 @@ import type { UsageRecord } from "../usage-client";
 
 function rec(userId: string, date: string, cost: number, tokens: number): UsageRecord {
   return {
-    userId, department: "eng", date, model: "claude-x",
+    userId, department: "eng", date, model: "claude-x", tool: "claude-code",
     inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
     totalTokens: tokens, requests: 1, estimatedCost: cost, latencySumMs: 0,
   };

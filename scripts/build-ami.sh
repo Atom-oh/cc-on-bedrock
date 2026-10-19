@@ -220,6 +220,7 @@ $(cat "$script_path")"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-common.sh"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-claude-code.sh"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-kiro.sh"
+run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-codex.sh"
 
 # ADR-032: bake the persistent /home/coder data-volume mount/migration unit into the AMI.
 # Single idempotent, fail-safe routine (mirrors src/lib/data-volume-userdata.ts): resolves
@@ -473,7 +474,7 @@ echo "Creating AMI: $AMI_NAME..."
 AMI_ID=$(aws ec2 create-image \
   --instance-id "$INSTANCE_ID" \
   --name "$AMI_NAME" \
-  --description "CC-on-Bedrock DevEnv: ${OS_TYPE} ARM64 + code-server + Claude Code + Kiro" \
+  --description "CC-on-Bedrock DevEnv: ${OS_TYPE} ARM64 + code-server + Claude Code + Codex + Kiro" \
   --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$AMI_NAME},{Key=managed_by,Value=cc-on-bedrock},{Key=os_type,Value=$OS_TYPE}]" \
   --query 'ImageId' \
   --output text \

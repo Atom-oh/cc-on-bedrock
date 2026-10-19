@@ -62,6 +62,8 @@ module "usage_tracking" {
   lambda_src_dir                = local.lambda_src_dir
   ecs_cluster_name              = var.ecs_cluster_name
   daily_budget_usd              = var.daily_budget_usd
+  weekly_budget_usd             = var.weekly_budget_usd
+  monthly_budget_usd            = var.monthly_budget_usd
   instance_table_name           = local.devenv_enabled ? module.ec2_devenv[0].instance_table_name : "cc-user-instances"
   routing_table_name            = local.devenv_enabled ? module.ecs_devenv[0].routing_table_name : "cc-routing-table"
   # OTel collector (Fargate + internal NLB:4318 OTLP/HTTP) networking — without these the collector
@@ -131,6 +133,7 @@ module "dashboard" {
   devenv_sg_locked_id                 = local.devenv_enabled ? module.ec2_devenv[0].sg_locked_id : local.default_dev_env
   otel_collector_endpoint             = module.usage_tracking.otel_collector_endpoint
   dns_firewall_rule_group_id          = module.network.dns_firewall_rule_group_id
+  codex_model_id                      = var.codex_model_id
 }
 
 # ---- 06 WAF ------------------------------------------------------------------

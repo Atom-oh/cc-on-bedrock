@@ -44,3 +44,21 @@ def test_consumers_match_terraform_default():
         if opus not in text:
             missing.append(f"{rel}: missing opus default {opus!r}")
     assert not missing, "Model ID drifted from terraform/variables.tf:\n" + "\n".join(missing)
+
+
+# ADR-014: Codex CLI default model — same drift guard as the Claude defaults.
+CODEX_CONSUMERS = [
+    "docker/devenv/scripts/entrypoint.sh",
+    # dashboard fallback for both the DevEnv user-data and the Local installer
+    "shared/nextjs-app/src/lib/codex-model.ts",
+    "tools/cc-bedrock-local.sh",
+    "terraform/terraform.tfvars.example",
+    "terraform/modules/dashboard/variables.tf",
+]
+
+
+def test_codex_consumers_match_terraform_default():
+    codex = _tf_default("codex_model_id")
+    assert codex.startswith("global.openai.gpt-"), codex
+    missing = [rel for rel in CODEX_CONSUMERS if codex not in (REPO / rel).read_text()]
+    assert not missing, f"Codex default {codex!r} drifted from terraform/variables.tf in: {missing}"

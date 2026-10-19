@@ -9,7 +9,7 @@ import MultiLineChart from "@/components/charts/multi-line-chart";
 import HorizontalBarChart from "@/components/charts/horizontal-bar-chart";
 import DonutChart from "@/components/charts/donut-chart";
 import UserDailyTrendChart from "@/components/charts/user-daily-trend-chart";
-import type { UserDailyTrend } from "@/lib/usage-client";
+import type { UserDailyTrend, ToolSummary } from "@/lib/usage-client";
 import type {
   SpendLog,
   ModelMetrics,
@@ -302,6 +302,7 @@ export default function AnalyticsDashboard({
   const [userSummariesApi, setUserSummariesApi] = useState<UserUsageSummary[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [userTrend, setUserTrend] = useState<UserDailyTrend | null>(null);
+  const [toolSummaries, setToolSummaries] = useState<ToolSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -348,6 +349,17 @@ export default function AnalyticsDashboard({
       if (userSumRes) {
         const userSumJson = (await userSumRes.json()) as ApiResponse<UserUsageSummary[]>;
         setUserSummariesApi(userSumJson.data ?? []);
+      }
+
+      // ADR-014: Claude Code vs Codex split (server scopes: admin=all, else self)
+      try {
+        const toolRes = await fetch(`/api/usage?action=tool_summaries&start_date=${start}&end_date=${end}`);
+        if (toolRes.ok) {
+          const toolJson = (await toolRes.json()) as ApiResponse<ToolSummary[]>;
+          setToolSummaries(toolJson.data ?? []);
+        }
+      } catch (toolErr) {
+        console.error("Tool summaries fetch failed:", toolErr);
       }
 
       // Per-user daily trend (server scopes by role: admin=all, dept-manager=dept, user=self)
@@ -552,6 +564,17 @@ export default function AnalyticsDashboard({
       value: d.totalTokens,
       color: DEPT_COLORS[i % DEPT_COLORS.length],
     }));
+
+  const TOOL_COLORS: Record<ToolSummary["tool"], string> = {
+    "claude-code": "#d97706",
+    codex: "#10b981",
+    other: "#6b7280",
+  };
+  const toolLabel = (tool: ToolSummary["tool"]) =>
+    tool === "claude-code" ? t("tools.claudeCode") : tool === "codex" ? t("tools.codex") : t("tools.other");
+  const toolCostDonutData = toolSummaries
+    .filter((s) => s.totalCost > 0)
+    .map((s) => ({ name: toolLabel(s.tool), value: Number(s.totalCost.toFixed(4)), color: TOOL_COLORS[s.tool] }));
 
   const topDeptByCost = deptSummaries.length > 0
     ? [...deptSummaries].sort((a, b) => b.totalCost - a.totalCost)[0]
@@ -779,6 +802,34 @@ export default function AnalyticsDashboard({
                 value={String(deptCount)}
               />
             </div>
+          </Section>
+
+          {/* Section: Usage by tool (ADR-014 Claude Code vs Codex) */}
+          <Section title={t("tools.title")}>
+            {toolSummaries.length === 0 ? (
+              <div className="text-sm text-gray-500">{t("tools.none")}</div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:col-span-2 gap-4">
+                  {toolSummaries.map((s) => (
+                    <DarkStatCard
+                      key={s.tool}
+                      title={toolLabel(s.tool)}
+                      value={formatCost(s.totalCost)}
+                      subtitle={`${formatNumber(s.totalTokens)} tokens · ${formatNumber(s.requests)} ${t("tools.requests")} · ${s.userCount} ${t("tools.users")} · ${s.models.join(", ")}`}
+                    />
+                  ))}
+                </div>
+                {toolCostDonutData.length > 0 && (
+                  <DonutChart
+                    data={toolCostDonutData}
+                    title={t("tools.costShare")}
+                    centerValue={formatCost(toolSummaries.reduce((sum, s) => sum + s.totalCost, 0))}
+                    centerLabel={t("overview.totalCost")}
+                  />
+                )}
+              </div>
+            )}
           </Section>
 
           {/* Section: Department Analysis */}

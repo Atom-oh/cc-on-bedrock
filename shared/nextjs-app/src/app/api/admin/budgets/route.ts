@@ -16,13 +16,11 @@ const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budg
 const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 
-// USD → normalized-token conversion for syncing $ budgets into the ADR-014/015
-// cc-on-bedrock-limits table. Default 66667 ≈ 1_000_000 / $15 per 1M output tokens
-// (Sonnet output reference). This ratio holds approximately across Claude model
-// families because token-limit-enforcer's normalize-weights are calibrated to be
-// roughly $-proportional (Opus weight 5.0 ↔ $75/1M, Haiku 0.267 ↔ $4/1M, Sonnet
-// 1.0 ↔ $15/1M output). Override NORMALIZED_PER_USD when adding non-Anthropic
-// models or when AWS Bedrock pricing shifts materially.
+// USD → normalized-token conversion for syncing $ budgets into the ADR-006(legacy 014)/015
+// cc-on-bedrock-limits table. Default 66667 = 1_000_000 / $15: token-limit-enforcer
+// weights are exactly list price / $15 for every model (Claude and OpenAI GPT,
+// derived from bedrock-usage-tracker PRICING and test-enforced), so N USD mirrors to
+// the same spend on the token axis. Only change this together with that $15 basis.
 const NORMALIZED_PER_USD = Number(process.env.NORMALIZED_PER_USD ?? "66667");
 
 const dynamodb = new DynamoDBClient({ region });
@@ -30,7 +28,10 @@ const dynamodb = new DynamoDBClient({ region });
 export interface DepartmentBudget {
   department: string;
   monthlyBudget: number;         // total dept cap (USD)
-  perUserMonthlyBudget: number;  // ADR-023: default per-member cap, used when user has no explicit budget
+  // ADR-008/023: default per-member caps (USD), used when the user sets no value for that period
+  perUserDailyBudget: number;
+  perUserWeeklyBudget: number;
+  perUserMonthlyBudget: number;
   currentSpend: number;
   updatedAt: string;
 }
@@ -38,10 +39,30 @@ export interface DepartmentBudget {
 export interface UserBudget {
   userId: string;
   department: string;
-  dailyTokenLimit: number;       // legacy: token-based limit, kept for backward compat (ADR-014 normalized tokens)
-  monthlyBudget: number;         // explicit per-user USD cap; 0 means inherit from dept.perUserMonthlyBudget
-  currentSpend: number;
+  dailyTokenLimit: number;       // legacy: token-based limit, kept for backward compat (ADR-006 (legacy ADR-014) normalized tokens)
+  // ADR-008: explicit per-user USD caps per period; 0 = inherit (dept per-user default → global env).
+  // Exceeding ANY one period blocks the user until every period is back under its cap.
+  dailyBudget: number;
+  weeklyBudget: number;
+  monthlyBudget: number;
+  currentSpend: number;          // month-to-date (written by budget-check)
+  currentDailySpend: number;
+  currentWeeklySpend: number;
+  currentMonthlySpend: number;
+  effectiveDailyBudget: number;  // resolved caps used by the last budget-check run
+  effectiveWeeklyBudget: number;
+  effectiveMonthlyBudget: number;
+  budgetExceeded: string[];      // periods currently over cap ([] = not blocked by USD budget)
+  budgetReleaseAt: string;       // ISO time the USD deny can lift ("" when not blocked)
+  periodAware: boolean; // budget-check has written per-period evaluation (budgetExceeded present)
   updatedAt: string;
+}
+
+const PERIOD_FIELDS = ["dailyBudget", "weeklyBudget", "monthlyBudget"] as const;
+const DEPT_PERIOD_FIELDS = ["perUserDailyBudget", "perUserWeeklyBudget", "perUserMonthlyBudget"] as const;
+
+function isValidUsd(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1_000_000;
 }
 
 export async function GET(req: NextRequest) {
@@ -68,6 +89,8 @@ export async function GET(req: NextRequest) {
         return {
           department: u.dept_id ?? u.department ?? u.PK?.replace("DEPT#", "") ?? "unknown",
           monthlyBudget: Number(u.monthlyBudget ?? 0),
+          perUserDailyBudget: Number(u.perUserDailyBudget ?? 0),
+          perUserWeeklyBudget: Number(u.perUserWeeklyBudget ?? 0),
           perUserMonthlyBudget: Number(u.perUserMonthlyBudget ?? 0),  // ADR-023
           currentSpend: Number(u.currentSpend ?? 0),
           updatedAt: u.updatedAt ?? "",
@@ -105,8 +128,19 @@ export async function GET(req: NextRequest) {
             userId: u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
             department: u.department ?? "default",
             dailyTokenLimit: Number(u.dailyTokenLimit ?? 100000),
+            dailyBudget: Number(u.dailyBudget ?? 0),
+            weeklyBudget: Number(u.weeklyBudget ?? 0),
             monthlyBudget: Number(u.monthlyBudget ?? 0),
             currentSpend: Number(u.currentSpend ?? 0),
+            currentDailySpend: Number(u.currentDailySpend ?? 0),
+            currentWeeklySpend: Number(u.currentWeeklySpend ?? 0),
+            currentMonthlySpend: Number(u.currentMonthlySpend ?? u.currentSpend ?? 0),
+            effectiveDailyBudget: Number(u.effectiveDailyBudget ?? 0),
+            effectiveWeeklyBudget: Number(u.effectiveWeeklyBudget ?? 0),
+            effectiveMonthlyBudget: Number(u.effectiveMonthlyBudget ?? 0),
+            budgetExceeded: Array.isArray(u.budgetExceeded) ? u.budgetExceeded.map(String) : [],
+            budgetReleaseAt: String(u.budgetReleaseAt ?? ""),
+            periodAware: Array.isArray(u.budgetExceeded),
             updatedAt: u.updatedAt ?? "",
           };
         })
@@ -134,11 +168,15 @@ export async function PUT(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { type, id, monthlyBudget, perUserMonthlyBudget, dailyTokenLimit, allowedTiers } = body as {
+    const { type, id, monthlyBudget, dailyTokenLimit, allowedTiers } = body as {
       type: "department" | "user";
       id: string;
       monthlyBudget?: number;
-      perUserMonthlyBudget?: number;  // ADR-023: dept-only field
+      dailyBudget?: number;           // user-only
+      weeklyBudget?: number;          // user-only
+      perUserDailyBudget?: number;    // dept-only (ADR-008/023 per-member defaults)
+      perUserWeeklyBudget?: number;
+      perUserMonthlyBudget?: number;
       dailyTokenLimit?: number;
       allowedTiers?: string[];
     };
@@ -146,14 +184,22 @@ export async function PUT(req: NextRequest) {
     if (!type || !id) {
       return NextResponse.json({ error: "type and id are required" }, { status: 400 });
     }
+    // Every USD field present must be a finite, non-negative number (0 = inherit / no cap).
+    for (const f of [...PERIOD_FIELDS, ...DEPT_PERIOD_FIELDS]) {
+      const v = (body as Record<string, unknown>)[f];
+      if (v !== undefined && !isValidUsd(v)) {
+        return NextResponse.json({ error: `${f} must be a number between 0 and 1000000` }, { status: 400 });
+      }
+    }
 
     const now = new Date().toISOString();
 
     if (type === "department") {
-      // ADR-023: dept rows now carry two budget knobs — `monthlyBudget` (total cap)
-      // and `perUserMonthlyBudget` (default per-member cap). At least one must be set.
-      if (monthlyBudget === undefined && perUserMonthlyBudget === undefined) {
-        return NextResponse.json({ error: "monthlyBudget or perUserMonthlyBudget is required" }, { status: 400 });
+      // ADR-023: dept rows carry `monthlyBudget` (total cap) plus per-member default
+      // caps per period (ADR-008: daily / weekly / monthly). At least one must be set.
+      const deptFields = DEPT_PERIOD_FIELDS.filter((f) => (body as Record<string, unknown>)[f] !== undefined);
+      if (monthlyBudget === undefined && deptFields.length === 0) {
+        return NextResponse.json({ error: "monthlyBudget or a perUser*Budget field is required" }, { status: 400 });
       }
       const updateParts: string[] = ["updatedAt = :now"];
       const exprVals: Record<string, { N: string } | { S: string } | { L: { S: string }[] }> = {
@@ -163,9 +209,9 @@ export async function PUT(req: NextRequest) {
         updateParts.push("monthlyBudget = :budget");
         exprVals[":budget"] = { N: String(monthlyBudget) };
       }
-      if (perUserMonthlyBudget !== undefined) {
-        updateParts.push("perUserMonthlyBudget = :perUser");
-        exprVals[":perUser"] = { N: String(perUserMonthlyBudget) };
+      for (const f of deptFields) {
+        updateParts.push(`${f} = :${f}`);
+        exprVals[`:${f}`] = { N: String((body as Record<string, number>)[f]) };
       }
       if (allowedTiers && Array.isArray(allowedTiers)) {
         updateParts.push("allowedTiers = :tiers");
@@ -188,9 +234,12 @@ export async function PUT(req: NextRequest) {
         ":now": { S: now },
       };
 
-      if (monthlyBudget !== undefined) {
-        updateParts.push("monthlyBudget = :budget");
-        exprValues[":budget"] = { N: String(monthlyBudget) };
+      for (const f of PERIOD_FIELDS) {
+        const v = (body as Record<string, unknown>)[f];
+        if (v !== undefined) {
+          updateParts.push(`${f} = :${f}`);
+          exprValues[`:${f}`] = { N: String(v) };
+        }
       }
       if (dailyTokenLimit !== undefined) {
         updateParts.push("dailyTokenLimit = :limit");
@@ -198,7 +247,7 @@ export async function PUT(req: NextRequest) {
       }
 
       if (updateParts.length === 1) {
-        return NextResponse.json({ error: "monthlyBudget or dailyTokenLimit required" }, { status: 400 });
+        return NextResponse.json({ error: "dailyBudget, weeklyBudget, monthlyBudget or dailyTokenLimit required" }, { status: 400 });
       }
 
       await dynamodb.send(new UpdateItemCommand({
@@ -208,7 +257,7 @@ export async function PUT(req: NextRequest) {
         ExpressionAttributeValues: exprValues,
       }));
 
-      // ADR-014/015: mirror $ monthlyBudget into cc-on-bedrock-limits LIMIT#monthly so
+      // ADR-006(legacy 014)/015: mirror $ monthlyBudget into cc-on-bedrock-limits LIMIT#monthly so
       // the Stream-driven token-limit-enforcer (near-real-time) can enforce it on the
       // Local Governance role. Without this, the only enforcement path is budget-check
       // (5-min cron) which used to silently skip Local-only users.
