@@ -9,8 +9,8 @@ runtime_required: false
 
 ## Status
 
-Accepted, 2026-09-13. Documentation convention and specialist protocol: **LIVE**
-in the repository workflow (`ROLE_REVIEW=1`). Runtime service availability and
+Accepted, 2026-09-13. Documentation convention: **LIVE**. Specialist protocol:
+**INACTIVE** in CI since the 2026-10-18 amendment below (retained behind `ROLE_REVIEW=1`). Runtime service availability and
 executed model identity require separate evidence; configuration is not proof.
 
 ## Context
@@ -74,6 +74,31 @@ receipt keys is outside this policy change.
 Static policy, executor and offline protocol tests validate the implementation.
 Real provider access and exact-HEAD publication need runtime evidence.
 
+## Amendment 2026-10-18 — simplified review, ADR Compliance CI removed
+
+Owner decisions:
+
+1. **Simplified review.** CI runs the lens panel → chair `VERDICT: PASS|FAIL` path
+   (`ROLE_REVIEW=0`), the same shape as the owner's other projects, with a 12,000-line diff
+   cap. The specialist protocol stays in the tree and is re-enabled with `ROLE_REVIEW=1`.
+   Motivation: the role protocol's 95 KB / 3,000-line request limits and required-role
+   timeouts (e.g. a 600 s requirements-role timeout on an 80 KB diff) blocked feature PRs
+   without producing findings, and forced splits that reviewers then flagged as
+   cross-PR "missing code".
+2. **ADR Compliance CI removed.** `adr-verify-pr.yml` and `adr-verify-main.yml` are deleted;
+   ADR `## Verification` blocks remain as documentation and can be checked locally. The
+   `adr-fail` label path of `issue-auto-implement.yml` has no producer any more.
+
+Safeguards on the simplified path: the chair runs with no tools and no MCP servers
+(`--tools "" --strict-mcp-config`) because the job runs under `pull_request_target` with
+runner credentials; Kiro cells keep the no-tools agent; a cell that exits non-zero is not
+credited as a response; a missing/invalid chair verdict fails closed.
+
+Known gaps (accepted): Codex cells use a `read-only` sandbox that can still read runner
+files (output is secret-scrubbed); renames out of an excluded directory are classified by the
+old path only; no specialist evidence artifact is retained; legacy prompts request Korean
+review output (the English-output rule applies to the specialist path).
+
 ## Verification
 
 ```yaml
@@ -81,10 +106,10 @@ files:
   - path: docs/decisions/BASELINE.md
     must_contain:
       - "| **LIVE** | Documentation language"
-      - "| **LIVE** | Specialist review protocol"
+      - "Specialist review protocol"
   - path: scripts/pr-review/README.md
     must_contain:
-      - "CI selects `ROLE_REVIEW=1`"
+      - "ROLE_REVIEW=1"
       - "compatibility identifier"
       - "Terraform/tfvars"
 ```

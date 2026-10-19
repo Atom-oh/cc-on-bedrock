@@ -1,8 +1,9 @@
 # Specialist PR review
 
 CI assigns distinct responsibilities instead of asking every model to repeat
-every review lens. The trusted workflow enables this protocol with
-`ROLE_REVIEW=1`; legacy matrix entrypoints remain for regression fixtures.
+every review lens. This protocol is retained but INACTIVE in CI since the ADR-013
+amendment (2026-10-18): the trusted workflow runs `ROLE_REVIEW=0` (panel → chair VERDICT)
+and re-enables this protocol with `ROLE_REVIEW=1`.
 
 | Slot | Configured model | Responsibility |
 | --- | --- | --- |

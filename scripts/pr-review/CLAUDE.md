@@ -1,7 +1,8 @@
 # PR review module
 
 [README.md](README.md) and the [project contract](../../docs/pr-review-specialists.md)
-own the active `ROLE_REVIEW=1` path. Keep legacy entrypoints for compatibility;
+own the `ROLE_REVIEW=1` specialist path (inactive in CI since 2026-10-18; CI runs the
+simplified `ROLE_REVIEW=0` panel → chair VERDICT path). Keep legacy entrypoints for compatibility;
 the [runbook](../../docs/runbooks/pr-review-panel.md) and
 `tests/unit/test-pr-review-panel.sh` retain their historical/legacy scope.
 

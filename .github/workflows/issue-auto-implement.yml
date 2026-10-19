@@ -11,7 +11,7 @@
 # safety net: GitHub disallows merging a Draft regardless of approvals.
 #
 # Uses `secrets.CLAUDE_BOT_PAT` (Fine-grained PAT) to push branches and open
-# PRs so that downstream workflows (`adr-verify-pr.yml`, `pr-review.yml`) DO
+# PRs so that downstream workflows (`pr-review.yml`) DO
 # trigger on the bot's PR — the default GITHUB_TOKEN would suppress them.
 
 name: Issue Auto-Implement (Claude Code)
@@ -104,7 +104,7 @@ jobs:
             3. **If actionable**: make minimal, surgical edits.
                - Follow project conventions (CLAUDE.md, conventional commits, Korean docs / English code).
                - DO NOT touch: `package-lock.json`, `yarn.lock`, `*.tsbuildinfo`, `.next/`, `cdk.out/`, `.venv/`, any `*.tar.gz`.
-               - For issues labelled `adr-fail`: the issue body has the EXACT failed check details (file, rule, value, evidence). Two valid fixes:
+               - For issues labelled `adr-fail` (legacy: the ADR Compliance CI that produced them was removed 2026-10-18): the issue body has the EXACT failed check details (file, rule, value, evidence). Two valid fixes:
                  (a) update the code so the failed `must_contain` / `must_not_contain` / `must_exist` rule passes, OR
                  (b) update the ADR's `## Verification` block if the rule itself is outdated (rare).
                  Prefer (a) unless the ADR text shows the rule predated a since-decided change.

@@ -1,6 +1,7 @@
 # Specialist review protocol
 
-CI selects `ROLE_REVIEW=1`: the installed provider executors prepare immutable
+Since 2026-10-18 CI runs the simplified panel → chair VERDICT path (`ROLE_REVIEW=0`;
+ADR-013 amendment). With `ROLE_REVIEW=1` the installed provider executors prepare immutable
 inputs, run specialists and conditionally invoke the chair. The legacy scripts
 remain compatibility entrypoints. See [the project contract](../../docs/pr-review-specialists.md).
 Only `role_review.py` is offline; executors fetch Git data and invoke provider CLIs.

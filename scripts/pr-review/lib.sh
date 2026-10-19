@@ -19,7 +19,12 @@ ensure_slots() {
 #   $1 slot 파일 경로, $2 패널 라벨, $3 responded 파일
 record_result() {
   local slot="$1" label="$2" responded="$3"
-  if [ -s "$slot" ]; then
+  # A cell that exited non-zero (try_panel writes $slot.rc) is never credited, even if it
+  # printed partial output — the simplified path keeps nonzero exits blocking (ADR-013 amendment).
+  if [ -f "$slot.rc" ] && [ "$(cat "$slot.rc" 2>/dev/null)" != "0" ]; then
+    echo "[skip] $label (exit $(cat "$slot.rc" 2>/dev/null))" >&2
+    : > "$slot"
+  elif [ -s "$slot" ]; then
     echo "$label" >> "$responded"
   else
     echo "[skip] $label" >&2
