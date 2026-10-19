@@ -52,9 +52,9 @@
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
 | **LIVE** | Documentation language | New/substantially rewritten documentation/ADRs/comments use English; existing Korean-only/bilingual content remains until its own maintenance update. Korean conversation/UI remain supported. Review output uses English. | ADR-013 |
-| **INACTIVE(flag)** | Specialist review protocol | Retained behind `ROLE_REVIEW=1`; CI runs the simplified lens panel → chair VERDICT path (`ROLE_REVIEW=0`, 12,000-line cap) since 2026-10-18 (owner decision) | ADR-013 |
+| **INACTIVE(flag)** | Specialist review protocol | Retained behind `ROLE_REVIEW=1`; CI runs the simplified lens panel → chair VERDICT path (`ROLE_REVIEW=0`, 12,000-line cap) since 2026-10-18 (owner decision, ADR-013 amendment) | ADR-013 |
 | **INACTIVE(flag)** | PR review roster | Specialist roster (Codex Astra, Kiro Opus/Sol, Claude Fable) applies only with `ROLE_REVIEW=1` | ADR-013 |
-| **REMOVED** | ADR Compliance CI | `adr-verify-pr.yml` / `adr-verify-main.yml` deleted 2026-10-18 (owner decision); ADR `## Verification` blocks remain as documentation | — |
+| **REMOVED** | ADR Compliance CI | `adr-verify-pr.yml` / `adr-verify-main.yml` deleted 2026-10-18 (owner decision); ADR `## Verification` blocks remain as documentation | ADR-013 (amendment) |
 
 ---
 

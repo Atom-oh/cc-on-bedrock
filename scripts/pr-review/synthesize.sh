@@ -128,17 +128,10 @@ esac ; }
 
 run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
-  # 2026-10-18: CI now runs this legacy path (ROLE_REVIEW=0) under pull_request_target with
-  # runner credentials, so the chair runs with NO tools (`--tools ""`) and no MCP servers
-  # (`--strict-mcp-config`) — a prompt-injected diff cannot read files or run commands.
-  # The chair only needs stdin (diff + panel output). Note below is historical context.
-  # 잔여 위험(cc-on-bedrock PR#107 리뷰 M3): Kiro 셀은 `--agent pr-review-notools`(`tools: []`
-  # 에이전트)로 무툴화해
-  # "diff 인젝션 → 절대경로 read → 공개 유출" 체인을 구조적으로 끊었지만, 이 chair 호출은
-  # tool 제한이 없다(headless 기본은 read 계열 도구를 허용) — 대칭이 아니다. `scrub_secrets`
-  # 는 알려진 크리덴셜 포맷만 잡는 last-line-of-defense 라 완전한 방어는 아니다. 강한 제한
-  # (`--disallowedTools`)은 AWS-Demo-Platform 의 chair 가 의도적으로 read 계열 도구로 diff
-  # 대조 검증을 수행하는 것과 충돌할 수 있어 이 PR 범위에서는 보류 — 잔여 위험만 문서화.
+  # The chair runs with NO tools (`--tools ""`) and no MCP servers (`--strict-mcp-config`):
+  # CI runs this path under pull_request_target with runner credentials, and the chair only
+  # needs stdin (diff + panel output). This closes the PR#107 M3 residual risk (ADR-013
+  # amendment 2026-10-18). Output still passes scrub_secrets as a last line of defense.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
     --tools "" --strict-mcp-config \
