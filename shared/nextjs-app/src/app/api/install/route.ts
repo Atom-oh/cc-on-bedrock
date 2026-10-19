@@ -145,8 +145,9 @@ cat > "\${CC_FN_FILE}" <<'FNEOF'
 ${CC_FUNCTION}
 FNEOF
 
-MARKER_START="# >>> cc-bedrock-local (ADR-006 (legacy ADR-014)) >>>"
-MARKER_END="# <<< cc-bedrock-local (ADR-006 (legacy ADR-014)) <<<"
+# Stable migration identifiers: preserve the markers used by existing installs.
+MARKER_START="# >>> cc-bedrock-local (ADR-014) >>>"
+MARKER_END="# <<< cc-bedrock-local (ADR-014) <<<"
 
 echo
 echo "[4/4] add 'cc' (Claude Code) + 'ccx' (Codex) shell functions to \${SHELL_RC}? (y/N)"

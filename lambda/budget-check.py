@@ -478,11 +478,13 @@ def _candidate_role_names(user: str) -> list:
 
     ADR-031 (B′): usage/limits rows are keyed by email, and ALL IAM role names use
     the subdomain. Both `cc-on-bedrock-local-user-{subdomain}` and
-    `cc-on-bedrock-task-{subdomain}` are built from the row's `subdomain` attribute
-    (captured during the usage scans). The email is NEVER used as a role name
+    `cc-on-bedrock-task-{subdomain}` use the current Cognito subdomain when known.
+    Historical usage metadata is only a fallback: monthly scans can include an
+    obsolete subdomain and return rows in arbitrary order.
+    The email is NEVER used as a role name
     suffix (`local-user-{email}` would be a wrong/non-existent role → fail-safe).
     """
-    subdomain = _subdomain_by_user.get(user)
+    subdomain = _email_subdomain_map.get(user) or _subdomain_by_user.get(user)
     if not subdomain:
         # No subdomain known → cannot construct a valid role name. Fail-safe: emit
         # nothing rather than local-user-{email}.
