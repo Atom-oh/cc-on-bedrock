@@ -1,33 +1,25 @@
 # Agent Module
 
 ## Role
-Bedrock AgentCore Runtime + MCP Gateway 기반 AI Assistant. Strands 프레임워크.
+Bedrock AgentCore Runtime + MCP Gateway 기반 AI Assistant (Strands). Slack과 대시보드 `/api/ai/runtime`이 호출한다. 상세는 `agent/CLAUDE.md`.
 
 ## Key Files
-- `agent.py` - Strands Agent + BedrockAgentCoreApp, @tool 정의
-- `streamable_http_sigv4.py` - SigV4 인증 HTTP 스트리밍
-- `Dockerfile` - Python 3.11 ARM64 컨테이너
-- `requirements.txt` - bedrock-agentcore, strands-agents, boto3
-- `lambda/cc_ecs_mcp.py` - ECS 컨테이너 관리 MCP tools
-- `lambda/cc_cloudwatch_mcp.py` - CloudWatch 메트릭 MCP tools
-- `lambda/cc_dynamodb_mcp.py` - DynamoDB 사용량 조회 MCP tools
-- `lambda/create_targets.py` - AgentCore Gateway Lambda 타겟 생성 스크립트
+- `agent.py` - `BedrockAgentCoreApp` 엔트리포인트. Gateway(MCP)에서 도구를 동적으로 받고, 모델은 `BEDROCK_MODEL_ID`(기본 `global.anthropic.claude-sonnet-5`)
+- `streamable_http_sigv4.py` - SigV4 서명 streamable HTTP transport
+- `lambda/cc_ecs_mcp.py` - `get_container_status`, `get_efs_info`
+- `lambda/cc_cloudwatch_mcp.py` - `get_container_metrics`
+- `lambda/cc_dynamodb_mcp.py` - `get_spend_summary`, `get_budget_status`, `get_system_health`, `get_user_usage`, `get_department_usage`
+- `lambda/create_targets.py` - Gateway(`cconbedrock-gateway`) + Lambda 타깃 생성
+- `Dockerfile` (Python 3.11), `requirements.txt`
 
-## AgentCore Resources
-| Resource | ID | Purpose |
-|----------|-----|---------|
-| Runtime | cconbedrock_assistant_v2 | Strands Agent (PUBLIC mode) |
-| Gateway | cconbedrock-gateway | MCP protocol, 3 Lambda targets |
-| Memory | cconbedrock_memory | Per-user conversation history |
+## AI Assistant 경로
+```
+Dashboard: Browser → /api/ai → Bedrock Converse (inline tools, 최대 5 iteration)
+Slack:     Slack Bot → /api/ai/runtime → AgentCore Runtime → Gateway (MCP) → Lambda
+공유:      AgentCore Memory (사용자별 세션 격리)
+```
 
-## MCP Tools (8)
-| Lambda | Tools | Description |
-|--------|-------|-------------|
-| cc_ecs_mcp | list_containers, start_container, stop_container | ECS 컨테이너 관리 |
-| cc_cloudwatch_mcp | get_container_metrics, get_cluster_metrics | CloudWatch 메트릭 |
-| cc_dynamodb_mcp | get_user_usage, get_cost_summary, get_budget_status | DynamoDB 사용량 |
-
-## Rules
-- `@app.entrypoint` 데코레이터로 AgentCore Runtime 서비스 계약 준수
-- `app.run()`으로 AgentCore가 실행 제어
-- Lambda 타겟 배포: `ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py`
+## Notes
+- `@app.entrypoint`와 `app.run()`은 AgentCore Runtime 서비스 계약이므로 유지한다.
+- AgentCore 리소스는 아직 Terraform 밖에서 만들어진다. 확장 시 Terraform 이관(ADR-001)을 먼저 검토한다.
+- ECS/EFS 관련 도구와 프롬프트는 과거 컨테이너 모델의 잔재다. 현재 DevEnv는 per-user EC2 + EBS(ADR-002).

@@ -1,35 +1,16 @@
-# Release Skill
+---
+name: release
+description: Prepare a tagged release of this repo - verify a clean, green tree, choose the semver bump, update CHANGELOG.md and create the tag.
+---
 
-Automate the release process with validation checks.
+# Release
 
-## Procedure
+Prepare a release. Pushing tags and deploying are the user's call; stop after creating the local tag and report the next steps.
 
-### 1. Pre-release Checks
-- Verify working tree is clean: `git status`
-- Verify all tests pass
-- Check for uncommitted changes
+## Steps
 
-### 2. Determine Version
-- Review changes since last tag: `git log $(git describe --tags --abbrev=0)..HEAD --oneline`
-- Apply semver rules:
-  - MAJOR: Breaking API changes
-  - MINOR: New features, backward compatible
-  - PATCH: Bug fixes only
-
-### 3. Update Changelog
-- Group changes by type (Added, Changed, Fixed, Removed)
-- Include commit references
-- Add date and version header
-
-### 4. Create Release
-- Update version in relevant files (package.json, pyproject.toml, etc.)
-- Create git tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
-- Generate release notes
-
-### 5. Summary
-- Display version bump
-- List key changes
-- Show next steps (push tag, deploy, etc.)
-
-## Usage
-Run with `/release` command
+1. **Pre-checks.** The working tree is clean (`git status`) and the fast gate passes (`bash tests/run-all.sh`). If either fails, report it instead of continuing.
+2. **Version.** Review changes since the last tag (`git log $(git describe --tags --abbrev=0)..HEAD --oneline`; tags follow `vX.Y.Z`) and pick the bump: MAJOR for breaking changes, MINOR for backward-compatible features, PATCH for fixes only. Confirm the version with the user when the bump is not obvious.
+3. **Changelog.** Turn the `## [Unreleased]` section of `CHANGELOG.md` into `## [X.Y.Z] - YYYY-MM-DD (<theme>)`, keeping its topic subsections and adding PR or commit references; start a fresh `[Unreleased]` above it. Verify each entry against the actual commit before writing it.
+4. **Tag.** Update version fields only where the project keeps one in sync, commit, then `git tag -a vX.Y.Z -m "Release vX.Y.Z"`.
+5. **Summary.** Report the version bump, key changes and next steps (push the tag, deploy).

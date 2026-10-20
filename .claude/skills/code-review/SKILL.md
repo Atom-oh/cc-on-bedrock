@@ -1,54 +1,43 @@
-# Code Review Skill
+---
+name: code-review
+description: Review local changes in this repo (default `git diff`) for real bugs, security issues and violations of CLAUDE.md rules, reporting only high-confidence findings.
+---
 
-Review changed code with confidence-based scoring to filter false positives.
+# Code Review
 
-## Review Scope
+Review changed code and report only issues you are confident are real, so the author's time goes to findings that matter.
 
-By default, review unstaged changes from `git diff`. The user may specify different files or scope.
+## Scope
 
-## Review Criteria
+By default, review unstaged changes from `git diff`. The user may name other files, a branch or a commit range.
 
-### Project Guidelines Compliance
-- Import patterns and module boundaries
-- Framework conventions and language style
-- Function declarations and error handling
-- Naming conventions from CLAUDE.md
+## What to look for
 
-### Bug Detection
-- Logic errors and null/undefined handling
-- Race conditions and memory leaks
-- Security vulnerabilities (OWASP Top 10)
-- Performance problems
+- **Project rules** from the root and module `CLAUDE.md` files. The ones most worth checking here: Terraform-only IaC, no hardcoded account/domain/region, no public ingress (`0.0.0.0/0`, public IPs, new internet-facing LBs), Cognito self sign-up off, BASELINE updated with any ADR/flag change, and the Codex IAM parity rules (no `bedrock-mantle:*`).
+- **Bugs**: logic errors, null/undefined handling, race conditions, leaks, error paths that fail open.
+- **Security**: OWASP Top 10, authz gaps in API routes (session check, admin/dept scope), IAM wildcards.
+- **Quality**: duplication, needless complexity, missing tests for changed behavior, accessibility in UI code.
 
-### Code Quality
-- Code duplication and unnecessary complexity
-- Missing critical error handling
-- Test coverage gaps
-- Accessibility issues (for frontend code)
+Verify a suspected issue against the surrounding code before reporting it; pre-existing issues outside the change are out of scope unless the change makes them worse.
 
-## Confidence Scoring
+## Confidence
 
-Rate each issue 0-100:
-- **0-24**: Likely false positive or pre-existing issue. Do not report.
-- **25-49**: Might be real but possibly a nitpick. Do not report.
-- **50-74**: Real issue but minor. Report only if critical.
-- **75-89**: Verified real issue, important. Report with fix suggestion.
-- **90-100**: Confirmed critical issue. Must report.
+Rate each candidate 0-100 and report only those at 75 or above:
 
-**Only report issues with confidence >= 75.**
+- 90-100: confirmed and important; label `CRITICAL`.
+- 75-89: verified real issue; label `IMPORTANT` and include a fix.
+- Below 75: likely nitpick, speculative or pre-existing; leave it out.
 
-## Output Format
+## Output
 
 For each issue:
+
 ```
 ### [CRITICAL|IMPORTANT] <issue title> (confidence: XX)
 **File:** `path/to/file.ext:line`
-**Issue:** Clear description of the problem
-**Guideline:** Reference to CLAUDE.md rule or security standard
-**Fix:** Concrete code suggestion
+**Issue:** what is wrong and why it matters
+**Guideline:** the CLAUDE.md rule or security standard, if one applies
+**Fix:** concrete change
 ```
 
-If no high-confidence issues found, confirm code meets standards with brief summary.
-
-## Usage
-Run with `/code-review` command
+If nothing reaches the threshold, say so in a sentence or two.

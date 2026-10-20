@@ -22,22 +22,33 @@ Terraform HCL is the canonical IaC for this repository.
 - `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront, and Docker runtime.
 - `modules/waf/` - CloudFront-scope WAF.
 
-## Status (post-ADR-033 — Terraform is the sole IaC)
-- ✅ **All 8 modules wired into root `main.tf`** (network, security, ecs-devenv, dashboard, usage-tracking, local-governance, waf, ec2-devenv).
-- ✅ **task permission boundary `cc-on-bedrock-task-boundary` is now created in TF** (`modules/security`, `aws_iam_policy.task_permission_boundary`) and wired to ec2-devenv/local-governance via `task_permission_boundary_arn`. **[ADR-034](../docs/decisions/ADR-034-permission-boundary-in-terraform.md) supersedes ADR-030 §T3's "boundary is CDK-only"** stance (CDK deleted by ADR-033 → boundary authored in `modules/security`). NOTE: the ported policy is the ADR-026 ceiling — **porting ADR-030's boundary-X DenyEscalation floor refinement to the TF boundary is a follow-up**.
-- ✅ OTel pipeline, nginx-config-gen + routing table, cognito-provisioner-trigger ported.
-- ✅ Dashboard deploys the real Next.js standalone container on an EC2 ASG. The image is pulled from a Terraform-managed ECR repository; `dashboard_image_tag` is part of the launch template and ASG version pin so immutable tag changes trigger instance refresh. `NEXTAUTH_SECRET` is read from SSM at boot.
-- ⚠️ **Remaining parity gaps (follow-up)**:
-  - ADR-022 `UserRoleProvisioner` Lambda + EventBridge `cc-on-bedrock-cognito-user-created` rule + DLQ.
-  - Route 53 Resolver **DNS Firewall** (DLP DNS layer).
-  - ADR-016 CloudFront split — DevEnv CF (`*.dev.<domain>`, us-east-1 cert) separate from Dashboard CF.
-  - `modules/ecs-devenv/` 중복 DLP SG 세트 (deprecated ECS 경로) 정리.
-  - `governanceOnly` 플래그 동등 변수.
+## Status
+
+All 8 modules are wired into the root `main.tf` (ADR-001). `governance_only = true` sets
+`count = 0` on `ecs_devenv` and `ec2_devenv`, deploying the governance layer without DevEnv
+infrastructure (Local Governance Mode, ADR-006).
+
+The task permission boundary `cc-on-bedrock-task-boundary` is authored in `modules/security`
+(`aws_iam_policy.task_permission_boundary`, statements `AllowInAccount` + `DenyEscalation`;
+ADR-007) and passed to ec2-devenv and local-governance as `task_permission_boundary_arn`.
+
+The dashboard runs the real Next.js standalone container on an EC2 ASG. The image is pulled
+from a Terraform-managed ECR repository; `dashboard_image_tag` is part of the launch template
+and ASG version pin, so an immutable tag change triggers instance refresh (ADR-011).
+`NEXTAUTH_SECRET` is read from SSM at boot.
+
+Known gap: the `UserRoleProvisioner` Lambda (`cc-on-bedrock-user-role-provisioner`) is invoked
+by name from `modules/security` but is not defined in Terraform yet, and the EventBridge
+pre-provisioning rule + DLQ (ADR-010) are not ported.
 
 ## Commands
 
 ```bash
-terraform -chdir=terraform init
+# Partial S3 backend (`backend "s3" {}` in providers.tf): pass settings at init (use_lockfile needs Terraform >= 1.10)
+terraform -chdir=terraform init \
+  -backend-config="bucket=cc-on-bedrock-tfstate-<ACCOUNT_ID>" \
+  -backend-config="key=cc-on-bedrock/terraform.tfstate" \
+  -backend-config="region=<REGION>" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform -chdir=terraform fmt -recursive
 terraform -chdir=terraform validate
 terraform -chdir=terraform plan
@@ -62,7 +73,7 @@ depends on the launch template tag string changing.
 - Lambda packages must read from `../lambda` through the root `local.lambda_src_dir`.
 - Keep code-server on `8080`; nginx may route additional validated custom ports.
 - Keep EC2 and Local roles distinct, but aligned by shared policy boundary, tags, and inference-profile attribution.
-- Keep OTEL Collector output available through `otel_collector_endpoint`.
-- Two same-named-pattern OTel collectors exist, exported as distinct root outputs: `otel_collector_endpoint` (legacy `ecs-devenv` awsemf collector, container-devenv path) and `otel_rollup_collector_endpoint` (`usage-tracking` module's rollup collector — what EC2 devenv instances actually push Claude Code telemetry to). Don't conflate them.
-- `ec2-devenv`'s `otel_collector_subnet_cidrs` variable scopes devenv egress on OTLP/HTTP:4318 to the rollup collector's private subnets rather than the whole VPC CIDR — NOT a security-group reference, since the collector's pre-existing NLB has no SG and adding one forces a replace (new DNS, cascading ECS service replacement). See `usage-tracking/main.tf`'s `aws_lb.otel` comment.
-- ADR-014 (Codex on Bedrock): root `codex_model_id` (validated `(global|us|eu|apac).openai.gpt-*`) → dashboard `CODEX_MODEL_ID` runtime env → DevEnv `/etc/codex/config.toml`. The per-user Bedrock allow-lists and the task permission boundary (`modules/security`, `modules/ec2-devenv`) include `*openai.gpt-*` foundation-model/inference-profile ARNs and `project/default` (Responses API default project); `tests/unit/test_bedrock_iam_codex_parity.py` keeps the TF/Python/TS copies aligned. Never add `bedrock-mantle:*`. The `cc-bedrock-audit` EventBridge rule matches `Responses` and is account-wide (audit-logger tags non-platform principals `mode=other`).
+- Ingress reaches origins only through CloudFront (managed prefix list + `X-Custom-Secret`). Do not add `0.0.0.0/0` / `::/0` ingress or public IPs on compute. New load balancers are internal behind CloudFront VPC origins; the existing internet-facing dashboard ALB and DevEnv NLB are not a pattern to copy.
+- Two OTel collectors exist with distinct root outputs. `otel_collector_endpoint` is the legacy `ecs-devenv` awsemf collector (container-devenv path); `otel_rollup_collector_endpoint` is the `usage-tracking` rollup collector that EC2 DevEnv instances actually send Claude Code telemetry to. Keep them separate.
+- `ec2-devenv`'s `otel_collector_subnet_cidrs` scopes DevEnv egress on OTLP/HTTP 4318 to the rollup collector's private subnets rather than the whole VPC CIDR. It is not a security-group reference because the collector's existing NLB has no SG, and adding one forces a replacement (new DNS, cascading ECS service replacement). See the `aws_lb.otel` comment in `usage-tracking/main.tf`.
+- Codex on Bedrock (ADR-014): root `codex_model_id` (validated `(global|us|eu|apac).openai.gpt-*`) flows to the dashboard `CODEX_MODEL_ID` runtime env and then to DevEnv `/etc/codex/config.toml`. The per-user Bedrock allow-lists and the task permission boundary (`modules/security`, `modules/ec2-devenv`) include `*openai.gpt-*` foundation-model/inference-profile ARNs and `project/default` (Responses API default project); `tests/unit/test_bedrock_iam_codex_parity.py` keeps the TF/Python/TS copies aligned. Do not grant `bedrock-mantle:*`, because it bypasses invocation-log metering, audit and the budget deny. The `cc-bedrock-audit` EventBridge rule matches `Responses` and is account-wide (audit-logger tags non-platform principals `mode=other`).

@@ -1,11 +1,8 @@
 # CC-on-Bedrock 배포 가이드 / Deployment Guide
 
-> **현행 진실(current truth)은 `docs/decisions/BASELINE.md` + `docs/architecture.md` 입니다.**
-> 이 가이드는 그 두 문서를 따르는 **운영 절차서**일 뿐, 아키텍처/결정의 정본이 아닙니다.
-> 충돌 시 BASELINE.md·architecture.md가 우선합니다.
+> 현행 진실은 `docs/decisions/BASELINE.md`와 `docs/architecture.md`이고, 이 가이드는 그 두 문서를 따르는 운영 절차서입니다. 충돌하면 두 문서가 우선합니다.
 >
-> **IaC는 Terraform 단일** (ADR-033: CDK·CloudFormation 폐기, 2026-06).
-> 더 이상 `cdk deploy` / `bash deploy.sh` / stack-NN 이름 / LiteLLM / EFS·RDS 경로는 없습니다.
+> IaC는 Terraform 단일입니다 (ADR-001: CDK·CloudFormation 폐기). `cdk deploy`, `bash deploy.sh`, stack-NN 이름, LiteLLM, EFS·RDS 경로는 더 이상 없습니다.
 
 ## 목차 / Table of Contents
 
@@ -43,13 +40,14 @@
 2. **도메인 (Route 53)**: Route 53에 호스팅된 도메인이 필요합니다. 외부 도메인을 쓰면 네임서버를 Route 53으로 위임하세요. 호스팅 영역은 `module.network` 가 참조/관리합니다.
 
 3. **Bedrock 모델 접근** (`ap-northeast-2` 서울):
-   - Claude **Opus 4.8** — `global.anthropic.claude-opus-4-8`
-   - Claude **Sonnet 5** — `global.anthropic.claude-sonnet-5`
+   - Claude Opus 4.8 — `global.anthropic.claude-opus-4-8` (`opus_model_id` 기본값)
+   - Claude Sonnet 5 — `global.anthropic.claude-sonnet-5` (`sonnet_model_id` 기본값)
+   - Codex를 쓸 경우 OpenAI GPT inference profile (`codex_model_id`, `global.openai.gpt-*`; ADR-014)
    - AWS Console > Bedrock > Model access 에서 활성화.
 
-4. **Bedrock 사용량 메터링 전제 (ADR-011/019)**: 사용량은 **Application Inference Profile + Bedrock Invocation Log → DynamoDB** 경로로 집계됩니다 (CloudWatch 계정 전역 메트릭이 **아님**, LiteLLM 프록시도 **아님**). Invocation Log 대상 리소스(S3/DynamoDB 파이프라인)는 `modules/usage-tracking` 에서 생성됩니다.
+4. **Bedrock 사용량 메터링 전제 (ADR-005)**: 사용량은 Application Inference Profile + Bedrock Invocation Log → DynamoDB 경로로 집계됩니다. CloudWatch 계정 전역 메트릭이나 LiteLLM 프록시는 쓰지 않습니다. Invocation Log 대상 리소스(S3/DynamoDB 파이프라인)는 `modules/usage-tracking` 에서 생성됩니다.
 
-5. **서비스 쿼터**: ECS 호스트(`m7g.4xlarge`)와 per-user DevEnv(`t4g.large`)용 EC2 한도를 확인하세요.
+5. **서비스 쿼터**: per-user DevEnv(기본 `t4g.large`)와 대시보드 ASG(기본 `t4g.xlarge`)용 EC2 vCPU 한도를 확인하세요.
    ```bash
    aws service-quotas get-service-quota \
      --service-code ec2 --quota-code L-3819A6DF --region ap-northeast-2
@@ -63,15 +61,15 @@
 
 ### Terraform State (S3 backend)
 
-State는 S3 backend를 사용합니다 (`terraform/providers.tf`):
+`terraform/providers.tf`는 partial S3 backend(`backend "s3" {}`)이므로, 계정·리전을 코드에 고정하지 않고 `terraform init` 시 `-backend-config`로 넘깁니다 (4장 참고). 권장 값:
 
 ```
 bucket: cc-on-bedrock-tfstate-<ACCOUNT_ID>
 key:    cc-on-bedrock/terraform.tfstate
-region: ap-northeast-2   (encrypt=true, use_lockfile=true)
+region: <REGION>   (encrypt=true, use_lockfile=true — use_lockfile은 Terraform >= 1.10 필요)
 ```
 
-최초 1회 backend 버킷을 만들어 둡니다 (계정 ID에 맞게 `providers.tf` 의 bucket 이름도 확인):
+최초 1회 backend 버킷을 만들어 둡니다:
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -110,13 +108,14 @@ terraform -chdir=terraform apply -target=module.security.aws_ecr_repository.dash
 # Terraform rejects dashboard_image_tag="latest" because ASG refresh depends on
 # the tag string changing.
 export IMAGE_TAG="$(git rev-parse --short HEAD)"
-cd docker && bash build.sh all all
+bash scripts/05-build-docker-images.sh all
 
-# 개별 빌드 예시
-#   bash build.sh all devenv-ubuntu
-#   bash build.sh all devenv-al2023
-#   bash build.sh all dashboard
-#   bash build.sh all nginx
+# 개별 빌드/푸시 예시 (docker/build.sh [build|push|all] <target>)
+#   bash docker/build.sh all devenv-ubuntu
+#   bash docker/build.sh all devenv-al2023
+#   bash docker/build.sh all dashboard
+#   bash docker/build.sh all otel-collector
+# 주의: docker/build.sh 의 target `all` 은 제거된 litellm 이미지를 포함해 실패합니다.
 ```
 
 > ARM64(Graviton) 전용 이미지입니다. `docker/build.sh` 는 `docker buildx --platform linux/arm64` 를 사용합니다. x86 머신에서 빌드 시 buildx/QEMU가 필요합니다.
@@ -125,7 +124,7 @@ cd docker && bash build.sh all all
 
 ## 3. DevEnv AMI 빌드
 
-per-user EC2 DevEnv (ADR-004)는 ECR 컨테이너가 아니라 **AMI 기반 EC2**로 실행됩니다.
+per-user EC2 DevEnv (ADR-002)는 ECR 컨테이너가 아니라 AMI 기반 EC2로 실행됩니다.
 AMI를 빌드하고 그 ID를 SSM Parameter Store에 등록하면, DevEnv launch template이 이를 읽습니다.
 
 ```bash
@@ -142,7 +141,7 @@ bash scripts/build-ami.sh al2023
 /cc-on-bedrock/devenv/ami-id          (legacy alias)
 ```
 
-> **저장소 모델 (ADR-032, 2-볼륨):** AMI에는 `cc-data-migrate` 부팅 유닛이 포함되어, 인스턴스에 **영속 데이터 EBS** (`/home/coder`, GP3, `DeleteOnTermination=false`, subdomain 태그)를 마운트/초기화합니다. **OS root EBS는 ephemeral** (`DeleteOnTermination=true`, 새 AMI로 교체 가능). Terminate 시에도 데이터 볼륨은 보존됩니다. EFS/RDS는 사용하지 않습니다.
+> **저장소 모델 (ADR-002, 2-볼륨):** AMI에는 `cc-data-migrate` 부팅 유닛이 포함되어, 인스턴스에 영속 데이터 EBS (`/home/coder`, GP3, `DeleteOnTermination=false`, subdomain 태그)를 마운트/초기화합니다. OS root EBS는 ephemeral입니다 (`DeleteOnTermination=true`, 새 AMI로 교체 가능). Terminate 시에도 데이터 볼륨은 보존됩니다. EFS/RDS는 사용하지 않습니다.
 
 ---
 
@@ -158,7 +157,10 @@ cp terraform.tfvars.example terraform.tfvars
 #   dev_subdomain = "dev"
 # (옵션) dashboard_subdomain, *_instance_type, subnet CIDR 등
 
-terraform init            # S3 backend 초기화
+terraform init \
+  -backend-config="bucket=cc-on-bedrock-tfstate-<ACCOUNT_ID>" \
+  -backend-config="key=cc-on-bedrock/terraform.tfstate" \
+  -backend-config="region=<REGION>" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform validate
 terraform plan
 terraform apply           # 확인 메시지에 'yes'
@@ -169,22 +171,22 @@ terraform apply           # 확인 메시지에 'yes'
 | 모듈 | 역할 |
 |------|------|
 | `network` | VPC, Subnets(public/private/isolated), NAT, VPC Endpoints, Route 53 |
-| `security` | Cognito(Hosted UI), ACM, KMS, Secrets Manager, IAM, **task permission boundary (ADR-034)** |
+| `security` | Cognito, ACM, KMS, Secrets Manager, IAM, task permission boundary (ADR-007) |
 | `ecs-devenv` | ECS Cluster, NLB + nginx Fargate, routing DynamoDB, DLP SGs, nginx-config-gen Lambda |
-| `ec2-devenv` | per-user EC2 launch template + DLP SGs (ADR-004), permission-boundary 적용 |
+| `ec2-devenv` | per-user EC2 launch template + DLP SGs (ADR-002), permission-boundary 적용 |
 | `usage-tracking` | usage DynamoDB(+GSI/Stream), OTel collector (Fargate+NLB:4318, OTLP/HTTP), rollup Lambda |
 | `dashboard` | Dashboard EC2 ASG + ALB + CloudFront (us-east-1 ACM) |
-| `local-governance` | STS issuer / token-limit enforcer / reset (ADR-014) |
+| `local-governance` | STS issuer / token-limit enforcer / reset (ADR-006/008) |
 | `waf` | CLOUDFRONT-scope WebACL (us-east-1) |
 
-> **Local Governance Mode (ADR-014):** EC2 DevEnv 없이 거버넌스 레이어만 띄우는 프로파일은 ADR-014에서 GATED 상태이며, `governanceOnly` 동등 Terraform 변수는 **아직 미구현(follow-up)** 입니다 (`terraform/CLAUDE.md` 참조). 현재는 전체 모듈이 함께 배포됩니다. 온보딩 절차는 `docs/runbooks/local-governance-onboarding.md` 를 참고하세요.
+> **Local Governance Mode (ADR-006):** `governance_only = true`로 설정하면 `ecs-devenv`/`ec2-devenv` 모듈 없이 거버넌스 레이어만 배포됩니다 (`terraform/main.tf`; BASELINE §2에는 아직 GATED로 표기). 기본값 `false`에서는 전체 모듈이 함께 배포됩니다. 온보딩 절차는 `docs/runbooks/local-governance-onboarding.md` 를 참고하세요.
 
 출력 확인:
 ```bash
 terraform output
-# vpc_id, user_pool_id, user_pool_client_id, ecs_cluster_name,
-# dashboard_url, dashboard_cloudfront_domain, devenv_cloudfront_domain,
-# devenv_ecr_url, devenv_launch_template_id, devenv_sg_{open,restricted,locked}_id ...
+# vpc_id, user_pool_id, user_pool_client_id, cognito_cli_public_client_id, ecs_cluster_name,
+# dashboard_url, dashboard_cloudfront_domain, dashboard_ecr_url, devenv_cloudfront_domain,
+# nginx_ecr_url, devenv_launch_template_id, devenv_sg_{open,restricted,locked}_id, sts_issuer_function_url ...
 ```
 
 제거:
@@ -223,13 +225,15 @@ aws cognito-idp admin-add-user-to-group \
   --group-name admin
 ```
 
-> Cognito 자격 증명(client id/secret)은 SSM Parameter Store(`/cc-on-bedrock/cognito/*`)에 저장되며 DevEnv/Dashboard가 부팅 시 읽습니다. 사용량/한도의 canonical key는 **email** 입니다 (ADR-031).
+> 대시보드의 Cognito 설정(User Pool ID, client ID, CLI public client ID)은 Terraform이 runtime env로 주입하고, `NEXTAUTH_SECRET`은 부팅 시 SSM `/cc-on-bedrock/nextauth-secret`에서 읽습니다. `04-setup-cognito-auth.sh`는 별도로 `/cc-on-bedrock/cognito/*` SSM 파라미터를 기록합니다. 사용량/한도의 canonical key는 email입니다 (ADR-005).
+>
+> Cognito self sign-up은 꺼져 있습니다(`allow_admin_create_user_only = true`). 사용자는 admin이 생성하거나 초대합니다.
 
 ### 5.2 배포 검증
 
 ```bash
 bash scripts/verify-deployment.sh your-domain.com
-# CloudFront, ECS(Dashboard+nginx), DynamoDB, Cognito, ECR, SSM,
+# CloudFront, ECS(nginx), Dashboard ASG, DynamoDB, Cognito, ECR, SSM,
 # Lambda, IAM, EC2 DevEnv AMI, Bedrock 접근을 점검
 ```
 
@@ -241,7 +245,7 @@ ACM 검증 + DNS 전파에 최대 30분이 걸릴 수 있습니다.
 dig +short <dashboard_subdomain>.your-domain.com
 dig +short test.dev.your-domain.com
 aws acm list-certificates --region ap-northeast-2   # ALB/지역 인증서
-aws acm list-certificates --region us-east-1        # CloudFront 인증서 (ADR-016)
+aws acm list-certificates --region us-east-1        # CloudFront 인증서 (ADR-003)
 ```
 
 ---
@@ -249,7 +253,7 @@ aws acm list-certificates --region us-east-1        # CloudFront 인증서 (ADR-
 ## 6. 대시보드 접속
 
 1. 브라우저에서 `terraform output dashboard_url` 의 주소로 접속
-2. Cognito Hosted UI에서 admin 계정 로그인
+2. 대시보드 로그인 페이지(`/login`)에서 admin 계정 로그인
 3. 최초 로그인 시 임시 비밀번호 변경
 4. 대시보드 표시
 
@@ -257,7 +261,7 @@ aws acm list-certificates --region us-east-1        # CloudFront 인증서 (ADR-
 |------|------|------|
 | 홈 | 시스템 상태 개요 | 전체 |
 | Analytics | 토큰 사용량/모델별 비용/트렌드 (Inference Profile + Invocation Log → DynamoDB 기반) | 전체 |
-| Monitoring | ECS/EC2 DevEnv 상태, OTel 코드활동 메트릭 | admin |
+| Monitoring | EC2 DevEnv 상태, OTel 코드활동 메트릭 | admin |
 | Admin | 사용자 CRUD, DevEnv 관리, 예산/한도 | admin |
 
 ---
@@ -268,19 +272,19 @@ aws acm list-certificates --region us-east-1        # CloudFront 인증서 (ADR-
 
 1. Admin > Users > "Add User"
 2. 입력: 이메일, 서브도메인(`user01` → `user01.dev.your-domain.com`), OS(Ubuntu/AL2023), 리소스 등급, 보안 정책
-3. "Create" — Cognito 사용자 생성 + 라우팅/IAM 프로비저닝이 따라옵니다 (ADR-022/028 경로).
+3. "Create" — Cognito 사용자 생성 + 라우팅/IAM 프로비저닝이 따라옵니다 (ADR-010).
 
 ### 개발환경 시작
 
 1. 사용자가 대시보드 로그인 후 "Start Dev Environment"
-2. per-user EC2가 시작되고, **영속 데이터 EBS(`/home/coder`)** 가 마운트됩니다 (ADR-032)
+2. per-user EC2가 시작되고, 영속 데이터 EBS(`/home/coder`)가 마운트됩니다 (ADR-002)
 3. 상태가 "Ready"가 되면 `https://user01.dev.your-domain.com` → code-server(VS Code Web)
 4. Claude Code / Kiro 사용 가능 (Bedrock 호출은 Application Inference Profile로 귀속)
 
 ### 개발환경 중지 / 보존
 
 - 대시보드 "Stop", 또는 유휴 시 자동 Stop/Hibernate (ADR-002)
-- 데이터는 **영속 데이터 EBS에 보존** — 재시작/OS 전환/AMI 교체에도 유지 (EFS 아님)
+- 데이터는 영속 데이터 EBS에 보존되어 재시작/OS 전환/AMI 교체에도 유지됩니다 (EFS 아님)
 
 ---
 
@@ -302,23 +306,23 @@ DNS 전파 최대 48h. CloudFront 배포 상태도 확인.
 aws acm list-certificates --region us-east-1 \
   --query "CertificateSummaryList[?contains(DomainName,'your-domain')]"
 ```
-DNS 검증 CNAME가 Route 53에 생성됐는지 확인 (ADR-016: CloudFront는 us-east-1 인증서).
+DNS 검증 CNAME가 Route 53에 생성됐는지 확인 (ADR-003: CloudFront는 us-east-1 인증서).
 
 ### DevEnv EC2 시작 실패
 - AMI 미등록 → `bash scripts/build-ami.sh <os>` 후 SSM 파라미터 확인.
 - launch template/SG 확인: `terraform output devenv_launch_template_id`, `devenv_sg_*_id`.
-- IAM permission boundary(ADR-034) 관련은 `scripts/check-policyset-boundary.py` 로 점검.
+- IAM permission boundary(ADR-007) 관련은 `scripts/check-policyset-boundary.py --self-test` 로 점검.
 
 ### Bedrock 호출 오류
 - 모델 access 활성 여부(1장) 및 region(ap-northeast-2) 확인.
-- VPC Endpoint / Task Role IAM (boundary 내 grant, ADR-021/030) 확인.
+- VPC Endpoint / per-user role IAM (boundary 내 grant, ADR-007) 확인.
 
 ### CloudFront 403
 - X-Custom-Secret 헤더 불일치. CloudFront Origin Custom Header ↔ ALB/NLB 리스너 규칙 헤더 값 일치 확인.
 - 값은 Secrets Manager(`module.security` 가 생성)에서 확인.
 
 ### 비용
-- NAT Gateway / VPC Endpoint / ECS 호스트(`m7g.4xlarge`)가 상시 비용의 큰 부분.
+- NAT Gateway / VPC Endpoint / nginx·OTel Fargate 서비스 / 대시보드 ASG가 상시 비용의 큰 부분.
 - 미사용 시 DevEnv 인스턴스가 Stop/Hibernate 되는지(ADR-002) 확인. `scripts/verify-deployment.sh` 로 리소스 점검.
 
 ---
@@ -329,9 +333,9 @@ DNS 검증 CNAME가 Route 53에 생성됐는지 확인 (ADR-016: CloudFront는 u
 |------|------|
 | 현행 결정 베이스라인 | `docs/decisions/BASELINE.md` |
 | 아키텍처 SSOT | `docs/architecture.md` |
-| IaC 단일화 결정 | `docs/decisions/ADR-033-cdk-to-terraform-migration.md` |
-| 2-볼륨 저장소 | `docs/decisions/ADR-032-persistent-data-ebs.md` |
-| permission boundary in TF | `docs/decisions/ADR-034-permission-boundary-in-terraform.md` |
+| IaC 단일화 결정 | `docs/decisions/ADR-001-iac-terraform.md` |
+| 2-볼륨 저장소 | `docs/decisions/ADR-002-devenv-compute-storage.md` |
+| IAM 신청·permission boundary | `docs/decisions/ADR-007-iam-access-control.md` |
 | Terraform 모듈 상세 | `terraform/CLAUDE.md` |
 | 완전 teardown + 재배포 | `docs/runbooks/full-teardown-redeploy.md` |
 | Local Governance 온보딩 | `docs/runbooks/local-governance-onboarding.md` |
