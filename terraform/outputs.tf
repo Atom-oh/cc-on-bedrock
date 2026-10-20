@@ -126,3 +126,8 @@ output "dns_firewall_rule_group_id" {
   description = "Route 53 Resolver DNS Firewall rule group for managed threat and DLP domain rules"
   value       = module.network.dns_firewall_rule_group_id
 }
+
+output "migration_hold_security_group_id" {
+  description = "Temporary source-VPC security group for staged DevEnv migration."
+  value       = module.network.migration_hold_security_group_id
+}

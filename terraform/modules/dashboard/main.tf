@@ -60,6 +60,10 @@ resource "aws_security_group" "alb" {
   }
 
   tags = { Name = "cc-dashboard-alb-sg" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_security_group" "ec2" {
@@ -83,21 +87,29 @@ resource "aws_security_group" "ec2" {
   }
 
   tags = { Name = "cc-dashboard-ec2-sg" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 # ---- ALB ---------------------------------------------------------------------
 resource "aws_lb" "this" {
-  name               = "cc-dashboard-alb"
+  name               = "cc-dashboard-${substr(var.vpc_id, -8, 8)}"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.public_subnet_ids
 
   tags = { Name = "cc-dashboard-alb" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb_target_group" "this" {
-  name     = "cc-dashboard-tg"
+  name     = "cc-dashboard-${substr(var.vpc_id, -8, 8)}"
   port     = 3000
   protocol = "HTTP"
   vpc_id   = var.vpc_id
@@ -108,6 +120,10 @@ resource "aws_lb_target_group" "this" {
   }
 
   tags = { Name = "cc-dashboard-tg" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb_listener" "https" {
@@ -220,13 +236,14 @@ USERDATA
 }
 
 resource "aws_autoscaling_group" "this" {
-  name                = "cc-dashboard-asg"
-  min_size            = 1
-  max_size            = 2
-  desired_capacity    = 1
-  vpc_zone_identifier = var.private_subnet_ids
-  health_check_type   = "ELB"
-  target_group_arns   = [aws_lb_target_group.this.arn]
+  wait_for_elb_capacity = 1
+  name                  = "cc-dashboard-asg"
+  min_size              = 1
+  max_size              = 2
+  desired_capacity      = 1
+  vpc_zone_identifier   = var.private_subnet_ids
+  health_check_type     = "ELB"
+  target_group_arns     = [aws_lb_target_group.this.arn]
 
   launch_template {
     id      = aws_launch_template.this.id

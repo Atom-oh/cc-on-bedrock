@@ -1,15 +1,35 @@
 # Shared networking remains owned by its original infrastructure stack.
 # This module reads it and manages only the application DNS/firewall resources.
 locals {
-  use_existing_vpc = var.vpc_id != null
-  vpc_id           = local.use_existing_vpc ? data.aws_vpc.existing[0].id : aws_vpc.this[0].id
-  vpc_cidr         = local.use_existing_vpc ? data.aws_vpc.existing[0].cidr_block : aws_vpc.this[0].cidr_block
+  use_existing_vpc       = var.vpc_id != null
+  create_managed_network = !local.use_existing_vpc || var.retain_managed_network
+  vpc_id                 = local.use_existing_vpc ? data.aws_vpc.existing[0].id : aws_vpc.this[0].id
+  vpc_cidr               = local.use_existing_vpc ? data.aws_vpc.existing[0].cidr_block : aws_vpc.this[0].cidr_block
   subnet_groups = {
     public   = var.public_subnet_ids
     private  = var.private_subnet_ids
     isolated = var.isolated_subnet_ids
   }
   existing_subnet_ids = concat(var.public_subnet_ids, var.private_subnet_ids, var.isolated_subnet_ids)
+}
+
+# Temporary quarantine for runtime-created instances while application security
+# groups are replaced. No inbound access; HTTPS permits SSM recovery if needed.
+resource "aws_security_group" "migration_hold" {
+  count       = local.use_existing_vpc && var.retain_managed_network ? 1 : 0
+  name_prefix = "cc-migration-hold-"
+  description = "Temporary isolation for source DevEnv instances during VPC migration"
+  vpc_id      = aws_vpc.this[0].id
+  ingress     = []
+
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "cc-migration-hold" }
 }
 
 data "aws_vpc" "existing" {

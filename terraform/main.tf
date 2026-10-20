@@ -23,6 +23,7 @@ module "network" {
   source = "./modules/network"
 
   vpc_id                 = var.vpc_id
+  retain_managed_network = var.retain_managed_network
   public_subnet_ids      = var.public_subnet_ids
   private_subnet_ids     = var.private_subnet_ids
   isolated_subnet_ids    = var.isolated_subnet_ids

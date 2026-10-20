@@ -37,6 +37,14 @@ network and replaces VPC-bound application resources. It cannot move
 runtime-created DevEnv instances. Operators must preserve persistent EBS data,
 maintain a recovery point and inspect the complete plan before cutover.
 
+For an existing deployment, first set `retain_managed_network = true`. This keeps
+source networking and creates a temporary inbound-closed security group for
+stopped runtime instances. VPC-derived load-balancer and target-group names force
+replacement without name collisions, with create-before-destroy security groups
+and application health waits. Clear the retention flag only after runtime
+instances leave the source VPC. This avoids destroy-dependency cycles and preserves
+the source instance's recovery path during cutover.
+
 The initial existing-network contract uses the VPC's primary IPv4 CIDR, matching
 the application's single-CIDR security rules. Subnets in secondary CIDRs are
 rejected rather than silently receiving incomplete access rules.

@@ -71,6 +71,10 @@ resource "aws_security_group" "open" {
   }
 
   tags = { Name = "cc-devenv-sg-open" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_security_group" "restricted" {
@@ -139,6 +143,10 @@ resource "aws_security_group" "restricted" {
   }
 
   tags = { Name = "cc-devenv-sg-restricted" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_security_group" "locked" {
@@ -208,6 +216,10 @@ resource "aws_security_group" "locked" {
   }
 
   tags = { Name = "cc-devenv-sg-locked" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 # ─── IAM Role for the per-user EC2 instance ──────────────────────────────────

@@ -10,6 +10,9 @@ aws_region = "ap-northeast-2"
 # public_subnet_ids   = ["subnet-00000000000000001", "subnet-00000000000000002"]
 # private_subnet_ids  = ["subnet-00000000000000003", "subnet-00000000000000004"]
 # isolated_subnet_ids = ["subnet-00000000000000005", "subnet-00000000000000006"]
+# Existing deployments only: keep the old managed VPC during the first cutover
+# stage, then set false after all runtime instances have moved.
+# retain_managed_network = true
 
 # Dedicated-network settings: used only when vpc_id is null/omitted.
 # Existing VPC CIDRs are read from AWS, not from these defaults.

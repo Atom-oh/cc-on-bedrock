@@ -68,6 +68,11 @@ depends on the launch template tag string changing.
 - Keep `modules/network/moved.tf`: it preserves existing state addresses when
   adding conditional creation. Switching a live deployment to another VPC still
   requires the [migration runbook](../docs/runbooks/vpc-migration.md).
+- For a live cutover, `retain_managed_network = true` retains source networking
+  and creates an inbound-closed hold group for stopped runtime instances. Set it
+  false only after those instances move. Load-balancer and target-group names
+  include the VPC suffix so cross-VPC changes replace them without name conflicts.
+  ECS steady-state and dashboard target-health waits precede old-resource cleanup.
 - Network contract tests require Terraform >= 1.7:
   `terraform test -filter=tests/network.tftest.hcl` from `terraform/`.
 - Do not add alternate deployment IaC equivalents.

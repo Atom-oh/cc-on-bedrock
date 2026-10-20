@@ -40,6 +40,7 @@ override_data {
 }
 
 variables {
+  retain_managed_network = false
   vpc_id                 = "vpc-0123456789abcdef0"
   public_subnet_ids      = ["subnet-00000000000000001", "subnet-00000000000000002"]
   private_subnet_ids     = ["subnet-00000000000000003", "subnet-00000000000000004"]
@@ -164,4 +165,24 @@ run "reject_subnet_ids_without_vpc" {
     vpc_id = null
   }
   expect_failures = [aws_vpc.this]
+}
+
+run "migration_retains_source_network" {
+  command = plan
+  module { source = "./modules/network" }
+  variables {
+    retain_managed_network = true
+  }
+  assert {
+    condition     = length(aws_vpc.this) == 1 && length(aws_nat_gateway.a) == 1 && length(aws_vpc_endpoint.interface) == 7
+    error_message = "The source network must survive the first migration stage."
+  }
+  assert {
+    condition     = output.vpc_id == var.vpc_id && output.vpc_cidr == "10.50.0.0/16"
+    error_message = "Application consumers must use the destination while the source remains."
+  }
+  assert {
+    condition     = length(aws_security_group.migration_hold) == 1 && length(aws_security_group.migration_hold[0].ingress) == 0
+    error_message = "The temporary source-instance group must have no inbound rules."
+  }
 }

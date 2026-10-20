@@ -2,6 +2,10 @@ output "vpc_id" {
   value = local.vpc_id
 }
 
+output "migration_hold_security_group_id" {
+  value = try(aws_security_group.migration_hold[0].id, null)
+}
+
 output "vpc_cidr" {
   value = local.vpc_cidr
 }

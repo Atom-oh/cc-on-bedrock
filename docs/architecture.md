@@ -99,6 +99,9 @@ graph LR
   Existing DevEnv instances and persistent EBS volumes require the
   [VPC migration procedure](runbooks/vpc-migration.md); changing tfvars alone does
   not migrate runtime-created user instances.
+  `retain_managed_network` keeps source networking during cutover. Load balancers
+  and target groups have VPC-derived names for replacement; old network cleanup
+  occurs only after runtime instances have moved and the retention flag is cleared.
 
 ## Key paths
 ```text

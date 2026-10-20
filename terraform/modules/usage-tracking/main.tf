@@ -1313,10 +1313,14 @@ resource "aws_security_group" "otel_collector" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb" "otel" {
-  name               = "cc-on-bedrock-otel"
+  name               = "cc-otel-rollup-${substr(var.vpc_id, -8, 8)}"
   internal           = true
   load_balancer_type = "network"
   subnets            = var.private_subnet_ids
@@ -1326,10 +1330,14 @@ resource "aws_lb" "otel" {
   # breaking every already-running devenv's configured endpoint on apply. Egress scoping
   # for devenv -> collector uses the private-subnet CIDRs instead (see ec2-devenv), which
   # needs no change to this resource at all.
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb_target_group" "otel" {
-  name        = "cc-on-bedrock-otel-4318"
+  name        = "cc-otel-rollup-${substr(var.vpc_id, -8, 8)}"
   port        = 4318
   protocol    = "TCP"
   target_type = "ip"
@@ -1460,11 +1468,12 @@ resource "aws_ecs_task_definition" "otel_collector" {
 }
 
 resource "aws_ecs_service" "otel_collector" {
-  name            = "cc-on-bedrock-otel-collector"
-  cluster         = aws_ecs_cluster.otel.id
-  task_definition = aws_ecs_task_definition.otel_collector.arn
-  desired_count   = 2
-  launch_type     = "FARGATE"
+  wait_for_steady_state = true
+  name                  = "cc-on-bedrock-otel-collector"
+  cluster               = aws_ecs_cluster.otel.id
+  task_definition       = aws_ecs_task_definition.otel_collector.arn
+  desired_count         = 2
+  launch_type           = "FARGATE"
 
   network_configuration {
     subnets         = var.private_subnet_ids

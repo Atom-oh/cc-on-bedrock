@@ -15,6 +15,13 @@ variable "vpc_id" {
   default     = null
 }
 
+variable "retain_managed_network" {
+  description = "Migration only: retain this stack's old dedicated network until runtime instances have moved."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "public_subnet_ids" {
   description = "Existing public subnet IDs in vpc_id, across at least two AZs."
   type        = list(string)

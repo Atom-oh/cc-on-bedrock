@@ -322,6 +322,10 @@ resource "aws_security_group" "nginx" {
   }
 
   tags = { Name = "cc-nginx-sg" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_security_group" "nlb" {
@@ -345,10 +349,14 @@ resource "aws_security_group" "nlb" {
   }
 
   tags = { Name = "cc-devenv-nlb-sg" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb" "nlb" {
-  name               = "cc-devenv-nlb"
+  name               = "cc-devenv-${substr(var.vpc_id, -8, 8)}"
   internal           = false
   load_balancer_type = "network"
   security_groups    = [aws_security_group.nlb.id]
@@ -357,10 +365,14 @@ resource "aws_lb" "nlb" {
   enable_cross_zone_load_balancing = true
 
   tags = { Name = "cc-devenv-nlb" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb_target_group" "nginx" {
-  name        = "cc-nginx-targets"
+  name        = "cc-nginx-${substr(var.vpc_id, -8, 8)}"
   port        = 80
   protocol    = "TCP"
   target_type = "ip"
@@ -375,6 +387,10 @@ resource "aws_lb_target_group" "nginx" {
     unhealthy_threshold = 3
     interval            = 15
   }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb_listener" "nlb" {
@@ -389,11 +405,12 @@ resource "aws_lb_listener" "nlb" {
 }
 
 resource "aws_ecs_service" "nginx" {
-  name            = "cc-nginx-proxy"
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.nginx.arn
-  desired_count   = 2
-  launch_type     = "FARGATE"
+  wait_for_steady_state = true
+  name                  = "cc-nginx-proxy"
+  cluster               = aws_ecs_cluster.this.id
+  task_definition       = aws_ecs_task_definition.nginx.arn
+  desired_count         = 2
+  launch_type           = "FARGATE"
 
   enable_execute_command             = true
   deployment_minimum_healthy_percent = 50
@@ -436,6 +453,10 @@ resource "aws_security_group" "otel_collector" {
   }
 
   tags = { Name = "cc-otel-collector-sg" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_cloudwatch_log_group" "otel_collector" {
@@ -527,7 +548,7 @@ resource "aws_ecs_task_definition" "otel_collector" {
 }
 
 resource "aws_lb" "otel_collector" {
-  name               = "cc-otel-collector-nlb"
+  name               = "cc-otel-legacy-${substr(var.vpc_id, -8, 8)}"
   internal           = true
   load_balancer_type = "network"
   security_groups    = [aws_security_group.otel_collector.id]
@@ -536,10 +557,14 @@ resource "aws_lb" "otel_collector" {
   enable_cross_zone_load_balancing = true
 
   tags = { Name = "cc-otel-collector-nlb" }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb_target_group" "otel_collector" {
-  name        = "cc-otel-collector"
+  name        = "cc-otel-legacy-${substr(var.vpc_id, -8, 8)}"
   port        = 4318
   protocol    = "TCP"
   target_type = "ip"
@@ -553,6 +578,10 @@ resource "aws_lb_target_group" "otel_collector" {
     unhealthy_threshold = 3
     interval            = 30
   }
+  lifecycle {
+    create_before_destroy = true
+  }
+
 }
 
 resource "aws_lb_listener" "otel_collector" {
@@ -567,11 +596,12 @@ resource "aws_lb_listener" "otel_collector" {
 }
 
 resource "aws_ecs_service" "otel_collector" {
-  name            = "cc-otel-collector"
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.otel_collector.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  wait_for_steady_state = true
+  name                  = "cc-otel-collector"
+  cluster               = aws_ecs_cluster.this.id
+  task_definition       = aws_ecs_task_definition.otel_collector.arn
+  desired_count         = 1
+  launch_type           = "FARGATE"
 
   network_configuration {
     subnets          = var.private_subnet_ids

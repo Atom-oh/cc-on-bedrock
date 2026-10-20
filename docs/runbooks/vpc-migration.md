@@ -42,6 +42,7 @@ Do not import those resources into this application's state.
    public_subnet_ids   = ["subnet-00000000000000001", "subnet-00000000000000002"]
    private_subnet_ids  = ["subnet-00000000000000003", "subnet-00000000000000004"]
    isolated_subnet_ids = ["subnet-00000000000000005", "subnet-00000000000000006"]
+   retain_managed_network = true
    ```
 
    Replace every example ID. Legacy `vpc_cidr` and `*_subnet_cidr_*` settings are
@@ -59,18 +60,45 @@ Do not import those resources into this application's state.
 
 ## Cut over
 
-Apply only the inspected migration plan after resolving its ordering and data
-preservation requirements. A blind full apply may stall deleting the old network
-while runtime-created DevEnv ENIs still use it; staged changes require a fresh
-reviewed plan at each stage, not ad hoc security-group CLI edits.
+Use three stages, with a fresh inspected plan for each:
+
+1. With `retain_managed_network = true`, create the temporary
+   `module.network.aws_security_group.migration_hold` resource using a targeted
+   plan/apply. This migration-specific target preserves the source VPC. Record
+   existing DevEnv security-group associations, then associate stopped source
+   instances with the hold group. Its rules are Terraform-owned, allow outbound
+   HTTPS for SSM recovery, and allow no inbound traffic. Association changes on
+   runtime-created instances do not require editing security-group rules.
+2. Apply the complete destination change set. If refresh reveals unrelated
+   pre-existing drift, record it and generate an explicitly targeted migration
+   plan that includes all network-dependent changes and their dependencies.
+   Do not roll unrelated application code or policies back as part of this move.
+   VPC-derived load-balancer/target-group
+   names allow old and new resources to coexist, and force actual cross-VPC
+   replacement. Security groups use create-before-destroy. ECS waits for steady
+   state; the dashboard ASG waits for a healthy load-balancer target. The old VPC,
+   NAT gateways, subnets and endpoints remain available during this stage.
+3. Move each runtime-created DevEnv and verify its data, runtime configuration
+   and identity records. Once no application ENIs remain in the source VPC, set
+   `retain_managed_network = false`, inspect the cleanup plan and apply it.
+   The cleanup removes the hold group and the old Terraform-owned network.
+
+Create recovery snapshots for every attached source volume before recreating a
+DevEnv. A stopped source can be imaged to preserve its OS and additional disks;
+attach its original persistent data volume to the replacement in the same AZ.
+Update any persisted OTel endpoint to the destination output. Verify mounts and
+data before enabling routing. Do not tag a cloned data disk as a second active
+`cc:role=data` volume: the platform deliberately rejects ambiguous volume
+identity. Preserve non-data source disks until their recovery copies are verified.
 
 The dashboard ASG, Nginx ECS service, both OTel collectors, load balancers and
 application security groups must all use the destination subnets/VPC. Terraform
 updates the dashboard's `PRIVATE_SUBNET_IDS` and the DevEnv launch template for
 new user instances. Existing user instances are outside Terraform state:
-recreate them through the platform's supported lifecycle, reattach their data
-volumes in the same AZ, and verify the user-instance and routing records point
-to the replacement instance and IP.
+recreate them through the platform's supported lifecycle or an operator migration
+that preserves the same instance-profile, data-volume and identity contracts.
+Reattach their data volumes in the same AZ, and verify the user-instance and
+routing records point to the replacement instance and IP.
 
 Verify dashboard sign-in, DevEnv routing/code-server, Bedrock requests, SSM,
 data-volume contents, usage collection and OTLP ingestion. Confirm every former
@@ -84,3 +112,11 @@ return to the previous topology. After VPC-bound resources have been replaced
 or the old network deleted, rollback is a redeployment, not an instant variable
 revert. Use retained data volumes/snapshots and recorded application state;
 do not overwrite a newer Terraform state with the old backup.
+
+## References
+
+- [EC2 CreateImage](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateImage.html):
+  image creation includes attached EBS mappings; copying an image changes its
+  encryption settings.
+- [EC2 AttachVolume](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AttachVolume.html):
+  attachment supports running or stopped instances in the same availability zone.

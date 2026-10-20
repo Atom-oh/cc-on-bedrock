@@ -9,6 +9,13 @@ variable "vpc_id" {
   }
 }
 
+variable "retain_managed_network" {
+  description = "Keep the existing Terraform-owned network during a staged migration."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "public_subnet_ids" {
   type     = list(string)
   default  = []
