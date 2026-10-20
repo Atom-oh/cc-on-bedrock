@@ -62,10 +62,10 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> Eleven consolidated ADRs replace the legacy 34; ADR-012/013/014 are subsequent records.
+> Eleven consolidated ADRs replace the legacy 34; ADR-012 through ADR-015 are subsequent records.
 > `../history/ADR-MAPPING.md` maps retired decisions; tag `adr-legacy-2026-06-23` retains their bodies.
 > Consolidation is complete. ADR-013's protocol and language policy are LIVE.
-> The next ADR number is 015; the earlier reset was a one-time exception.
+> The next ADR number is 016; the earlier reset was a one-time exception.
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
@@ -83,6 +83,7 @@
 | 012 | DevEnv 헬스 판정 | 직접 8080 probe 제거(SG 격리로 timeout) → EC2 lifecycle 파생(running+privateIp⇒HEALTHY), 낙관적 false-positive trade-off 수용 | (신규) |
 | 013 | Specialist PR review and documentation | Active role protocol and incremental English maintenance policy; preserves remaining security/custody rules | New |
 | 014 | Codex on Bedrock | OpenAI Codex CLI → bedrock-runtime Responses API (`global.openai.*`), per-user role attribution; IAM adds OpenAI GPT + default project (no mantle); explicit per-model cache rates + corrected Claude prices (Price List API); usage `tool` attribute + per-tool dashboard; audit-logger `Responses` / Local roles / `client_tool`; `/etc/codex/config.toml` system layer | New |
+| 015 | Existing VPC selection | Optional VPC/subnet IDs in tfvars; preserve dedicated creation and state upgrade; shared network stays externally owned | New |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 

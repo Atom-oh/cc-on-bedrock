@@ -17,22 +17,33 @@ locals {
 
 # ---- VPC ---------------------------------------------------------------------
 resource "aws_vpc" "this" {
+  count = local.use_existing_vpc ? 0 : 1
+
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
 
   tags = { Name = var.vpc_name }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.existing_subnet_ids) == 0
+      error_message = "Subnet ID inputs require vpc_id. Leave all subnet ID lists empty when creating a VPC."
+    }
+  }
 }
 
 # ---- Internet Gateway --------------------------------------------------------
 resource "aws_internet_gateway" "this" {
-  vpc_id = aws_vpc.this.id
+  count  = local.use_existing_vpc ? 0 : 1
+  vpc_id = aws_vpc.this[0].id
   tags   = { Name = "${var.vpc_name}-igw" }
 }
 
 # ---- Public Subnets ----------------------------------------------------------
 resource "aws_subnet" "public_a" {
-  vpc_id                  = aws_vpc.this.id
+  count                   = local.use_existing_vpc ? 0 : 1
+  vpc_id                  = aws_vpc.this[0].id
   cidr_block              = var.public_subnet_cidr_a
   availability_zone       = local.azs[0]
   map_public_ip_on_launch = true
@@ -40,7 +51,8 @@ resource "aws_subnet" "public_a" {
 }
 
 resource "aws_subnet" "public_c" {
-  vpc_id                  = aws_vpc.this.id
+  count                   = local.use_existing_vpc ? 0 : 1
+  vpc_id                  = aws_vpc.this[0].id
   cidr_block              = var.public_subnet_cidr_c
   availability_zone       = local.azs[1]
   map_public_ip_on_launch = true
@@ -48,131 +60,153 @@ resource "aws_subnet" "public_c" {
 }
 
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.this.id
+  count  = local.use_existing_vpc ? 0 : 1
+  vpc_id = aws_vpc.this[0].id
   tags   = { Name = "${var.vpc_name}-public-rt" }
 }
 
 resource "aws_route" "public_internet" {
-  route_table_id         = aws_route_table.public.id
+  count                  = local.use_existing_vpc ? 0 : 1
+  route_table_id         = aws_route_table.public[0].id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.this.id
+  gateway_id             = aws_internet_gateway.this[0].id
 }
 
 resource "aws_route_table_association" "public_a" {
-  subnet_id      = aws_subnet.public_a.id
-  route_table_id = aws_route_table.public.id
+  count          = local.use_existing_vpc ? 0 : 1
+  subnet_id      = aws_subnet.public_a[0].id
+  route_table_id = aws_route_table.public[0].id
 }
 
 resource "aws_route_table_association" "public_c" {
-  subnet_id      = aws_subnet.public_c.id
-  route_table_id = aws_route_table.public.id
+  count          = local.use_existing_vpc ? 0 : 1
+  subnet_id      = aws_subnet.public_c[0].id
+  route_table_id = aws_route_table.public[0].id
 }
 
 # ---- NAT Gateways (one per AZ) ----------------------------------------------
 resource "aws_eip" "nat_a" {
+  count  = local.use_existing_vpc ? 0 : 1
   domain = "vpc"
   tags   = { Name = "${var.vpc_name}-nat-a" }
 }
 
 resource "aws_eip" "nat_c" {
+  count  = local.use_existing_vpc ? 0 : 1
   domain = "vpc"
   tags   = { Name = "${var.vpc_name}-nat-c" }
 }
 
 resource "aws_nat_gateway" "a" {
-  allocation_id = aws_eip.nat_a.id
-  subnet_id     = aws_subnet.public_a.id
+  count         = local.use_existing_vpc ? 0 : 1
+  allocation_id = aws_eip.nat_a[0].id
+  subnet_id     = aws_subnet.public_a[0].id
   tags          = { Name = "${var.vpc_name}-nat-a" }
 }
 
 resource "aws_nat_gateway" "c" {
-  allocation_id = aws_eip.nat_c.id
-  subnet_id     = aws_subnet.public_c.id
+  count         = local.use_existing_vpc ? 0 : 1
+  allocation_id = aws_eip.nat_c[0].id
+  subnet_id     = aws_subnet.public_c[0].id
   tags          = { Name = "${var.vpc_name}-nat-c" }
 }
 
 # ---- Private Subnets (PRIVATE_WITH_EGRESS) -----------------------------------
 resource "aws_subnet" "private_a" {
-  vpc_id            = aws_vpc.this.id
+  count             = local.use_existing_vpc ? 0 : 1
+  vpc_id            = aws_vpc.this[0].id
   cidr_block        = var.private_subnet_cidr_a
   availability_zone = local.azs[0]
   tags              = { Name = "${var.vpc_name}-Private-A" }
 }
 
 resource "aws_subnet" "private_c" {
-  vpc_id            = aws_vpc.this.id
+  count             = local.use_existing_vpc ? 0 : 1
+  vpc_id            = aws_vpc.this[0].id
   cidr_block        = var.private_subnet_cidr_c
   availability_zone = local.azs[1]
   tags              = { Name = "${var.vpc_name}-Private-C" }
 }
 
 resource "aws_route_table" "private_a" {
-  vpc_id = aws_vpc.this.id
+  count  = local.use_existing_vpc ? 0 : 1
+  vpc_id = aws_vpc.this[0].id
   tags   = { Name = "${var.vpc_name}-private-rt-a" }
 }
 
 resource "aws_route_table" "private_c" {
-  vpc_id = aws_vpc.this.id
+  count  = local.use_existing_vpc ? 0 : 1
+  vpc_id = aws_vpc.this[0].id
   tags   = { Name = "${var.vpc_name}-private-rt-c" }
 }
 
 resource "aws_route" "private_nat_a" {
-  route_table_id         = aws_route_table.private_a.id
+  count                  = local.use_existing_vpc ? 0 : 1
+  route_table_id         = aws_route_table.private_a[0].id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.a.id
+  nat_gateway_id         = aws_nat_gateway.a[0].id
 }
 
 resource "aws_route" "private_nat_c" {
-  route_table_id         = aws_route_table.private_c.id
+  count                  = local.use_existing_vpc ? 0 : 1
+  route_table_id         = aws_route_table.private_c[0].id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.c.id
+  nat_gateway_id         = aws_nat_gateway.c[0].id
 }
 
 resource "aws_route_table_association" "private_a" {
-  subnet_id      = aws_subnet.private_a.id
-  route_table_id = aws_route_table.private_a.id
+  count          = local.use_existing_vpc ? 0 : 1
+  subnet_id      = aws_subnet.private_a[0].id
+  route_table_id = aws_route_table.private_a[0].id
 }
 
 resource "aws_route_table_association" "private_c" {
-  subnet_id      = aws_subnet.private_c.id
-  route_table_id = aws_route_table.private_c.id
+  count          = local.use_existing_vpc ? 0 : 1
+  subnet_id      = aws_subnet.private_c[0].id
+  route_table_id = aws_route_table.private_c[0].id
 }
 
 # ---- Isolated Subnets (PRIVATE_ISOLATED) -------------------------------------
 resource "aws_subnet" "isolated_a" {
-  vpc_id            = aws_vpc.this.id
+  count             = local.use_existing_vpc ? 0 : 1
+  vpc_id            = aws_vpc.this[0].id
   cidr_block        = var.isolated_subnet_cidr_a
   availability_zone = local.azs[0]
   tags              = { Name = "${var.vpc_name}-Isolated-A" }
 }
 
 resource "aws_subnet" "isolated_c" {
-  vpc_id            = aws_vpc.this.id
+  count             = local.use_existing_vpc ? 0 : 1
+  vpc_id            = aws_vpc.this[0].id
   cidr_block        = var.isolated_subnet_cidr_c
   availability_zone = local.azs[1]
   tags              = { Name = "${var.vpc_name}-Isolated-C" }
 }
 
 resource "aws_route_table" "isolated" {
-  vpc_id = aws_vpc.this.id
+  count  = local.use_existing_vpc ? 0 : 1
+  vpc_id = aws_vpc.this[0].id
   tags   = { Name = "${var.vpc_name}-isolated-rt" }
 }
 
 resource "aws_route_table_association" "isolated_a" {
-  subnet_id      = aws_subnet.isolated_a.id
-  route_table_id = aws_route_table.isolated.id
+  count          = local.use_existing_vpc ? 0 : 1
+  subnet_id      = aws_subnet.isolated_a[0].id
+  route_table_id = aws_route_table.isolated[0].id
 }
 
 resource "aws_route_table_association" "isolated_c" {
-  subnet_id      = aws_subnet.isolated_c.id
-  route_table_id = aws_route_table.isolated.id
+  count          = local.use_existing_vpc ? 0 : 1
+  subnet_id      = aws_subnet.isolated_c[0].id
+  route_table_id = aws_route_table.isolated[0].id
 }
 
 # ---- VPC Endpoint Security Group ---------------------------------------------
 resource "aws_security_group" "vpc_endpoints" {
+  count       = local.use_existing_vpc ? 0 : 1
   name_prefix = "cc-vpce-"
   description = "Allow HTTPS from VPC for interface VPC endpoints"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = aws_vpc.this[0].id
 
   ingress {
     from_port   = 443
@@ -198,34 +232,35 @@ locals {
 }
 
 resource "aws_vpc_endpoint" "interface" {
-  for_each = local.interface_endpoints
+  for_each = local.use_existing_vpc ? {} : local.interface_endpoints
 
-  vpc_id              = aws_vpc.this.id
+  vpc_id              = aws_vpc.this[0].id
   service_name        = each.value
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
-  subnet_ids          = [aws_subnet.private_a.id, aws_subnet.private_c.id]
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  subnet_ids          = [aws_subnet.private_a[0].id, aws_subnet.private_c[0].id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
 
   tags = { Name = "${var.vpc_name}-${each.key}" }
 }
 
 # ---- Gateway VPC Endpoint (S3) -----------------------------------------------
 resource "aws_vpc_endpoint" "s3" {
-  vpc_id            = aws_vpc.this.id
+  count             = local.use_existing_vpc ? 0 : 1
+  vpc_id            = aws_vpc.this[0].id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids = [
-    aws_route_table.public.id,
-    aws_route_table.private_a.id,
-    aws_route_table.private_c.id,
-    aws_route_table.isolated.id,
+    aws_route_table.public[0].id,
+    aws_route_table.private_a[0].id,
+    aws_route_table.private_c[0].id,
+    aws_route_table.isolated[0].id,
   ]
 
   tags = { Name = "${var.vpc_name}-s3" }
 }
 
-# ---- Route 53 Private Hosted Zone -------------------------------------------
+# ---- Route 53 Public Hosted Zone --------------------------------------------
 resource "aws_route53_zone" "this" {
   name = var.domain_name
 }
@@ -255,7 +290,7 @@ resource "aws_route53_resolver_firewall_rule_group_association" "dns_firewall" {
   name                   = "cc-on-bedrock-dns-firewall"
   firewall_rule_group_id = aws_route53_resolver_firewall_rule_group.dns_firewall.id
   priority               = 101
-  vpc_id                 = aws_vpc.this.id
+  vpc_id                 = local.vpc_id
 
   tags = { Name = "cc-on-bedrock-dns-firewall" }
 }

@@ -3,7 +3,16 @@
 
 aws_region = "ap-northeast-2"
 
-# Network
+# Network: reuse an existing VPC by setting ALL four inputs below.
+# Use IDs from the target account/region; the VPC Name tag (for example demo-vpc)
+# is only a label. Each subnet group must span at least two AZs.
+# vpc_id              = "vpc-0123456789abcdef0"
+# public_subnet_ids   = ["subnet-00000000000000001", "subnet-00000000000000002"]
+# private_subnet_ids  = ["subnet-00000000000000003", "subnet-00000000000000004"]
+# isolated_subnet_ids = ["subnet-00000000000000005", "subnet-00000000000000006"]
+
+# Dedicated-network settings: used only when vpc_id is null/omitted.
+# Existing VPC CIDRs are read from AWS, not from these defaults.
 vpc_name              = "cc-on-bedrock-vpc"
 vpc_cidr              = "10.0.0.0/16"
 public_subnet_cidr_a  = "10.0.1.0/24"

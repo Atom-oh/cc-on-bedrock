@@ -9,6 +9,33 @@ variable "aws_region" {
 }
 
 # ---- Network ----------------------------------------------------------------
+variable "vpc_id" {
+  description = "Existing VPC to use. Null preserves the Terraform-managed VPC."
+  type        = string
+  default     = null
+}
+
+variable "public_subnet_ids" {
+  description = "Existing public subnet IDs in vpc_id, across at least two AZs."
+  type        = list(string)
+  default     = []
+  nullable    = false
+}
+
+variable "private_subnet_ids" {
+  description = "Existing private subnet IDs with outbound access, across at least two AZs."
+  type        = list(string)
+  default     = []
+  nullable    = false
+}
+
+variable "isolated_subnet_ids" {
+  description = "Existing isolated subnet IDs in vpc_id, across at least two AZs."
+  type        = list(string)
+  default     = []
+  nullable    = false
+}
+
 variable "vpc_name" {
   description = "Name tag for the VPC"
   type        = string

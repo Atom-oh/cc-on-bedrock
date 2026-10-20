@@ -4,7 +4,7 @@
 > ADRs in `docs/decisions/` are the *decision log* (why); the decision baseline is
 > `docs/decisions/BASELINE.md`. Anything under `docs/decisions/archive/` or `docs/history/`
 > is **historical / superseded — NOT current**.
-> Last reconciled: 2026-10-18 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry; Codex on Bedrock, ADR-014).
+> Last reconciled: 2026-10-20 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry; Codex on Bedrock, ADR-014; optional existing VPC, ADR-015).
 
 ## What this is
 멀티유저 Claude Code 개발환경 플랫폼 on AWS Bedrock. 사용자는 per-user EC2 DevEnv(브라우저 IDE)
@@ -89,6 +89,16 @@ graph LR
 ## IaC
 - **Terraform is the only IaC.** CDK/CloudFormation removed (ADR-001). Lambda handlers in `lambda/`
   (Terraform packages them). Policies incl. permission boundary authored in Terraform (ADR-007).
+- **Network selection (ADR-015).** `terraform.tfvars` can provide `vpc_id` and public,
+  private and isolated subnet ID lists. Each group must span at least two AZs, belong
+  to the selected VPC and use its primary CIDR. Terraform reads their actual CIDRs
+  for network rules, including DevEnv OTLP egress. Without these inputs, the existing
+  dedicated VPC creation path remains available. Shared VPCs, routing, NAT and
+  endpoints stay owned by their original infrastructure stack; CC-on-Bedrock still
+  owns its security groups, public hosted zone and VPC-wide DNS Firewall association.
+  Existing DevEnv instances and persistent EBS volumes require the
+  [VPC migration procedure](runbooks/vpc-migration.md); changing tfvars alone does
+  not migrate runtime-created user instances.
 
 ## Key paths
 ```text

@@ -10,7 +10,7 @@ Terraform HCL is the canonical IaC for this repository.
 - `variables.tf` - Root variables.
 - `outputs.tf` - Deployment outputs consumed by the dashboard and operators.
 - `providers.tf` - AWS providers, including `us-east-1` alias for CloudFront-scope WAF.
-- `modules/network/` - VPC, subnets, NAT, endpoints, Route 53.
+- `modules/network/` - Dedicated VPC creation or existing VPC/subnet selection through tfvars; Route 53 and DNS Firewall.
 - `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM, permission boundary.
 - `modules/ecs-devenv/` - Shared Nginx router, NLB, routing table, config Lambda, OTEL Collector.
 - `modules/ec2-devenv/` - Per-user EC2 DevEnv launch template, EBS GP3, DLP security groups.
@@ -58,6 +58,18 @@ depends on the launch template tag string changing.
 
 ## Rules
 
+- Set `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, and `isolated_subnet_ids`
+  together to use an existing network (ADR-015). Omit them to keep the dedicated VPC.
+  Existing networking is read through data sources; this stack does not take
+  ownership of its NAT gateways, routes, subnets or VPC endpoints. DNS Firewall
+  association is still managed and affects the whole selected VPC.
+- Use `module.network.private_subnet_cidrs` for OTLP egress. The legacy subnet CIDR
+  variables describe newly created subnets only.
+- Keep `modules/network/moved.tf`: it preserves existing state addresses when
+  adding conditional creation. Switching a live deployment to another VPC still
+  requires the [migration runbook](../docs/runbooks/vpc-migration.md).
+- Network contract tests require Terraform >= 1.7:
+  `terraform test -filter=tests/network.tftest.hcl` from `terraform/`.
 - Do not add alternate deployment IaC equivalents.
 - Lambda packages must read from `../lambda` through the root `local.lambda_src_dir`.
 - Keep code-server on `8080`; nginx may route additional validated custom ports.
