@@ -10,16 +10,16 @@ Terraform HCL is the canonical IaC for this repository.
 - `variables.tf` - Root variables.
 - `outputs.tf` - Deployment outputs consumed by the dashboard and operators.
 - `providers.tf` - AWS providers, including `us-east-1` alias for CloudFront-scope WAF.
-- `modules/network/` - VPC, subnets, NAT, endpoints, Route 53.
+- `modules/network/` - BYO VPC: takes `vpc_id` + subnet IDs (never creates a VPC/subnet/NAT/IGW), adds missing interface endpoints (`interface_endpoint_services`), DNS Firewall; looks up the shared public Route 53 zone as a data source.
 - `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM, permission boundary.
-- `modules/ecs-devenv/` - Shared Nginx router, NLB, routing table, config Lambda, OTEL Collector.
+- `modules/ecs-devenv/` - Shared Nginx router, internal NLB behind a CloudFront VPC origin, routing table, config Lambda, OTEL Collector.
 - `modules/ec2-devenv/` - Per-user EC2 DevEnv launch template, EBS GP3, DLP security groups.
 - `modules/usage-tracking/` - Bedrock Invocation Logs, usage aggregation, budget checks. Also the
   native OTEL code-activity rollup (ADR-009): raw OTLP S3 bucket with `otlp-metrics/`+`otlp-logs/`
   lifecycle + S3 notifications triggering the rollup Lambda (per-user daily KPI → DynamoDB; needs
   `dynamodb:TransactWriteItems` for per-chunk idempotent markers).
 - `modules/local-governance/` - STS issuer, token-limit enforcer, limit reset.
-- `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront, and Docker runtime.
+- `modules/dashboard/` - Dashboard EC2 ASG, internal ALB behind a CloudFront VPC origin, CloudFront, and Docker runtime.
 - `modules/waf/` - CloudFront-scope WAF.
 
 ## Status

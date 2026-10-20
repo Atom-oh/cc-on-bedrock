@@ -10,45 +10,46 @@ variable "aws_region" {
 
 # ---- Network ----------------------------------------------------------------
 variable "vpc_name" {
-  description = "Name tag for the VPC"
+  description = "Name tag prefix for network resources this stack adds to the VPC"
   type        = string
-  default     = "cc-on-bedrock-vpc"
+  default     = "cc-on-bedrock"
 }
 
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC"
+# Bring-your-own VPC: the stack never creates a VPC, subnets, NAT or IGW.
+variable "vpc_id" {
+  description = "Existing VPC ID to deploy into"
   type        = string
-  default     = "10.0.0.0/16"
+
+  validation {
+    condition     = can(regex("^vpc-[0-9a-f]+$", var.vpc_id))
+    error_message = "vpc_id must be an existing VPC ID (vpc-...)."
+  }
 }
 
-variable "public_subnet_cidr_a" {
-  type    = string
-  default = "10.0.1.0/24"
+variable "public_subnet_ids" {
+  description = "Public subnets in the VPC (two AZs). Nothing internet-facing is placed here; kept for NAT-routed tooling"
+  type        = list(string)
 }
 
-variable "public_subnet_cidr_c" {
-  type    = string
-  default = "10.0.2.0/24"
+variable "private_subnet_ids" {
+  description = "Private subnets with NAT egress (two AZs): internal LBs, EC2, Fargate, interface endpoints"
+  type        = list(string)
+
+  validation {
+    condition     = length(var.private_subnet_ids) >= 2
+    error_message = "private_subnet_ids needs at least two subnets in different AZs."
+  }
 }
 
-variable "private_subnet_cidr_a" {
-  type    = string
-  default = "10.0.16.0/20"
+variable "isolated_subnet_ids" {
+  description = "Isolated subnets (no internet route) in the VPC"
+  type        = list(string)
 }
 
-variable "private_subnet_cidr_c" {
-  type    = string
-  default = "10.0.32.0/20"
-}
-
-variable "isolated_subnet_cidr_a" {
-  type    = string
-  default = "10.0.100.0/23"
-}
-
-variable "isolated_subnet_cidr_c" {
-  type    = string
-  default = "10.0.102.0/23"
+variable "interface_endpoint_services" {
+  description = "Interface VPC endpoints to create, by service suffix. Leave out services the VPC already has with private DNS"
+  type        = list(string)
+  default     = ["ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "bedrock-runtime", "logs"]
 }
 
 # ---- Domain ------------------------------------------------------------------

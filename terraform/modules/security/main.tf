@@ -271,10 +271,12 @@ resource "aws_route53_record" "devenv_cert_validation" {
   }
 
   zone_id = var.hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  records = [each.value.record]
-  ttl     = 300
+  # ACM reuses the same validation CNAME for a re-issued cert; take over a leftover record.
+  allow_overwrite = true
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 300
 }
 
 resource "aws_acm_certificate_validation" "devenv" {
@@ -304,10 +306,12 @@ resource "aws_route53_record" "dashboard_cert_validation" {
   }
 
   zone_id = var.hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  records = [each.value.record]
-  ttl     = 300
+  # ACM reuses the same validation CNAME for a re-issued cert; take over a leftover record.
+  allow_overwrite = true
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 300
 }
 
 resource "aws_acm_certificate_validation" "dashboard" {

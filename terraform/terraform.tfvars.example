@@ -3,15 +3,14 @@
 
 aws_region = "ap-northeast-2"
 
-# Network
-vpc_name              = "cc-on-bedrock-vpc"
-vpc_cidr              = "10.0.0.0/16"
-public_subnet_cidr_a  = "10.0.1.0/24"
-public_subnet_cidr_c  = "10.0.2.0/24"
-private_subnet_cidr_a = "10.0.16.0/20"
-private_subnet_cidr_c = "10.0.32.0/20"
-isolated_subnet_cidr_a = "10.0.100.0/23"
-isolated_subnet_cidr_c = "10.0.102.0/23"
+# Network — existing VPC (the stack never creates a VPC/subnets/NAT/IGW)
+vpc_name            = "cc-on-bedrock"
+vpc_id              = "vpc-0123456789abcdef0"
+public_subnet_ids   = ["subnet-aaaa", "subnet-bbbb"]
+private_subnet_ids  = ["subnet-cccc", "subnet-dddd"] # NAT egress, two AZs
+isolated_subnet_ids = ["subnet-eeee", "subnet-ffff"]
+# Interface endpoints to add; drop any the VPC already has with private DNS.
+interface_endpoint_services = ["ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "bedrock-runtime", "logs"]
 
 # Domain
 domain_name   = "example.com"

@@ -22,15 +22,13 @@ moved {
 module "network" {
   source = "./modules/network"
 
-  vpc_name               = var.vpc_name
-  vpc_cidr               = var.vpc_cidr
-  public_subnet_cidr_a   = var.public_subnet_cidr_a
-  public_subnet_cidr_c   = var.public_subnet_cidr_c
-  private_subnet_cidr_a  = var.private_subnet_cidr_a
-  private_subnet_cidr_c  = var.private_subnet_cidr_c
-  isolated_subnet_cidr_a = var.isolated_subnet_cidr_a
-  isolated_subnet_cidr_c = var.isolated_subnet_cidr_c
-  domain_name            = var.domain_name
+  name_prefix                 = var.vpc_name
+  vpc_id                      = var.vpc_id
+  public_subnet_ids           = var.public_subnet_ids
+  private_subnet_ids          = var.private_subnet_ids
+  isolated_subnet_ids         = var.isolated_subnet_ids
+  interface_endpoint_services = var.interface_endpoint_services
+  domain_name                 = var.domain_name
 }
 
 # ---- 02 Security -------------------------------------------------------------
@@ -158,7 +156,7 @@ module "ec2_devenv" {
   # The collector's NLB has no SG (adding one would force a replace -- see
   # usage-tracking/main.tf's aws_lb.otel comment), so egress is scoped to its subnets
   # instead of a SG reference.
-  otel_collector_subnet_cidrs = [var.private_subnet_cidr_a, var.private_subnet_cidr_c]
+  otel_collector_subnet_cidrs = module.network.private_subnet_cidrs
 }
 
 # ---- 08 Local Governance -----------------------------------------------------

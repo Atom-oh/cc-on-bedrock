@@ -23,11 +23,11 @@ reloads the server configuration.
 ```mermaid
 graph LR
   subgraph EC2 Mode
-    U1[User Browser] --> CFd[CloudFront · devenv] --> NLB --> NG[nginx · ECS Fargate] --> EC2[per-user EC2 DevEnv]
+    U1[User Browser] --> CFd[CloudFront · devenv] -->|VPC origin| NLB[internal NLB] --> NG[nginx · ECS Fargate] --> EC2[per-user EC2 DevEnv]
     EC2 --> BR[(Amazon Bedrock)]
   end
   subgraph Dashboard
-    U2[User Browser] --> CFa[CloudFront · dashboard] --> ALB --> DASH[Dashboard · EC2 ASG + Docker]
+    U2[User Browser] --> CFa[CloudFront · dashboard] -->|VPC origin| ALB[internal ALB] --> DASH[Dashboard · EC2 ASG + Docker]
   end
   subgraph Local Mode
     L[cc-bedrock-local CLI] --> CG[Cognito public client] --> API[Dashboard /api/local/credentials] --> STS[STS issuer]
@@ -39,6 +39,8 @@ graph LR
 ```
 
 > 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx) and dashboard(→ALB→EC2 ASG), 분리.
+> 두 LB 모두 **internal**(private subnet)이며 CloudFront **VPC origin**으로만 도달한다. LB SG ingress는 `CloudFront-VPCOrigins-Service-SG`만 허용하고, nginx는 NLB SG만 허용한다. 공인 IP·internet-facing LB 없음.
+> **Network (BYO VPC):** 스택은 VPC·서브넷·NAT·IGW·게이트웨이 엔드포인트를 만들지 않는다. `vpc_id`와 subnet ID 목록을 tfvars로 받고(현재 배포: demo-vpc `fsi-demo-vpc`, 2a/2b), VPC에 없는 interface endpoint만 `interface_endpoint_services`로 추가한다. Route 53 공용 zone(`domain_name`)은 다른 프로젝트와 공유하므로 data source로 조회하고 레코드만 추가한다.
 > Dashboard runs the real Next.js standalone container from Terraform-managed ECR. `dashboard_image_tag`
 > is injected into the launch template and pinned to the ASG for deterministic instance refresh.
 > `NEXTAUTH_SECRET` is fetched from SSM at boot, DevEnv edge auth strips NextAuth cookies before
