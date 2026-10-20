@@ -10,7 +10,8 @@ runtime_required: false
 ## Status
 
 Accepted, 2026-09-13. Documentation convention: **LIVE**. Specialist protocol:
-**INACTIVE** in CI since the 2026-10-18 amendment below (retained behind `ROLE_REVIEW=1`). Runtime service availability and
+**INACTIVE** in CI since the 2026-10-18 amendment below; the 2026-10-20 amendment
+removes the automatic entrypoint switch and retains only standalone specialist tools. Runtime service availability and
 executed model identity require separate evidence; configuration is not proof.
 
 ## Context
@@ -98,6 +99,32 @@ Known gaps (accepted): Codex cells use a `read-only` sandbox that can still read
 files (output is secret-scrubbed); renames out of an excluded directory are classified by the
 old path only; no specialist evidence artifact is retained; legacy prompts request Korean
 review output (the English-output rule applies to the specialist path).
+
+## Amendment 2026-10-20 — two complete reviewers, no Kiro in CI
+
+The owner requested the simpler review pattern used by other projects and removal
+of Kiro from CI. Following `awsops`, Codex and Claude each review the complete
+in-scope diff once, covering all four checklists. A tool-free Claude chair combines
+the two reports. This replaces the twelve-call matrix with two independent calls
+and removes Kiro quota/authentication, agent configuration and per-lens fan-out
+from the active path.
+
+`run-panel.sh` and `synthesize.sh` no longer route on `ROLE_REVIEW`. The existing
+specialist tools remain available only through explicit standalone entrypoints.
+The required GitHub check stays `AI Code Review`.
+
+Both successful reports and complete checklist coverage are mandatory. Nonzero
+provider exits, timeouts, missing sections, oversized inputs/reports and missing
+or contradictory final verdicts block. The 12,000-line limit remains; input also
+has a 512,000-byte ceiling. Oversized diffs are rejected instead of truncated.
+Reports are bounded at 60,000 bytes each and are scrubbed before synthesis.
+
+Only trusted default-branch BASE scripts execute. Diff selection uses pinned
+merge-base and HEAD objects; publication checks the current PR HEAD. Claude
+disables tools, MCP and settings sources; Codex remains read-only with web search
+disabled. The Codex read-access residual risk documented above remains.
+Provider commands do not receive GitHub tokens. Each run uses a unique temporary
+directory and bounded retries. Offline tests cover both active and retained paths.
 
 ## Verification
 
