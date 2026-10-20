@@ -5,11 +5,13 @@ on:
     paths:
       - 'scripts/pr-review/**'
       - '.github/workflows/pr-review*.yml'
+      - 'tests/unit/test-pr-review-panel.sh'
   push:
     branches: [main]
     paths:
       - 'scripts/pr-review/**'
       - '.github/workflows/pr-review*.yml'
+      - 'tests/unit/test-pr-review-panel.sh'
 
 permissions:
   contents: read
@@ -22,7 +24,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Test scope and execution without provider calls
+      - name: Test current and retained review protocols without provider calls
         run: python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
       - name: Check shell syntax
-        run: bash -n scripts/pr-review/run-specialists.sh
+        run: |
+          bash -n scripts/pr-review/run-panel.sh scripts/pr-review/synthesize.sh \
+            scripts/pr-review/lib.sh scripts/pr-review/run-specialists.sh
