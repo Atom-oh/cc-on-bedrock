@@ -30,6 +30,68 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_publication_redacts_expression_defaults_and_punctuated_keys(self):
+        import run_role
+        import synthesize_roles
+
+        canary = "SYNTHETIC_ROLLOUT_CANARY"
+        cases = [f'password = settings.PASSWORD {operator} "{canary}"\nPUBLIC_AFTER'
+                 for operator in ("||", "??", "or")]
+        cases += [f'password = (old {operator}\n "{canary}")'
+                  for operator in ("||", "??", "or")]
+        cases += [f'password: "old {operator}\n{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??", "or")]
+        cases += [f'password = settings.PASSWORD{before}{operator}{after}"{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??", "or")
+                  for before, after in ((" ", "\n    "), ("\n    ", " "))]
+        cases += [prefix + json.dumps({key: canary}) + suffix
+                  for key in ("/prod/db/password", "password[0]", "api key (prod)")
+                  for prefix, suffix in (("", ""), ("Evidence: ", "\nPUBLIC_AFTER"))]
+        for index, evidence in enumerate(cases):
+            with self.subTest(case=index):
+                self.work = self.root / f"publication-{index}"
+                plan = self.prepare()
+                response = self.response("claude-self", findings=[{
+                    "severity": "MINOR", "path": FRONTEND,
+                    "condition": "When quoting a configuration example", "evidence": evidence,
+                }])
+                with mock_patch.object(run_role, "execute", return_value=(0, json.dumps(response), "")):
+                    run_role.run(self.work, "claude-self")
+                result = self.read("slot/claude-self-result.json")
+                self.assertTrue(result["valid"], result["failure_codes"])
+                self.assertEqual(result["response"]["reviewed_paths"], [FRONTEND])
+                self.assertEqual(result["response"]["findings"][0]["path"], FRONTEND)
+                for tag, role in plan["roles"].items():
+                    if role["required"] and tag != "claude-self":
+                        self.record(tag)
+                self.cli("aggregate", "--work", self.work)
+                self.assertEqual(self.read("role-summary.json")["mode"], "deterministic")
+                with mock_patch.dict(synthesize_roles.os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                        mock_patch.object(synthesize_roles, "execute",
+                                          side_effect=AssertionError("Unexpected chair call")):
+                    synthesize_roles.synthesize(self.work, self.work / "review.md")
+                for name in ("slot/claude-self-result.json", "role-summary.json",
+                             "deterministic-review.md", "review.md"):
+                    self.assertNotIn(canary, (self.work / name).read_text())
+                    if evidence.endswith("PUBLIC_AFTER"):
+                        self.assertIn("PUBLIC_AFTER", (self.work / name).read_text())
+                self.assertTrue((self.work / "review.md").read_text().rstrip().endswith("VERDICT: PASS"))
+
+
+    def test_ordinary_prose_scrub_has_bounded_runtime(self):
+        prose = "The password is required and the token is optional. " * 80
+        script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(prose),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), prose)
+        canary = "SYNTHETIC_ROLLOUT_CANARY"
+        repeated = "Evidence: " + json.dumps([{"password": canary}] * 300, separators=(",", ":"))
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(repeated),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(canary, json.loads(result.stdout))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
