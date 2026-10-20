@@ -168,12 +168,14 @@ resource "aws_security_group" "locked" {
     }
   }
 
+  # SG references, not the VPC CIDR: the VPC may be shared with other workloads,
+  # and a CIDR rule would let a locked DevEnv reach any HTTPS service in it.
   egress {
-    description = "HTTPS to VPC endpoints only"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "HTTPS to VPC interface endpoints only"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = var.vpc_endpoint_security_group_ids
   }
 
   # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Scoped to the

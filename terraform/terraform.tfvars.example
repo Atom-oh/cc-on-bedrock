@@ -11,6 +11,8 @@ private_subnet_ids  = ["subnet-cccc", "subnet-dddd"] # NAT egress, two AZs
 isolated_subnet_ids = ["subnet-eeee", "subnet-ffff"]
 # Interface endpoints to add; drop any the VPC already has with private DNS.
 interface_endpoint_services = ["ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "bedrock-runtime", "logs"]
+# SGs of endpoints the VPC already had; the locked DevEnv tier reaches only endpoint SGs on 443.
+existing_vpc_endpoint_security_group_ids = []
 
 # Domain
 domain_name   = "example.com"

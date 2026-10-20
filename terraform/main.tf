@@ -157,6 +157,36 @@ module "ec2_devenv" {
   # usage-tracking/main.tf's aws_lb.otel comment), so egress is scoped to its subnets
   # instead of a SG reference.
   otel_collector_subnet_cidrs = module.network.private_subnet_cidrs
+  vpc_endpoint_security_group_ids = concat(
+    module.network.vpc_endpoint_security_group_ids,
+    var.existing_vpc_endpoint_security_group_ids,
+  )
+}
+
+# DevEnv tiers -> both OTEL collectors (OTLP/HTTP 4318), by SG reference. Lives here
+# because the collectors' modules and ec2-devenv would otherwise reference each other.
+locals {
+  otel_ingress = local.devenv_enabled ? merge([
+    for sg_key, sg_id in {
+      open       = module.ec2_devenv[0].sg_open_id
+      restricted = module.ec2_devenv[0].sg_restricted_id
+      locked     = module.ec2_devenv[0].sg_locked_id
+      } : {
+      "rollup-${sg_key}" = { target = module.usage_tracking.otel_nlb_security_group_id, source = sg_id }
+      "ecs-${sg_key}"    = { target = module.ecs_devenv[0].otel_collector_security_group_id, source = sg_id }
+    }
+  ]...) : {}
+}
+
+resource "aws_vpc_security_group_ingress_rule" "otel_from_devenv" {
+  for_each = local.otel_ingress
+
+  security_group_id            = each.value.target
+  description                  = "OTLP HTTP from DevEnv (${each.key})"
+  ip_protocol                  = "tcp"
+  from_port                    = 4318
+  to_port                      = 4318
+  referenced_security_group_id = each.value.source
 }
 
 # ---- 08 Local Governance -----------------------------------------------------

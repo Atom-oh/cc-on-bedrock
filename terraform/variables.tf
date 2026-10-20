@@ -173,3 +173,9 @@ variable "dashboard_subdomain" {
   type        = string
   default     = "cconbedrock-dashboard"
 }
+
+variable "existing_vpc_endpoint_security_group_ids" {
+  description = "Security groups of interface endpoints the VPC already had (not created here); the locked DevEnv tier may reach them on 443"
+  type        = list(string)
+  default     = []
+}

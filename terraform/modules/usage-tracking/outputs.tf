@@ -62,3 +62,7 @@ output "otel_collector_endpoint" {
 output "otel_metrics_raw_bucket" {
   value = aws_s3_bucket.otel_raw.id
 }
+
+output "otel_nlb_security_group_id" {
+  value = aws_security_group.otel_nlb.id
+}

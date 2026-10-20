@@ -413,11 +413,11 @@ resource "aws_security_group" "otel_collector" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "OTLP HTTP from DevEnv EC2 instances"
-    from_port   = 4318
-    to_port     = 4318
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "OTLP HTTP from the collector NLB"
+    from_port       = 4318
+    to_port         = 4318
+    protocol        = "tcp"
+    security_groups = [aws_security_group.otel_collector_nlb.id]
   }
 
   egress {
@@ -428,6 +428,24 @@ resource "aws_security_group" "otel_collector" {
   }
 
   tags = { Name = "cc-otel-collector-sg" }
+}
+
+# The collector NLB's own SG. Ingress comes only from DevEnv SGs, added in the root
+# module as standalone rules (no inline ingress here, so the two never fight).
+resource "aws_security_group" "otel_collector_nlb" {
+  name_prefix = "cc-otel-collector-nlb-"
+  description = "OTEL collector NLB - DevEnv OTLP HTTP only"
+  vpc_id      = var.vpc_id
+
+  egress {
+    description = "To collector tasks"
+    from_port   = 4318
+    to_port     = 4318
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  tags = { Name = "cc-otel-collector-nlb-sg" }
 }
 
 resource "aws_cloudwatch_log_group" "otel_collector" {
@@ -522,7 +540,7 @@ resource "aws_lb" "otel_collector" {
   name               = "cc-otel-collector-nlb"
   internal           = true
   load_balancer_type = "network"
-  security_groups    = [aws_security_group.otel_collector.id]
+  security_groups    = [aws_security_group.otel_collector_nlb.id]
   subnets            = var.private_subnet_ids
 
   enable_cross_zone_load_balancing = true

@@ -37,3 +37,8 @@ variable "otel_collector_subnet_cidrs" {
   type        = list(string)
   default     = []
 }
+
+variable "vpc_endpoint_security_group_ids" {
+  description = "Security groups on the VPC's interface endpoints; the locked tier's only HTTPS egress"
+  type        = list(string)
+}

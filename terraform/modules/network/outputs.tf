@@ -33,3 +33,7 @@ output "hosted_zone_name" {
 output "dns_firewall_rule_group_id" {
   value = aws_route53_resolver_firewall_rule_group.dns_firewall.id
 }
+
+output "vpc_endpoint_security_group_ids" {
+  value = aws_security_group.vpc_endpoints[*].id
+}
