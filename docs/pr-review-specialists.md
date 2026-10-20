@@ -1,9 +1,11 @@
 # Specialist PR review
 
-CI assigns distinct responsibilities instead of asking every model to repeat
-every review lens. This protocol is retained but INACTIVE in CI since the ADR-013
-amendment (2026-10-18): the trusted workflow runs `ROLE_REVIEW=0` (panel → chair VERDICT)
-and re-enables this protocol with `ROLE_REVIEW=1`.
+This retained protocol assigns distinct responsibilities to reviewers. It is
+INACTIVE in CI. Since the ADR-013 amendment of 2026-10-20, automatic CI uses one
+complete Codex report, one complete Claude report and a tool-free Claude chair.
+The CI entrypoints no longer inspect `ROLE_REVIEW`; standalone specialist tools
+must be invoked explicitly. The remainder of this document describes those
+retained tools, not the current CI roster.
 
 | Slot | Configured model | Responsibility |
 | --- | --- | --- |
