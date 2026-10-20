@@ -113,6 +113,23 @@
 - Framework: vitest (`npx vitest` or `npx vitest run`)
 - Test location: `src/lib/__tests__/`
 - Type check: `npx tsc --noEmit`
+- CI must propagate Vitest failures; do not append `|| true` to the test command.
+
+## User portal recovery
+
+`portal-status.ts` distinguishes unavailable status from a successful empty
+environment. Preserve the last verified state, show a recovery action, and disable
+start/stop while status is stale. The status API must retain `STOPPING` until EC2
+confirms the final state; client timers cannot manufacture stop completion.
+
+`provisioning-stream.ts` requires a terminal event. Interrupted streams and expired
+sessions return actionable errors. React effect replay must not duplicate start
+requests, and closing progress only closes tracking. Keep event names aligned with
+`PROVISIONING_STEPS`, including `storage_prepare`.
+
+Custom-route edits survive failed saves and version conflicts. Reloading server
+data after a conflict requires an explicit user action; never silently discard the
+draft. Disable saving until the existing settings have loaded successfully.
 
 ## Rules
 - Server Components 기본, 차트/인터랙티브 UI만 'use client'

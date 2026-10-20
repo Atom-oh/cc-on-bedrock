@@ -7,7 +7,7 @@ import EnvironmentTab from "@/components/user/environment-tab";
 import StorageTab from "@/components/user/storage-tab";
 import SettingsTab from "@/components/user/settings-tab";
 import WelcomeOnboarding from "@/components/user/welcome-onboarding";
-import FirstLaunchGuide from "@/components/user/first-launch-guide";
+import { PortalStatusError, readContainerStatus } from "@/lib/portal-status";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode (Claude Code on local PC via STS). Tab visible
 // when NEXT_PUBLIC_LOCAL_MODE_ENABLED=true is set on the Dashboard container.
@@ -61,33 +61,65 @@ const ALL_TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: Re
 const TABS = ALL_TABS;
 
 export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [activeTab, setActiveTab] = useState<UserPortalTab>("environment");
   const [container, setContainer] = useState<ContainerInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [hasEverStarted, setHasEverStarted] = useState(true); // assume yes until proven otherwise
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [statusError, setStatusError] = useState<"session" | "unavailable" | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const statusRequest = useRef<AbortController | null>(null);
+  const requestSequence = useRef(0);
   const [animating, setAnimating] = useState(false);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const fetchContainerStatus = useCallback(async () => {
+    statusRequest.current?.abort();
+    const controller = new AbortController();
+    statusRequest.current = controller;
+    const sequence = ++requestSequence.current;
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    setRefreshing(true);
     try {
-      const res = await fetch("/api/user/container");
-      const data = await res.json();
-      if (data.success) {
-        setContainer(data.data ?? null);
-      }
+      const res = await fetch("/api/user/container", { signal: controller.signal, cache: "no-store" });
+      const data = await readContainerStatus(res);
+      if (sequence !== requestSequence.current) return;
+      setContainer(data);
+      setHasLoaded(true);
+      setStatusError(null);
+      setLastUpdated(new Date());
     } catch (err) {
-      console.error("Failed to fetch container status:", err);
+      if (sequence !== requestSequence.current) return;
+      setStatusError(err instanceof PortalStatusError && err.status === 401 ? "session" : "unavailable");
     } finally {
-      setLoading(false);
+      clearTimeout(timeout);
+      if (sequence === requestSequence.current) {
+        statusRequest.current = null;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [user.subdomain]);
 
   useEffect(() => {
-    fetchContainerStatus();
+    void fetchContainerStatus();
+    return () => {
+      ++requestSequence.current;
+      statusRequest.current?.abort();
+    };
+  }, [fetchContainerStatus]);
+
+  useEffect(() => {
     // Fast polling (5s) when container is starting, normal (30s) when healthy/idle
-    const pollInterval = container && container.status !== "STOPPED" && container.healthStatus !== "HEALTHY" ? 5000 : 30000;
-    const interval = setInterval(fetchContainerStatus, pollInterval);
+    const transitioning = container && (
+      ["PENDING", "PROVISIONING", "STOPPING"].includes(container.status) ||
+      (container.status === "RUNNING" && container.healthStatus !== "HEALTHY")
+    );
+    const pollInterval = transitioning ? 5000 : 30000;
+    const interval = setInterval(() => {
+      if (!statusRequest.current) void fetchContainerStatus();
+    }, pollInterval);
     return () => clearInterval(interval);
   }, [fetchContainerStatus, container?.status, container?.healthStatus]);
 
@@ -126,7 +158,7 @@ export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
 
   if (loading && !container) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex items-center justify-center h-64" role="status">
         <div className="text-gray-400">{t("analytics.loading")}</div>
       </div>
     );
@@ -140,19 +172,26 @@ export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
     return <WelcomeOnboarding email={user.email} />;
   }
 
-  // First launch: subdomain assigned but never started a container
-  if (user.subdomain && !container && !loading && !hasEverStarted) {
-    return (
-      <FirstLaunchGuide
-        subdomain={user.subdomain}
-        onStart={() => switchTab("environment")}
-        loading={false}
-      />
-    );
-  }
-
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <span className="text-gray-400" aria-live="polite">
+          {lastUpdated ? `${t("user.lastUpdated")}: ${lastUpdated.toLocaleTimeString(locale === "ko" ? "ko-KR" : "en-US")}` : t("user.statusUnknown")}
+        </span>
+        <button onClick={fetchContainerStatus} disabled={refreshing}
+          className="rounded-lg border border-gray-700 px-3 py-2 text-gray-200 hover:bg-gray-800 disabled:opacity-50">
+          {refreshing ? t("user.refreshing") : t("user.refreshStatus")}
+        </button>
+      </div>
+      {statusError && (
+        <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-900/20 p-4 text-sm text-amber-200">
+          <p>{t(statusError === "session" ? "user.sessionExpired" : hasLoaded ? "user.statusStale" : "user.statusUnavailable")}</p>
+          {statusError === "session" && (
+            <a href="/login?callbackUrl=%2Fuser" className="mt-2 inline-block underline">{t("user.signInAgain")}</a>
+          )}
+        </div>
+      )}
+      {hasLoaded && <>
       {/* Tab Navigation */}
       <div className="bg-[#161b22] rounded-xl border border-gray-800">
         <div className="flex overflow-x-auto border-b border-gray-800" role="tablist" aria-label="User portal tabs">
@@ -176,8 +215,7 @@ export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
                 }`}
               >
                 {tab.icon}
-                <span className="hidden sm:inline">{tab.label}</span>
-                <span className="sm:hidden">{tab.shortLabel}</span>
+                <span>{t(`user.tab.${tab.id}`)}</span>
               </button>
             );
           })}
@@ -198,6 +236,7 @@ export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
               fetchData={fetchContainerStatus}
               domainName={runtimeConfig.domainName}
               devSubdomain={runtimeConfig.devSubdomain}
+              statusVerified={!statusError}
             />
           </div>
         )}
@@ -217,6 +256,7 @@ export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
           </div>
         )}
       </div>
+      </>}
     </div>
   );
 }

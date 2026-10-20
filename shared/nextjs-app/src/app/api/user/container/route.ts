@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
   try {
     const instances = await listInstances();
     const userInstance = instances.find(
-      (i) => i.subdomain === user.subdomain && (i.status === "running" || i.status === "pending" || i.status === "hibernated")
+      (i) => i.subdomain === user.subdomain && ["running", "pending", "stopping", "hibernated"].includes(i.status)
     );
     if (userInstance) {
       // ADR-010: Map hibernated DynamoDB status to HIBERNATED API status
@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
         taskArn: userInstance.instanceId,
         taskId: userInstance.instanceId,
         status: apiStatus,
-        desiredStatus: apiStatus,
+        desiredStatus: apiStatus === "STOPPING" ? "STOPPED" : apiStatus,
         username: userInstance.username,
         subdomain: userInstance.subdomain,
         containerOs: "ubuntu",
