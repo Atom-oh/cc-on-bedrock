@@ -159,6 +159,7 @@ module "ec2_devenv" {
   kms_key_arn                  = module.security.kms_key_arn
   devenv_instance_type         = var.devenv_instance_type
   task_permission_boundary_arn = module.security.task_permission_boundary_arn
+  use_nginx_security_group     = true
   nginx_security_group_id      = local.devenv_enabled ? module.ecs_devenv[0].nginx_security_group_id : local.default_dev_env
   # The collector's NLB has no SG (adding one would force a replace -- see
   # usage-tracking/main.tf's aws_lb.otel comment), so egress is scoped to its subnets

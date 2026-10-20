@@ -96,6 +96,8 @@ graph LR
   dedicated VPC creation path remains available. Shared VPCs, routing, NAT and
   endpoints stay owned by their original infrastructure stack; CC-on-Bedrock still
   owns its security groups, public hosted zone and VPC-wide DNS Firewall association.
+  DevEnv ingress selection uses a plan-time boolean, keeping Nginx-only rules
+  stable while the Nginx security group ID is unknown during replacement.
   Existing DevEnv instances and persistent EBS volumes require the
   [VPC migration procedure](runbooks/vpc-migration.md); changing tfvars alone does
   not migrate runtime-created user instances.

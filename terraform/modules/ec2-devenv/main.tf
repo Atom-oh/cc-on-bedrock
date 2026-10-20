@@ -42,7 +42,7 @@ resource "aws_security_group" "open" {
   vpc_id      = var.vpc_id
 
   dynamic "ingress" {
-    for_each = var.nginx_security_group_id == "" ? local.devenv_ports : []
+    for_each = var.use_nginx_security_group ? [] : local.devenv_ports
     content {
       description = "${ingress.value.desc} from VPC (via Nginx)"
       from_port   = ingress.value.port
@@ -53,7 +53,7 @@ resource "aws_security_group" "open" {
   }
 
   dynamic "ingress" {
-    for_each = var.nginx_security_group_id != "" ? [1] : []
+    for_each = var.use_nginx_security_group ? [1] : []
     content {
       description     = "Nginx to code-server and user custom ports"
       from_port       = 1024
@@ -83,7 +83,7 @@ resource "aws_security_group" "restricted" {
   vpc_id      = var.vpc_id
 
   dynamic "ingress" {
-    for_each = var.nginx_security_group_id == "" ? local.devenv_ports : []
+    for_each = var.use_nginx_security_group ? [] : local.devenv_ports
     content {
       description = "${ingress.value.desc} from VPC"
       from_port   = ingress.value.port
@@ -94,7 +94,7 @@ resource "aws_security_group" "restricted" {
   }
 
   dynamic "ingress" {
-    for_each = var.nginx_security_group_id != "" ? [1] : []
+    for_each = var.use_nginx_security_group ? [1] : []
     content {
       description     = "Nginx to code-server and user custom ports"
       from_port       = 1024
@@ -155,7 +155,7 @@ resource "aws_security_group" "locked" {
   vpc_id      = var.vpc_id
 
   dynamic "ingress" {
-    for_each = var.nginx_security_group_id == "" ? local.devenv_ports : []
+    for_each = var.use_nginx_security_group ? [] : local.devenv_ports
     content {
       description = "${ingress.value.desc} from VPC"
       from_port   = ingress.value.port
@@ -166,7 +166,7 @@ resource "aws_security_group" "locked" {
   }
 
   dynamic "ingress" {
-    for_each = var.nginx_security_group_id != "" ? [1] : []
+    for_each = var.use_nginx_security_group ? [1] : []
     content {
       description     = "Nginx to code-server and user custom ports"
       from_port       = 1024

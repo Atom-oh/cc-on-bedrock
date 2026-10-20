@@ -4,6 +4,12 @@ This procedure changes application placement. VPC-independent resources such as
 Cognito, DynamoDB, IAM, KMS, ECR and CloudFront remain in the same account and
 region. This is not an account migration.
 
+Use an exclusive change window for this Terraform state and the platform's
+runtime IAM profiles. If another operation removes state bindings or deletes a
+user instance profile, stop mutations and reconcile ownership before resuming.
+Do not recreate shared DNS/ECR resources merely because their state bindings
+disappeared.
+
 ## Identify the destination
 
 Confirm the AWS account, region and exact VPC ID. A Name tag such as `demo-vpc`

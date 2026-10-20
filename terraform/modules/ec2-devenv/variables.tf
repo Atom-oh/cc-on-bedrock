@@ -26,6 +26,13 @@ variable "devenv_instance_type" {
   default = "t4g.large"
 }
 
+variable "use_nginx_security_group" {
+  description = "Select Nginx-only ingress at plan time, independently of a security group ID that may be unknown during replacement."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "nginx_security_group_id" {
   description = "Security group ID of the shared Nginx ECS router allowed to reach code-server and custom ports"
   type        = string
