@@ -49,7 +49,7 @@ const sections = [
   {
     href: "/docs/local-mode",
     icon: Terminal,
-    title: { ko: "Local 모드 (ADR-014)", en: "Local Mode (ADR-014)" },
+    title: { ko: "Local 모드 (ADR-006 (legacy ADR-014))", en: "Local Mode (ADR-006 (legacy ADR-014))" },
     desc: {
       ko: "본인 PC에서 claude 직접 실행 + STS 자격증명 + normalized 토큰 한도. EC2 비용 0, 거버넌스는 동일.",
       en: "Run claude on your own PC with STS credentials and normalized token limits. Zero EC2 cost, same governance.",

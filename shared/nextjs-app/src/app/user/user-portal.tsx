@@ -9,7 +9,7 @@ import SettingsTab from "@/components/user/settings-tab";
 import WelcomeOnboarding from "@/components/user/welcome-onboarding";
 import FirstLaunchGuide from "@/components/user/first-launch-guide";
 
-// ADR-014: Local Governance Mode (Claude Code on local PC via STS). Tab visible
+// ADR-006 (legacy ADR-014): Local Governance Mode (Claude Code on local PC via STS). Tab visible
 // when NEXT_PUBLIC_LOCAL_MODE_ENABLED=true is set on the Dashboard container.
 const LOCAL_MODE_ENABLED =
   (process.env.NEXT_PUBLIC_LOCAL_MODE_ENABLED ?? "").toLowerCase() === "true";
@@ -56,7 +56,7 @@ const ALL_TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: Re
   },
 ];
 
-// ADR-014: Local (Bedrock) was a separate tab — now merged into Environment.
+// ADR-006 (legacy ADR-014): Local (Bedrock) was a separate tab — now merged into Environment.
 // Keeping ALL_TABS → TABS without filtering for now (local tab removed entirely).
 const TABS = ALL_TABS;
 

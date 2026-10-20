@@ -1,5 +1,5 @@
 """
-Shared role-factory helpers for Local Governance Mode (ADR-014).
+Shared role-factory helpers for Local Governance Mode (ADR-006 (legacy ADR-014)).
 
 Used by:
   - sts-issuer.py        — lazy fallback when a role is missing at AssumeRole time
@@ -52,10 +52,15 @@ def role_name(subdomain: str) -> str:
 
 
 def allowed_model_arns() -> list:
-    """ADR-021 wildcard Claude-family ARNs across every region prefix."""
+    """ADR-021 wildcard Claude-family ARNs across every region prefix, plus
+    ADR-014 OpenAI GPT (Codex) — the Responses API on bedrock-runtime also
+    authorizes bedrock:InvokeModel on the account default project (project/default)."""
     return [
         "arn:aws:bedrock:*::foundation-model/*anthropic.claude-*",
         f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*anthropic.claude-*",
+        "arn:aws:bedrock:*::foundation-model/*openai.gpt-*",
+        f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*openai.gpt-*",
+        f"arn:aws:bedrock:*:{ACCOUNT_ID}:project/default",
         "arn:aws:bedrock:*::foundation-model/*embed*",
         f"arn:aws:bedrock:*:{ACCOUNT_ID}:inference-profile/*embed*",
         f"arn:aws:bedrock:*:{ACCOUNT_ID}:application-inference-profile/*",

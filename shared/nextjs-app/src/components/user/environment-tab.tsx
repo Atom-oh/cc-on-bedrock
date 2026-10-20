@@ -268,7 +268,7 @@ export default function EnvironmentTab({
         </div>
       )}
 
-      {/* ADR-014: Local (Bedrock) section — sits ABOVE the Code Server section.
+      {/* ADR-006 (legacy ADR-014): Local (Bedrock) section — sits ABOVE the Code Server section.
           Always visible when LOCAL_MODE_ENABLED so users can use Claude Code on
           their local machine even without (or alongside) an EC2 DevEnv. */}
       {LOCAL_MODE_ENABLED && (

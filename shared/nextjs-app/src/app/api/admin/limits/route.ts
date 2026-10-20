@@ -9,7 +9,7 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
-// ADR-014/015: admin CRUD for normalized-token limits in cc-on-bedrock-limits.
+// ADR-006(legacy 014)/015: admin CRUD for normalized-token limits in cc-on-bedrock-limits.
 //
 // Schema (ADR-031 B′):
 //   PK = "USER#{email}" | "DEPT#{dept}"   (canonical user key = lowercased email)

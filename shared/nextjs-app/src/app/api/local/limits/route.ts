@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { DynamoDBClient, ScanCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
-// ADR-014: returns the current normalized-token usage and limits for the logged-in user
+// ADR-006 (legacy ADR-014): returns the current normalized-token usage and limits for the logged-in user
 // across daily / weekly / monthly periods, plus department aggregates.
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
@@ -12,6 +12,17 @@ const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 
 const dynamo = new DynamoDBClient({ region });
+
+const PERIOD_SPEND_FIELD: Record<string, string> = {
+  daily: "currentDailySpend",
+  weekly: "currentWeeklySpend",
+  monthly: "currentMonthlySpend",
+};
+const PERIOD_CAP_FIELD: Record<string, string> = {
+  daily: "effectiveDailyBudget",
+  weekly: "effectiveWeeklyBudget",
+  monthly: "effectiveMonthlyBudget",
+};
 
 type PeriodSummary = {
   period: "daily" | "weekly" | "monthly";
@@ -122,7 +133,9 @@ export async function GET(_req: NextRequest) {
     // table, so read the budget row and surface a release estimate to the user.
     // ADR-031 (B′): cc-user-budgets is keyed by email; legacy rows may still be
     // keyed by subdomain, so fall back to it.
-    let budgetDeny: { active: boolean; currentSpend: number; budget: number; releaseAt: string } | null = null;
+    let budgetDeny: {
+      active: boolean; currentSpend: number; budget: number; releaseAt: string; periods: string[];
+    } | null = null;
     const subdomain = (session.user as { subdomain?: string }).subdomain;
     const budgetKeys = [userKey, ...(subdomain && subdomain !== userKey ? [subdomain] : [])];
     try {
@@ -133,10 +146,26 @@ export async function GET(_req: NextRequest) {
         }));
         if (!r.Item) continue;
         const b = unmarshall(r.Item);
-        const budget = Number(b.monthlyBudget ?? 0);
-        const spend = Number(b.currentSpend ?? 0);
-        if (budget > 0 && spend >= budget) {
-          budgetDeny = { active: true, currentSpend: spend, budget, releaseAt: nextUtcMidnightIso() };
+        // ADR-008: budget-check writes the exceeded periods + release time; prefer them.
+        const periods: string[] = Array.isArray(b.budgetExceeded) ? b.budgetExceeded.map(String) : [];
+        if (periods.length > 0) {
+          const first = periods[0];
+          const spendKey = PERIOD_SPEND_FIELD[first] ?? "currentSpend";
+          const capKey = PERIOD_CAP_FIELD[first] ?? "monthlyBudget";
+          budgetDeny = {
+            active: true,
+            currentSpend: Number(b[spendKey] ?? 0),
+            budget: Number(b[capKey] ?? 0),
+            releaseAt: String(b.budgetReleaseAt || nextUtcMidnightIso()),
+            periods,
+          };
+        } else if (!Array.isArray(b.budgetExceeded)) {
+          // Row not yet written by the period-aware budget-check — legacy evaluation.
+          const budget = Number(b.monthlyBudget ?? 0);
+          const spend = Number(b.currentSpend ?? 0);
+          if (budget > 0 && spend >= budget) {
+            budgetDeny = { active: true, currentSpend: spend, budget, releaseAt: nextUtcMidnightIso(), periods: [] };
+          }
         }
         break; // first existing row wins (canonical email key preferred)
       }

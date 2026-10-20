@@ -33,7 +33,7 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Copy tools/cc-bedrock-local.sh so /api/install/cli can serve it at runtime (ADR-014)
+# Copy tools/cc-bedrock-local.sh so /api/install/cli can serve it at runtime (ADR-006 (legacy ADR-014))
 COPY tools/cc-bedrock-local.sh ./public/tools/cc-bedrock-local.sh
 
 # Non-root user for security

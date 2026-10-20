@@ -10,6 +10,7 @@ Docker 이미지 빌드 및 관리. devenv (Ubuntu/AL2023) 개발환경 이미�
 - `devenv/scripts/setup-common.sh` - 공통 설치 (Node.js, Python, AWS CLI)
 - `devenv/scripts/setup-claude-code.sh` - Claude Code CLI 설치
 - `devenv/scripts/setup-kiro.sh` - Kiro CLI 설치
+- `devenv/scripts/setup-codex.sh` - OpenAI Codex CLI install (`npm i -g @openai/codex`, ADR-014). The entrypoint writes the governed system config `/etc/codex/config.toml` (provider `amazon-bedrock-runtime`, region, `CODEX_MODEL_ID`, analytics off) and persists `~/.codex` on EFS
 - `devenv/scripts/s3-sync.sh` - S3 배포 아티팩트 동기화
 - `devenv/scripts/sync-mcp-config.sh` - EC2 부팅 시 DDB에서 MCP Gateway URL 읽어 `mcp_servers.json` 생성 (ADR-007)
 - `devenv/systemd/cc-mcp-sync.service` - MCP config 동기화 systemd 서비스 (부팅 시 실행)

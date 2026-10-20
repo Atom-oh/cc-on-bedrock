@@ -116,7 +116,15 @@ const ko: Record<string, string> = {
   "dept.totalTokens": "전체 토큰",
 
   // Analytics
-  "analytics.title": "Claude Code Usage",
+  "analytics.title": "Claude Code · Codex 사용량",
+  "tools.title": "도구별 사용량 (Claude Code vs Codex)",
+  "tools.claudeCode": "Claude Code",
+  "tools.codex": "Codex",
+  "tools.other": "기타",
+  "tools.costShare": "도구별 비용 비중",
+  "tools.users": "사용자",
+  "tools.requests": "요청",
+  "tools.none": "선택한 기간에 사용량이 없습니다",
   "analytics.lastUpdated": "최종 업데이트",
   "analytics.loading": "분석 데이터 로딩 중...",
   "analytics.past1d": "1일",
@@ -411,7 +419,15 @@ const en: Record<string, string> = {
   "dept.totalTokens": "Total Tokens",
 
   // Analytics
-  "analytics.title": "Claude Code Usage",
+  "analytics.title": "Claude Code · Codex Usage",
+  "tools.title": "Usage by Tool (Claude Code vs Codex)",
+  "tools.claudeCode": "Claude Code",
+  "tools.codex": "Codex",
+  "tools.other": "Other",
+  "tools.costShare": "Cost share by tool",
+  "tools.users": "users",
+  "tools.requests": "requests",
+  "tools.none": "No usage in the selected range",
   "analytics.lastUpdated": "Last updated",
   "analytics.loading": "Loading analytics...",
   "analytics.past1d": "1 Day",

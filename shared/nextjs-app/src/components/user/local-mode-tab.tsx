@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-// ADR-014: Local Governance Mode usage panel inside the user portal (/user tab).
+// ADR-006 (legacy ADR-014): Local Governance Mode usage panel inside the user portal (/user tab).
 // Mirrors /local page but embedded as a tab — for users who log in via Cognito
 // on the dashboard and run Claude Code locally against Bedrock.
 
@@ -105,7 +105,7 @@ export default function LocalModeTab() {
     <div className="space-y-4">
       <header className="text-sm text-gray-400">
         Claude Code를 로컬 PC에서 Bedrock 직접 호출로 사용하기 위한 1h STS 자격증명, 자동 갱신 CLI, 사용량, 한도 상태입니다.
-        (ADR-014 Local Governance Mode)
+        (ADR-006 (legacy ADR-014) Local Governance Mode)
       </header>
 
       {/* Deny banner */}

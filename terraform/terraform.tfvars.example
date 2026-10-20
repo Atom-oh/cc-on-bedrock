@@ -20,11 +20,14 @@ dev_subdomain = "dev"
 # Models
 opus_model_id   = "global.anthropic.claude-opus-4-8"
 sonnet_model_id = "global.anthropic.claude-sonnet-5"
+codex_model_id  = "global.openai.gpt-6.1-sol" # Codex CLI (ADR-014)
 
 # Compute
 dashboard_instance_type = "t4g.xlarge"
 dashboard_image_tag     = "replace-with-commit-sha" # Required; must match the pushed dashboard image tag and must not be latest.
 devenv_instance_type    = "t4g.large"
 ecs_cluster_name        = "cc-on-bedrock-devenv"
-daily_budget_usd        = 50
+daily_budget_usd        = 50 # per-user USD caps; any one exceeded = blocked (ADR-008)
+weekly_budget_usd       = 0  # 0 = no global weekly cap (set per user/dept in Admin → Budgets)
+monthly_budget_usd      = 0  # 0 = no global monthly cap
 governance_only         = false

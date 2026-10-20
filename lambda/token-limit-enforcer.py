@@ -1,5 +1,5 @@
 """
-Token Limit Enforcer Lambda — Local Governance Mode (ADR-014, ADR-015)
+Token Limit Enforcer Lambda — Local Governance Mode (ADR-006 (legacy ADR-014), ADR-015)
 
 Consumes the `cc-on-bedrock-usage` DynamoDB Stream (NEW_AND_OLD_IMAGES).
 For each USER# update:
@@ -36,12 +36,57 @@ SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 DENY_POLICY_NAME = os.environ.get("DENY_POLICY_NAME", "cc-bedrock-local-token-deny")
 WARNING_THRESHOLDS = [float(x) for x in os.environ.get("WARNING_THRESHOLDS", "0.8,0.95").split(",")]
 
-# Default normalized weights (env override possible)
+# Default normalized weights (env override possible). Scale: 1.0 = $15 per 1M tokens
+# (same basis as the dashboard NORMALIZED_PER_USD=66667), i.e. every weight = list
+# price / $15, so the USD→token mirror written by /api/admin/budgets agrees with the
+# USD budget it mirrors. Kept aligned with PRICING (exact per-model → MODEL_WEIGHTS)
+# and FAMILY_PRICING (family fallback → DEFAULT_WEIGHTS) in bedrock-usage-tracker.py
+# (tests import the tracker and compare). Claude rows were rescaled to current list
+# prices on 2026-10-18 (ADR-014; production had no normalized-token LIMIT rows).
 DEFAULT_WEIGHTS = {
-    "opus": {"in": 1.0, "out": 5.0},
-    "sonnet": {"in": 0.2, "out": 1.0},
-    "haiku": {"in": 0.053, "out": 0.267},
+    "opus": {"in": 0.3333, "out": 1.6667},  # FAMILY_PRICING $5.0/$25.0
+    "sonnet": {"in": 0.1333, "out": 0.6667},  # FAMILY_PRICING $2.0/$10.0
+    "haiku": {"in": 0.0667, "out": 0.3333},  # FAMILY_PRICING $1.0/$5.0
+    "fable": {"in": 0.6667, "out": 3.3333},  # FAMILY_PRICING $10.0/$50.0
+    "astra": {"in": 0.6667, "out": 3.3333},  # FAMILY_PRICING $10.0/$50.0
+    "sol": {"in": 0.1333, "out": 0.6667},  # FAMILY_PRICING $2.0/$10.0
+    "terra": {"in": 0.1333, "out": 0.8},  # FAMILY_PRICING $2.0/$12.0
+    "luna": {"in": 0.0133, "out": 0.08},  # FAMILY_PRICING $0.2/$1.2
+    "gpt": {"in": 0.2667, "out": 1.3333},  # FAMILY_PRICING $4.0/$20.0
 }
+
+# Exact per-model weights, matched longest-key-first by substring so "gpt-6.1-sol"
+# wins over "gpt-6-sol" and "claude-opus-5-5" over "claude-opus-5".
+MODEL_WEIGHTS = {
+    "claude-opus-5-5": {"in": 0.2667, "out": 1.3333},  # $4.0/$20.0
+    "claude-opus-5": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-8": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-7": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-6": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-opus-4-5": {"in": 0.3333, "out": 1.6667},  # $5.0/$25.0
+    "claude-sonnet-5-5": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "claude-sonnet-5": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "claude-sonnet-4-6": {"in": 0.2, "out": 1.0},  # $3.0/$15.0
+    "claude-sonnet-4-5": {"in": 0.2, "out": 1.0},  # $3.0/$15.0
+    "claude-haiku-5-5": {"in": 0.0067, "out": 0.0333},  # $0.1/$0.5
+    "claude-haiku-4-5": {"in": 0.0667, "out": 0.3333},  # $1.0/$5.0
+    "claude-fable-5-1": {"in": 0.6667, "out": 3.3333},  # $10.0/$50.0
+    "claude-fable-5": {"in": 0.6667, "out": 3.3333},  # $10.0/$50.0
+    "gpt-6.1-sol": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "gpt-6-astra": {"in": 0.6667, "out": 3.3333},  # $10.0/$50.0
+    "gpt-6-sol": {"in": 0.1333, "out": 0.6667},  # $2.0/$10.0
+    "gpt-6-luna": {"in": 0.0067, "out": 0.0333},  # $0.1/$0.5
+    "gpt-5.6-sol": {"in": 0.2667, "out": 1.3333},  # $4.0/$20.0
+    "gpt-5.6-terra": {"in": 0.1333, "out": 0.8},  # $2.0/$12.0
+    "gpt-5.6-luna": {"in": 0.0133, "out": 0.08},  # $0.2/$1.2
+    "gpt-5.5": {"in": 0.3333, "out": 2.0},  # $5.0/$30.0
+    "gpt-5.4": {"in": 0.1667, "out": 1.0},  # $2.5/$15.0
+}
+_MODEL_WEIGHT_KEYS = tuple(sorted(MODEL_WEIGHTS, key=len, reverse=True))
+
+# Match order matters: GPT tiers before the bare "gpt" family. Keep aligned with
+# FAMILY_PRICING in bedrock-usage-tracker.py.
+_FAMILY_ORDER = ("opus", "sonnet", "haiku", "fable", "astra", "sol", "terra", "luna", "gpt")
 
 ROLE_PREFIX = "cc-on-bedrock-local-user-"
 PERIODS = ("daily", "weekly", "monthly")
@@ -65,7 +110,7 @@ KST = timezone(timedelta(hours=9))
 
 def _model_family(model: str) -> str:
     m = (model or "").lower()
-    for fam in ("opus", "sonnet", "haiku"):
+    for fam in _FAMILY_ORDER:
         if fam in m:
             return fam
     return "sonnet"  # safe default
@@ -73,7 +118,15 @@ def _model_family(model: str) -> str:
 
 def _normalize(model: str, input_tokens: int, output_tokens: int, override_weights: dict | None = None) -> Decimal:
     fam = _model_family(model)
-    weights = (override_weights or {}).get(fam) or DEFAULT_WEIGHTS[fam]
+    weights = (override_weights or {}).get(fam)
+    if not weights:
+        m = (model or "").lower()
+        for key in _MODEL_WEIGHT_KEYS:
+            if key in m:
+                weights = MODEL_WEIGHTS[key]
+                break
+    if not weights:
+        weights = DEFAULT_WEIGHTS[fam]
     raw = input_tokens * weights["in"] + output_tokens * weights["out"]
     return Decimal(str(round(raw, 4)))
 
