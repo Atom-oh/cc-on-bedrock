@@ -122,16 +122,20 @@ chair_label() { case "$1" in
   *)           echo "$1" ;;
 esac ; }
 
-run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
+run_chair() {  # $1=model → "$OUT" (scrubbed); a failed claude run is recorded in CHAIR_RC, never fatal.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
   # The chair runs with NO tools (`--tools ""`) and no MCP servers (`--strict-mcp-config`):
   # CI runs this path under pull_request_target with runner credentials, and the chair only
   # needs stdin (diff + panel output). This closes the PR#107 M3 residual risk (ADR-013
   # amendment 2026-10-18). Output still passes scrub_secrets as a last line of defense.
+  # Settings are loaded on purpose: they come from the trusted BASE checkout and the
+  # runner image, never from the PR head. Every CI Claude run with `--setting-sources ""`
+  # (2026-10-20/21) returned no valid review, while the same command without it passed.
+  CHAIR_RC=0
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    --tools "" --strict-mcp-config --setting-sources "" \
-    < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT" || true
+    --tools "" --strict-mcp-config \
+    < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT" || CHAIR_RC=$?
 }
 
 # 요구사항: 마지막 non-empty 줄이 정확히 VERDICT: PASS 또는 VERDICT: FAIL.
@@ -145,7 +149,24 @@ chair_valid() {
   awk 'NF{last=$0} END{print last}' "$OUT" | grep -qE '^VERDICT: (PASS|FAIL)$'
 }
 
+# Log why a chair attempt was rejected: exit code, size, and the scrubbed start of its
+# stdout and stderr. Claude prints API errors on stdout, which the fallback overwrites.
+chair_diag() {  # $1 = model
+  {
+    echo "--- chair '$(chair_label "$1")' rejected: rc=${CHAIR_RC:-?} stdout=$(wc -c < "$OUT" 2>/dev/null || echo 0)B; last line: $(awk 'NF{last=$0} END{print last}' "$OUT" 2>/dev/null | head -c 200)"
+    echo "--- stdout (first 1500 bytes, scrubbed) ---"
+    head -c 1500 "$OUT" 2>/dev/null
+    echo ""
+    echo "--- stderr (first 1500 bytes, scrubbed) ---"
+    scrub_secrets < "$WORK/chair.err" 2>/dev/null > "$WORK/chair-err-diag.tmp" || true
+    head -c 1500 "$WORK/chair-err-diag.tmp" 2>/dev/null
+    rm -f "$WORK/chair-err-diag.tmp"
+    echo ""
+  } >&2
+}
+
 run_chair "$CHAIR_PRIMARY_MODEL"
+chair_valid || chair_diag "$CHAIR_PRIMARY_MODEL"
 CHAIR_USED="$CHAIR_PRIMARY_MODEL"
 # PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면 재시도는 동일 호출을 그대로
 # 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
@@ -165,13 +186,14 @@ if ! chair_valid && [ "$CHAIR_FALLBACK_MODEL" != "$CHAIR_PRIMARY_MODEL" ]; then
   rm -f "$WORK/chair-err-scrubbed.tmp"
   echo "::warning::chair '$(chair_label "$CHAIR_PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $CHAIR_ERR_EXCERPT — falling back to '$(chair_label "$CHAIR_FALLBACK_MODEL")'"
   run_chair "$CHAIR_FALLBACK_MODEL"
+  chair_valid || chair_diag "$CHAIR_FALLBACK_MODEL"
   if chair_valid; then
     CHAIR_USED="$CHAIR_FALLBACK_MODEL"
   fi
 fi
 
 if ! chair_valid; then
-  echo "리뷰 생성 실패 — $(chair_label "$CHAIR_PRIMARY_MODEL")·$(chair_label "$CHAIR_FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
+  echo "Review generation failed: neither $(chair_label "$CHAIR_PRIMARY_MODEL") nor $(chair_label "$CHAIR_FALLBACK_MODEL") returned a valid review (empty output or no VERDICT). The job log has the scrubbed chair output." > "$OUT"
   echo "VERDICT: FAIL" >> "$OUT"
 fi
 

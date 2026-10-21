@@ -114,8 +114,9 @@ amendment; that text is kept as history.
 2. **Fail-closed coverage.** Any lens Codex did not complete sets `coverage-severe.flag` and
    forces `VERDICT: FAIL`, whatever the chair decided.
 3. **Chair.** Claude Opus 5.5 (`global.anthropic.claude-opus-5-5`, fallback
-   `global.anthropic.claude-opus-5`), tool-less (`--tools "" --strict-mcp-config
-   --setting-sources ""`), reviews the same diff as the second independent reviewer,
+   `global.anthropic.claude-opus-5`), tool-less (`--tools "" --strict-mcp-config`; settings load
+   from the trusted BASE checkout and runner image, because CI runs with
+   `--setting-sources ""` never produced a valid review), reviews the same diff as the second independent reviewer,
    adjudicates the Codex findings and emits exactly one final VERDICT. The PR title reaches
    it on stdin as untrusted data.
 4. **Diff custody.** The diff is built with `git diff` from the pinned merge-base/HEAD

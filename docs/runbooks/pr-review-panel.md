@@ -18,7 +18,8 @@ and HEAD commits, then:
    under a `PANEL_TIMEOUT` (default 300 s) backstop.
 2. `scripts/pr-review/synthesize.sh` runs the Claude chair (`global.anthropic.claude-opus-5-5`,
    fallback `global.anthropic.claude-opus-5`, `CHAIR_TIMEOUT` default 600 s) with no tools
-   (`--tools "" --strict-mcp-config --setting-sources ""`). The chair receives the PR title
+   (`--tools "" --strict-mcp-config`). A rejected chair attempt logs its exit code and the
+   scrubbed start of its stdout/stderr (`chair_diag`). The chair receives the PR title
    (as untrusted data), the diff and the Codex cells on stdin, reviews the diff itself as the
    second independent reviewer, adjudicates the Codex findings and emits exactly one final
    `VERDICT`. The workflow checks the diff's sha256 between panel and chair, so the chair sees

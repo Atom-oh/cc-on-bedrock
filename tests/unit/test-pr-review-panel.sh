@@ -27,7 +27,8 @@ chk 'codex -c web_search=disabled exec' "Codex runs with web search disabled"
 chk 'codex_env timeout' "Codex runs under the allowlisted env"
 nochk 'kiro-cli' "panel no longer invokes Kiro"
 schk 'CHAIR_PRIMARY_MODEL:-global\.anthropic\.claude-opus-5-5' "chair defaults to Claude Opus 5.5"
-schk '--tools "" --strict-mcp-config --setting-sources ""' "chair runs tool-less with no setting sources"
+schk '--tools "" --strict-mcp-config' "chair runs tool-less with no MCP servers"
+schk 'chair_diag "\$CHAIR_PRIMARY_MODEL"' "rejected chair output is logged for diagnosis"
 
 if command -v timeout >/dev/null 2>&1; then
   T_STUB="$(mktemp -d)"
