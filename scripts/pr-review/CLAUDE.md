@@ -1,10 +1,19 @@
 # PR review module
 
+CI runs the simplified `ROLE_REVIEW=0` path (owner decision 2026-10-21, ADR-013
+amendment): `run-panel.sh` runs one Codex (`PANEL_MODEL`, default
+`global.openai.gpt-6.1-sol`) cell per lens L2–L5 in parallel, diff on stdin, web search
+disabled, allowlisted `AWS_*`/`CODEX_*` env (no GitHub/Kiro tokens), up to
+`PANEL_RETRIES` attempts. Any lens Codex did not complete sets `coverage-severe.flag` →
+forced `VERDICT: FAIL`. `synthesize.sh` runs the tool-less Claude chair
+(`global.anthropic.claude-opus-5-5`, fallback `global.anthropic.claude-opus-5`) as the
+second independent reviewer; it adjudicates Codex findings and emits the one final
+VERDICT. Kiro is not in this path. `run-panel.sh`/`synthesize.sh` are covered by
+`tests/unit/test-pr-review-panel.sh`; the [runbook](../../docs/runbooks/pr-review-panel.md)
+covers operations.
+
 [README.md](README.md) and the [project contract](../../docs/pr-review-specialists.md)
-own the `ROLE_REVIEW=1` specialist path (inactive in CI since 2026-10-18; CI runs the
-simplified `ROLE_REVIEW=0` panel → chair VERDICT path). Keep legacy entrypoints for compatibility;
-the [runbook](../../docs/runbooks/pr-review-panel.md) and
-`tests/unit/test-pr-review-panel.sh` retain their historical/legacy scope.
+own the retained, inactive `ROLE_REVIEW=1` specialist path.
 
 The installed path uses `prepare_roles.py`, `run_role.py`, `run-specialists.sh`,
 `role_review.py`, `synthesize_roles.py` and `role-controls.sh`. Executors fetch

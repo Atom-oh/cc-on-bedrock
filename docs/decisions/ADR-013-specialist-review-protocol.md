@@ -10,7 +10,8 @@ runtime_required: false
 ## Status
 
 Accepted, 2026-09-13. Documentation convention: **LIVE**. Specialist protocol:
-**INACTIVE** in CI since the 2026-10-18 amendment below (retained behind `ROLE_REVIEW=1`). Runtime service availability and
+**INACTIVE** in CI since the 2026-10-18 amendment below (retained behind `ROLE_REVIEW=1`;
+active CI path revised by the 2026-10-21 amendment). Runtime service availability and
 executed model identity require separate evidence; configuration is not proof.
 
 ## Context
@@ -98,6 +99,37 @@ Known gaps (accepted): Codex cells use a `read-only` sandbox that can still read
 files (output is secret-scrubbed); renames out of an excluded directory are classified by the
 old path only; no specialist evidence artifact is retained; legacy prompts request Korean
 review output (the English-output rule applies to the specialist path).
+
+## Amendment 2026-10-21 — Codex lens panel, Claude chair, Kiro removed
+
+Owner decision: keep `ROLE_REVIEW=0` and simplify the active path to the same shape as the
+owner's other projects (e.g. ttobak). This supersedes the panel roster of the 2026-10-18
+amendment; that text is kept as history.
+
+1. **Panel.** Codex only (`PANEL_MODEL`, default `global.openai.gpt-6.1-sol`), one cell per
+   lens L2–L5 in parallel, diff on stdin, web search disabled, `read-only` sandbox, an
+   allowlisted environment (`AWS_*`/`CODEX_*` only; no `GH_TOKEN`/`GITHUB_TOKEN`/
+   `KIRO_API_KEY`), up to `PANEL_RETRIES` attempts. Kiro is removed from the panel and the
+   `scripts/pr-review/agents/pr-review-notools.json` agent file is deleted.
+2. **Fail-closed coverage.** Any lens Codex did not complete sets `coverage-severe.flag` and
+   forces `VERDICT: FAIL`, whatever the chair decided.
+3. **Chair.** Claude Opus 5.5 (`global.anthropic.claude-opus-5-5`, fallback
+   `global.anthropic.claude-opus-5`), tool-less (`--tools "" --strict-mcp-config
+   --setting-sources ""`), reviews the same diff as the second independent reviewer,
+   adjudicates the Codex findings and emits exactly one final VERDICT. The PR title reaches
+   it on stdin as untrusted data.
+4. **Diff custody.** The diff is built with `git diff` from the pinned merge-base/HEAD
+   commits. Diffs over 12,000 lines or 512,000 bytes are blocked (fail closed), never
+   truncated. A sha256 check confirms the chair sees the bytes the panel reviewed.
+5. **Specialist protocol** (`run-specialists.sh`, `ROLE_REVIEW=1`) is retained but inactive.
+
+History: #127 added a Codex + Claude two-reviewer panel path; #131 reverted it because the
+Claude panel reviewer kept exiting without the coverage marker. This amendment supersedes
+both: Claude reviews only as the chair, so no Claude panel cell or coverage marker is needed.
+
+Known gaps (accepted): with one panel vendor, cross-family checking rests on the chair; the
+Codex `read-only` sandbox can still read runner files (output is secret-scrubbed). Lens
+prompts and the chair now request English review output.
 
 ## Verification
 

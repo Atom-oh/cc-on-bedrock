@@ -1,22 +1,21 @@
 name: AI Code Review
 
-# PR마다 lens×모델 매트릭스 패널(Codex + Kiro x2, L2~L5 각 lens 독립 에이전트, 3모델×4lens=
-# 12셀)이 리뷰하고 Claude 의장(primary/fallback)이 lens별로 종합해 코멘트로 게시
-# (fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
-#   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
-#   - 매트릭스 fan-out: scripts/pr-review/run-panel.sh(3모델×4lens=12셀) → synthesize.sh
-#   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO)
-#   - 리전: global inference profile (claude-fable-5.1) 이지만 "global." 접두어는 Bedrock
-#     라우팅에만 영향, SigV4 서명 리전은 그대로 AWS_REGION=ANTHROPIC_BEDROCK_BASE_URL 매칭 필요
-#     (codex 의 amazon-bedrock-runtime provider 와 달리 AWS_REGION 고정을 계속 필요로 함)
+# Simplified AI review, the same shape as the other projects (e.g. ttobak):
+# Codex (global.openai.gpt-6.1-sol) reviews each lens L2-L5 in parallel
+# (scripts/pr-review/run-panel.sh), then Claude Opus 5.5 reviews the same diff as the
+# tool-less chair and posts one fail-closed VERDICT (scripts/pr-review/synthesize.sh).
+#   - pull_request_target with a base-ref checkout: PR head code never runs; the diff is data.
+#   - Auth: EKS Pod Identity (ci-runner) SigV4 on the shared actions-runner-claude image.
+#   - "global." profiles only affect Bedrock routing; Claude's SigV4 signing region must
+#     still match ANTHROPIC_BEDROCK_BASE_URL (Codex's amazon-bedrock-runtime provider does not).
 
 on:
   pull_request_target:
     types: [opened, synchronize]
 
 env:
-  # Simplified (2026-10-18, owner decision): legacy lens panel → chair VERDICT path,
-  # the same shape as the other projects. ROLE_REVIEW=1 re-enables the specialist protocol.
+  # Owner decision 2026-10-21: Codex lens panel → Claude chair VERDICT.
+  # ROLE_REVIEW=1 re-enables the retained specialist protocol.
   ROLE_REVIEW: "0"
   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -39,15 +38,9 @@ jobs:
       pull-requests: write
       contents: read
     env:
-      # claude-fable-5.1 은 global inference profile — 모델 ID 의 "global." 접두어는 Bedrock
-      # 내부 라우팅에만 영향을 주고, SigV4 서명 리전(AWS_REGION)은 여전히
-      # ANTHROPIC_BEDROCK_BASE_URL 의 엔드포인트와 일치해야 서명이 성공한다
-      # (cc-on-bedrock #114 리뷰에서 발견 — 이전 버전 코멘트가 더 이상 고정이 필요 없다고
-      # 잘못 주장했던 것을 정정. codex 의 amazon-bedrock-runtime provider 는 실제로 리전
-      # 고정이 필요 없어 다른 패턴이다). 엔드포인트/리전 쌍은 가장 가까운 리전
-      # (ap-northeast-2/Seoul) 으로 맞춰 둔다. 의장은 fleet 표준(fable-5.1)으로 정렬 —
-      # 다른 pr-review 리포 전부 동일.
-      ANTHROPIC_MODEL: global.anthropic.claude-fable-5-1
+      # The chair model is set in synthesize.sh (CHAIR_PRIMARY_MODEL, Opus 5.5); the
+      # endpoint/region pair stays on the nearest region (ap-northeast-2).
+      ANTHROPIC_MODEL: global.anthropic.claude-opus-5-5
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
       AWS_REGION: ap-northeast-2
@@ -68,9 +61,8 @@ jobs:
         run: |
           command -v claude >/dev/null 2>&1 || { echo "::warning::claude not found"; npm install -g @anthropic-ai/claude-code; }
           claude --version
-          for c in codex kiro-cli; do
-            command -v "$c" >/dev/null 2>&1 || echo "::warning::$c not found on runner (image needs rebuild)"
-          done
+          command -v codex >/dev/null 2>&1 || { echo "::error::codex not found on runner (image needs rebuild)"; exit 1; }
+          codex --version
 
       - name: Get PR diff
         env:
@@ -105,10 +97,8 @@ jobs:
           mkdir -p /tmp/pr-review/lenses
           COMMON="Review ONLY the diff under review for this PR, in this repo (AWS Bedrock
           기반 멀티유저 Claude Code 개발환경 플랫폼, Terraform-only IaC). The diff reaches you
-          one of two ways depending on your tool: it is either piped to your stdin directly,
-          or embedded inline below in your instructions (Kiro cells: no file-read tool is
-          granted — the diff text is inline, not a path to read) — whichever applies to
-          you, that IS the diff under review; do not expect any other delivery format.
+          on your stdin; that IS the diff under review — do not expect any other delivery
+          format or read other files.
           Stay inside your assigned lens below — do not comment on other lenses (other
           agents cover those independently). Output concise findings grouped
           CRITICAL/MAJOR/MINOR. DO NOT output a VERDICT line — that is the chair's job.
@@ -229,10 +219,8 @@ jobs:
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## AI Code Review — specialists"
-            echo "_Synthesis: ${chair_used:-pending}_"
-            echo ""
-            echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
+            echo "## AI Code Review — Codex + Claude"
+            echo "_Panel: Codex GPT-6.1 Sol (${panel_responded:-none}) · Chair: ${chair_used:-pending}_"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
