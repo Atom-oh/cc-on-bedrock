@@ -1,19 +1,15 @@
 # Terraform Module
 
 ## Role
-Terraform HCL로 전체 인프라 배포. 4개 모듈 (Usage Tracking 모듈 추가 필요).
+Terraform HCL is the only IaC (ADR-001). The root `main.tf` wires 8 modules; details are in `terraform/CLAUDE.md`.
 
 ## Key Files
-- `main.tf` - Root module, 모듈 호출 및 연결
-- `variables.tf` / `outputs.tf` - 입력 변수, 출력값
-- `providers.tf` - AWS provider (ap-northeast-2)
-- `modules/network/` - VPC, Subnets, NAT, VPC Endpoints, Route 53
-- `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM
-- `modules/ecs-devenv/` - ECS Cluster, Task Defs, EFS, ALB, CloudFront
-- `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront
-- `modules/litellm/` - **deprecated** (Bedrock Direct 전환으로 제거 예정)
+- `main.tf`, `variables.tf`, `outputs.tf`, `providers.tf` (S3 backend, `us-east-1` alias for CloudFront-scope resources)
+- `modules/network/`, `modules/security/`, `modules/ecs-devenv/`, `modules/ec2-devenv/`, `modules/usage-tracking/`, `modules/dashboard/`, `modules/local-governance/`, `modules/waf/`
+- `terraform.tfvars.example` - copy to `terraform.tfvars` and set at least `domain_name`
 
 ## Rules
-- `terraform fmt -recursive` 후 커밋
-- 모듈 간 의존성은 변수로 전달
-- `terraform.tfvars.example`을 `terraform.tfvars`로 복사 후 사용
+- Run `terraform -chdir=terraform fmt -recursive` before committing (`tests/run-all.sh` checks it).
+- Pass dependencies between modules as variables/outputs.
+- No hardcoded account ID, domain or region; no `0.0.0.0/0` ingress; ingress only through CloudFront.
+- `dashboard_image_tag` must be an immutable tag, not `latest`.

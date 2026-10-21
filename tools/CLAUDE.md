@@ -1,46 +1,44 @@
 # Tools Module
 
 ## Role
-End-user CLI helpers and operational prompts. The most important artifact is `cc-bedrock-local.sh`, the **Local Governance Mode** user CLI (ADR-006 (legacy ADR-014)).
+End-user CLI helpers. The main artifact is `cc-bedrock-local.sh`, the Local Governance Mode user CLI (ADR-006).
 
 ## Key Files
-- `cc-bedrock-local.sh` — Local Governance Mode CLI wrapper. Fetches 1h STS credentials from the Dashboard (`/api/local/credentials`) and exec's `claude` with `CLAUDE_CODE_USE_BEDROCK=1`. **ADR-029**: installs `credential_process = cc-bedrock-local.sh credential-process` into `~/.aws/config [profile cc-bedrock]` — the AWS SDK re-invokes the hook before each Expiration, so sessions of any length survive the 1h role-chaining cap (re-login only when the 30d Cognito refresh token dies). Legacy static-key `[cc-bedrock]` sections in `~/.aws/credentials` are removed on login/refresh/launch (they would shadow credential_process). ADR-006 (legacy ADR-014).
-- `cc-otel-code-metrics.sh` — **RETIRED (ADR-009 P1 rewrite, 2026-06-26).** This custom shell emitter (session/git wrappers + 5-min heartbeat) is superseded by **native Claude Code OpenTelemetry** (`claude_code.*` metrics + `tool_result` events), enabled via env in `ec2-clients.ts` `otelEnvUserData`. Native OTEL also measures skill/agent/tool usage, which the wrapper could not. File kept for history/local-mode reference; no longer installed on devenvs.
-- `prompts/` — Reserved for shared LLM prompt templates (currently empty)
-- `scripts/` — Reserved for additional shell helpers (currently empty)
+- `cc-bedrock-local.sh` — Local Governance Mode CLI wrapper. It logs into Cognito, fetches 1h STS credentials from the dashboard (`/api/local/credentials`), and runs `claude` with `CLAUDE_CODE_USE_BEDROCK=1` or `codex` through the `amazon-bedrock-runtime` provider (ADR-014). It installs `credential_process = cc-bedrock-local.sh credential-process` into `~/.aws/config [profile cc-bedrock]`; the AWS SDK re-invokes it before each expiration, so sessions of any length survive the 1h role-chaining cap. Re-login is needed only when the 30-day Cognito refresh token expires. Legacy static-key `[cc-bedrock]` sections in `~/.aws/credentials` are removed on login/refresh/launch because they would shadow `credential_process`.
+- `cc-otel-code-metrics.sh` — retired. The custom emitter (session/git wrappers + 5-minute heartbeat) was superseded by native Claude Code OpenTelemetry (`claude_code.*` metrics + `tool_result` events), enabled via env in `ec2-clients.ts` `otelEnvUserData` (ADR-009). Kept for reference; no longer installed on DevEnvs.
+- `prompts/`, `scripts/` — reserved, currently empty.
 
 ## Commands
 ```bash
-# One-time setup (per user workstation)
-curl -fsSL https://cconbedrock-dashboard.<domain>/api/install | bash
+# One-time setup per workstation (installs the CLI plus cc()/ccx() shell functions)
+curl -fsSL https://<dashboard_subdomain>.<domain>/api/install | bash
 
-# Operations
 cc-bedrock-local login               # Cognito login, caches refresh token
-cc-bedrock-local refresh             # silent refresh from cached Cognito refresh token
+cc-bedrock-local refresh             # silent refresh from the cached refresh token
 cc-bedrock-local status              # remaining TTL + Deny/limit state
-cc-bedrock-local claude              # auto-refresh + exec claude
+cc-bedrock-local claude [args]       # ensure session + exec claude
+cc-bedrock-local codex [args]        # ensure session + exec codex on Bedrock
+cc-bedrock-local set-model K=V       # sonnet | opus | haiku | subagent | pin | codex
 cc-bedrock-local config              # print active config
-cc                                # shell function installed by /api/install
 
-# Syntax check
-bash -n tools/cc-bedrock-local.sh tools/cc-otel-code-metrics.sh
+bash -n tools/cc-bedrock-local.sh    # syntax check (also run by tests/run-all.sh)
 ```
 
-## Configuration
-- File: `~/.config/cc-bedrock/config` (mode 600)
-- State: `~/.config/cc-bedrock/state.json` (last credentials + limit status, mode 600)
-- AWS profile written to: `~/.aws/config [profile cc-bedrock]` (credential_process, ADR-029); legacy static-key section in `~/.aws/credentials` is auto-removed
-- Env overrides win: `CC_BEDROCK_DASHBOARD_URL`, `CC_BEDROCK_EMAIL`, `AWS_PROFILE_NAME`, `AWS_REGION`
+The default `dashboard_subdomain` is `cconbedrock-dashboard`.
 
-## Rules
-- The CLI logs into Cognito directly via the public CLI app client and sends the Cognito access token to `/api/local/credentials`.
-- Refresh thresholds: `run`/`claude` pre-fetch at launch when TTL < 10 min; `credential-process` serves cache while TTL > 5 min, silently re-issues otherwise (never prompts — exits 1 with a re-login hint when the refresh token is dead)
-- Cross-platform date handling: tries GNU `date -d`, BSD `date -j -f`, then python3 fallback
-- Only `python3` and `curl` runtime dependencies — no AWS CLI required
-- Profile snippet `[cc-bedrock]` in the response is rewritten to use the configured `AWS_PROFILE_NAME` before write
+## Configuration
+- Config `~/.config/cc-bedrock/config` and state `~/.config/cc-bedrock/state.json` (last credentials + limit status), both mode 600.
+- AWS profile: `~/.aws/config [profile cc-bedrock]` using `credential_process`.
+- Env overrides win: `CC_BEDROCK_DASHBOARD_URL`, `CC_BEDROCK_EMAIL`, `AWS_PROFILE_NAME`, `AWS_REGION`.
+
+## Behavior to preserve
+- The CLI logs into Cognito directly through the public CLI app client and sends the Cognito access token to `/api/local/credentials`.
+- Refresh thresholds: `run`/`claude` pre-fetch at launch when TTL < 10 min. `credential-process` serves the cache while TTL > 5 min and silently re-issues otherwise. It never prompts; when the refresh token is dead it exits 1 with a re-login hint, since an SDK hook cannot be interactive.
+- Date handling tries GNU `date -d`, then BSD `date -j -f`, then python3, so it works on Linux and macOS.
+- Runtime dependencies are only `python3` and `curl`; the AWS CLI is not required.
+- The `[cc-bedrock]` profile snippet in the response is rewritten to the configured `AWS_PROFILE_NAME` before it is written.
 
 ## Related
-- ADR-006 (legacy ADR-014): Local Governance Mode (EC2-less)
-- ADR-015: Dollar Budget × Normalized Token Limit Integration
-- Dashboard: `shared/nextjs-app/src/app/local/page.tsx`, `src/app/api/local/credentials/route.ts`
+- ADR-006 (Local Mode, credential_process), ADR-008 (dollar budget × normalized token limit), ADR-014 (Codex)
+- Dashboard: `shared/nextjs-app/src/app/local/page.tsx`, `src/app/api/local/credentials/route.ts`, `src/app/api/install/route.ts`
 - Lambda: `lambda/sts-issuer.py`

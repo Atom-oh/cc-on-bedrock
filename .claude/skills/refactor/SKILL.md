@@ -1,35 +1,17 @@
-# Refactor Skill
+---
+name: refactor
+description: Restructure existing code in this repo without changing behavior, in small verified steps.
+---
 
-Refactor existing code to improve quality without changing behavior.
+# Refactor
 
-## Principles
-- Improve structure without changing behavior
-- Single Responsibility Principle (SRP)
-- Remove duplicate code (DRY)
-- Small, incremental steps with verification
+Improve the structure of existing code without changing its behavior.
 
-## Process
+## Approach
 
-### 1. Analysis
-- Identify the target code and its tests
-- Map all callers and dependencies
-- Confirm test coverage exists (suggest adding tests first if not)
+1. **Understand.** Identify the target code, its callers and dependencies, and the tests that cover it. If coverage is thin, suggest adding characterization tests first.
+2. **Plan.** Tell the user what will change, what will not, and the risk (low/medium/high). For a small, low-risk change a sentence is enough.
+3. **Change in small steps.** Run the relevant tests after each step (`npx vitest run`, `python3 -m pytest ...`, or `bash tests/run-all.sh`). Keep commits atomic.
+4. **Verify.** Existing tests pass, behavior is unchanged, and the refactor achieved its goal.
 
-### 2. Plan
-Present the refactoring plan to the user:
-- What will change
-- What will NOT change (behavior preservation)
-- Risk assessment (low/medium/high)
-
-### 3. Execute
-- Make changes in small, verifiable steps
-- Run tests after each step if possible
-- Keep commits atomic
-
-### 4. Verify
-- Confirm all existing tests pass
-- Verify no behavior changes
-- Check that the refactoring achieved its goal
-
-## Usage
-Run with `/refactor` command
+Favor clear single-responsibility units and removing real duplication, but don't add abstractions the code doesn't need yet.

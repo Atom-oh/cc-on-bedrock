@@ -1,12 +1,9 @@
 # Sync Docs
 
-Synchronize project documentation with current code state.
+Bring documentation back in line with the code; aim for accurate and concise, not more.
 
-## Actions
-1. **Quality Assessment** - Score each doc (0-100): commands(20), architecture(20), patterns(15), conciseness(15), currency(15), actionability(15)
-2. **AGENT.md Sync** - Update Overview, Tech Stack, Conventions, Key Commands
-3. **Architecture Doc Sync** - Update `docs/architecture.md`
-4. **Module Steering Audit** - Scan cdk/, terraform/, cloudformation/, docker/, shared/, agent/; create/update steering docs
-5. **ADR Audit** - Check `git log --oneline -20`, suggest ADRs. Format: `docs/decisions/ADR-NNN-title.md`
-6. **README.md Sync** - Update project structure section
-7. **Report** - Before/after scores, list of changes
+1. **Find drift** - Compare `CLAUDE.md`, module `CLAUDE.md` files (terraform/, lambda/, docker/, shared/nextjs-app/, scripts/, tools/, tests/, agent/), these steering docs, `docs/architecture.md` and `README.md` against the code and `git log --oneline -20`.
+2. **Verify before keeping** - Confirm every command, path, count, model ID and ADR number against the code; fix or remove what no longer holds.
+3. **Update what changed** - Keep each file's language and style. Use consolidated ADR numbers (`docs/history/ADR-MAPPING.md`).
+4. **Decisions** - Point out undocumented architectural decisions and suggest an ADR; write one only if asked, and update `docs/decisions/BASELINE.md` in the same change.
+5. **Report** - Files changed with a one-line reason each.

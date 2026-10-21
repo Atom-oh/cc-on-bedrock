@@ -30,12 +30,12 @@ EBS 볼륨은 AZ 종속이므로, `dataVolumeAz`를 영속화하고 **재연결 
 
 ### Q: 사용자 승인 플로우는?
 ```
-신청(pending) → 승인(approved) → 리소스 할당(assigned) → 컨테이너 사용
+신청(pending) → 승인(approved) → 리소스 할당(assigned) → DevEnv 사용
 ```
 1. 사용자가 `POST /api/user/container-request`로 리소스 크기, 스토리지 타입 선택 후 신청
 2. Admin이 `POST /api/admin/approval-requests` {action: "approve"}로 승인
 3. Admin이 {action: "assign"}으로 subdomain 할당 → Cognito `custom:subdomain` 설정
-4. 사용자가 다음 로그인/새로고침 시 컨테이너 시작 가능
+4. 사용자가 다음 로그인/새로고침 시 DevEnv 시작 가능
 
 ### Q: subdomain은 어떻게 결정되나요?
 Email 기반 자동 파생입니다. `emailToSubdomain("atom.oh@example.com")` → `"atom-oh"`. 수동 지정은 admin assign 시 `subdomain` 파라미터로 오버라이드 가능합니다.
@@ -53,7 +53,7 @@ Cognito 계정은 유지됩니다. 데이터 EBS는 `DeleteOnTermination=false`�
 
 ---
 
-## 컨테이너 프로비저닝
+## DevEnv 프로비저닝
 
 ### Q: DevEnv 프로비저닝은 어떻게 진행되나요?
 DevEnv은 per-user EC2 인스턴스로 프로비저닝됩니다(ADR-002). 진행상황은 Server-Sent Events로 실시간 스트리밍되며, 백엔드는 ECS RunTask가 아니라 EC2 `RunInstances` + 데이터 EBS 연결 기반입니다. 대략적인 흐름:
@@ -74,15 +74,15 @@ DevEnv은 per-user EC2 인스턴스로 프로비저닝됩니다(ADR-002). 진행
 ## 아키텍처
 
 ### Q: Nginx 동적 라우팅은 어떻게 작동하나요?
-DynamoDB `cc-routing-table`에 `{subdomain: privateIp}` 매핑을 저장합니다. DynamoDB Streams → Lambda가 Nginx 설정을 재생성하여 S3에 업로드. Nginx Fargate Service가 주기적으로 설정을 pull합니다. → [ADR-003](decisions/ADR-003-access-topology-routing.md)
+DynamoDB `cc-routing-table`에 `{subdomain: privateIp}` 매핑을 저장합니다. DynamoDB Streams → Lambda(`nginx-config-gen`)가 Nginx 설정을 재생성하여 S3에 업로드하고, Nginx Fargate 서비스가 주기적으로 ETag를 확인해 바뀐 설정을 pull·reload합니다. → [ADR-003](decisions/ADR-003-access-topology-routing.md)
 
 ### Q: Per-user IAM Role은 왜 필요한가요?
-각 사용자 컨테이너에 개별 IAM Role을 부여하여:
+각 사용자 DevEnv 인스턴스(EC2 Mode)와 Local 역할(Local Mode)에 개별 IAM Role을 부여하여:
 - Bedrock 호출을 사용자별로 추적 (CloudTrail)
 - S3 접근을 사용자 prefix로 제한
 - 예산 초과 시 개별 사용자의 Bedrock 접근만 차단 (IAM Deny Policy)
 
-`cc-on-bedrock-task-boundary` Permission Boundary가 최대 권한을 제한합니다.
+`cc-on-bedrock-task-boundary` Permission Boundary가 최대 권한을 제한합니다 (ADR-007). EC2와 Local은 같은 role을 공유하지 않고 정책 shape·boundary·태그·inference-profile 귀속만 공유합니다 (ADR-006).
 
 ### Q: 스토리지로 EFS를 선택할 수 있나요?
 아니요. 스토리지는 per-user gp3 **EBS 2-볼륨 모델**로 고정입니다(ADR-002). EFS·`storageType` 선택 옵션은 더 이상 존재하지 않습니다. IaC는 **Terraform 단일 정본**이며(ADR-001, CDK·CloudFormation 폐기), 별도의 `storageType` config는 없습니다. 데이터 격리는 사용자별 물리적 데이터 볼륨(subdomain 태그·AZ 핀, fail-closed 식별)으로 보장됩니다.

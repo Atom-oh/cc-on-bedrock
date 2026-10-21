@@ -1,118 +1,67 @@
 # Next.js Dashboard Module
 
 ## Role
-관리자/사용자 대시보드. 사용량 분석, 운영 모니터링, EC2 인스턴스 관리, 셀프서비스 환경 포털.
+관리자/사용자 대시보드: 사용량 분석, 운영 모니터링, EC2 DevEnv 관리, 셀프서비스 포털, Local Governance Mode 자격증명 발급. Terraform `modules/dashboard`의 EC2 ASG에서 standalone 컨테이너로 실행된다 (ADR-011).
 
-## Pages
-- `src/app/` - Home 대시보드 (비용/토큰/인스턴스 요약)
-- `src/app/user/` - **사용자 셀프서비스 포털** (3-탭: 환경/스토리지/설정)
-- `src/app/dept/` - 부서 관리자 대시보드 (멤버, 예산, 사용량)
-- `src/app/analytics/` - 토큰 사용량, 모델 비율, 비용 트렌드 차트
-- `src/app/monitoring/` - EC2 인스턴스 메트릭, Bedrock 사용량 (DynamoDB), 실시간 세션
-- `src/app/ai/` - AI Assistant (Bedrock Converse API + AgentCore Memory, Tool Use)
-- `src/app/security/` - Security Dashboard (IAM, DLP 정책, DNS Firewall 현황)
-- `src/app/admin/` - 사용자 CRUD, API 키 관리
-- `src/app/admin/instances/` - EC2 인스턴스 할당/시작/중지
-- `src/app/admin/budgets/` - 부서 예산 관리
-- `src/app/admin/tokens/` - 토큰 사용량 대시보드
-- `src/app/admin/approvals/` - EBS 확장 등 승인 요청 관리
-- `src/app/admin/dlp/` - DLP 정책 관리 (도메인 차단/허용)
-- `src/app/admin/mcp/` - MCP 카탈로그/게이트웨이 관리 (서버 할당, 동기화)
-- `src/app/admin/limits/` - **Local Governance Mode** normalized token 한도 CRUD (사용자/부서, period별, ADR-014)
-- `src/app/local/` - **Local Governance Mode** 사용자 페이지 (STS 자격증명 발급, aws configure 스니펫, 남은 토큰 게이지, ADR-014)
-- `src/app/docs/` - 내장 문서 (getting-started, user-guide, admin-guide, architecture, security, faq)
-- `src/app/login/` - 로그인 페이지 (direct form, no Cognito redirect)
+ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 등)는 `docs/history/ADR-MAPPING.md`로 변환한다.
 
-## API Routes
+## Pages (`src/app/`)
+- `/` Home (비용/토큰/인스턴스 요약) · `/login` (직접 폼, Cognito Hosted UI 리다이렉트 없음)
+- `/user` 사용자 셀프서비스 포털 (환경/스토리지/설정 탭 + Local Mode 탭)
+- `/dept` 부서 관리자 대시보드 (멤버, 예산, 사용량)
+- `/analytics` 토큰·모델·비용 트렌드 · `/monitoring` EC2 메트릭 + DynamoDB 기반 Bedrock 사용량 · `/security` IAM/DLP/DNS Firewall 현황
+- `/ai` AI Assistant (Bedrock Converse + AgentCore Memory, Tool Use)
+- `/admin` 사용자 CRUD, 하위 `instances`, `budgets`, `tokens`, `approvals`, `dlp`, `mcp`, `limits`(Local Governance 토큰 한도, ADR-006/008)
+- `/local` Local Governance Mode 사용자 페이지 (STS 자격증명, aws configure 스니펫, 남은 토큰 게이지; ADR-006)
+- `/docs` 내장 문서 (getting-started, user-guide, admin-guide, architecture, security, faq, local-mode)
+
+## API Routes (`src/app/api/`)
+
+모든 route는 세션을 검증한다. Admin route는 Cognito `admin` 그룹을, user route는 본인 데이터만 허용한다.
 
 ### Admin
-- `src/app/api/containers/route.ts` - EC2 인스턴스 관리 (Admin)
-- `src/app/api/container-metrics/route.ts` - EC2 CloudWatch 메트릭 + Bedrock 사용량(DynamoDB) (Admin)
-- `src/app/api/users/route.ts` - Cognito 사용자 관리 (Admin)
-- `src/app/api/usage/route.ts` - Usage Analytics API (Admin). `action=user_daily_trend`: per-user 일별 cost/token 트렌드. **서버측 fail-closed RBAC** (admin=전체 · dept-manager=자기 부서 · user=본인; 스코프 속성 없으면 403). 날짜창 ≤92일 검증 (spec `docs/superpowers/specs/2026-06-13-per-user-daily-usage-trend-design.md`)
-- `src/app/api/security/route.ts` - 보안 현황 조회 (Admin)
-- `src/app/api/admin/ebs-resize/route.ts` - EBS 리사이즈 승인/거부 (Admin)
-- `src/app/api/admin/budgets/route.ts` - 부서 예산 관리 (Admin)
-- `src/app/api/admin/tokens/route.ts` - 토큰 관리 (Admin)
-- `src/app/api/admin/approval-requests/route.ts` - 승인 요청 관리 (Admin)
-- `src/app/api/admin/dlp/domains/route.ts` - DLP 도메인 차단/허용 (Admin)
-- `src/app/api/admin/mcp/catalog/route.ts` - MCP 서버 카탈로그 CRUD (Admin)
-- `src/app/api/admin/mcp/gateways/route.ts` - MCP 게이트웨이 관리 (Admin)
-- `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 동기화 트리거 (Admin)
-- `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-부서 할당 (Admin, ADR-007)
-- `src/app/api/admin/limits/route.ts` - Local Governance normalized token 한도 CRUD (Admin, ADR-014). **USER 키 = 소문자 email** (ADR-031, 과거 Cognito sub)
-- `src/app/api/admin/limits/reset/route.ts` - 사용자 한도 강제 reset + Deny policy detach (Admin, ADR-014). body `{email}`로 `USER#{email}/DENY#active` 조회 → 행의 `subdomain`으로 Local 롤명(`local-user-{subdomain}`) 해석·detach·삭제 (ADR-031; 키=email, 롤명=subdomain 분리). 활성 deny 없으면 404
+- `containers`, `container-metrics` - EC2 인스턴스 관리, CloudWatch 메트릭 + DynamoDB 사용량
+- `users` - Cognito 사용자 관리 · `security` - 보안 현황
+- `usage` - Usage Analytics. `action=user_daily_trend`(사용자별 일별 cost/token), `action=tool_summaries`(Claude Code/Codex 도구별 비용; admin은 전체, 그 외 본인). 서버측 fail-closed RBAC(admin=전체, dept-manager=자기 부서, user=본인, 스코프 속성 없으면 403), 날짜창 ≤ 92일
+- `admin/ebs-resize`, `admin/budgets`, `admin/tokens`, `admin/approval-requests`, `admin/dlp/domains`
+- `admin/mcp/{catalog,gateways,gateways/sync,assignments,marketplaces}` - MCP 카탈로그·게이트웨이·마켓플레이스 (MCP Gateway는 BASELINE 범위 밖 기능으로 유지만 됨)
+- `admin/limits` - Local Governance normalized token 한도 CRUD. USER 키는 소문자 email (ADR-005)
+- `admin/limits/reset` - 한도 강제 reset + Deny policy detach. body `{email}`로 `USER#{email}/DENY#active`를 조회하고, 행의 `subdomain`으로 Local 롤명 `local-user-{subdomain}`을 해석해 detach·삭제한다(키=email, 롤명=subdomain). 활성 deny가 없으면 404
 
-### User Self-Service
-- `src/app/api/user/container/route.ts` - EC2 인스턴스 시작/중지
-- `src/app/api/user/container/stream/route.ts` - **SSE 프로비저닝 진행상황** (6단계 실시간)
-- `src/app/api/user/container-metrics/route.ts` - 사용자 인스턴스 메트릭
-- `src/app/api/user/disk-usage/route.ts` - 디스크 사용량 (CloudWatch)
-- `src/app/api/user/ebs-resize/route.ts` - EBS 확장 신청/상태/취소
-- `src/app/api/user/password/route.ts` - 비밀번호 조회/변경 (Cognito + Secrets Manager)
-- `src/app/api/user/usage/route.ts` - 일일 토큰 사용량
-- `src/app/api/user/keep-alive/route.ts` - 유휴 타임아웃 연장 (EBS)
-- `src/app/api/user/resource-review/route.ts` - AI 리소스 리뷰 (EBS 확장 전 사용량 분석)
-- `src/app/api/user/container-request/route.ts` - 인스턴스 생성 요청
-- `src/app/api/user/custom-routes/route.ts` - **포트 노출 CRUD** (GET/PUT, 본인 customRoutes, max 5, version CAS, routing-table 미러, ADR-027)
-- `src/app/api/local/credentials/route.ts` - STS Issuer Lambda 호출, 1h Bedrock 자격증명 반환 (role-chaining hard cap, CLI 자동 갱신; Local Governance, ADR-014)
-- `src/app/api/local/limits/route.ts` - 본인 사용자의 normalized token 한도/사용량/Deny 상태 조회 (Local Governance, ADR-014)
+### User self-service
+- `user/container` (시작/중지), `user/container/stream` (SSE 6단계 프로비저닝 진행), `user/container-request`, `user/container-metrics`, `user/disk-usage`
+- `user/ebs-resize` (신청/상태/취소), `user/keep-alive` (유휴 타임아웃 연장), `user/resource-review` (EBS 확장 전 AI 사용량 분석)
+- `user/password` (Cognito + Secrets Manager), `user/usage` (일일 토큰 사용량)
+- `user/custom-routes` - 포트 노출 GET/PUT: 본인 customRoutes, 최대 5개, version CAS, routing-table 미러 (ADR-003)
+- `local/credentials` - STS Issuer Lambda 호출, 1h Bedrock 자격증명 반환 (role-chaining 1h 한도, CLI가 자동 갱신; ADR-006)
+- `local/limits` - 본인 normalized token 한도/사용량/Deny 상태
 
 ### Common
-- `src/app/api/ai/route.ts` - Bedrock Converse API (Tool Use, 5 tools, max 5 iterations)
-- `src/app/api/ai/memory/route.ts` - AgentCore Memory 관리
-- `src/app/api/ai/runtime/route.ts` - AgentCore Runtime 관리
-- `src/app/api/dept/route.ts` - 부서 정보
-- `src/app/api/dept/list/route.ts` - 부서 목록 조회
-- `src/app/api/health/route.ts` - 헬스체크
-- `src/app/api/slack/commands/route.ts` - Slack slash command 핸들러
-- `src/app/api/slack/events/route.ts` - Slack event subscription 핸들러
+- `ai` - Bedrock Converse (Tool Use, 최대 5 iteration) · `ai/memory`, `ai/runtime` - AgentCore Memory/Runtime
+- `dept`, `dept/list`, `dept/mcp` · `health` · `auth/[...nextauth]`
+- `install`, `install/cli`, `install/otel` - Local CLI 설치 스크립트 (`cc()` / `ccx()` 셸 함수 포함)
+- `slack/commands`, `slack/events`
 
 ## Components
+- `src/components/user/` - `environment-tab`(프로비저닝, 상태, IDE/WEB/API URL, 메트릭), `provisioning-progress`(SSE 진행, Cancel, ARIA), `storage-tab`(디스크 게이지, EBS 확장, Keep-Alive), `settings-tab`(비밀번호, 계정, 포트 노출 CRUD, resource-specific IAM 권한 신청 폼; ADR-003/007), `local-mode-tab`, `first-launch-guide`, `welcome-onboarding`
+- `src/components/charts/` - Recharts (token-usage, model-ratio, cost-trend, leaderboard, horizontal-bar, area-trend, multi-line, donut)
+- `tables/`, `cards/`, `dept/`, `app-shell.tsx`, `sidebar.tsx`, `filter-bar.tsx`, `container-metrics.tsx`
 
-### User Portal (`src/components/user/`)
-- `environment-tab.tsx` - 환경 정보 탭 (프로비저닝, 상태, 멀티URL [IDE/WEB/API], 메트릭, 사용량)
-- `provisioning-progress.tsx` - SSE 6단계 프로비저닝 프로그레스 (Cancel, ARIA)
-- `storage-tab.tsx` - 스토리지 탭 (디스크 게이지, EBS 확장 신청, Keep-Alive)
-- `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보, **포트 노출 CRUD** ADR-027, **IAM 권한신청 = resource-specific 커스텀 문장 폼** ADR-026 T8)
-- `first-launch-guide.tsx` - 첫 실행 가이드 (환경 설정 안내)
-- `welcome-onboarding.tsx` - 온보딩 워크플로우
-
-### Charts (`src/components/charts/`)
-- Recharts 기반: token-usage, model-ratio, cost-trend, leaderboard, horizontal-bar, area-trend, multi-line, donut
-
-### Other
-- `src/components/tables/` - 데이터 테이블 (users-table, containers-table)
-- `src/components/cards/` - 상태 카드 (stat-card, health-card)
-- `src/components/app-shell.tsx` - 앱 레이아웃 셸 (사이드바 + 콘텐츠)
-- `src/components/container-metrics.tsx` - CPU/Memory/Network/Disk I/O 게이지 + 차트
-- `src/components/sidebar.tsx` - 사이드바 네비게이션
-- `src/components/filter-bar.tsx` - 필터 바
-- `src/components/dept/` - 부서 관련 (dept-selector, dept-card)
-
-## Lib
-- `src/lib/auth.ts` - Cognito + NextAuth 설정 (JWT, 8h session, custom attributes, `.atomai.click` 쿠키 도메인)
-- `src/lib/aws-clients.ts` - Cognito 사용자 관리 + DynamoDB 라우팅 테이블
-  - `listCognitoUsers()`, `createCognitoUser()`, `deleteCognitoUser()` 등
-  - `mirrorCustomRoutes()` (settings PUT의 version-guarded customRoutes 미러, ADR-027) / `deregisterContainerRoute()` (resetUserEnvironment) — 인스턴스 시작 시 라우팅 등록은 `ec2-clients.ts`의 `registerRoute()`
-- `src/lib/ec2-clients.ts` - EC2 인스턴스 관리 (start/stop, RunInstances, password sync, gateway policy)
-  - **UserData boot script** — `startInstance` / `restoreFromSnapshot`에서 systemd unit `cc-cli-update.service`(oneshot, every boot)를 생성·enable해 Claude Code/Kiro CLI를 자동 업데이트. `User=coder`로 실행하되 `ExecStartPost`에 `+` prefix를 붙여 `/usr/local/bin` symlink 갱신만 root로 수행 (CWAgent, MCP config sync 포함). ADR-014: the same unit refreshes `@openai/codex` (root `ExecStartPost=+`); `codexUserData()` writes `/etc/codex/config.toml` from `codexConfigToml()` (`CODEX_MODEL_ID` env, default `global.openai.gpt-6.1-sol`) on create/restore and in `postStartSetup`; the restart path re-upserts the per-user role inline policy (`ensureUserInstanceProfile`) so legacy roles gain the OpenAI/project ARNs
-- `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 (EC2 CPU/Memory/Network/Disk)
-- `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 + Bedrock 모니터링 메트릭 (cc-on-bedrock 프로젝트 전용). `buildUserDailyTrend` (순수 pivot: user×date, Top-N+others, 전구간 zero-fill) + `getUserDailyTrend` (fetch wrapper) — per-user 일별 트렌드 차트용
-- `src/lib/slack-client.ts` - Slack API 클라이언트 (알림, 명령 처리)
-- `src/lib/validation.ts` - 입력 검증 유틸리티
-- `src/lib/iam-request-validation.ts` - **ADR-026** IAM 권한 신청 검증 (Resource:*·쓰기/임베디드 와일드카드·위험액션·교차계정 거부; **읽기 와일드카드 Get*/List*/Describe*/BatchGet*/Query*/Scan* 허용** T8) + `buildIamExtensionRequest` + DEFAULT_SERVICE_ALLOWLIST/WILDCARD_OK_ACTIONS. 클라이언트(settings-tab)·서버 공유 단일 검증 출처
-- `src/lib/iam-resource-annotator.ts` - **ADR-026** 신청 statements 의 advisory LLM 위험 주석 (Bedrock, 프롬프트 인젝션 격리)
-- `src/lib/approval-authz.ts` - **ADR-026** 승인 인가 (admin OR dept-manager, 저장 부서 기준, 순수·테스트가능)
-- `src/lib/utils.ts` - 공통 유틸리티 함수
-- `src/lib/i18n.tsx` - 다국어(한/영) 지원
-- `src/lib/types.ts` - 공유 타입 정의 (Provisioning, DiskUsage, Password, UserPortalTab 등)
+## Lib (`src/lib/`)
+- `auth.ts` - Cognito + NextAuth (JWT, 8h 세션, custom attributes, 쿠키 도메인은 `COOKIE_DOMAIN` env)
+- `aws-clients.ts` - Cognito 사용자 관리 + DynamoDB 라우팅 테이블. `mirrorCustomRoutes()`(settings PUT의 version-guarded 미러), `deregisterContainerRoute()`(resetUserEnvironment). 인스턴스 시작 시 라우팅 등록은 `ec2-clients.ts`의 `registerRoute()`
+- `ec2-clients.ts` - EC2 start/stop, RunInstances, password sync, gateway policy. UserData는 매 부팅 실행되는 systemd oneshot `cc-cli-update.service`를 만들어 Claude Code/Kiro/Codex CLI를 갱신한다(`User=coder`, `/usr/local/bin` symlink 갱신만 `ExecStartPost=+`로 root 실행; CWAgent, MCP config sync 포함). `codexUserData()`는 create/restore와 `postStartSetup`에서 `codexConfigToml()`로 `/etc/codex/config.toml`을 쓴다. 재시작 경로는 per-user role inline policy를 다시 upsert(`ensureUserInstanceProfile`)해 기존 role에도 OpenAI/project ARN을 추가한다 (ADR-014)
+- `data-volume*.ts` - 2-볼륨 EBS 모델의 데이터 볼륨 식별·AZ 핀·SSM·UserData (ADR-002) · `devenv-health.ts` - EC2 lifecycle 기반 헬스 판정 (ADR-012)
+- `cloudwatch-client.ts` - EC2 CPU/Memory/Network/Disk 메트릭
+- `usage-client.ts` - DynamoDB 사용량 조회. `buildUserDailyTrend`(순수 pivot: user×date, Top-N+others, zero-fill) + `getUserDailyTrend`
+- `iam-request-validation.ts` - IAM 권한 신청 검증의 단일 출처(클라이언트·서버 공유): `Resource:*`·쓰기/임베디드 와일드카드·위험 액션·교차계정 거부, 읽기 와일드카드(Get*/List*/Describe*/BatchGet*/Query*/Scan*) 허용, `buildIamExtensionRequest`, `DEFAULT_SERVICE_ALLOWLIST`/`WILDCARD_OK_ACTIONS` (ADR-007)
+- `iam-resource-annotator.ts` - 신청 statement의 advisory LLM 위험 주석 (프롬프트 인젝션 격리) · `approval-authz.ts` - 승인 인가 (admin 또는 저장된 부서의 dept-manager)
+- `codex-model.ts` (Codex 모델 ID·고정 CLI 버전 sanitizer, 기본값 `global.openai.gpt-6.1-sol`; 값이 root user-data로 들어가므로 검증 필수), `client-tool.ts` (CloudTrail userAgent/모델 vendor로 Claude Code vs Codex 귀속), `budget-periods.ts` (budget-check의 기간별 cap 해석 미러; ADR-014/008), `budget-display.ts` (cap ≤ 0 = Unlimited 표시, budget-check 의미와 일치)
+- `slack-client.ts`, `validation.ts`, `utils.ts`, `i18n.tsx`(한/영), `types.ts`
 - `src/middleware.ts` - 인증 + admin/dept-manager 라우트 보호
 
 ## Testing
-- Framework: vitest (`npx vitest` or `npx vitest run`)
-- Test location: `src/lib/__tests__/`
-- Type check: `npx tsc --noEmit`
+- `npx tsc --noEmit`, `npx vitest run` (테스트 위치 `src/lib/__tests__/`). `bash tests/run-all.sh`가 둘 다 실행한다.
 - CI must propagate Vitest failures; do not append `|| true` to the test command.
 
 ## User portal recovery
@@ -132,12 +81,8 @@ data after a conflict requires an explicit user action; never silently discard t
 draft. Disable saving until the existing settings have loaded successfully.
 
 ## Rules
-- Server Components 기본, 차트/인터랙티브 UI만 'use client'
-- Admin 페이지는 Cognito 'admin' 그룹 필수
-- User API는 세션 기반 본인 데이터만 접근
-- 환경변수는 `.env.example` 참조
-- API routes에서 session 검증 필수
-- ARIA 접근성: 탭(tablist/tab/tabpanel), 프로그레스바(progressbar), 폼(htmlFor/id), 알림(aria-live)
-- Bedrock 사용량 메트릭은 DynamoDB `cc-on-bedrock-usage` 테이블에서 조회 (CloudWatch AWS/Bedrock은 계정 전체이므로 사용하지 않음)
-- Local Governance Mode UI(`/local`, `/admin/limits`)는 `governanceOnly` 배포 또는 EC2 모드 공존 시에만 노출; 환경변수 `NEXT_PUBLIC_LOCAL_MODE_ENABLED=true`로 사이드바 표시 제어
-- ADR-014 libs: `src/lib/codex-model.ts` (Codex model + pinned CLI version sanitizers — values reach root user-data), `src/lib/client-tool.ts` (Claude Code vs Codex attribution from CloudTrail userAgent / model vendor), `src/lib/budget-periods.ts` (mirror of budget-check per-period cap resolution). `/api/usage?action=tool_summaries` = per-tool cost/tokens (admin: all, else self).
+- Server Components가 기본이고, 차트/인터랙티브 UI만 `'use client'`.
+- Bedrock 사용량은 DynamoDB `cc-on-bedrock-usage`에서 읽는다. CloudWatch `AWS/Bedrock`은 계정 전체 수치라 사용자별 집계에 맞지 않는다.
+- Local Governance UI(`/local`, `/admin/limits`) 사이드바 노출은 `NEXT_PUBLIC_LOCAL_MODE_ENABLED=true`로 제어한다.
+- 접근성: 탭(tablist/tab/tabpanel), 프로그레스바(progressbar), 폼(htmlFor/id), 알림(aria-live).
+- 환경변수 목록은 `.env.example`; 배포 시 값은 Terraform `modules/dashboard`의 runtime env가 주입한다.
