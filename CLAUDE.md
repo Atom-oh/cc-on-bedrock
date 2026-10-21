@@ -120,14 +120,16 @@ Offline review checks: `python3 -m unittest discover -s scripts/pr-review -p 'te
 
 ## Specialist PR review
 
-CI runs the simplified lens panel → chair `VERDICT` path (`ROLE_REVIEW=0`, 12,000-line
-diff cap; owner decision 2026-10-18, matching the other projects). The specialist
-protocol below is retained and re-enabled with `ROLE_REVIEW=1`: one applicable
-responsibility per model instead of repeating every lens. See [the current review contract](docs/pr-review-specialists.md).
-Codex and Claude retain full change-boundary checks from independent model families;
-Kiro covers AWS and operational responsibilities when applicable. Trusted routing
-owns NOT_APPLICABLE. Failed or incomplete required output is never a clean review.
-The chair adjudicates substantive candidates; it cannot waive coverage failures.
+CI runs the simplified Codex panel → Claude chair `VERDICT` path (`ROLE_REVIEW=0`;
+owner decision 2026-10-21, same shape as the other projects). Codex
+(`global.openai.gpt-6.1-sol`) reviews each lens L2–L5 in parallel; Claude Opus 5.5
+(tool-less chair) reviews the same diff independently, adjudicates Codex findings and
+emits the single `VERDICT`. Any lens Codex did not complete forces `VERDICT: FAIL`;
+diffs over 12,000 lines / 512,000 bytes are blocked, never truncated. Kiro is not in
+the CI panel. The specialist protocol is retained and re-enabled with `ROLE_REVIEW=1`
+(one applicable responsibility per model). See [the current review contract](docs/pr-review-specialists.md).
+Failed or incomplete required output is never a clean review; the chair cannot waive
+coverage failures.
 This section supersedes earlier matrix-count and permissive dropout descriptions.
 
 PR review instructions, guides, related ADRs and review output are English-only.

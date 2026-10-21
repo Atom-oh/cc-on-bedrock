@@ -1,9 +1,11 @@
 # Specialist PR review
 
 CI assigns distinct responsibilities instead of asking every model to repeat
-every review lens. This protocol is retained but INACTIVE in CI since the ADR-013
-amendment (2026-10-18): the trusted workflow runs `ROLE_REVIEW=0` (panel → chair VERDICT)
-and re-enables this protocol with `ROLE_REVIEW=1`.
+every review lens. This protocol is retained but INACTIVE in CI (ADR-013 amendments
+2026-10-18 and 2026-10-21): the trusted workflow runs `ROLE_REVIEW=0` — a Codex
+(`global.openai.gpt-6.1-sol`) lens panel L2–L5 → tool-less Claude Opus 5.5 chair VERDICT,
+with no Kiro cells (see [the panel runbook](runbooks/pr-review-panel.md)) — and
+re-enables this protocol with `ROLE_REVIEW=1`.
 
 | Slot | Configured model | Responsibility |
 | --- | --- | --- |
