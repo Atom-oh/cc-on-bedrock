@@ -210,6 +210,13 @@ resource "aws_security_group" "locked" {
   }
 
   tags = { Name = "cc-devenv-sg-locked" }
+
+  lifecycle {
+    precondition {
+      condition     = length(var.vpc_endpoint_security_group_ids) > 0
+      error_message = "The locked tier needs at least one interface-endpoint SG: set interface_endpoint_services or existing_vpc_endpoint_security_group_ids."
+    }
+  }
 }
 
 # ─── IAM Role for the per-user EC2 instance ──────────────────────────────────

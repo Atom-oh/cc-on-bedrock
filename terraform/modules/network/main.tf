@@ -62,6 +62,15 @@ resource "aws_vpc_endpoint" "interface" {
 
 # ---- Route 53 public hosted zone (shared, looked up) ---------------------------
 # The apex zone carries records for other projects; this stack only adds records.
+# Older states managed the zone as a resource: forget it rather than destroy it.
+removed {
+  from = aws_route53_zone.this
+
+  lifecycle {
+    destroy = false
+  }
+}
+
 data "aws_route53_zone" "this" {
   name         = var.domain_name
   private_zone = false

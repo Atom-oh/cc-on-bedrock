@@ -39,6 +39,7 @@
 - **code-server 포트 8080 예약** — custom route 포트는 8080(및 well-known) 사용 금지.
 - **Kiro 거버넌스 제외** — Kiro는 IAM Identity Center 구독 라이선스; Cognito/Bedrock 토큰 한도 집행 대상 아님.
 - **Codex = bedrock-runtime only** — Codex CLI calls Bedrock only via the `amazon-bedrock-runtime` provider (Responses API). Never grant `bedrock-mantle:*` (it escapes invocation-log metering, management-event audit and the IAM deny). Every per-user Bedrock allow-list copy includes the OpenAI GPT and default-project ARNs (`tests/unit/test_bedrock_iam_codex_parity.py`) (ADR-014).
+- **No public ingress, no owned VPC** — Every LB is `internal`, reached only by CloudFront VPC origins, and admits only the CloudFront VPC-origin SG. There are no public IPs on compute. Terraform takes `vpc_id` and subnet IDs and never declares `aws_vpc`. In a shared VPC, SG rules reference SGs instead of the VPC CIDR (interface endpoints excepted) (ADR-015).
 - **anti-drift** — 새 ADR/flag/status 변경은 **같은 PR에서 이 §3(또는 §2)를 갱신**. 갱신 없으면 "not live". 옛 ADR 본문은 트리에서 제거(git tag + `../history/ADR-MAPPING.md` 보존), **번호 재사용 금지** (2026-06-23 BASELINE reset의 일괄 재번호는 일회성 예외; 이후 신규 ADR에 적용).
 
 ---
@@ -63,10 +64,10 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> Eleven consolidated ADRs replace the legacy 34; ADR-012/013/014 are subsequent records.
+> Eleven consolidated ADRs replace the legacy 34; ADR-012 through ADR-015 are subsequent records.
 > `../history/ADR-MAPPING.md` maps retired decisions; tag `adr-legacy-2026-06-23` retains their bodies.
 > Consolidation is complete. ADR-013's language policy is LIVE; its specialist protocol is retained behind `ROLE_REVIEW=1`.
-> The next ADR number is 015; the earlier reset was a one-time exception.
+> The next ADR number is 016; the earlier reset was a one-time exception.
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
@@ -84,6 +85,7 @@
 | 012 | DevEnv 헬스 판정 | 직접 8080 probe 제거(SG 격리로 timeout) → EC2 lifecycle 파생(running+privateIp⇒HEALTHY), 낙관적 false-positive trade-off 수용 | (신규) |
 | 013 | Specialist PR review and documentation | Active role protocol and incremental English maintenance policy; preserves remaining security/custody rules | New |
 | 014 | Codex on Bedrock | OpenAI Codex CLI → bedrock-runtime Responses API (`global.openai.*`), per-user role attribution; IAM adds OpenAI GPT + default project (no mantle); explicit per-model cache rates + corrected Claude prices (Price List API); usage `tool` attribute + per-tool dashboard; audit-logger `Responses` / Local roles / `client_tool`; `/etc/codex/config.toml` system layer | New |
+| 015 | Existing VPC + internal origins | BYO VPC (`vpc_id` + subnet IDs, no `aws_vpc`), shared public zone as a data source (`removed` for old states), dashboard ALB / DevEnv NLB `internal` behind CloudFront VPC origins, SG-reference rules instead of VPC CIDR; migration = destroy + fresh apply | New |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 

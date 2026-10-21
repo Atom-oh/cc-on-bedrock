@@ -67,6 +67,18 @@ terraform -chdir=terraform apply -var="dashboard_image_tag=$(git rev-parse --sho
 `dashboard_image_tag` is required and must not be `latest`; ASG instance refresh
 depends on the launch template tag string changing.
 
+## Migrating a pre-ADR-015 deployment
+
+A state from before ADR-015 (the stack owned its VPC and Route 53 zone, and had internet-facing
+LBs) cannot be upgraded in place: the LB scheme, endpoint keys and OTEL NLB security groups all
+force replacement. Do a destroy and a fresh apply:
+1. Back up the state (`terraform state pull > backup.json`).
+2. Run `terraform state rm` on anything that must survive the destroy: the shared public zone
+   (`module.network.aws_route53_zone.this`; the `removed` block also covers it) and any ECR
+   repositories you want to keep. Re-import the repositories after the apply.
+3. Run `terraform destroy`, then `terraform apply` with the new tfvars (`vpc_id` and subnet IDs).
+4. Users re-launch their DevEnvs, since running instances keep the old collector DNS name.
+
 ## Rules
 
 - Do not add alternate deployment IaC equivalents.

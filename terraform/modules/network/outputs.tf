@@ -12,6 +12,11 @@ output "public_subnet_ids" {
 
 output "private_subnet_ids" {
   value = var.private_subnet_ids
+
+  precondition {
+    condition     = length(distinct([for s in data.aws_subnet.private : s.availability_zone])) >= 2
+    error_message = "private_subnet_ids must span at least two availability zones."
+  }
 }
 
 output "private_subnet_cidrs" {
