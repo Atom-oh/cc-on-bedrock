@@ -1301,11 +1301,11 @@ resource "aws_security_group" "otel_collector" {
   # Claude Code OTEL SDK exposes no grpc keepalive/round_robin knobs to tune. HTTP export
   # is one independent request per batch and works cleanly through the NLB.
   ingress {
-    description = "OTLP HTTP from VPC devenvs"
-    from_port   = 4318
-    to_port     = 4318
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "OTLP HTTP from the collector NLB"
+    from_port       = 4318
+    to_port         = 4318
+    protocol        = "tcp"
+    security_groups = [aws_security_group.otel_nlb.id]
   }
   egress {
     from_port   = 0
@@ -1315,17 +1315,35 @@ resource "aws_security_group" "otel_collector" {
   }
 }
 
+data "aws_subnet" "collector" {
+  for_each = toset(var.private_subnet_ids)
+  id       = each.value
+}
+
+# The NLB's own SG: ingress only from DevEnv SGs (added in the root module by SG
+# reference), so other workloads in a shared VPC cannot push telemetry.
+resource "aws_security_group" "otel_nlb" {
+  name        = "cc-on-bedrock-otel-nlb"
+  description = "OTEL collector NLB - DevEnv OTLP HTTP only"
+  vpc_id      = var.vpc_id
+
+  egress {
+    description = "To collector tasks (private subnets)"
+    from_port   = 4318
+    to_port     = 4318
+    protocol    = "tcp"
+    cidr_blocks = [for s in data.aws_subnet.collector : s.cidr_block]
+  }
+
+  tags = { Name = "cc-on-bedrock-otel-nlb" }
+}
+
 resource "aws_lb" "otel" {
   name               = "cc-on-bedrock-otel"
   internal           = true
   load_balancer_type = "network"
   subnets            = var.private_subnet_ids
-  # Deliberately NOT setting security_groups here: this NLB already exists with none, and
-  # AWS/the provider can't add security_groups to an existing NLB in place -- it forces a
-  # full replace (new DNS name, listener/TG rebuild, cascading ECS service replacement),
-  # breaking every already-running devenv's configured endpoint on apply. Egress scoping
-  # for devenv -> collector uses the private-subnet CIDRs instead (see ec2-devenv), which
-  # needs no change to this resource at all.
+  security_groups    = [aws_security_group.otel_nlb.id]
 }
 
 resource "aws_lb_target_group" "otel" {

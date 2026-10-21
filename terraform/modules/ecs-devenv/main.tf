@@ -11,9 +11,6 @@
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
-data "aws_ec2_managed_prefix_list" "cloudfront" {
-  name = "com.amazonaws.global.cloudfront.origin-facing"
-}
 
 # ---- ECR Repository: shared Nginx router image ------------------------------
 resource "aws_ecr_repository" "nginx" {
@@ -307,11 +304,11 @@ resource "aws_security_group" "nginx" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "NLB to Nginx"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "NLB to Nginx"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.nlb.id]
   }
 
   egress {
@@ -329,13 +326,7 @@ resource "aws_security_group" "nlb" {
   description = "NLB SG for CloudFront origin traffic"
   vpc_id      = var.vpc_id
 
-  ingress {
-    description     = "CloudFront origin-facing HTTP"
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
-  }
+  # Ingress: only the CloudFront VPC-origin service SG (aws_vpc_security_group_ingress_rule.nlb_from_cloudfront).
 
   egress {
     from_port   = 0
@@ -347,12 +338,13 @@ resource "aws_security_group" "nlb" {
   tags = { Name = "cc-devenv-nlb-sg" }
 }
 
+# Internal only: CloudFront reaches it through a VPC origin, never the internet.
 resource "aws_lb" "nlb" {
   name               = "cc-devenv-nlb"
-  internal           = false
+  internal           = true
   load_balancer_type = "network"
   security_groups    = [aws_security_group.nlb.id]
-  subnets            = var.public_subnet_ids
+  subnets            = var.private_subnet_ids
 
   enable_cross_zone_load_balancing = true
 
@@ -421,11 +413,11 @@ resource "aws_security_group" "otel_collector" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "OTLP HTTP from DevEnv EC2 instances"
-    from_port   = 4318
-    to_port     = 4318
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "OTLP HTTP from the collector NLB"
+    from_port       = 4318
+    to_port         = 4318
+    protocol        = "tcp"
+    security_groups = [aws_security_group.otel_collector_nlb.id]
   }
 
   egress {
@@ -436,6 +428,29 @@ resource "aws_security_group" "otel_collector" {
   }
 
   tags = { Name = "cc-otel-collector-sg" }
+}
+
+# The collector NLB's own SG. Ingress comes only from DevEnv SGs, added in the root
+# module as standalone rules (no inline ingress here, so the two never fight).
+data "aws_subnet" "collector" {
+  for_each = toset(var.private_subnet_ids)
+  id       = each.value
+}
+
+resource "aws_security_group" "otel_collector_nlb" {
+  name_prefix = "cc-otel-collector-nlb-"
+  description = "OTEL collector NLB - DevEnv OTLP HTTP only"
+  vpc_id      = var.vpc_id
+
+  egress {
+    description = "To collector tasks (private subnets)"
+    from_port   = 4318
+    to_port     = 4318
+    protocol    = "tcp"
+    cidr_blocks = [for s in data.aws_subnet.collector : s.cidr_block]
+  }
+
+  tags = { Name = "cc-otel-collector-nlb-sg" }
 }
 
 resource "aws_cloudwatch_log_group" "otel_collector" {
@@ -530,7 +545,7 @@ resource "aws_lb" "otel_collector" {
   name               = "cc-otel-collector-nlb"
   internal           = true
   load_balancer_type = "network"
-  security_groups    = [aws_security_group.otel_collector.id]
+  security_groups    = [aws_security_group.otel_collector_nlb.id]
   subnets            = var.private_subnet_ids
 
   enable_cross_zone_load_balancing = true
@@ -663,6 +678,43 @@ resource "aws_lambda_function" "devenv_session_validator" {
 }
 
 # ---- CloudFront + Route 53 wildcard -----------------------------------------
+# ---- CloudFront VPC origin -> internal NLB ------------------------------------
+resource "aws_cloudfront_vpc_origin" "nlb" {
+  vpc_origin_endpoint_config {
+    name                   = "cc-devenv-nlb"
+    arn                    = aws_lb.nlb.arn
+    http_port              = 80
+    https_port             = 443
+    origin_protocol_policy = "http-only"
+
+    origin_ssl_protocols {
+      items    = ["TLSv1.2"]
+      quantity = 1
+    }
+  }
+
+  depends_on = [aws_lb_listener.nlb]
+
+  tags = { Name = "cc-devenv-vpc-origin" }
+}
+
+# Service-managed SG CloudFront creates with the first VPC origin in the VPC.
+data "aws_security_group" "cloudfront_vpc_origin" {
+  vpc_id = var.vpc_id
+  name   = "CloudFront-VPCOrigins-Service-SG"
+
+  depends_on = [aws_cloudfront_vpc_origin.nlb]
+}
+
+resource "aws_vpc_security_group_ingress_rule" "nlb_from_cloudfront" {
+  security_group_id            = aws_security_group.nlb.id
+  description                  = "CloudFront VPC origin"
+  ip_protocol                  = "tcp"
+  from_port                    = 80
+  to_port                      = 80
+  referenced_security_group_id = data.aws_security_group.cloudfront_vpc_origin.id
+}
+
 resource "aws_cloudfront_distribution" "this" {
   comment = "CC-on-Bedrock DevEnv (*.dev domain)"
   enabled = true
@@ -673,11 +725,8 @@ resource "aws_cloudfront_distribution" "this" {
     domain_name = aws_lb.nlb.dns_name
     origin_id   = "devenv-nlb"
 
-    custom_origin_config {
-      http_port              = 80
-      https_port             = 443
-      origin_protocol_policy = "http-only"
-      origin_ssl_protocols   = ["TLSv1.2"]
+    vpc_origin_config {
+      vpc_origin_id = aws_cloudfront_vpc_origin.nlb.id
     }
 
     custom_header {

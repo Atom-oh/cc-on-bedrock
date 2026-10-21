@@ -45,3 +45,7 @@ output "nginx_security_group_id" {
 output "otel_collector_endpoint" {
   value = "http://${aws_lb.otel_collector.dns_name}:4318"
 }
+
+output "otel_collector_security_group_id" {
+  value = aws_security_group.otel_collector_nlb.id
+}

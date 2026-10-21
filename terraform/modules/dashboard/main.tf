@@ -43,14 +43,7 @@ resource "aws_security_group" "alb" {
   description = "Dashboard ALB SG"
   vpc_id      = var.vpc_id
 
-  # CloudFront managed prefix list for ap-northeast-2
-  ingress {
-    description     = "Allow CloudFront"
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    prefix_list_ids = ["pl-22a6434b"]
-  }
+  # Ingress: only the CloudFront VPC-origin service SG (aws_vpc_security_group_ingress_rule.alb_from_cloudfront).
 
   egress {
     from_port   = 0
@@ -86,12 +79,13 @@ resource "aws_security_group" "ec2" {
 }
 
 # ---- ALB ---------------------------------------------------------------------
+# Internal only: CloudFront reaches it through a VPC origin, never the internet.
 resource "aws_lb" "this" {
   name               = "cc-dashboard-alb"
-  internal           = false
+  internal           = true
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = var.public_subnet_ids
+  subnets            = var.private_subnet_ids
 
   tags = { Name = "cc-dashboard-alb" }
 }
@@ -286,6 +280,42 @@ resource "aws_acm_certificate_validation" "cloudfront" {
   validation_record_fqdns = [for r in aws_route53_record.cloudfront_cert_validation : r.fqdn]
 }
 
+# ---- CloudFront VPC origin -> internal ALB ------------------------------------
+resource "aws_cloudfront_vpc_origin" "alb" {
+  vpc_origin_endpoint_config {
+    name                   = "cc-dashboard-alb"
+    arn                    = aws_lb.this.arn
+    http_port              = 80
+    https_port             = 443
+    origin_protocol_policy = "https-only"
+
+    origin_ssl_protocols {
+      items    = ["TLSv1.2"]
+      quantity = 1
+    }
+  }
+
+  tags = { Name = "cc-dashboard-vpc-origin" }
+}
+
+# CloudFront creates this service-managed SG in the VPC with the first VPC origin;
+# read it after the origin exists so a fresh VPC also works.
+data "aws_security_group" "cloudfront_vpc_origin" {
+  vpc_id = var.vpc_id
+  name   = "CloudFront-VPCOrigins-Service-SG"
+
+  depends_on = [aws_cloudfront_vpc_origin.alb]
+}
+
+resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
+  security_group_id            = aws_security_group.alb.id
+  description                  = "CloudFront VPC origin"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = data.aws_security_group.cloudfront_vpc_origin.id
+}
+
 # ---- CloudFront Distribution -------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
   comment = "CC-on-Bedrock Dashboard"
@@ -296,11 +326,8 @@ resource "aws_cloudfront_distribution" "this" {
     domain_name = aws_lb.this.dns_name
     origin_id   = "dashboard-alb"
 
-    custom_origin_config {
-      http_port              = 80
-      https_port             = 443
-      origin_protocol_policy = "https-only"
-      origin_ssl_protocols   = ["TLSv1.2"]
+    vpc_origin_config {
+      vpc_origin_id = aws_cloudfront_vpc_origin.alb.id
     }
 
     custom_header {

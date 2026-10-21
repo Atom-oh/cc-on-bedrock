@@ -109,17 +109,14 @@ resource "aws_security_group" "restricted" {
   }
   # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Without this the
   # restricted tier's egress (DNS + 443 only) blocks the collector, so no metrics/events
-  # flow. Scoped to the private subnets the collector's NLB lives in, not the whole VPC
-  # CIDR -- restricted's entire purpose is a tight allowlist, and a VPC-wide 4318 hole
-  # would let any other in-VPC host reachable on that port become a side-channel. Not
-  # SG-referenced: the NLB has no SG attached and adding one forces a replace (see
-  # usage-tracking/main.tf's aws_lb.otel comment) -- subnet CIDR is the safe scope here.
+  # flow. Scoped to the collector NLBs' SGs, not a CIDR: the VPC may be shared, and a
+  # 4318 hole to subnets would let other in-VPC hosts on that port become a side-channel.
   egress {
-    description = "OTLP/HTTP to the OTEL collector subnets only"
-    from_port   = 4318
-    to_port     = 4318
-    protocol    = "tcp"
-    cidr_blocks = var.otel_collector_subnet_cidrs
+    description     = "OTLP/HTTP to the OTEL collector NLBs only"
+    from_port       = 4318
+    to_port         = 4318
+    protocol        = "tcp"
+    security_groups = var.otel_collector_security_group_ids
   }
   # DNS ONLY via the VPC resolver — external DNS (e.g. 8.8.8.8) would bypass
   # the Route 53 DNS Firewall threat blocks and enable DNS-tunnel exfiltration.
@@ -168,24 +165,24 @@ resource "aws_security_group" "locked" {
     }
   }
 
+  # SG references, not the VPC CIDR: the VPC may be shared with other workloads,
+  # and a CIDR rule would let a locked DevEnv reach any HTTPS service in it.
   egress {
-    description = "HTTPS to VPC endpoints only"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "HTTPS to VPC interface endpoints only"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = var.vpc_endpoint_security_group_ids
   }
 
   # OTLP/HTTP to the in-VPC OTEL collector (ADR-009 native telemetry). Scoped to the
-  # collector's NLB subnets rather than the whole VPC CIDR, consistent with locked's
-  # otherwise-minimal egress surface (see the restricted block above for why this isn't
-  # SG-referenced).
+  # collector NLBs' SGs, consistent with locked's otherwise-minimal egress surface.
   egress {
-    description = "OTLP/HTTP to the OTEL collector subnets only"
-    from_port   = 4318
-    to_port     = 4318
-    protocol    = "tcp"
-    cidr_blocks = var.otel_collector_subnet_cidrs
+    description     = "OTLP/HTTP to the OTEL collector NLBs only"
+    from_port       = 4318
+    to_port         = 4318
+    protocol        = "tcp"
+    security_groups = var.otel_collector_security_group_ids
   }
 
   # DNS to the in-VPC Route 53 Resolver (VPC base + 2) ONLY — required for name
@@ -208,6 +205,13 @@ resource "aws_security_group" "locked" {
   }
 
   tags = { Name = "cc-devenv-sg-locked" }
+
+  lifecycle {
+    precondition {
+      condition     = length(var.vpc_endpoint_security_group_ids) > 0
+      error_message = "The locked tier needs at least one interface-endpoint SG: set interface_endpoint_services or existing_vpc_endpoint_security_group_ids."
+    }
+  }
 }
 
 # ─── IAM Role for the per-user EC2 instance ──────────────────────────────────
