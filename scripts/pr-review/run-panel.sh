@@ -29,7 +29,7 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 # A reused workdir on a non-ephemeral runner must not carry over the last run's flags.
 rm -f "$WORK"/*.flag; : > "$WORK/degraded-models.txt"
 T="${PANEL_TIMEOUT:-300}"
-RETRIES="${PANEL_RETRIES:-3}"
+RETRIES="${PANEL_RETRIES:-2}"
 PANEL_MODEL="${PANEL_MODEL:-global.openai.gpt-6.1-sol}"
 
 shopt -s nullglob

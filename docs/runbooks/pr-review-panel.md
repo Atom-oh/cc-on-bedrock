@@ -14,10 +14,10 @@ and HEAD commits, then:
    (`PANEL_MODEL`, default `global.openai.gpt-6.1-sol`). Each cell reads the diff on stdin,
    runs with `-c web_search=disabled -s read-only`, gets an allowlisted environment
    (`PATH`/`HOME`/locale/`TMPDIR` plus `AWS_*` and `CODEX_*` only — no `GH_TOKEN`,
-   `GITHUB_TOKEN` or `KIRO_API_KEY`), and is retried up to `PANEL_RETRIES` (default 3) times
+   `GITHUB_TOKEN` or `KIRO_API_KEY`), and is retried up to `PANEL_RETRIES` (default 2) times
    under a `PANEL_TIMEOUT` (default 300 s) backstop.
 2. `scripts/pr-review/synthesize.sh` runs the Claude chair (`global.anthropic.claude-opus-5-5`,
-   fallback `global.anthropic.claude-opus-5`, `CHAIR_TIMEOUT` default 600 s) with no tools
+   fallback `global.anthropic.claude-opus-5`, `CHAIR_TIMEOUT` default 900 s, run from an empty working directory) with no tools
    (`--tools "" --strict-mcp-config --setting-sources ""`). A rejected chair attempt logs its exit code and the
    scrubbed start of its stdout/stderr (`chair_diag`). The chair receives the PR title
    (as untrusted data), the diff and the Codex cells on stdin, reviews the diff itself as the
