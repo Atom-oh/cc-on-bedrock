@@ -432,17 +432,22 @@ resource "aws_security_group" "otel_collector" {
 
 # The collector NLB's own SG. Ingress comes only from DevEnv SGs, added in the root
 # module as standalone rules (no inline ingress here, so the two never fight).
+data "aws_subnet" "collector" {
+  for_each = toset(var.private_subnet_ids)
+  id       = each.value
+}
+
 resource "aws_security_group" "otel_collector_nlb" {
   name_prefix = "cc-otel-collector-nlb-"
   description = "OTEL collector NLB - DevEnv OTLP HTTP only"
   vpc_id      = var.vpc_id
 
   egress {
-    description = "To collector tasks"
+    description = "To collector tasks (private subnets)"
     from_port   = 4318
     to_port     = 4318
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = [for s in data.aws_subnet.collector : s.cidr_block]
   }
 
   tags = { Name = "cc-otel-collector-nlb-sg" }

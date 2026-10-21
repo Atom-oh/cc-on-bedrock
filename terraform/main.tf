@@ -153,10 +153,10 @@ module "ec2_devenv" {
   devenv_instance_type         = var.devenv_instance_type
   task_permission_boundary_arn = module.security.task_permission_boundary_arn
   nginx_security_group_id      = local.devenv_enabled ? module.ecs_devenv[0].nginx_security_group_id : local.default_dev_env
-  # The collector's NLB has no SG (adding one would force a replace -- see
-  # usage-tracking/main.tf's aws_lb.otel comment), so egress is scoped to its subnets
-  # instead of a SG reference.
-  otel_collector_subnet_cidrs = module.network.private_subnet_cidrs
+  otel_collector_security_group_ids = [
+    module.usage_tracking.otel_nlb_security_group_id,
+    module.ecs_devenv[0].otel_collector_security_group_id,
+  ]
   vpc_endpoint_security_group_ids = concat(
     module.network.vpc_endpoint_security_group_ids,
     var.existing_vpc_endpoint_security_group_ids,

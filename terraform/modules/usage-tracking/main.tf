@@ -1315,6 +1315,11 @@ resource "aws_security_group" "otel_collector" {
   }
 }
 
+data "aws_subnet" "collector" {
+  for_each = toset(var.private_subnet_ids)
+  id       = each.value
+}
+
 # The NLB's own SG: ingress only from DevEnv SGs (added in the root module by SG
 # reference), so other workloads in a shared VPC cannot push telemetry.
 resource "aws_security_group" "otel_nlb" {
@@ -1323,11 +1328,11 @@ resource "aws_security_group" "otel_nlb" {
   vpc_id      = var.vpc_id
 
   egress {
-    description = "To collector tasks"
+    description = "To collector tasks (private subnets)"
     from_port   = 4318
     to_port     = 4318
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = [for s in data.aws_subnet.collector : s.cidr_block]
   }
 
   tags = { Name = "cc-on-bedrock-otel-nlb" }

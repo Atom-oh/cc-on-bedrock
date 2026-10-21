@@ -75,8 +75,10 @@ force replacement. Do a destroy and a fresh apply:
 1. Back up the state (`terraform state pull > backup.json`).
 2. Run `terraform state rm` on anything that must survive the destroy: the shared public zone
    (`module.network.aws_route53_zone.this`; the `removed` block also covers it) and any ECR
-   repositories you want to keep. Re-import the repositories after the apply.
-3. Run `terraform destroy`, then `terraform apply` with the new tfvars (`vpc_id` and subnet IDs).
+   repositories you want to keep.
+3. Run `terraform destroy`. Then, **before** `terraform apply`, re-import the kept ECR
+   repositories (`terraform import` or temporary `import` blocks); otherwise the apply fails
+   with `RepositoryAlreadyExistsException`. Apply with the new tfvars (`vpc_id` and subnet IDs).
 4. Users re-launch their DevEnvs, since running instances keep the old collector DNS name.
 
 ## Rules
@@ -85,7 +87,7 @@ force replacement. Do a destroy and a fresh apply:
 - Lambda packages must read from `../lambda` through the root `local.lambda_src_dir`.
 - Keep code-server on `8080`; nginx may route additional validated custom ports.
 - Keep EC2 and Local roles distinct, but aligned by shared policy boundary, tags, and inference-profile attribution.
-- Ingress reaches origins only through CloudFront (managed prefix list + `X-Custom-Secret`). Do not add `0.0.0.0/0` / `::/0` ingress or public IPs on compute. New load balancers are internal behind CloudFront VPC origins; the existing internet-facing dashboard ALB and DevEnv NLB are not a pattern to copy.
+- Ingress reaches origins only through CloudFront: both load balancers are `internal`, reached by CloudFront VPC origins, and admit only the CloudFront VPC-origin SG (ADR-015). Do not add `0.0.0.0/0` / `::/0` ingress or public IPs on compute.
 - Two OTel collectors exist with distinct root outputs. `otel_collector_endpoint` is the legacy `ecs-devenv` awsemf collector (container-devenv path); `otel_rollup_collector_endpoint` is the `usage-tracking` rollup collector that EC2 DevEnv instances actually send Claude Code telemetry to. Keep them separate.
-- `ec2-devenv`'s `otel_collector_subnet_cidrs` scopes DevEnv egress on OTLP/HTTP 4318 to the rollup collector's private subnets rather than the whole VPC CIDR. It is not a security-group reference because the collector's existing NLB has no SG, and adding one forces a replacement (new DNS, cascading ECS service replacement). See the `aws_lb.otel` comment in `usage-tracking/main.tf`.
+- `ec2-devenv`'s `otel_collector_security_group_ids` scopes the restricted and locked tiers' OTLP/HTTP 4318 egress to the two collector NLBs' security groups (no CIDR, since the VPC may be shared). The NLBs admit 4318 only from the three DevEnv SGs (`otel_from_devenv` in the root module).
 - Codex on Bedrock (ADR-014): root `codex_model_id` (validated `(global|us|eu|apac).openai.gpt-*`) flows to the dashboard `CODEX_MODEL_ID` runtime env and then to DevEnv `/etc/codex/config.toml`. The per-user Bedrock allow-lists and the task permission boundary (`modules/security`, `modules/ec2-devenv`) include `*openai.gpt-*` foundation-model/inference-profile ARNs and `project/default` (Responses API default project); `tests/unit/test_bedrock_iam_codex_parity.py` keeps the TF/Python/TS copies aligned. Do not grant `bedrock-mantle:*`, because it bypasses invocation-log metering, audit and the budget deny. The `cc-bedrock-audit` EventBridge rule matches `Responses` and is account-wide (audit-logger tags non-platform principals `mode=other`).

@@ -27,8 +27,9 @@ variable "vpc_id" {
 }
 
 variable "public_subnet_ids" {
-  description = "Public subnets in the VPC (two AZs). Nothing internet-facing is placed here; kept for NAT-routed tooling"
+  description = "Public subnets in the VPC. Optional and unused by this stack (nothing is placed in them); passed through as the network module's output"
   type        = list(string)
+  default     = []
 }
 
 variable "private_subnet_ids" {

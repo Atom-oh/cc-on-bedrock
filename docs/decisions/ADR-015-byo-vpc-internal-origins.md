@@ -48,7 +48,8 @@ VPC CIDR trusts those workloads too.
      stack's and `existing_vpc_endpoint_security_group_ids`). A precondition requires at
      least one of them.
    - Each OTEL collector NLB has its own security group, which admits 4318 only from the
-     open, restricted and locked DevEnv security groups.
+     open, restricted and locked DevEnv security groups. The restricted and locked tiers'
+     4318 egress targets only those NLB security groups.
    - Each collector task admits only its NLB.
 
 ## Consequences
@@ -87,4 +88,7 @@ files:
   - path: terraform/modules/ec2-devenv/main.tf
     must_contain:
       - "security_groups = var.vpc_endpoint_security_group_ids"
+      - "security_groups = var.otel_collector_security_group_ids"
+    must_not_contain:
+      - "otel_collector_subnet_cidrs"
 ```
