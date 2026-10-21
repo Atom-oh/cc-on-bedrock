@@ -228,7 +228,8 @@ for lens_file in "${LENS_FILES[@]}"; do
   # us-east-1 전용이었음). diff 는 stdin.
   if command -v codex >/dev/null 2>&1; then
     ( try_panel codex "$SLOT/codex-$lens.md" "$SLOT/codex-$lens.err" \
-        timeout "$T" codex exec --model global.openai.gpt-6-astra -s read-only --skip-git-repo-check "$LENS_PROMPT" ) &
+        env -u GH_TOKEN -u GITHUB_TOKEN timeout "$T" codex -c web_search=disabled exec \
+          --model global.openai.gpt-6-astra -s read-only --skip-git-repo-check "$LENS_PROMPT" ) &
   else echo "[skip] codex/$lens (binary absent)" >&2; : > "$SLOT/codex-$lens.md"; fi
 
   # Kiro x2 셀 — model:tag 를 한 배열에서 파생(호출/집계 동기화). Kiro's non-interactive

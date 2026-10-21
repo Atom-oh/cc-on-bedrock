@@ -77,24 +77,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
           MERGE_BASE_SHA=$(gh api "repos/${GH_REPO}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')
           [[ "$MERGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid merge base"; exit 1; }
           git fetch --no-tags --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
           printf 'MERGE_BASE_SHA=%s\n' "$MERGE_BASE_SHA" >> "$GITHUB_ENV"
-          gh pr diff "$PR_NUMBER" > /tmp/pr-diff-raw.txt
-          awk '
-            /^diff --git/ {
-              path = substr($3, 3)
-              skip = (path ~ /(^|\/)package-lock\.json$/) ||
-                     (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
-                     (path ~ /(^|\/)yarn\.lock$/) ||
-                     (path ~ /(^|\/)node_modules\//) ||
-                     (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
-                     (path ~ /(^|\/)(dist|out|build)\//) ||
-                     (path ~ /\.terraform\.lock\.hcl$/)
-            }
-            !skip
-          ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
+          # Diff from the pinned, fetched commits (not `gh pr diff`, which reads the live PR).
+          git diff --no-ext-diff --no-textconv "$MERGE_BASE_SHA" "$HEAD_SHA" -- . \
+            ':(glob,exclude)**/package-lock.json' ':(glob,exclude)**/pnpm-lock.yaml' \
+            ':(glob,exclude)**/yarn.lock' ':(glob,exclude)**/.terraform.lock.hcl' \
+            ':(glob,exclude)**/node_modules/**' ':(glob,exclude)**/dist/**' \
+            ':(glob,exclude)**/out/**' ':(glob,exclude)**/build/**' \
+            ':(glob,exclude)**/*.pptx' ':(glob,exclude)**/*.png' \
+            ':(glob,exclude)**/*.jpg' ':(glob,exclude)**/*.jpeg' \
+            ':(glob,exclude)**/*.gif' ':(glob,exclude)**/*.pdf' \
+            ':(glob,exclude)**/*.vsix' ':(glob,exclude)**/*.zip' > /tmp/pr-diff.txt
+          echo "total_bytes=$(wc -c < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
           echo "total_lines=$(wc -l < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
 
       - name: Build lens prompts (L2-L5 — each self-contained, one lens only)
@@ -102,7 +100,7 @@ jobs:
           set -euo pipefail
           MAX_LINES=12000
           echo "max_lines=$MAX_LINES" >> "$GITHUB_ENV"
-          head -"$MAX_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-truncated.txt
+          MAX_BYTES=512000
           rm -rf /tmp/pr-review/lenses
           mkdir -p /tmp/pr-review/lenses
           COMMON="Review ONLY the diff under review for this PR, in this repo (AWS Bedrock
@@ -152,11 +150,17 @@ jobs:
             갱신했는지, 은퇴된 ADR 번호 재사용 금지.
           PROMPT_EOF
 
-          if [ "${total_lines:-0}" -gt "$MAX_LINES" ]; then
-            for f in /tmp/pr-review/lenses/*.txt; do
-              echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed." >> "$f"
-            done
-            echo "panel_truncated=1" >> "$GITHUB_ENV"
+          # Fail closed: an oversized diff is never reviewed as a prefix.
+          if [ "${total_lines:-0}" -gt "$MAX_LINES" ] || [ "${total_bytes:-0}" -gt "$MAX_BYTES" ]; then
+            {
+              echo "## Review blocked"
+              echo ""
+              echo "The diff is ${total_lines} lines / ${total_bytes} bytes, over the ${MAX_LINES}-line / ${MAX_BYTES}-byte review limit. Split the PR; a partial review is never published as a pass."
+              echo ""
+              echo "VERDICT: FAIL"
+            } > /tmp/review.md
+            echo "diff_oversize=1" >> "$GITHUB_ENV"
+            echo "chair_failed=1" >> "$GITHUB_ENV"
           fi
 
       - name: Run specialists and conditionally adjudicate findings
@@ -164,11 +168,15 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PANEL_TIMEOUT: "300"
+        if: ${{ env.diff_oversize != '1' }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/pr-review
-          bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
-          bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
+          DIFF_SHA="$(sha256sum /tmp/pr-diff.txt | cut -d' ' -f1)"
+          bash scripts/pr-review/run-panel.sh /tmp/pr-diff.txt /tmp/pr-review/lenses /tmp/pr-review
+          # The chair must adjudicate the exact diff the panel reviewed.
+          [ "$(sha256sum /tmp/pr-diff.txt | cut -d' ' -f1)" = "$DIFF_SHA" ] || { echo "::error::diff changed after panel review"; exit 1; }
+          bash scripts/pr-review/synthesize.sh /tmp/pr-diff.txt /tmp/pr-review \
             "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
@@ -225,7 +233,6 @@ jobs:
             echo "_Synthesis: ${chair_used:-pending}_"
             echo ""
             echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
-            [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first ${max_lines:-12000} lines — review is partial._"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
