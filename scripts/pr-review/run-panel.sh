@@ -193,6 +193,17 @@ prepare_kiro_agent() {
   local CELL_CWD="$1"
   mkdir -p "$CELL_CWD/.kiro/agents" && cp "$KIRO_AGENT_SRC" "$CELL_CWD/.kiro/agents/"
 }
+# Codex gets an allowlisted environment: only what its amazon-bedrock-runtime
+# provider needs (AWS SDK credential chain + CODEX_* config), never runner tokens
+# or other reviewers' keys such as KIRO_API_KEY.
+codex_env() {
+  local -a keep=(PATH="$PATH" HOME="$HOME" LANG="${LANG:-}" LC_ALL="${LC_ALL:-}" TMPDIR="${TMPDIR:-/tmp}")
+  local name
+  for name in $(compgen -e); do
+    case "$name" in AWS_*|CODEX_*) keep+=("$name=${!name}") ;; esac
+  done
+  env -i "${keep[@]}" "$@"
+}
 kiro_env() {
   local cell_cwd="$1"; shift
   env -i PATH="$PATH" HOME="$cell_cwd" LANG="${LANG:-}" LC_ALL="${LC_ALL:-}" TMPDIR="${TMPDIR:-/tmp}" \
@@ -228,7 +239,7 @@ for lens_file in "${LENS_FILES[@]}"; do
   # us-east-1 전용이었음). diff 는 stdin.
   if command -v codex >/dev/null 2>&1; then
     ( try_panel codex "$SLOT/codex-$lens.md" "$SLOT/codex-$lens.err" \
-        env -u GH_TOKEN -u GITHUB_TOKEN timeout "$T" codex -c web_search=disabled exec \
+        codex_env timeout "$T" codex -c web_search=disabled exec \
           --model global.openai.gpt-6-astra -s read-only --skip-git-repo-check "$LENS_PROMPT" ) &
   else echo "[skip] codex/$lens (binary absent)" >&2; : > "$SLOT/codex-$lens.md"; fi
 
