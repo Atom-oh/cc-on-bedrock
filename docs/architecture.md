@@ -4,19 +4,11 @@
 > ADRs in `docs/decisions/` are the *decision log* (why); the decision baseline is
 > `docs/decisions/BASELINE.md`. Anything under `docs/decisions/archive/` or `docs/history/`
 > is **historical / superseded — NOT current**.
-> Last reconciled: 2026-10-20 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry; Codex on Bedrock, ADR-014; two-reviewer CI, ADR-013 amendment).
+> Last reconciled: 2026-10-18 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry; Codex on Bedrock, ADR-014).
 
 ## What this is
 멀티유저 Claude Code 개발환경 플랫폼 on AWS Bedrock. 사용자는 per-user EC2 DevEnv(브라우저 IDE)
 또는 로컬 PC에서 Bedrock을 호출하고, 사용량·예산·IAM 권한이 중앙에서 거버넌스된다.
-
-## PR review
-
-Automatic PR review runs trusted default-branch BASE scripts against a pinned PR
-diff. Codex and Claude each review deployment, security, correctness and
-documentation once; a tool-free Claude chair produces the final verdict.
-Kiro is not a CI dependency. Both complete reports, a valid verdict and unchanged
-PR HEAD are required. See [the review runbook](runbooks/pr-review-panel.md).
 
 ## Access paths
 

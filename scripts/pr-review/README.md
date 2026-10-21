@@ -1,33 +1,9 @@
-# PR review
+# Specialist review protocol
 
-Since 2026-10-20, automatic CI follows the two-reviewer pattern used by `awsops`:
-one complete Codex review and one complete Claude review in parallel, followed
-by a tool-free Claude chair. Each report covers deployment, security,
-correctness and documentation. This replaces twelve model/lens calls with two.
-
-`run-panel.sh` and `synthesize.sh` no longer invoke Kiro or inspect `ROLE_REVIEW`.
-Only Codex and Claude CLIs are required. Claude panel/chair calls disable tools,
-MCP and settings sources; Codex uses the existing read-only sandbox with web search
-disabled. GitHub tokens are removed from provider subprocess environments.
-
-Trusted default-branch BASE scripts fetch the pinned merge-base/HEAD objects and
-create the diff without checking out PR code. Existing lockfile, binary and
-generated-directory exclusions remain. Input exceeding 12,000 lines or 512,000
-bytes blocks instead of silently reviewing a prefix. Combined BASE context is
-limited to 32 KiB, and each report to 60,000 bytes. Both reports need substantive
-L2/L3/L4/L5 sections and a coverage marker. Nonzero exits, missing coverage and
-invalid/ambiguous chair verdicts block. The comment is posted only for the same
-PR HEAD and the required check retains the name `AI Code Review`.
-
-Run `bash tests/unit/test-pr-review-panel.sh` for active-path tests and shell
-syntax checks. See [the current runbook](../../docs/runbooks/pr-review-panel.md).
-
-## Retained specialist protocol
-
-The following documents the separately retained specialist executors. They are
-not reachable from automatic CI, including when `ROLE_REVIEW=1` is set.
-Standalone users can call `run-specialists.sh` and `synthesize_roles.py` explicitly.
-See [the specialist contract](../../docs/pr-review-specialists.md).
+Since 2026-10-18 CI runs the simplified panel → chair VERDICT path (`ROLE_REVIEW=0`;
+ADR-013 amendment). With `ROLE_REVIEW=1` the installed provider executors prepare immutable
+inputs, run specialists and conditionally invoke the chair. The legacy scripts
+remain compatibility entrypoints. See [the project contract](../../docs/pr-review-specialists.md).
 Only `role_review.py` is offline; executors fetch Git data and invoke provider CLIs.
 
 | Tag | Requested model | Scope |

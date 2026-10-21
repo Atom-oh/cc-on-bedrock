@@ -19,7 +19,7 @@ ensure_slots() {
 #   $1 slot 파일 경로, $2 패널 라벨, $3 responded 파일
 record_result() {
   local slot="$1" label="$2" responded="$3"
-  # A reviewer that exited non-zero (run_reviewer writes $slot.rc) is never credited, even if it
+  # A cell that exited non-zero (try_panel writes $slot.rc) is never credited, even if it
   # printed partial output — the simplified path keeps nonzero exits blocking (ADR-013 amendment).
   if [ -f "$slot.rc" ] && [ "$(cat "$slot.rc" 2>/dev/null)" != "0" ]; then
     echo "[skip] $label (exit $(cat "$slot.rc" 2>/dev/null))" >&2
@@ -32,8 +32,14 @@ record_result() {
   fi
 }
 
-# Redact common credential formats before reports reach the chair or PR.
-# This is defense in depth, not a substitute for provider tool restrictions.
+# 자격증명 패턴 스크럽 — 마지막 방어선(last line of defense), 예방이 아님. Kiro 의
+# fs_read 잔여 위험(diff 인젝션 → 절대경로 read → 셀 출력에 크리덴셜 노출 → 체어 종합 →
+# 공개 PR 코멘트/외부 Kiro 서비스 유출) 체인을 끊기 위해, 셀 출력을 체어에 넘기기 전에
+# 흔한 크리덴셜 포맷을 정규식으로 치환한다. 패턴은 co-agent 의
+# `consensus_hooks.py::_SECRET_RE`(AWS/GitHub/Slack/OpenAI·Anthropic/Google + generic
+# key=value)를 재사용하고, EKS Pod Identity 토큰(고정 경로 파일의 값 자체가 JWT 포맷)
+# 탐지를 추가했다. 절대경로 read 자체를 막지는 못하므로(스크럽은 값이 셀 출력에 실제로
+# 나타난 *뒤*에만 작동) 잔여 위험은 그대로 남는다 — ADR-002 명시.
 scrub_secrets() {
   # PEM 은 여러 줄에 걸치므로 line-oriented sed 로는 본문을 못 지운다(헤더 줄만 매칭)
   # — awk 상태기계로 BEGIN..END 블록 전체를 마커 한 줄로 치환(첫 스테이지, 구조적 스크럽).

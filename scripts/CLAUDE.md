@@ -36,8 +36,7 @@ Terraform-only deployment helpers, AMI build scripts, verification scripts, and 
 - 실패 시 명확한 에러 메시지 출력
 - 번호 스크립트는 보조 도구이며, 배포의 기준 순서는 Terraform plan/apply이다.
 
-CI runs one complete Codex review and one complete Claude review in parallel,
-then a tool-free Claude chair (ADR-013 amendment 2026-10-20). Kiro and the
-`ROLE_REVIEW` switch are absent from the active entrypoints. The
-[module guide](pr-review/README.md) documents current checks and the separately
-retained specialist tools.
+CI runs the simplified panel → chair VERDICT path (`ROLE_REVIEW=0`, ADR-013 amendment
+2026-10-18); the [specialist protocol](pr-review/README.md) is retained behind `ROLE_REVIEW=1`.
+Its module guide owns offline checks and provider/custody rules; legacy entrypoints
+remain for compatibility.
