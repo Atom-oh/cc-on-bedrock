@@ -116,9 +116,9 @@ export async function POST(req: NextRequest) {
         send(1, "iam_role", "completed", { message: "Permissions ready" });
         await delay(300);
 
-        send(2, "storage", "in_progress", { message: "Preparing storage..." });
+        send(2, "storage_prepare", "in_progress", { message: "Preparing storage..." });
         await delay(500);
-        send(2, "storage", "completed", { message: "EBS volume preserved" });
+        send(2, "storage_prepare", "completed", { message: "EBS volume preserved" });
         await delay(300);
 
         send(3, "task_definition", "in_progress", { message: "Configuring instance..." });

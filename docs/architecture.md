@@ -20,6 +20,14 @@ PR HEAD are required. See [the review runbook](runbooks/pr-review-panel.md).
 
 ## Access paths
 
+The self-service portal distinguishes unavailable status from an absent
+environment. Failed refreshes retain the last verified state and expose retry or
+sign-in recovery. Start/stop controls require verified status; `STOPPING` remains
+visible until the status API confirms completion. Provisioning progress requires
+a terminal event, and closing its view does not cancel the underlying start.
+Custom-route version conflicts preserve local edits until the user explicitly
+reloads the server configuration.
+
 ```mermaid
 graph LR
   subgraph EC2 Mode

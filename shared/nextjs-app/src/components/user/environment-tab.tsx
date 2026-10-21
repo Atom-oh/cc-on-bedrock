@@ -21,6 +21,7 @@ interface EnvironmentTabProps {
   fetchData: () => Promise<void>;
   domainName: string;
   devSubdomain: string;
+  statusVerified?: boolean;
 }
 
 interface UsageData {
@@ -41,11 +42,13 @@ export default function EnvironmentTab({
   fetchData,
   domainName,
   devSubdomain,
+  statusVerified = true,
 }: EnvironmentTabProps) {
   const { t } = useI18n();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [selectedTier, setSelectedTier] = useState<"light" | "standard" | "power">(
     user.resourceTier ?? "standard"
   );
@@ -187,15 +190,14 @@ export default function EnvironmentTab({
   }, [container?.status, container?.taskId]);
 
   const handleStartContainer = async () => {
-    console.log("[DEBUG] handleStartContainer called, tier:", selectedTier, "allowed:", deptPolicy.allowedTiers);
+    if (!statusVerified) return;
     if (!deptPolicy.allowedTiers.includes(selectedTier)) {
       setError(`Tier "${selectedTier}" is not allowed for your department`);
-      console.log("[DEBUG] Tier not allowed");
       return;
     }
-    console.log("[DEBUG] Setting isProvisioning=true");
     setIsProvisioning(true);
     setError(null);
+    setNotice(null);
   };
 
   const handleProvisioningComplete = useCallback(async (url?: string) => {
@@ -206,15 +208,19 @@ export default function EnvironmentTab({
   const handleProvisioningError = useCallback((errorMsg: string) => {
     setIsProvisioning(false);
     setError(errorMsg);
-  }, []);
+    void fetchData();
+  }, [fetchData]);
+
+  const handleDismissProgress = useCallback(() => {
+    setIsProvisioning(false);
+    setNotice(t("user.trackingClosed"));
+    void fetchData();
+  }, [fetchData, t]);
 
   const handleStopContainer = async () => {
-    if (!container) return;
+    if (!container || !statusVerified) return;
     setActionLoading(true);
     setError(null);
-
-    // Immediately show STOPPING state
-    setContainer({ ...container, status: "STOPPING", desiredStatus: "STOPPED" });
 
     try {
       const res = await fetch("/api/user/container", {
@@ -223,35 +229,16 @@ export default function EnvironmentTab({
         body: JSON.stringify({ action: "stop", taskArn: container.taskArn }),
       });
       const data = await res.json();
-      if (!data.success) {
+      if (!res.ok || !data.success) {
         setError(data.error ?? "Failed to stop instance");
-        setContainer(container); // Restore original state on error
-        setActionLoading(false);
         return;
       }
-
-      // Poll until instance is fully stopped or hibernated
-      let finalData = null;
-      for (let i = 0; i < 12; i++) {
-        await new Promise(r => setTimeout(r, 5000));
-        try {
-          const check = await fetch("/api/user/container");
-          const checkData = await check.json();
-          if (!checkData.data || checkData.data.status === "STOPPED" || checkData.data.status === "stopped") {
-            finalData = null;
-            break;
-          }
-          if (checkData.data.status === "HIBERNATED") {
-            finalData = checkData.data;
-            break;
-          }
-        } catch { /* continue polling */ }
-      }
-
-      setContainer(finalData);
+      // The shared status poll confirms completion; elapsed time is not proof.
+      setContainer({ ...container, status: "STOPPING", desiredStatus: "STOPPED" });
     } catch {
       setError("Failed to stop instance");
     } finally {
+      await fetchData();
       setActionLoading(false);
     }
   };
@@ -262,8 +249,9 @@ export default function EnvironmentTab({
 
   return (
     <div className="space-y-6">
+      {notice && <div role="status" className="rounded-lg border border-blue-500/30 bg-blue-900/20 px-4 py-3 text-sm text-blue-200">{notice}</div>}
       {error && (
-        <div className="bg-red-900/30 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg">
+        <div role="alert" className="bg-red-900/30 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg">
           {error}
         </div>
       )}
@@ -380,6 +368,7 @@ export default function EnvironmentTab({
           os={user.containerOs ?? "ubuntu"}
           onComplete={handleProvisioningComplete}
           onError={handleProvisioningError}
+          onDismiss={handleDismissProgress}
         />
       )}
 
@@ -557,7 +546,7 @@ export default function EnvironmentTab({
           {(!container || container.status === "HIBERNATED") && !isProvisioning && (
             <button
               onClick={handleStartContainer}
-              disabled={actionLoading || !hasSubdomain}
+              disabled={actionLoading || !hasSubdomain || !statusVerified}
               className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
               title={container?.status === "HIBERNATED" ? "메모리 상태가 보존되어 빠르게 재개됩니다" : undefined}
             >
@@ -576,7 +565,7 @@ export default function EnvironmentTab({
             <>
               <button
                 onClick={handleStopContainer}
-                disabled={actionLoading}
+                disabled={actionLoading || !statusVerified}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
               >
                 {actionLoading ? (t("user.stopping") || "Stopping...") : (t("user.stop") || "Stop Instance")}

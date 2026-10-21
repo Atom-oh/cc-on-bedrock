@@ -37,6 +37,10 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
   const [routesError, setRoutesError] = useState<string | null>(null);
   const [routesPending, setRoutesPending] = useState(false);
   const [routesVersion, setRoutesVersion] = useState<number>(0);
+  const [routesLoaded, setRoutesLoaded] = useState(false);
+  const [routesLoading, setRoutesLoading] = useState(false);
+  const [routesConflict, setRoutesConflict] = useState(false);
+  const [routesSaved, setRoutesSaved] = useState(false);
 
   const codeServerUrl = user.subdomain
     ? `https://${user.subdomain}.${devSubdomain}.${domainName}`
@@ -44,15 +48,24 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
 
   // Load custom routes (also re-used after save to refresh routeStatus + version)
   const loadRoutes = useCallback(async () => {
+    setRoutesLoading(true);
+    setRoutesError(null);
     try {
       const res = await fetch("/api/user/custom-routes");
       const d = await res.json();
-      if (d.success) {
-        setRoutes(d.data.routes ?? []);
-        setRouteStatus(d.data.status ?? []);
-        setRoutesVersion(d.data.version ?? 0);
+      if (!res.ok || !d.success || !d.data) {
+        throw new Error("Unable to load routes");
       }
-    } catch { /* ignore */ }
+      setRoutes(d.data.routes ?? []);
+      setRouteStatus(d.data.status ?? []);
+      setRoutesVersion(d.data.version ?? 0);
+      setRoutesLoaded(true);
+      setRoutesConflict(false);
+    } catch {
+      setRoutesError("포트 설정을 불러오지 못했습니다. 연결을 확인하고 다시 불러와 주세요.");
+    } finally {
+      setRoutesLoading(false);
+    }
   }, []);
 
   useEffect(() => { loadRoutes(); }, [loadRoutes]);
@@ -60,6 +73,7 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
   const saveRoutes = async () => {
     setRoutesSaving(true);
     setRoutesError(null);
+    setRoutesSaved(false);
     try {
       const res = await fetch("/api/user/custom-routes", {
         method: "PUT",
@@ -70,11 +84,16 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
       const d = await res.json();
       if (!res.ok || !d.success) {
         setRoutesError(res.status === 409 ? (d.error ?? "동시 수정 충돌 — 새로고침하세요") : (d.error ?? "저장 실패"));
-        if (res.status === 409) await loadRoutes(); // refresh to latest
+        // Keep the user's draft until they explicitly choose to reload server data.
+        if (res.status === 409) setRoutesConflict(true);
         return;
       }
       setRoutesPending(d.data.pending === true);
-      await loadRoutes(); // MINOR: refresh routeStatus (✅/⚠️) + new version after save
+      setRoutesVersion(d.data.version);
+      setRouteStatus([]);
+      setRoutesSaved(true);
+    } catch {
+      setRoutesError("저장 결과를 확인하지 못했습니다. 입력한 내용은 유지됩니다. 연결을 확인한 뒤 다시 시도해 주세요.");
     } finally {
       setRoutesSaving(false);
     }
@@ -82,11 +101,17 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
 
   const addRoute = () => {
     if (routes.length >= 5) return;
+    setRoutesSaved(false);
     setRoutes([...routes, { path: "/preview", port: 5173, label: "App" }]);
   };
-  const removeRoute = (i: number) => setRoutes(routes.filter((_, idx) => idx !== i));
-  const updateRoute = (i: number, patch: Partial<RouteRow>) =>
+  const removeRoute = (i: number) => {
+    setRoutesSaved(false);
+    setRoutes(routes.filter((_, idx) => idx !== i));
+  };
+  const updateRoute = (i: number, patch: Partial<RouteRow>) => {
+    setRoutesSaved(false);
     setRoutes(routes.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  };
 
   // Fetch current code-server password
   useEffect(() => {
@@ -370,21 +395,23 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
               앱이 해당 path 밑에서 서빙되도록 설정 필요 (Vite <code>base</code>, Next <code>basePath</code>,
               Streamlit <code>--server.baseUrlPath</code>). 최대 5개. 8080은 code-server 예약.
             </p>
-            <div className="mt-3 space-y-2">
+            <fieldset disabled={routesSaving || routesLoading} className="mt-3 space-y-2">
               {routes.map((r, i) => {
                 const st = routeStatus.find((s) => s.path === r.path);
                 return (
-                  <div key={i} className="flex items-center gap-2">
+                  <div key={i} className="flex flex-wrap items-center gap-2">
                     <input
                       value={r.label}
                       onChange={(e) => updateRoute(i, { label: e.target.value })}
                       placeholder="Label"
+                      aria-label={`포트 ${i + 1} 이름`}
                       className="w-28 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
                     />
                     <input
                       value={r.path}
                       onChange={(e) => updateRoute(i, { path: e.target.value })}
                       placeholder="/preview"
+                      aria-label={`포트 ${i + 1} 경로`}
                       className="w-32 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
                     />
                     <input
@@ -392,6 +419,7 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
                       value={r.port}
                       onChange={(e) => updateRoute(i, { port: Number(e.target.value) })}
                       placeholder="5173"
+                      aria-label={`포트 ${i + 1} 번호`}
                       className="w-24 bg-[#0d1117] border border-gray-700 rounded px-2 py-1 text-sm text-gray-200"
                     />
                     <span className="text-xs text-gray-500 truncate">
@@ -411,26 +439,34 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
                   </div>
                 );
               })}
-            </div>
-            <div className="mt-3 flex items-center gap-3">
+            </fieldset>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <button
                 onClick={addRoute}
-                disabled={routes.length >= 5}
+                disabled={routes.length >= 5 || !routesLoaded || routesLoading || routesSaving}
                 className="text-sm px-3 py-1 rounded bg-gray-800 text-gray-200 disabled:opacity-50"
               >
                 + 추가
               </button>
               <button
                 onClick={saveRoutes}
-                disabled={routesSaving}
+                disabled={routesSaving || routesLoading || !routesLoaded || routesConflict}
                 className="text-sm px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
               >
-                저장
+                {routesSaving ? "저장 중..." : "저장"}
               </button>
+              {routesLoading && <span role="status" className="text-xs text-gray-400">포트 설정 확인 중...</span>}
+              {routesSaved && <span role="status" className="text-xs text-green-400">포트 설정을 저장했습니다</span>}
               {routesPending && (
                 <span className="text-xs text-amber-400">인스턴스 시작 시 반영됩니다</span>
               )}
-              {routesError && <span className="text-xs text-red-400">{routesError}</span>}
+              {routesError && <span role="alert" className="text-xs text-red-400">{routesError}</span>}
+              {routesError && (
+                <button onClick={loadRoutes} disabled={routesLoading || routesSaving}
+                  className="text-xs text-blue-400 underline disabled:opacity-50">
+                  {routesLoaded ? "서버 설정 다시 불러오기 (편집 내용 취소)" : "다시 불러오기"}
+                </button>
+              )}
             </div>
           </section>
         </div>

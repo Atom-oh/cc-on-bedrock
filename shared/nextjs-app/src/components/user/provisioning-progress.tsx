@@ -2,22 +2,27 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { PROVISIONING_STEPS, type ProvisioningEvent } from "@/lib/types";
+import { ProvisioningStreamError, readProvisioningStream } from "@/lib/provisioning-stream";
+import { useI18n } from "@/lib/i18n";
 
 interface ProvisioningProgressProps {
   tier: "light" | "standard" | "power";
   os: "ubuntu" | "al2023";
   onComplete: (url?: string) => void;
   onError: (error: string) => void;
+  onDismiss: () => void;
 }
 
-export default function ProvisioningProgress({ tier, os, onComplete, onError }: ProvisioningProgressProps) {
+export default function ProvisioningProgress({ tier, os, onComplete, onError, onDismiss }: ProvisioningProgressProps) {
+  const { t } = useI18n();
   const [events, setEvents] = useState<Map<string, ProvisioningEvent>>(new Map());
   const [currentStep, setCurrentStep] = useState(0);
   const [failed, setFailed] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const startedRef = useRef(false);
+  const callbacks = useRef({ onComplete, onError, t });
+  callbacks.current = { onComplete, onError, t };
 
   const progressPercent = Math.max(5, (currentStep / 7) * 100);
 
@@ -26,83 +31,58 @@ export default function ProvisioningProgress({ tier, os, onComplete, onError }: 
       abortRef.current.abort();
     }
     setCancelled(true);
-    onError("Provisioning cancelled by user");
-  }, [onError]);
-
-  const startProvisioning = useCallback(async () => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const response = await fetch("/api/user/container/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start", resourceTier: tier, containerOs: os }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: "Failed to start provisioning" }));
-        onError(errorData.error ?? `HTTP ${response.status}`);
-        return;
-      }
-
-      if (!response.body) {
-        onError("No response body");
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const event: ProvisioningEvent = JSON.parse(line.slice(6));
-              setEvents(prev => {
-                const next = new Map(prev);
-                next.set(event.name, event);
-                return next;
-              });
-
-              if (event.status === "in_progress" || event.status === "completed") {
-                setCurrentStep(prev => Math.max(prev, event.step));
-              }
-              if (event.status === "completed" && event.step === 7) {
-                setCompleted(true);
-                setTimeout(() => onComplete(event.url), 1500);
-              } else if (event.status === "failed") {
-                setFailed(true);
-                onError(event.error ?? `Step ${event.step} failed`);
-              }
-            } catch { /* ignore parse errors */ }
-          }
-        }
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      onError(err instanceof Error ? err.message : "Connection failed");
-    }
-  }, [tier, os, onComplete, onError]);
+    onDismiss();
+  }, [onDismiss]);
 
   useEffect(() => {
-    startProvisioning();
-    return () => {
-      if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let completedTimer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = setTimeout(() => {
+      if (controller.signal.aborted) return;
+      controller.abort();
+      callbacks.current.onError(callbacks.current.t("user.provisioningInterrupted"));
+    }, 180_000);
+    const start = async () => {
+      // Strict Mode's initial setup/cleanup must not send a duplicate start POST.
+      if (controller.signal.aborted) return;
+      try {
+        const response = await fetch("/api/user/container/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "start", resourceTier: tier, containerOs: os }),
+          signal: controller.signal,
+        });
+        const url = await readProvisioningStream(response, event => {
+          if (controller.signal.aborted) return;
+          setEvents(prev => new Map(prev).set(event.name, event));
+          if (event.status === "in_progress" || event.status === "completed") {
+            setCurrentStep(prev => Math.max(prev, event.step));
+          }
+        });
+        if (controller.signal.aborted) return;
+        setCompleted(true);
+        completedTimer = setTimeout(() => callbacks.current.onComplete(url), 1500);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setFailed(true);
+        const key = err instanceof ProvisioningStreamError && err.reason === "session"
+          ? "user.sessionExpired" : "user.provisioningInterrupted";
+        callbacks.current.onError(
+          err instanceof ProvisioningStreamError && err.publicMessage
+            ? err.publicMessage : callbacks.current.t(key),
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
     };
-  }, [startProvisioning]);
+    queueMicrotask(() => { void start(); });
+    return () => {
+      clearTimeout(timeout);
+      clearTimeout(completedTimer);
+      controller.abort();
+    };
+  }, [tier, os]);
 
   const getStepStatus = (stepName: string): ProvisioningEvent["status"] => {
     return events.get(stepName)?.status ?? "pending";
@@ -134,16 +114,16 @@ export default function ProvisioningProgress({ tier, os, onComplete, onError }: 
               <button
                 onClick={handleCancel}
                 className="text-xs text-gray-500 hover:text-red-400 transition-colors px-2 py-1"
-                aria-label="Cancel provisioning"
+                aria-label={t("user.closeProgress")}
               >
-                Cancel
+                {t("user.closeProgress")}
               </button>
             </>
           )}
         </div>
       </div>
 
-      <p className="text-xs text-gray-500 mb-4">Usually takes 1-2 minutes</p>
+      <p className="text-xs text-gray-500 mb-4">{t("user.provisioningHint")}</p>
 
       {/* Progress Bar */}
       <div
