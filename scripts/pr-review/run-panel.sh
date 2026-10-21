@@ -27,7 +27,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 ensure_slots "$WORK" || exit 1
 SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 # A reused workdir on a non-ephemeral runner must not carry over the last run's flags.
-rm -f "$WORK/coverage-severe.flag"; : > "$WORK/degraded-models.txt"
+rm -f "$WORK"/*.flag; : > "$WORK/degraded-models.txt"
 T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-3}"
 PANEL_MODEL="${PANEL_MODEL:-global.openai.gpt-6.1-sol}"
@@ -76,6 +76,7 @@ for lens_file in "${LENS_FILES[@]}"; do
         codex_env timeout "$T" codex -c web_search=disabled exec \
           --model "$PANEL_MODEL" -s read-only --skip-git-repo-check "$LENS_PROMPT" ) &
   else
+    echo "codex CLI not found on runner" > "$SLOT/codex-$lens.err"
     : > "$SLOT/codex-$lens.md"
   fi
 done
@@ -89,7 +90,8 @@ echo "Panel responded ($(wc -l < "$RESP") / ${#LENS_FILES[@]} cells, $PANEL_MODE
 
 # Codex is the only panel vendor, so every lens must be covered: a missing lens has
 # no cross-check left and forces VERDICT: FAIL in synthesize.sh (fail-closed).
-if [ "$(wc -l < "$RESP")" -lt "${#LENS_FILES[@]}" ]; then
+RESPONDED="$(wc -l < "$RESP" 2>/dev/null)"
+if [ "${RESPONDED:-0}" -lt "${#LENS_FILES[@]}" ]; then
   echo "codex" >> "$WORK/degraded-models.txt"
   echo "::error::codex did not complete every lens — forcing VERDICT: FAIL" >&2
   : > "$WORK/coverage-severe.flag"

@@ -25,9 +25,10 @@ bash -n "$SYNTH" && ok "synthesize.sh valid bash" || bad "synthesize.sh syntax"
 chk 'PANEL_MODEL:-global\.openai\.gpt-6\.1-sol' "panel defaults to Codex gpt-6.1-sol"
 chk 'codex -c web_search=disabled exec' "Codex runs with web search disabled"
 chk 'codex_env timeout' "Codex runs under the allowlisted env"
+chk '-s read-only' "Codex cells run in the read-only sandbox"
 nochk 'kiro-cli' "panel no longer invokes Kiro"
 schk 'CHAIR_PRIMARY_MODEL:-global\.anthropic\.claude-opus-5-5' "chair defaults to Claude Opus 5.5"
-schk '--tools "" --strict-mcp-config' "chair runs tool-less with no MCP servers"
+schk '--tools "" --strict-mcp-config --setting-sources ""' "chair runs tool-less with no MCP servers or setting sources"
 schk 'chair_diag "\$CHAIR_PRIMARY_MODEL"' "rejected chair output is logged for diagnosis"
 
 if command -v timeout >/dev/null 2>&1; then
@@ -59,7 +60,16 @@ if command -v timeout >/dev/null 2>&1; then
   grepout 'Panel responded \(3 / 4 cells' "$OUT" "the failed lens is not counted"
   [ -f "$T_STUB/work/coverage-severe.flag" ] && ok "missing lens raises coverage-severe" || bad "missing lens raises coverage-severe"
 
+  echo "== stub: a transient Codex failure is retried =="
+  codex_stub 'cat >/dev/null; printf x >> "$0.attempts.$(printf "%s" "$*" | grep -o "lens L[2-5]")"; [ "$(wc -c < "$0.attempts.$(printf "%s" "$*" | grep -o "lens L[2-5]")")" -ge 2 ] || exit 1; echo "no findings"'
+  OUT="$(run_panel)"
+  grepout 'Panel responded \(4 / 4 cells' "$OUT" "a failed first attempt recovers on retry"
+  [ -f "$T_STUB/work/coverage-severe.flag" ] && bad "a recovered retry must not raise coverage-severe" || ok "a recovered retry leaves no coverage-severe flag"
+  rm -f "$T_STUB"/bin/codex.attempts.*
+
   echo "== stub: chair verdict is overridden by incomplete coverage =="
+  codex_stub 'cat >/dev/null; case "$*" in *"lens L3"*) exit 1 ;; esac; echo "no findings"'
+  run_panel >/dev/null
   printf '#!/bin/bash\ncat >/dev/null\necho "Looks fine."\necho "VERDICT: PASS"\n' > "$T_STUB/bin/claude"; chmod +x "$T_STUB/bin/claude"
   PATH="$T_STUB/bin:$PATH" bash "$SYNTH" "$T_STUB/diff.txt" "$T_STUB/work" 1 "title" "$T_STUB/review.md" >/dev/null 2>&1 || true
   eq "coverage-severe forces the final VERDICT: FAIL" "VERDICT: FAIL" "$(awk 'NF{last=$0} END{print last}' "$T_STUB/review.md")"

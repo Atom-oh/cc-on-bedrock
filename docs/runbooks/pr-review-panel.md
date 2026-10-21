@@ -18,7 +18,7 @@ and HEAD commits, then:
    under a `PANEL_TIMEOUT` (default 300 s) backstop.
 2. `scripts/pr-review/synthesize.sh` runs the Claude chair (`global.anthropic.claude-opus-5-5`,
    fallback `global.anthropic.claude-opus-5`, `CHAIR_TIMEOUT` default 600 s) with no tools
-   (`--tools "" --strict-mcp-config`). A rejected chair attempt logs its exit code and the
+   (`--tools "" --strict-mcp-config --setting-sources ""`). A rejected chair attempt logs its exit code and the
    scrubbed start of its stdout/stderr (`chair_diag`). The chair receives the PR title
    (as untrusted data), the diff and the Codex cells on stdin, reviews the diff itself as the
    second independent reviewer, adjudicates the Codex findings and emits exactly one final
@@ -51,9 +51,11 @@ Bedrock auth failure) forces `VERDICT: FAIL` whatever the chair decided (fail-cl
 ## Symptom B — chair produced no valid review
 
 Log: `::warning::chair 'Claude Opus 5.5' degraded (...) — falling back to 'Claude Opus 5'`;
-if the fallback also fails, the comment reads `리뷰 생성 실패 — ...` followed by
+if the fallback also fails, the comment reads `Review generation failed: ...` followed by
 `VERDICT: FAIL`. A valid chair response must end with exactly `VERDICT: PASS` or
-`VERDICT: FAIL` as its last non-empty line.
+`VERDICT: FAIL` as its last non-empty line. Check the `--- chair ... rejected` block in the
+job log first. Bedrock capacity errors (`ServiceUnavailableException`) also appear in
+CloudTrail as failed `InvokeModelWithResponseStream` calls by the runner role.
 
 1. Check the scrubbed `chair.err` excerpt in the warning line.
 2. Confirm the Claude signing region matches `ANTHROPIC_BEDROCK_BASE_URL` in the workflow

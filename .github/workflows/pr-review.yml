@@ -38,9 +38,8 @@ jobs:
       pull-requests: write
       contents: read
     env:
-      # The chair model is set in synthesize.sh (CHAIR_PRIMARY_MODEL, Opus 5.5); the
-      # endpoint/region pair stays on the nearest region (ap-northeast-2).
-      ANTHROPIC_MODEL: global.anthropic.claude-opus-5-5
+      # The chair model comes only from synthesize.sh (CHAIR_PRIMARY_MODEL, Opus 5.5);
+      # the endpoint/region pair stays on the nearest region (ap-northeast-2).
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
       AWS_REGION: ap-northeast-2

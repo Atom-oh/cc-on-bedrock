@@ -11,7 +11,9 @@ runtime_required: false
 
 Accepted, 2026-09-13. Documentation convention: **LIVE**. Specialist protocol:
 **INACTIVE** in CI since the 2026-10-18 amendment below (retained behind `ROLE_REVIEW=1`;
-active CI path revised by the 2026-10-21 amendment). Runtime service availability and
+active CI path revised by the 2026-10-21 amendment). Since 2026-10-21, CI runs a Codex
+gpt-6.1-sol lens panel and a Claude Opus 5.5 chair with no Kiro; the chair invocation,
+fallback model and failure diagnostics changed with it. Runtime service availability and
 executed model identity require separate evidence; configuration is not proof.
 
 ## Context
@@ -114,9 +116,8 @@ amendment; that text is kept as history.
 2. **Fail-closed coverage.** Any lens Codex did not complete sets `coverage-severe.flag` and
    forces `VERDICT: FAIL`, whatever the chair decided.
 3. **Chair.** Claude Opus 5.5 (`global.anthropic.claude-opus-5-5`, fallback
-   `global.anthropic.claude-opus-5`), tool-less (`--tools "" --strict-mcp-config`; settings load
-   from the trusted BASE checkout and runner image, because CI runs with
-   `--setting-sources ""` never produced a valid review), reviews the same diff as the second independent reviewer,
+   `global.anthropic.claude-opus-5`), tool-less with no setting sources (`--tools "" --strict-mcp-config
+   --setting-sources ""`), reviews the same diff as the second independent reviewer,
    adjudicates the Codex findings and emits exactly one final VERDICT. The PR title reaches
    it on stdin as untrusted data.
 4. **Diff custody.** The diff is built with `git diff` from the pinned merge-base/HEAD
