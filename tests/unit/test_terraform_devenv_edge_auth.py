@@ -52,6 +52,7 @@ def test_readme_documented_terraform_contracts_exist():
     dashboard_tf = (REPO / "terraform/modules/dashboard/main.tf").read_text()
     root_tf = (REPO / "terraform/main.tf").read_text()
 
+    assert 'variable "deployment_mode"' in variables_tf
     assert 'variable "governance_only"' in variables_tf
     for output_name in [
         "cognito_cli_public_client_id",
@@ -87,3 +88,13 @@ def test_ec2_idle_stop_uses_terraform_devenv_table_outputs():
     idle_policy = idle_policy.split('resource "aws_iam_role_policy" "ec2_idle_stop_policy"', 1)[0]
     assert '"kms:Decrypt"' in idle_policy
     assert "resources = [var.kms_key_arn]" in idle_policy
+
+
+def test_upgrade_guard_matches_devenv_security_group_name():
+    root_tf = (REPO / "terraform/main.tf").read_text()
+    ec2_devenv_tf = (REPO / "terraform/modules/ec2-devenv/main.tf").read_text()
+
+    # The guard in the root module finds existing DevEnvs by this SG name prefix.
+    assert 'data "aws_security_groups" "existing_devenv"' in root_tf
+    assert '"cc-devenv-open-*"' in root_tf
+    assert 'name_prefix = "cc-devenv-open-"' in ec2_devenv_tf

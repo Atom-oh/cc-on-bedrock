@@ -20,6 +20,7 @@ locals {
     # cookies before forwarding to user-controlled origins.
     COOKIE_DOMAIN               = ".${var.domain_name}"
     DASHBOARD_URL               = "https://${local.dashboard_domain}"
+    DEPLOYMENT_MODE             = var.deployment_mode
     DEV_SUBDOMAIN               = var.dev_subdomain
     DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
     DOMAIN_NAME                 = var.domain_name

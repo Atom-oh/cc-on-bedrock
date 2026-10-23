@@ -84,5 +84,6 @@ draft. Disable saving until the existing settings have loaded successfully.
 - Server Components가 기본이고, 차트/인터랙티브 UI만 `'use client'`.
 - Bedrock 사용량은 DynamoDB `cc-on-bedrock-usage`에서 읽는다. CloudWatch `AWS/Bedrock`은 계정 전체 수치라 사용자별 집계에 맞지 않는다.
 - Local Governance UI(`/local`, `/admin/limits`) 사이드바 노출은 `NEXT_PUBLIC_LOCAL_MODE_ENABLED=true`로 제어한다.
+- `DEPLOYMENT_MODE` (runtime env from Terraform `deployment_mode`; unset or unknown = `governance`) is read by `lib/deployment-mode.ts` in the root layout and exposed to client components through `useDeploymentMode()`. In governance mode `/user` renders `components/user/local-setup.tsx` (installer + credentials/usage), the Instances menu and EC2 home cards are hidden, and DevEnv lifecycle APIs (`/api/containers`, `/api/user/container`, `/api/user/container/stream`) and DevEnv self-service requests (`/api/user/container-request`: tier, DLP, IAM extension) return 404 through `devenvDisabledResponse()`.
 - 접근성: 탭(tablist/tab/tabpanel), 프로그레스바(progressbar), 폼(htmlFor/id), 알림(aria-live).
 - 환경변수 목록은 `.env.example`; 배포 시 값은 Terraform `modules/dashboard`의 runtime env가 주입한다.

@@ -31,4 +31,6 @@ ecs_cluster_name        = "cc-on-bedrock-devenv"
 daily_budget_usd        = 50 # per-user USD caps; any one exceeded = blocked (ADR-008)
 weekly_budget_usd       = 0  # 0 = no global weekly cap (set per user/dept in Admin → Budgets)
 monthly_budget_usd      = 0  # 0 = no global monthly cap
-governance_only         = false
+# "governance" (default): dashboard + local installer, no EC2. "devenv": adds per-user EC2 DevEnvs.
+# Existing devenv stacks: set "devenv" here; "governance" destroys every DevEnv resource.
+deployment_mode = "governance"

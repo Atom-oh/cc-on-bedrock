@@ -4,7 +4,8 @@
 
 locals {
   lambda_src_dir  = abspath("${path.module}/../lambda")
-  devenv_enabled  = !var.governance_only
+  deployment_mode = var.governance_only != null ? (var.governance_only ? "governance" : "devenv") : (var.deployment_mode == null ? "governance" : var.deployment_mode)
+  devenv_enabled  = local.deployment_mode == "devenv"
   default_dev_env = ""
 }
 
@@ -16,6 +17,30 @@ moved {
 moved {
   from = module.ec2_devenv
   to   = module.ec2_devenv[0]
+}
+
+# Upgrade guard: the default profile is governance, which removes every DevEnv resource.
+# With neither deployment_mode nor governance_only set, refuse to plan while DevEnv
+# security groups exist in the VPC, so an older tfvars cannot silently destroy DevEnvs.
+data "aws_security_groups" "existing_devenv" {
+  count = var.deployment_mode == null && var.governance_only == null ? 1 : 0
+
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+
+  filter {
+    name   = "group-name"
+    values = ["cc-devenv-open-*"]
+  }
+
+  lifecycle {
+    postcondition {
+      condition     = length(self.ids) == 0
+      error_message = "DevEnv security groups exist in this VPC but deployment_mode is not set. The default profile is now \"governance\", which destroys every DevEnv resource. Set deployment_mode = \"devenv\" to keep them, or deployment_mode = \"governance\" to remove them."
+    }
+  }
 }
 
 # ---- 01 Network -------------------------------------------------------------
@@ -40,6 +65,7 @@ module "security" {
   hosted_zone_id      = module.network.hosted_zone_id
   dashboard_subdomain = var.dashboard_subdomain
   lambda_src_dir      = local.lambda_src_dir
+  devenv_enabled      = local.devenv_enabled
 
   providers = {
     aws           = aws
@@ -58,6 +84,7 @@ module "usage_tracking" {
   department_budgets_table_name = module.security.department_budgets_table_name
   task_permission_boundary_name = module.security.task_permission_boundary_name
   lambda_src_dir                = local.lambda_src_dir
+  devenv_enabled                = local.devenv_enabled
   ecs_cluster_name              = var.ecs_cluster_name
   daily_budget_usd              = var.daily_budget_usd
   weekly_budget_usd             = var.weekly_budget_usd
@@ -132,6 +159,7 @@ module "dashboard" {
   otel_collector_endpoint             = module.usage_tracking.otel_collector_endpoint
   dns_firewall_rule_group_id          = module.network.dns_firewall_rule_group_id
   codex_model_id                      = var.codex_model_id
+  deployment_mode                     = local.deployment_mode
 }
 
 # ---- 06 WAF ------------------------------------------------------------------

@@ -33,3 +33,9 @@ variable "dashboard_subdomain" {
   type        = string
   default     = "cconbedrock-dashboard"
 }
+
+variable "devenv_enabled" {
+  description = "deployment_mode = \"devenv\": create the DevEnv wildcard certificate and the dashboard's EC2 DevEnv permissions"
+  type        = bool
+  default     = true
+}

@@ -17,13 +17,15 @@ Governed multi-user development platform for Claude Code on Amazon Bedrock. The 
 ## Key Paths
 
 ```text
-terraform/          Terraform root and modules
+terraform/          Terraform root and 8 modules
 lambda/             Lambda handlers packaged by Terraform
 shared/nextjs-app/  Dashboard application
-tools/              Local CLI and OTEL helper scripts
-docker/nginx/       Shared nginx router image
-tests/              Unit and integration tests
-docs/               ADRs, runbooks, specs, plans
+tools/              Local CLI (cc-bedrock-local.sh) and OTEL helper scripts
+docker/             DevEnv (AMI bake), dashboard, nginx and OTEL collector images
+scripts/            Prerequisite checks, ECR/AMI/image builds, verification, PR-review tooling
+agent/              AgentCore Runtime AI assistant
+tests/              Fast gate, unit, integration and container tests
+docs/               Architecture, ADRs, runbooks, deployment guide
 ```
 
 ## Local Mode
@@ -53,9 +55,13 @@ terraform -chdir=terraform validate
 terraform -chdir=terraform plan
 ```
 
-> **Local Governance-only mode is GATED — not yet wired.** The `governance_only`
-> Terraform variable is a planned follow-up (see `terraform/CLAUDE.md` and `BASELINE.md` §2);
-> until it lands, all modules deploy together. Do not pass `governance_only` yet.
+> **Deployment profiles.** `deployment_mode = "governance"` (default when unset) deploys the admin
+> dashboard and the local installer only: users run Claude Code / Codex on their own PC with
+> Cognito-issued STS credentials, and no EC2 DevEnv is created. Set
+> `deployment_mode = "devenv"` to add per-user EC2 DevEnvs. The deprecated `governance_only`
+> bool still works and overrides `deployment_mode` when set.
+
+> **Upgrading an existing stack.** Older tfvars that set neither `deployment_mode` nor `governance_only` used to deploy DevEnvs. The default is now governance, which destroys them. Add `deployment_mode = "devenv"` before upgrading to keep them. If DevEnv security groups exist and the mode is unset, `terraform plan` fails instead of destroying them.
 
 Important outputs include:
 

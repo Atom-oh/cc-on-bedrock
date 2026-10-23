@@ -7,6 +7,8 @@ import EnvironmentTab from "@/components/user/environment-tab";
 import StorageTab from "@/components/user/storage-tab";
 import SettingsTab from "@/components/user/settings-tab";
 import WelcomeOnboarding from "@/components/user/welcome-onboarding";
+import LocalSetup from "@/components/user/local-setup";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import { PortalStatusError, readContainerStatus } from "@/lib/portal-status";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode (Claude Code on local PC via STS). Tab visible
@@ -60,7 +62,20 @@ const ALL_TABS: { id: UserPortalTab; label: string; shortLabel: string; icon: Re
 // Keeping ALL_TABS → TABS without filtering for now (local tab removed entirely).
 const TABS = ALL_TABS;
 
-export default function UserPortal({ user, runtimeConfig }: UserPortalProps) {
+// Governance mode has no EC2 DevEnv: the portal is the local installer and usage panel.
+export default function UserPortal(props: UserPortalProps) {
+  const deploymentMode = useDeploymentMode();
+  if (deploymentMode !== "devenv") {
+    return (
+      <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+        <LocalSetup />
+      </div>
+    );
+  }
+  return <DevenvPortal {...props} />;
+}
+
+function DevenvPortal({ user, runtimeConfig }: UserPortalProps) {
   const { t, locale } = useI18n();
   const [activeTab, setActiveTab] = useState<UserPortalTab>("environment");
   const [container, setContainer] = useState<ContainerInfo | null>(null);

@@ -7,8 +7,14 @@ import {
   terminateInstance,
   listInstances,
 } from "@/lib/ec2-clients";
+import { devenvDisabledResponse } from "@/lib/deployment-mode";
+
+// DEPLOYMENT_MODE is a runtime env; never prerender or cache this handler at build time.
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
@@ -47,6 +53,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
@@ -78,6 +86,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });

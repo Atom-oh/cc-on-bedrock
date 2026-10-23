@@ -56,7 +56,7 @@ output "dept_mcp_config_table_name" {
 
 output "otel_collector_endpoint" {
   description = "Internal OTLP/HTTP endpoint (NLB DNS:4318) for devenv telemetry push -- the rollup collector this module owns, distinct from the legacy ecs-devenv module's own awsemf collector of the same name pattern"
-  value       = "${aws_lb.otel.dns_name}:4318"
+  value       = var.devenv_enabled ? "${aws_lb.otel[0].dns_name}:4318" : ""
 }
 
 output "otel_metrics_raw_bucket" {
@@ -64,5 +64,5 @@ output "otel_metrics_raw_bucket" {
 }
 
 output "otel_nlb_security_group_id" {
-  value = aws_security_group.otel_nlb.id
+  value = one(aws_security_group.otel_nlb[*].id)
 }

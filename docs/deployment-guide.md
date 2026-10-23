@@ -179,7 +179,7 @@ terraform apply           # 확인 메시지에 'yes'
 | `local-governance` | STS issuer / token-limit enforcer / reset (ADR-006/008) |
 | `waf` | CLOUDFRONT-scope WebACL (us-east-1) |
 
-> **Local Governance Mode (ADR-006):** `governance_only = true`로 설정하면 `ecs-devenv`/`ec2-devenv` 모듈 없이 거버넌스 레이어만 배포됩니다 (`terraform/main.tf`; BASELINE §2에는 아직 GATED로 표기). 기본값 `false`에서는 전체 모듈이 함께 배포됩니다. 온보딩 절차는 `docs/runbooks/local-governance-onboarding.md` 를 참고하세요.
+> **Deployment profiles (ADR-006):** `deployment_mode = "governance"` (default) deploys the admin dashboard, usage/budget governance and the local installer, with no `ecs-devenv`/`ec2-devenv` modules, OTEL collector or EC2 schedules. Users install the CLI with `curl -fsSL https://<dashboard>/api/install | bash`, sign in with Cognito and receive 1h STS credentials; no Bedrock API key is issued. `deployment_mode = "devenv"` adds per-user EC2 DevEnvs. An existing tfvars with `governance_only = false` stays on devenv; set `deployment_mode = "devenv"` before removing that line. If neither variable is set and DevEnv security groups exist in the VPC, `terraform plan` fails instead of destroying them; set `deployment_mode` explicitly. Onboarding: `docs/runbooks/local-governance-onboarding.md`.
 
 출력 확인:
 ```bash

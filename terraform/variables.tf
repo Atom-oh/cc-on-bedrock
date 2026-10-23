@@ -130,10 +130,26 @@ variable "monthly_budget_usd" {
   }
 }
 
+# Deployment profile. "governance" (effective default when unset): admin dashboard (usage,
+# cost, budgets) plus the local installer; users run Claude Code / Codex on their own PC with
+# Cognito-issued STS credentials, no EC2. "devenv": also provisions per-user EC2 DevEnvs behind CloudFront.
+variable "deployment_mode" {
+  description = "Deployment profile: \"governance\" (dashboard + local installer, no EC2) or \"devenv\" (adds per-user EC2 DevEnvs). null (unset) means \"governance\"; an unset mode refuses to plan while DevEnv security groups exist (upgrade guard)"
+  type        = string
+  default     = null
+
+  validation {
+    condition     = contains(["governance", "devenv"], var.deployment_mode == null ? "governance" : var.deployment_mode)
+    error_message = "deployment_mode must be \"governance\" or \"devenv\" (or unset for governance)."
+  }
+}
+
+# Deprecated: use deployment_mode. When set, it overrides deployment_mode so existing
+# tfvars keep their profile (true = "governance", false = "devenv").
 variable "governance_only" {
-  description = "Deploy Local Governance mode without EC2/ECS DevEnv infrastructure"
+  description = "Deprecated alias of deployment_mode (true = governance, false = devenv); overrides it when set"
   type        = bool
-  default     = false
+  default     = null
 }
 
 # ---- Compute -----------------------------------------------------------------

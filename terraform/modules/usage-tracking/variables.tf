@@ -85,3 +85,9 @@ variable "private_subnet_ids" {
   type        = list(string)
   default     = []
 }
+
+variable "devenv_enabled" {
+  description = "deployment_mode = \"devenv\": create EC2 idle-stop schedules and the DevEnv OTEL collector"
+  type        = bool
+  default     = true
+}

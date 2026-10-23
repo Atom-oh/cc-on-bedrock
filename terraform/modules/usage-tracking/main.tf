@@ -644,16 +644,22 @@ resource "aws_lambda_permission" "budget_check_invoke" {
 # ec2-idle-stop Lambda + 3 schedules (idle / EOD shutdown / hibernate expiry)
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_iam_role" "ec2_idle_stop" {
+  count = var.devenv_enabled ? 1 : 0
+
   name               = "cc-on-bedrock-ec2-idle-stop-role"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "ec2_idle_stop_basic" {
-  role       = aws_iam_role.ec2_idle_stop.name
+  count = var.devenv_enabled ? 1 : 0
+
+  role       = aws_iam_role.ec2_idle_stop[0].name
   policy_arn = local.lambda_basic_managed_policy
 }
 
 data "aws_iam_policy_document" "ec2_idle_stop_policy" {
+  count = var.devenv_enabled ? 1 : 0
+
   statement {
     actions   = ["ec2:DescribeInstances"]
     resources = ["*"]
@@ -704,19 +710,25 @@ data "aws_iam_policy_document" "ec2_idle_stop_policy" {
 }
 
 resource "aws_iam_role_policy" "ec2_idle_stop_policy" {
-  role   = aws_iam_role.ec2_idle_stop.id
+  count = var.devenv_enabled ? 1 : 0
+
+  role   = aws_iam_role.ec2_idle_stop[0].id
   name   = "ec2-idle-stop-policy"
-  policy = data.aws_iam_policy_document.ec2_idle_stop_policy.json
+  policy = data.aws_iam_policy_document.ec2_idle_stop_policy[0].json
 }
 
 resource "aws_cloudwatch_log_group" "ec2_idle_stop" {
+  count = var.devenv_enabled ? 1 : 0
+
   name              = "/aws/lambda/${var.project_prefix}-ec2-idle-stop"
   retention_in_days = 30
 }
 
 resource "aws_lambda_function" "ec2_idle_stop" {
+  count = var.devenv_enabled ? 1 : 0
+
   function_name    = "${var.project_prefix}-ec2-idle-stop"
-  role             = aws_iam_role.ec2_idle_stop.arn
+  role             = aws_iam_role.ec2_idle_stop[0].arn
   runtime          = "python3.12"
   handler          = "ec2-idle-stop.handler"
   filename         = data.archive_file.lambda["ec2_idle_stop"].output_path
@@ -741,64 +753,82 @@ resource "aws_lambda_function" "ec2_idle_stop" {
 }
 
 resource "aws_cloudwatch_event_rule" "ec2_idle_check" {
+  count = var.devenv_enabled ? 1 : 0
+
   name                = "cc-ec2-idle-check"
   description         = "Check for idle EC2 devenv instances every 5 minutes"
   schedule_expression = "rate(5 minutes)"
 }
 
 resource "aws_cloudwatch_event_target" "ec2_idle_check" {
-  rule  = aws_cloudwatch_event_rule.ec2_idle_check.name
-  arn   = aws_lambda_function.ec2_idle_stop.arn
+  count = var.devenv_enabled ? 1 : 0
+
+  rule  = aws_cloudwatch_event_rule.ec2_idle_check[0].name
+  arn   = aws_lambda_function.ec2_idle_stop[0].arn
   input = jsonencode({ action = "check_idle" })
 }
 
 resource "aws_lambda_permission" "ec2_idle_check" {
+  count = var.devenv_enabled ? 1 : 0
+
   statement_id  = "AllowIdleCheck"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_idle_stop.function_name
+  function_name = aws_lambda_function.ec2_idle_stop[0].function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.ec2_idle_check.arn
+  source_arn    = aws_cloudwatch_event_rule.ec2_idle_check[0].arn
 }
 
 # EOD shutdown — 18:00 KST = 09:00 UTC
 resource "aws_cloudwatch_event_rule" "ec2_eod_shutdown" {
+  count = var.devenv_enabled ? 1 : 0
+
   name                = "cc-ec2-eod-shutdown"
   schedule_expression = "cron(0 9 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "ec2_eod_shutdown" {
-  rule  = aws_cloudwatch_event_rule.ec2_eod_shutdown.name
-  arn   = aws_lambda_function.ec2_idle_stop.arn
+  count = var.devenv_enabled ? 1 : 0
+
+  rule  = aws_cloudwatch_event_rule.ec2_eod_shutdown[0].name
+  arn   = aws_lambda_function.ec2_idle_stop[0].arn
   input = jsonencode({ action = "schedule_shutdown" })
 }
 
 resource "aws_lambda_permission" "ec2_eod_shutdown" {
+  count = var.devenv_enabled ? 1 : 0
+
   statement_id  = "AllowEodShutdown"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_idle_stop.function_name
+  function_name = aws_lambda_function.ec2_idle_stop[0].function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.ec2_eod_shutdown.arn
+  source_arn    = aws_cloudwatch_event_rule.ec2_eod_shutdown[0].arn
 }
 
 # ADR-010: Hibernate expiry rotation (03:00 UTC daily)
 resource "aws_cloudwatch_event_rule" "ec2_hibernate_expiry" {
+  count = var.devenv_enabled ? 1 : 0
+
   name                = "cc-ec2-hibernate-expiry"
   description         = "Rotate hibernated instances approaching AWS 60-day limit"
   schedule_expression = "cron(0 3 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "ec2_hibernate_expiry" {
-  rule  = aws_cloudwatch_event_rule.ec2_hibernate_expiry.name
-  arn   = aws_lambda_function.ec2_idle_stop.arn
+  count = var.devenv_enabled ? 1 : 0
+
+  rule  = aws_cloudwatch_event_rule.ec2_hibernate_expiry[0].name
+  arn   = aws_lambda_function.ec2_idle_stop[0].arn
   input = jsonencode({ action = "check_hibernate_expiry" })
 }
 
 resource "aws_lambda_permission" "ec2_hibernate_expiry" {
+  count = var.devenv_enabled ? 1 : 0
+
   statement_id  = "AllowHibernateExpiry"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_idle_stop.function_name
+  function_name = aws_lambda_function.ec2_idle_stop[0].function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.ec2_hibernate_expiry.arn
+  source_arn    = aws_cloudwatch_event_rule.ec2_hibernate_expiry[0].arn
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1285,10 +1315,14 @@ locals {
 }
 
 resource "aws_ecs_cluster" "otel" {
+  count = var.devenv_enabled ? 1 : 0
+
   name = "cc-on-bedrock-otel"
 }
 
 resource "aws_security_group" "otel_collector" {
+  count = var.devenv_enabled ? 1 : 0
+
   name = "cc-on-bedrock-otel-collector"
   # NOTE: SG description is immutable in AWS — changing it forces a replace that fails with
   # DependencyViolation while the collector tasks still use the old SG. Keep it as-is; the
@@ -1305,7 +1339,7 @@ resource "aws_security_group" "otel_collector" {
     from_port       = 4318
     to_port         = 4318
     protocol        = "tcp"
-    security_groups = [aws_security_group.otel_nlb.id]
+    security_groups = [aws_security_group.otel_nlb[0].id]
   }
   egress {
     from_port   = 0
@@ -1316,13 +1350,15 @@ resource "aws_security_group" "otel_collector" {
 }
 
 data "aws_subnet" "collector" {
-  for_each = toset(var.private_subnet_ids)
+  for_each = var.devenv_enabled ? toset(var.private_subnet_ids) : toset([])
   id       = each.value
 }
 
 # The NLB's own SG: ingress only from DevEnv SGs (added in the root module by SG
 # reference), so other workloads in a shared VPC cannot push telemetry.
 resource "aws_security_group" "otel_nlb" {
+  count = var.devenv_enabled ? 1 : 0
+
   name        = "cc-on-bedrock-otel-nlb"
   description = "OTEL collector NLB - DevEnv OTLP HTTP only"
   vpc_id      = var.vpc_id
@@ -1339,14 +1375,18 @@ resource "aws_security_group" "otel_nlb" {
 }
 
 resource "aws_lb" "otel" {
+  count = var.devenv_enabled ? 1 : 0
+
   name               = "cc-on-bedrock-otel"
   internal           = true
   load_balancer_type = "network"
   subnets            = var.private_subnet_ids
-  security_groups    = [aws_security_group.otel_nlb.id]
+  security_groups    = [aws_security_group.otel_nlb[0].id]
 }
 
 resource "aws_lb_target_group" "otel" {
+  count = var.devenv_enabled ? 1 : 0
+
   name        = "cc-on-bedrock-otel-4318"
   port        = 4318
   protocol    = "TCP"
@@ -1361,12 +1401,14 @@ resource "aws_lb_target_group" "otel" {
 }
 
 resource "aws_lb_listener" "otel" {
-  load_balancer_arn = aws_lb.otel.arn
+  count = var.devenv_enabled ? 1 : 0
+
+  load_balancer_arn = aws_lb.otel[0].arn
   port              = 4318
   protocol          = "TCP"
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.otel.arn
+    target_group_arn = aws_lb_target_group.otel[0].arn
   }
 }
 
@@ -1381,23 +1423,31 @@ data "aws_iam_policy_document" "ecs_task_assume" {
 }
 
 resource "aws_iam_role" "otel_task_exec" {
+  count = var.devenv_enabled ? 1 : 0
+
   name               = "cc-on-bedrock-otel-task-exec"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "otel_task_exec" {
-  role       = aws_iam_role.otel_task_exec.name
+  count = var.devenv_enabled ? 1 : 0
+
+  role       = aws_iam_role.otel_task_exec[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_iam_role" "otel_task" {
+  count = var.devenv_enabled ? 1 : 0
+
   name               = "cc-on-bedrock-otel-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
 }
 
 resource "aws_iam_role_policy" "otel_task_s3put" {
+  count = var.devenv_enabled ? 1 : 0
+
   name = "s3-put-raw"
-  role = aws_iam_role.otel_task.id
+  role = aws_iam_role.otel_task[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -1439,18 +1489,22 @@ resource "aws_iam_role_policy" "otel_task_s3put" {
 }
 
 resource "aws_cloudwatch_log_group" "otel_collector" {
+  count = var.devenv_enabled ? 1 : 0
+
   name              = "/ecs/cc-on-bedrock-otel-collector"
   retention_in_days = 30
 }
 
 resource "aws_ecs_task_definition" "otel_collector" {
+  count = var.devenv_enabled ? 1 : 0
+
   family                   = "cc-on-bedrock-otel-collector"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = "256"
   memory                   = "512"
-  execution_role_arn       = aws_iam_role.otel_task_exec.arn
-  task_role_arn            = aws_iam_role.otel_task.arn
+  execution_role_arn       = aws_iam_role.otel_task_exec[0].arn
+  task_role_arn            = aws_iam_role.otel_task[0].arn
 
   runtime_platform {
     cpu_architecture        = "ARM64"
@@ -1469,7 +1523,7 @@ resource "aws_ecs_task_definition" "otel_collector" {
     logConfiguration = {
       logDriver = "awslogs"
       options = {
-        "awslogs-group"         = aws_cloudwatch_log_group.otel_collector.name
+        "awslogs-group"         = aws_cloudwatch_log_group.otel_collector[0].name
         "awslogs-region"        = local.region
         "awslogs-stream-prefix" = "otel"
       }
@@ -1478,19 +1532,21 @@ resource "aws_ecs_task_definition" "otel_collector" {
 }
 
 resource "aws_ecs_service" "otel_collector" {
+  count = var.devenv_enabled ? 1 : 0
+
   name            = "cc-on-bedrock-otel-collector"
-  cluster         = aws_ecs_cluster.otel.id
-  task_definition = aws_ecs_task_definition.otel_collector.arn
+  cluster         = aws_ecs_cluster.otel[0].id
+  task_definition = aws_ecs_task_definition.otel_collector[0].arn
   desired_count   = 2
   launch_type     = "FARGATE"
 
   network_configuration {
     subnets         = var.private_subnet_ids
-    security_groups = [aws_security_group.otel_collector.id]
+    security_groups = [aws_security_group.otel_collector[0].id]
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.otel.arn
+    target_group_arn = aws_lb_target_group.otel[0].arn
     container_name   = "otel-collector"
     container_port   = 4318
   }
@@ -1499,19 +1555,23 @@ resource "aws_ecs_service" "otel_collector" {
 }
 
 resource "aws_appautoscaling_target" "otel_collector" {
+  count = var.devenv_enabled ? 1 : 0
+
   max_capacity       = 6
   min_capacity       = 2
-  resource_id        = "service/${aws_ecs_cluster.otel.name}/${aws_ecs_service.otel_collector.name}"
+  resource_id        = "service/${aws_ecs_cluster.otel[0].name}/${aws_ecs_service.otel_collector[0].name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
 }
 
 resource "aws_appautoscaling_policy" "otel_collector_cpu" {
+  count = var.devenv_enabled ? 1 : 0
+
   name               = "CollectorCpuScaling"
   policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.otel_collector.resource_id
-  scalable_dimension = aws_appautoscaling_target.otel_collector.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.otel_collector.service_namespace
+  resource_id        = aws_appautoscaling_target.otel_collector[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.otel_collector[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.otel_collector[0].service_namespace
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {
       predefined_metric_type = "ECSServiceAverageCPUUtilization"

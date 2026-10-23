@@ -13,8 +13,8 @@ Docker 이미지 빌드. devenv 이미지(Ubuntu/AL2023)는 AMI 베이킹에 쓰
 - `devenv/scripts/sync-mcp-config.sh` + `devenv/systemd/cc-mcp-sync.service` - 부팅 시 DynamoDB에서 MCP Gateway URL을 읽어 `mcp_servers.json` 생성 (MCP Gateway는 BASELINE 범위 밖 — history/brainstorm)
 - `devenv/config/extensions.txt`, `devenv/config/settings.json` - code-server 기본 확장/설정
 - `dashboard/Dockerfile` - Next.js standalone 대시보드 이미지 (빌드 컨텍스트 = repo root)
-- `nginx/` - DevEnv 라우터 이미지 (`nginx.conf.template`, `reload.sh`)
-- `otel-collector/` - OpenTelemetry Collector (contrib), 네이티브 Claude Code OTel 수집 (ADR-009). OTLP/HTTP :4318만 사용(L4 NLB 위 gRPC는 불안정). `config.yaml`의 metrics/logs 파이프라인 → `awss3`(S3 `otlp-metrics/`, `otlp-logs/`). logs 파이프라인은 DLP scrub을 한다: `tool_name` 속성이 있는 레코드(`tool_result`/`tool_decision`)만 남기고, `skill_name`/`subagent_type`을 끌어올린 뒤 `keep_keys` allowlist로 `tool_parameters`/`tool_input`/`prompt`/본문을 버린다(break-closed). `event.name` 기반 필터는 동작하지 않는다 — OTLP는 이벤트 이름을 attribute가 아닌 LogRecord `event_name` 필드에 둔다. 버킷/리전은 `${env:...}`.
+- `nginx/` - DevEnv 라우터 이미지 (`deployment_mode = "devenv"`에서만 배포) (`nginx.conf.template`, `reload.sh`)
+- `otel-collector/` - OpenTelemetry Collector (contrib), 네이티브 Claude Code OTel 수집 (ADR-009). `deployment_mode = "devenv"`에서만 배포된다. OTLP/HTTP :4318만 사용(L4 NLB 위 gRPC는 불안정). `config.yaml`의 metrics/logs 파이프라인 → `awss3`(S3 `otlp-metrics/`, `otlp-logs/`). logs 파이프라인은 DLP scrub을 한다: `tool_name` 속성이 있는 레코드(`tool_result`/`tool_decision`)만 남기고, `skill_name`/`subagent_type`을 끌어올린 뒤 `keep_keys` allowlist로 `tool_parameters`/`tool_input`/`prompt`/본문을 버린다(break-closed). `event.name` 기반 필터는 동작하지 않는다 — OTLP는 이벤트 이름을 attribute가 아닌 LogRecord `event_name` 필드에 둔다. 버킷/리전은 `${env:...}`.
 - `build.sh` - 빌드/푸시 스크립트: `bash docker/build.sh [build|push|all] [devenv-ubuntu|devenv-al2023|dashboard|otel-collector]`. dashboard 타깃은 immutable `IMAGE_TAG`가 필요하다.
 
 ## Notes

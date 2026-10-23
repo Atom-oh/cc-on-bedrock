@@ -20,6 +20,7 @@ import {
 import type { ContainerInfo, ApiResponse } from "@/lib/types";
 import StatCard from "@/components/cards/stat-card";
 import { cn } from "@/lib/utils";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 
 interface HomeDashboardProps {
   isAdmin: boolean;
@@ -96,24 +97,28 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
     health: null,
   });
 
+  const devenv = useDeploymentMode() === "devenv";
+
   const fetchData = useCallback(async () => {
     try {
       setRefreshing(true);
       const today = new Date().toISOString().split("T")[0];
+      // Governance mode has no instances; keep the response order without calling DevEnv APIs (containers, container metrics).
+      const noInstances = () => Promise.resolve(Response.json({ success: true, data: [] }));
       const fetches: Promise<Response>[] = [
         fetch("/api/health"),
       ];
       if (isAdmin) {
         fetches.push(
-          fetch("/api/containers"),
-          fetch("/api/container-metrics?action=current"),
+          devenv ? fetch("/api/containers") : noInstances(),
+          devenv ? fetch("/api/container-metrics?action=current") : Promise.resolve(Response.json({ success: false, data: null })),
           fetch("/api/usage?action=total_spend"),
           fetch(`/api/usage?action=total_spend&start_date=${today}&end_date=${today}`),
         );
       } else {
         fetches.push(
           fetch(`/api/user/usage?date=${today}`),
-          fetch("/api/user/container"),
+          devenv ? fetch("/api/user/container") : noInstances(),
         );
       }
 
@@ -168,7 +173,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [isAdmin]);
+  }, [isAdmin, devenv]);
 
   useEffect(() => {
     fetchData();
@@ -232,21 +237,21 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           value={formatNum(isAdmin ? data.todayTokens : data.totalTokens)}
           description={isAdmin ? "Today's Model Interaction" : "Your Today's Tokens"}
         />
-        {isAdmin && (
+        {isAdmin && devenv && (
           <StatCard
             title={t("home.activeContainers")}
             value={data.activeContainers.toString()}
             description="Running EC2 Instances"
           />
         )}
-        {isAdmin && data.cwMetrics && (
+        {isAdmin && devenv && data.cwMetrics && (
           <StatCard
             title="Cluster CPU"
             value={`${data.cwMetrics.avgCpu?.toFixed(1) ?? "0"}%`}
             description={`${data.activeContainers} instances`}
           />
         )}
-        {!isAdmin && (
+        {!isAdmin && devenv && (
           <StatCard
             title={t("home.activeContainers")}
             value={data.activeContainers > 0 ? "Running" : "Stopped"}

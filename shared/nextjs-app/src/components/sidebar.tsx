@@ -6,6 +6,7 @@ import { useSession, signOut } from "next-auth/react";
 import { useI18n } from "@/lib/i18n";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import {
   Home,
   Terminal,
@@ -33,6 +34,7 @@ interface NavItem {
   deptManagerOnly?: boolean;
   showForAll?: boolean;
   localModeOnly?: boolean;
+  devenvOnly?: boolean;
 }
 
 // ADR-006 (legacy ADR-014): Local Governance Mode menu items only render when the env flag is set.
@@ -49,7 +51,7 @@ const navItems: NavItem[] = [
   { href: "/monitoring", labelKey: "nav.monitoring", icon: Activity, adminOnly: true },
   { href: "/security", labelKey: "nav.security", icon: ShieldCheck, adminOnly: true },
   { href: "/admin", labelKey: "nav.users", icon: Users2, adminOnly: true },
-  { href: "/admin/instances", labelKey: "nav.containers", icon: Server, adminOnly: true },
+  { href: "/admin/instances", labelKey: "nav.containers", icon: Server, adminOnly: true, devenvOnly: true },
   { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
   { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
   { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
@@ -61,6 +63,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const { locale, setLocale, t } = useI18n();
+  const deploymentMode = useDeploymentMode();
   const isAdmin = session?.user?.isAdmin ?? false;
   const groups = session?.user?.groups ?? [];
   const isDeptManager = groups.includes("dept-manager") || isAdmin;
@@ -69,6 +72,7 @@ export default function Sidebar() {
     if (item.adminOnly && !isAdmin) return false;
     if (item.deptManagerOnly && !isDeptManager) return false;
     if (item.localModeOnly && !LOCAL_MODE_ENABLED) return false;
+    if (item.devenvOnly && deploymentMode !== "devenv") return false;
     return true;
   });
 
