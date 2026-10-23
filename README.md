@@ -17,13 +17,15 @@ Governed multi-user development platform for Claude Code on Amazon Bedrock. The 
 ## Key Paths
 
 ```text
-terraform/          Terraform root and modules
+terraform/          Terraform root and 8 modules
 lambda/             Lambda handlers packaged by Terraform
 shared/nextjs-app/  Dashboard application
-tools/              Local CLI and OTEL helper scripts
-docker/nginx/       Shared nginx router image
-tests/              Unit and integration tests
-docs/               ADRs, runbooks, specs, plans
+tools/              Local CLI (cc-bedrock-local.sh) and OTEL helper scripts
+docker/             DevEnv (AMI bake), dashboard, nginx and OTEL collector images
+scripts/            Prerequisite checks, ECR/AMI/image builds, verification, PR-review tooling
+agent/              AgentCore Runtime AI assistant
+tests/              Fast gate, unit, integration and container tests
+docs/               Architecture, ADRs, runbooks, deployment guide
 ```
 
 ## Local Mode
