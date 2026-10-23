@@ -24,9 +24,20 @@ Terraform HCL is the canonical IaC for this repository.
 
 ## Status
 
-All 8 modules are wired into the root `main.tf` (ADR-001). `governance_only = true` sets
-`count = 0` on `ecs_devenv` and `ec2_devenv`, deploying the governance layer without DevEnv
-infrastructure (Local Governance Mode, ADR-006).
+All 8 modules are wired into the root `main.tf` (ADR-001). `deployment_mode` picks the profile
+(ADR-006 amendment 2026-10-23):
+- `"governance"` (default) sets `count = 0` on `ecs_devenv` and `ec2_devenv`, and passes
+  `devenv_enabled = false` to `security` (no DevEnv wildcard cert, no dashboard EC2/ECS DevEnv
+  policies) and `usage-tracking` (no EC2 idle/EOD/hibernate schedules, no OTEL collector
+  Fargate service or NLB; the raw bucket and rollup Lambda stay).
+- `"devenv"` deploys everything. The gated resources carry `moved` blocks
+  (`modules/{security,usage-tracking}/moved.tf`), so an existing devenv state plans no
+  replacements.
+- The deprecated `governance_only` bool overrides `deployment_mode` when set. A tfvars file
+  with `governance_only = false` stays on devenv; deleting that line switches to governance and
+  destroys every DevEnv resource, so set `deployment_mode = "devenv"` first.
+- The dashboard receives `DEPLOYMENT_MODE` and hides DevEnv pages; DevEnv lifecycle APIs return
+  404 in governance mode.
 
 The task permission boundary `cc-on-bedrock-task-boundary` is authored in `modules/security`
 (`aws_iam_policy.task_permission_boundary`, statements `AllowInAccount` + `DenyEscalation`;

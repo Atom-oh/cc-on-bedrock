@@ -5,6 +5,7 @@ import { startInstance, listInstances } from "@/lib/ec2-clients";
 import { getLiveSecurityPolicy } from "@/lib/aws-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { devenvDisabledResponse } from "@/lib/deployment-mode";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -36,6 +37,8 @@ async function getDeptAllowedTiers(department: string): Promise<ResourceTier[]> 
 }
 
 export async function POST(req: NextRequest) {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return new Response(JSON.stringify({ error: "Authentication required" }), {

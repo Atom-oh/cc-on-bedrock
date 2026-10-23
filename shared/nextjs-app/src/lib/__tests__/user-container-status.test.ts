@@ -15,6 +15,7 @@ import { GET } from "@/app/api/user/container/route";
 
 describe("self-service environment lifecycle status", () => {
   beforeEach(() => {
+    vi.stubEnv("DEPLOYMENT_MODE", "devenv");
     mocks.session.mockResolvedValue({ user: { email: "user@example.test", subdomain: "user" } });
     mocks.instances.mockResolvedValue([]);
   });
@@ -47,6 +48,27 @@ describe("self-service environment lifecycle status", () => {
     mocks.session.mockResolvedValue(null);
     const res = await GET(new NextRequest("https://example.test/api/user/container"));
     expect(res.status).toBe(401);
+    expect(mocks.instances).not.toHaveBeenCalled();
+  });
+});
+
+describe("governance deployment mode", () => {
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+    mocks.session.mockResolvedValue({ user: { email: "user@example.test", subdomain: "user" } });
+    mocks.instances.mockClear();
+  });
+
+  it("returns 404 without reading infrastructure when DEPLOYMENT_MODE is unset", async () => {
+    const res = await GET(new NextRequest("https://example.test/api/user/container"));
+    expect(res.status).toBe(404);
+    expect(mocks.instances).not.toHaveBeenCalled();
+  });
+
+  it("treats an unknown DEPLOYMENT_MODE as governance", async () => {
+    vi.stubEnv("DEPLOYMENT_MODE", "ec2");
+    const res = await GET(new NextRequest("https://example.test/api/user/container"));
+    expect(res.status).toBe(404);
     expect(mocks.instances).not.toHaveBeenCalled();
   });
 });

@@ -22,7 +22,7 @@
 
 ### 핵심 설계 (Core Design)
 1. **Terraform 단일 IaC** — CDK/CloudFormation 폐기 (→ ADR-001).
-2. **2개 접근 경로** — EC2 Mode(CloudFront→NLB→nginx ECS→EC2) + Local Mode(STS issuer) (→ ADR-003·006).
+2. **2개 접근 경로** — EC2 Mode(CloudFront→NLB→nginx ECS→EC2) + Local Mode(STS issuer) (→ ADR-003·006). Deployment profile `deployment_mode`: `governance` (default, Local Mode only) or `devenv` (adds EC2 Mode).
 3. **사용량/예산은 Inference Profile + Invocation Log 기반** — DynamoDB 집계, EventBridge→IAM deny 집행 (→ ADR-005·008).
 4. **per-user 격리** — EC2/Local 동일 inference-profile 귀속, role은 분리(공유 정책·boundary·태그) (→ ADR-006·007).
 
@@ -48,7 +48,7 @@
 
 | 상태 | 항목 | 조건 / 비고 | 근거 |
 |---|---|---|---|
-| **GATED** | Local Governance Mode | `governanceOnly` 동등 변수로 EC2 없이 거버넌스 레이어만 배포 가능 | ADR-006 |
+| **LIVE (default)** | Governance deployment profile | `deployment_mode = "governance"` (default): dashboard + local installer (Cognito → 1h STS, no Bedrock key), no EC2/ECS DevEnv, OTEL collector or EC2 schedules. `deployment_mode = "devenv"` adds EC2 DevEnvs; deprecated `governance_only` overrides when set | ADR-006 (amendment 2026-10-23) |
 | **LIVE(flag)** | EC2 Hibernation | `HIBERNATE_ENABLED=true`. 유휴 stop/hibernate + 만료 회전, 암호화 root | ADR-002 |
 | **GATED** | 셀프서비스 IAM 권한 확장 | UI 신청 → **admin 승인** 필수 + permission boundary 내 | ADR-007 |
 | **LIVE** | Codex on Bedrock | Codex CLI preinstalled on EC2 DevEnv + Local `cc-bedrock-local codex` / `ccx`; bedrock-runtime Responses API sharing usage, budget and audit. Codex OTEL productivity rollup is a follow-up | ADR-014 |
@@ -76,7 +76,7 @@
 | 003 | 접근 토폴로지·라우팅 | 2 CloudFront(devenv NLB+nginx / dashboard ALB), code-server ?folder= 8080 + custom 포트 | 002·009·016·027 · ~~013~~ |
 | 004 | 인증 | Cognito public client + NextAuth, JIT 트리거 fallback, 삭제 cleanup | 024·028 · ~~012~~ |
 | 005 | 사용량 집계 | Inference Profile + Invocation Log → DynamoDB, email canonical key, 모델 정규화 | 011·019·031 · ~~025~~ |
-| 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신 | 014·029 |
+| 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신; amendment 2026-10-23: `deployment_mode` profiles, `governance` default | 014·029 |
 | 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude | 005·020·021·030·034 · ~~026~~ |
 | 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18) | 006·015·023 |
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |

@@ -10,6 +10,7 @@ import {
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { deriveDevenvHealth } from "@/lib/devenv-health";
+import { devenvDisabledResponse } from "@/lib/deployment-mode";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -41,6 +42,8 @@ async function getDeptAllowedTiers(department: string): Promise<ResourceTier[]> 
 }
 
 export async function GET(req: NextRequest) {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -100,6 +103,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });

@@ -16,6 +16,7 @@ import {
   type IamStatement,
 } from "@/lib/iam-request-validation";
 import { annotateIamRequest } from "@/lib/iam-resource-annotator";
+import { devenvDisabledResponse } from "@/lib/deployment-mode";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
@@ -26,6 +27,8 @@ const VALID_REQUEST_TYPES = ["tier_change", "dlp_change", "iam_extension"] as co
 type RequestType = (typeof VALID_REQUEST_TYPES)[number];
 
 export async function GET() {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -56,6 +59,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const disabled = devenvDisabledResponse();
+  if (disabled) return disabled;
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });

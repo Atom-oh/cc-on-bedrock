@@ -52,6 +52,7 @@ def test_readme_documented_terraform_contracts_exist():
     dashboard_tf = (REPO / "terraform/modules/dashboard/main.tf").read_text()
     root_tf = (REPO / "terraform/main.tf").read_text()
 
+    assert 'variable "deployment_mode"' in variables_tf
     assert 'variable "governance_only"' in variables_tf
     for output_name in [
         "cognito_cli_public_client_id",

@@ -11,12 +11,12 @@ consolidates: [ADR-014, ADR-029]
 > 옛 본문은 git tag `adr-legacy-2026-06-23` 및 `../history/ADR-MAPPING.md`로 보존.
 
 ## Status / 상태
-Accepted (2026-06-23). Consolidates ADR-014, ADR-029.
+Accepted (2026-06-23). Consolidates ADR-014, ADR-029. Amended 2026-10-23 (deployment profiles).
 
 ## Context / 배경
 
 CC-on-Bedrock은 두 접근 경로를 갖는다 — per-user **EC2 DevEnv**(ADR-002 / SSOT §6)와
-**Local Mode**(`governanceOnly`, BASELINE §2 GATED). 두 경로 모두 회사 자격으로 Bedrock을
+**Local Mode**(`deployment_mode = "governance"`, the default profile since the 2026-10-23 amendment). 두 경로 모두 회사 자격으로 Bedrock을
 호출하되 사용량·예산·IAM 권한이 중앙에서 거버넌스되어야 한다. 핵심 질문: **두 경로의 자격증명을
 어떻게 통일해 한 축으로 귀속·통제하는가.**
 
@@ -96,6 +96,37 @@ Cognito refresh 30d ──(만료 시)──▶ 'cc-bedrock-local login' 1회
 **Out of scope**
 - 실시간(<1초) 쿼터·고급 DLP — LLM Gateway Phase 2 별도 ADR.
 - 프롬프트 텍스트 감사 저장 — `textDataDeliveryEnabled=false`로 의도적 미포함.
+
+## Amendment 2026-10-23: deployment profiles, governance by default
+
+**Context.** EC2 DevEnv is the most complex and most expensive part of the stack (per-user
+EC2, nginx ECS, devenv CloudFront and NLB, OTEL collector, idle/hibernate schedules). Most
+adopters first need central cost visibility and governed Bedrock access from their own PCs.
+`governance_only` existed but defaulted to `false`, and BASELINE §2 listed the profile as GATED.
+
+**Decision.** The owner decided to split deployment into two profiles with a Terraform
+variable `deployment_mode`:
+- **`governance` (default).** Deploys the admin dashboard (usage, cost, budgets, approvals,
+  audit), the usage/budget pipeline, the Local Mode STS issuer and the installer
+  (`/api/install`). The installed CLI signs in with the Cognito public client and receives 1h
+  STS credentials for the user's per-user role and inference profile (§2–§3). No Bedrock API
+  key is distributed. Terraform creates no EC2/ECS DevEnv, devenv CloudFront or NLB, DevEnv
+  wildcard certificate, dashboard EC2/ECS DevEnv policies, OTEL collector service or NLB, or
+  EC2 idle/EOD/hibernate schedules.
+- **`devenv`.** Adds all of the above. Local Mode keeps working alongside.
+- The deprecated `governance_only` bool overrides `deployment_mode` when set, so existing
+  tfvars keep their profile.
+- The dashboard reads `DEPLOYMENT_MODE` at runtime. In governance mode it hides DevEnv pages,
+  shows the local setup as the user portal, and DevEnv lifecycle APIs return 404.
+
+**Consequences.**
+- A fresh deploy is cheaper and has a smaller attack surface; turning DevEnv on later is a
+  variable change plus apply.
+- Switching an existing devenv stack to governance destroys every DevEnv resource, including
+  running instances. Persistent data volumes are kept (ADR-002), but users lose their
+  environments until devenv is re-enabled.
+- Local Mode has no OTEL productivity rollup (the collector is internal to the VPC); Bedrock
+  token and cost metering is unaffected because it comes from invocation logs (ADR-005).
 
 ## Cross-references / 교차 참조
 - **005 사용량 집계** — 동일 Application Inference Profile + Invocation Log → DynamoDB(email canonical key).

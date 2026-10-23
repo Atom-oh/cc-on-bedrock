@@ -53,9 +53,11 @@ terraform -chdir=terraform validate
 terraform -chdir=terraform plan
 ```
 
-> **Local Governance-only mode is GATED — not yet wired.** The `governance_only`
-> Terraform variable is a planned follow-up (see `terraform/CLAUDE.md` and `BASELINE.md` §2);
-> until it lands, all modules deploy together. Do not pass `governance_only` yet.
+> **Deployment profiles.** `deployment_mode = "governance"` (default) deploys the admin
+> dashboard and the local installer only: users run Claude Code / Codex on their own PC with
+> Cognito-issued STS credentials, and no EC2 DevEnv is created. Set
+> `deployment_mode = "devenv"` to add per-user EC2 DevEnvs. The deprecated `governance_only`
+> bool still works and overrides `deployment_mode` when set.
 
 Important outputs include:
 

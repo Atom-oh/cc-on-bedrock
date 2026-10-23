@@ -38,6 +38,7 @@ graph LR
   BR -. invocation logs .-> AGG[Inference Profile + Invocation Log → DynamoDB]
 ```
 
+> **Deployment profiles:** `deployment_mode = "governance"` (default) deploys only the Dashboard and Local Mode paths. The EC2 Mode path, the OTEL collector and the EC2 idle/hibernate schedules exist only with `deployment_mode = "devenv"`.
 > 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx) and dashboard(→ALB→EC2 ASG), 분리.
 > 두 LB 모두 **internal**(private subnet)이며 CloudFront **VPC origin**으로만 도달한다. LB SG ingress는 `CloudFront-VPCOrigins-Service-SG`만 허용하고, nginx는 NLB SG만 허용한다. 공인 IP·internet-facing LB 없음.
 > **Network (BYO VPC):** 스택은 VPC·서브넷·NAT·IGW·게이트웨이 엔드포인트를 만들지 않는다. `vpc_id`와 subnet ID 목록을 tfvars로 받고(ADR-015), VPC에 없는 interface endpoint만 `interface_endpoint_services`로 추가한다. Route 53 공용 zone(`domain_name`)은 다른 프로젝트와 공유하므로 data source로 조회하고 레코드만 추가한다.
@@ -56,8 +57,9 @@ graph LR
    default but uses IAM Identity Center licensing — **not** part of Cognito/Bedrock usage governance.
 2. **Two access paths.** EC2 Mode (CloudFront→NLB→nginx ECS→EC2) + Local Mode (`cc-bedrock-local`
    → Cognito public client → Dashboard `/api/local/credentials` → STS issuer; STS returns 1h creds,
-   the CLI calls Bedrock). The Local credential path works in a full deploy; the **GATED** label in
-   BASELINE §2 refers to the `governanceOnly` *deploy profile* (skips EC2), not the path itself.
+   the CLI calls Bedrock). Terraform `deployment_mode` selects the profile: `governance` (default)
+   deploys the dashboard, governance layer and local installer without EC2 Mode; `devenv` adds
+   EC2 Mode (ADR-006 amendment 2026-10-23).
 3. **Code-activity OTEL (native).** EC2 DevEnv enables native Claude Code OpenTelemetry
    (`claude_code.*` metrics + `tool_result`/`tool_decision` events). The collector exports
    both signals to S3 (logs DLP-scrubbed to skill/agent/tool counts, no content); a rollup

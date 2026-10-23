@@ -10,8 +10,10 @@ Multi-user Claude Code (and OpenAI Codex CLI) development platform on Amazon Bed
 
 ## Deployment profiles
 
-- **EC2 DevEnv mode** (default, ADR-002): each user gets a per-user ARM64 EC2 instance running code-server, Claude Code, Kiro and Codex.
-- **Local Governance Mode** (ADR-006): users call Bedrock from their own PC with 1h STS credentials renewed through `credential_process`. Setting `governance_only = true` skips the `ecs_devenv` and `ec2_devenv` modules (`terraform/main.tf`); BASELINE §2 still lists the mode as GATED. Both modes can coexist.
+Terraform `deployment_mode` selects one of two profiles (ADR-006 amendment 2026-10-23):
+- **`governance`** (default): admin dashboard (usage, cost, budgets, approvals) plus the local installer (`curl <dashboard>/api/install | bash`). Users run Claude Code / Codex on their own PC; the CLI signs in with Cognito and gets 1h STS credentials for their per-user role and inference profile, renewed through `credential_process`. No Bedrock API key, no EC2.
+- **`devenv`**: everything in `governance` plus per-user ARM64 EC2 DevEnvs (code-server, Claude Code, Kiro, Codex) behind CloudFront (ADR-002/003), the OTEL collector and the EC2 idle/hibernate schedules. Local mode keeps working alongside.
+The deprecated `governance_only` bool overrides `deployment_mode` when set (`true` = governance, `false` = devenv), so older tfvars keep their profile.
 
 ## Stack
 

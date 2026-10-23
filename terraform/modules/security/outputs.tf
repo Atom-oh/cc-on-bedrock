@@ -15,7 +15,7 @@ output "cli_public_client_id" {
 }
 
 output "devenv_certificate_arn" {
-  value = aws_acm_certificate.devenv.arn
+  value = one(aws_acm_certificate.devenv[*].arn)
 }
 
 output "dashboard_certificate_arn" {

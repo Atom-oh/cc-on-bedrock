@@ -32,32 +32,32 @@ output "cognito_cli_public_client_id" {
 # ECS DevEnv
 output "ecs_cluster_name" {
   description = "ECS cluster name"
-  value       = var.governance_only ? null : module.ecs_devenv[0].cluster_name
+  value       = !local.devenv_enabled ? null : module.ecs_devenv[0].cluster_name
 }
 
 output "devenv_cloudfront_domain" {
   description = "Dev environment CloudFront domain"
-  value       = var.governance_only ? null : module.ecs_devenv[0].cloudfront_domain
+  value       = !local.devenv_enabled ? null : module.ecs_devenv[0].cloudfront_domain
 }
 
 output "devenv_nlb_dns" {
   description = "DevEnv NLB DNS name for the shared Nginx router"
-  value       = var.governance_only ? null : module.ecs_devenv[0].nlb_dns
+  value       = !local.devenv_enabled ? null : module.ecs_devenv[0].nlb_dns
 }
 
 output "nginx_ecr_url" {
   description = "Nginx router ECR repository URL"
-  value       = var.governance_only ? null : module.ecs_devenv[0].nginx_ecr_repository_url
+  value       = !local.devenv_enabled ? null : module.ecs_devenv[0].nginx_ecr_repository_url
 }
 
 output "routing_table_name" {
   description = "Nginx routing table"
-  value       = var.governance_only ? null : module.ecs_devenv[0].routing_table_name
+  value       = !local.devenv_enabled ? null : module.ecs_devenv[0].routing_table_name
 }
 
 output "otel_collector_endpoint" {
   description = "Internal OTLP HTTP endpoint for EC2 code activity metrics -- the legacy ecs-devenv module's own awsemf collector (container-devenv path, docker/devenv/scripts/entrypoint.sh). NOT the rollup collector devenv instances actually push Claude Code telemetry to -- see otel_rollup_collector_endpoint for that one. Two differently-purposed collectors sharing a near-identical name is confusing; kept as-is to avoid a breaking rename of an existing output."
-  value       = var.governance_only ? null : module.ecs_devenv[0].otel_collector_endpoint
+  value       = !local.devenv_enabled ? null : module.ecs_devenv[0].otel_collector_endpoint
 }
 
 output "otel_rollup_collector_endpoint" {
@@ -84,22 +84,22 @@ output "dashboard_ecr_url" {
 # EC2 DevEnv (ADR-004) — DLP security groups, consumed as SG_DEVENV_* env vars
 output "devenv_sg_open_id" {
   description = "DLP open-tier security group"
-  value       = var.governance_only ? null : module.ec2_devenv[0].sg_open_id
+  value       = !local.devenv_enabled ? null : module.ec2_devenv[0].sg_open_id
 }
 
 output "devenv_sg_restricted_id" {
   description = "DLP restricted-tier security group"
-  value       = var.governance_only ? null : module.ec2_devenv[0].sg_restricted_id
+  value       = !local.devenv_enabled ? null : module.ec2_devenv[0].sg_restricted_id
 }
 
 output "devenv_sg_locked_id" {
   description = "DLP locked-tier security group"
-  value       = var.governance_only ? null : module.ec2_devenv[0].sg_locked_id
+  value       = !local.devenv_enabled ? null : module.ec2_devenv[0].sg_locked_id
 }
 
 output "devenv_launch_template_id" {
   description = "Per-user DevEnv launch template"
-  value       = var.governance_only ? null : module.ec2_devenv[0].launch_template_id
+  value       = !local.devenv_enabled ? null : module.ec2_devenv[0].launch_template_id
 }
 
 output "usage_table_name" {
@@ -125,4 +125,9 @@ output "cloudfront_waf_acl_arn" {
 output "dns_firewall_rule_group_id" {
   description = "Route 53 Resolver DNS Firewall rule group for managed threat and DLP domain rules"
   value       = module.network.dns_firewall_rule_group_id
+}
+
+output "deployment_mode" {
+  description = "Active deployment profile (\"governance\" or \"devenv\")"
+  value       = local.deployment_mode
 }

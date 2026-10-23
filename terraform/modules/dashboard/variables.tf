@@ -136,3 +136,9 @@ variable "codex_model_id" {
   type        = string
   default     = "global.openai.gpt-6.1-sol"
 }
+
+variable "deployment_mode" {
+  description = "Deployment profile (\"governance\" or \"devenv\"); the dashboard hides DevEnv features in governance mode"
+  type        = string
+  default     = "governance"
+}

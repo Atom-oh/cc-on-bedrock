@@ -6,7 +6,7 @@ import type { UserSession, ContainerInfo } from "@/lib/types";
 import { TIER_CONFIG } from "@/lib/types";
 import ContainerMetrics from "@/components/container-metrics";
 import ProvisioningProgress from "./provisioning-progress";
-import LocalModeTab from "./local-mode-tab";
+import LocalSetup from "./local-setup";
 import { emailToSubdomain } from "@/lib/utils";
 
 const LOCAL_MODE_ENABLED =
@@ -268,17 +268,7 @@ export default function EnvironmentTab({
             <span className="text-xs text-gray-500 group-open:rotate-180 transition">▾</span>
           </summary>
           <div className="px-5 pb-5 pt-2 border-t border-gray-800">
-            <div className="mb-4 rounded border border-blue-500/30 bg-blue-500/5 p-3 text-xs text-blue-300">
-              <div className="font-semibold mb-1">한 줄 설치 (no browser flow):</div>
-              <pre className="bg-black/40 rounded p-2 overflow-auto text-xs text-gray-200">
-{`curl -fsSL ${DASHBOARD_ORIGIN}/api/install | bash`}
-              </pre>
-              <div className="mt-2 text-blue-300/80">
-                설치 후 새 셸에서 <code className="text-gray-200">cc</code> 명령으로 Claude Code(Bedrock) 실행.
-                자격증명은 1시간 후 자동 만료되며 재실행 시 cache된 refresh token으로 무인터랙션 갱신됩니다.
-              </div>
-            </div>
-            <LocalModeTab />
+            <LocalSetup />
           </div>
         </details>
       )}

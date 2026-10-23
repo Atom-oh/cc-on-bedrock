@@ -4,7 +4,8 @@
 
 locals {
   lambda_src_dir  = abspath("${path.module}/../lambda")
-  devenv_enabled  = !var.governance_only
+  deployment_mode = var.governance_only == null ? var.deployment_mode : (var.governance_only ? "governance" : "devenv")
+  devenv_enabled  = local.deployment_mode == "devenv"
   default_dev_env = ""
 }
 
@@ -40,6 +41,7 @@ module "security" {
   hosted_zone_id      = module.network.hosted_zone_id
   dashboard_subdomain = var.dashboard_subdomain
   lambda_src_dir      = local.lambda_src_dir
+  devenv_enabled      = local.devenv_enabled
 
   providers = {
     aws           = aws
@@ -58,6 +60,7 @@ module "usage_tracking" {
   department_budgets_table_name = module.security.department_budgets_table_name
   task_permission_boundary_name = module.security.task_permission_boundary_name
   lambda_src_dir                = local.lambda_src_dir
+  devenv_enabled                = local.devenv_enabled
   ecs_cluster_name              = var.ecs_cluster_name
   daily_budget_usd              = var.daily_budget_usd
   weekly_budget_usd             = var.weekly_budget_usd
@@ -132,6 +135,7 @@ module "dashboard" {
   otel_collector_endpoint             = module.usage_tracking.otel_collector_endpoint
   dns_firewall_rule_group_id          = module.network.dns_firewall_rule_group_id
   codex_model_id                      = var.codex_model_id
+  deployment_mode                     = local.deployment_mode
 }
 
 # ---- 06 WAF ------------------------------------------------------------------

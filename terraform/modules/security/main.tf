@@ -250,6 +250,8 @@ resource "aws_dynamodb_table" "department_budgets" {
 
 # ---- ACM Certificates --------------------------------------------------------
 resource "aws_acm_certificate" "devenv" {
+  count = var.devenv_enabled ? 1 : 0
+
   provider          = aws.us_east_1 # CloudFront requires us-east-1 certificates
   domain_name       = local.dev_domain
   validation_method = "DNS"
@@ -263,7 +265,7 @@ resource "aws_acm_certificate" "devenv" {
 
 resource "aws_route53_record" "devenv_cert_validation" {
   for_each = {
-    for dvo in aws_acm_certificate.devenv.domain_validation_options : dvo.domain_name => {
+    for dvo in flatten(aws_acm_certificate.devenv[*].domain_validation_options) : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
@@ -280,8 +282,10 @@ resource "aws_route53_record" "devenv_cert_validation" {
 }
 
 resource "aws_acm_certificate_validation" "devenv" {
+  count = var.devenv_enabled ? 1 : 0
+
   provider                = aws.us_east_1
-  certificate_arn         = aws_acm_certificate.devenv.arn
+  certificate_arn         = aws_acm_certificate.devenv[0].arn
   validation_record_fqdns = [for r in aws_route53_record.devenv_cert_validation : r.fqdn]
 }
 
@@ -708,6 +712,8 @@ resource "aws_iam_role_policy" "dashboard_data_infra" {
 }
 
 data "aws_iam_policy_document" "dashboard_ecs" {
+  count = var.devenv_enabled ? 1 : 0
+
   statement {
     actions   = ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks", "ecs:ListTasks"]
     resources = ["*"]
@@ -722,9 +728,11 @@ data "aws_iam_policy_document" "dashboard_ecs" {
 }
 
 resource "aws_iam_role_policy" "dashboard_ecs" {
+  count = var.devenv_enabled ? 1 : 0
+
   name   = "ecs-manage"
   role   = aws_iam_role.dashboard_ec2.id
-  policy = data.aws_iam_policy_document.dashboard_ecs.json
+  policy = data.aws_iam_policy_document.dashboard_ecs[0].json
 }
 
 # ECR pull so the dashboard EC2 can run the managed Next.js app image.
@@ -748,6 +756,8 @@ resource "aws_iam_role_policy" "dashboard_ecr" {
 }
 
 data "aws_iam_policy_document" "dashboard_ec2_devenv" {
+  count = var.devenv_enabled ? 1 : 0
+
   statement {
     sid = "Ec2DevenvInstances"
     actions = [
@@ -813,9 +823,11 @@ data "aws_iam_policy_document" "dashboard_ec2_devenv" {
 }
 
 resource "aws_iam_role_policy" "dashboard_ec2_devenv" {
+  count = var.devenv_enabled ? 1 : 0
+
   name   = "dashboard-ec2-devenv"
   role   = aws_iam_role.dashboard_ec2.id
-  policy = data.aws_iam_policy_document.dashboard_ec2_devenv.json
+  policy = data.aws_iam_policy_document.dashboard_ec2_devenv[0].json
 }
 
 resource "aws_iam_instance_profile" "dashboard_ec2" {
