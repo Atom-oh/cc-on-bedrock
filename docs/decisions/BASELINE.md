@@ -49,8 +49,8 @@
 | 상태 | 항목 | 조건 / 비고 | 근거 |
 |---|---|---|---|
 | **LIVE (default)** | Governance deployment profile | `deployment_mode = "governance"` (default): dashboard + local installer (Cognito → 1h STS, no Bedrock key), no EC2/ECS DevEnv, OTEL collector or EC2 schedules. `deployment_mode = "devenv"` adds EC2 DevEnvs; deprecated `governance_only` overrides when set | ADR-006 (amendment 2026-10-23) |
-| **LIVE(flag)** | EC2 Hibernation | `HIBERNATE_ENABLED=true`. 유휴 stop/hibernate + 만료 회전, 암호화 root | ADR-002 |
-| **GATED** | 셀프서비스 IAM 권한 확장 | UI 신청 → **admin 승인** 필수 + permission boundary 내 | ADR-007 |
+| **LIVE(flag)** | EC2 Hibernation | `HIBERNATE_ENABLED=true`. 유휴 stop/hibernate + 만료 회전, 암호화 root (`deployment_mode = "devenv"` 전용) | ADR-002 |
+| **GATED** | 셀프서비스 IAM 권한 확장 | UI 신청 → **admin 승인** 필수 + permission boundary 내. 신청 API(`/api/user/container-request`)는 `deployment_mode = "devenv"` 전용 (ADR-006 amendment 2026-10-23) | ADR-007 |
 | **LIVE** | Codex on Bedrock | Codex CLI preinstalled on EC2 DevEnv + Local `cc-bedrock-local codex` / `ccx`; bedrock-runtime Responses API sharing usage, budget and audit. Codex OTEL productivity rollup is a follow-up | ADR-014 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
@@ -77,7 +77,7 @@
 | 004 | 인증 | Cognito public client + NextAuth, JIT 트리거 fallback, 삭제 cleanup | 024·028 · ~~012~~ |
 | 005 | 사용량 집계 | Inference Profile + Invocation Log → DynamoDB, email canonical key, 모델 정규화 | 011·019·031 · ~~025~~ |
 | 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신; amendment 2026-10-23: `deployment_mode` profiles, `governance` default | 014·029 |
-| 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude | 005·020·021·030·034 · ~~026~~ |
+| 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude; 셀프서비스 신청 UI/API는 devenv 프로파일 전용 | 005·020·021·030·034 · ~~026~~ |
 | 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18) | 006·015·023 |
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |

@@ -139,8 +139,8 @@ variable "deployment_mode" {
   default     = null
 
   validation {
-    condition     = contains(["governance", "devenv"], coalesce(var.deployment_mode, "governance"))
-    error_message = "deployment_mode must be \"governance\" or \"devenv\"."
+    condition     = contains(["governance", "devenv"], var.deployment_mode == null ? "governance" : var.deployment_mode)
+    error_message = "deployment_mode must be \"governance\" or \"devenv\" (or unset for governance)."
   }
 }
 

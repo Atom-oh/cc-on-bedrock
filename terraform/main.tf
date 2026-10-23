@@ -4,7 +4,7 @@
 
 locals {
   lambda_src_dir  = abspath("${path.module}/../lambda")
-  deployment_mode = var.governance_only != null ? (var.governance_only ? "governance" : "devenv") : coalesce(var.deployment_mode, "governance")
+  deployment_mode = var.governance_only != null ? (var.governance_only ? "governance" : "devenv") : (var.deployment_mode == null ? "governance" : var.deployment_mode)
   devenv_enabled  = local.deployment_mode == "devenv"
   default_dev_env = ""
 }

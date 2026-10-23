@@ -103,7 +103,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
     try {
       setRefreshing(true);
       const today = new Date().toISOString().split("T")[0];
-      // Governance mode has no instances; keep the response order without calling DevEnv APIs.
+      // Governance mode has no instances; keep the response order without calling DevEnv APIs (containers, container metrics).
       const noInstances = () => Promise.resolve(Response.json({ success: true, data: [] }));
       const fetches: Promise<Response>[] = [
         fetch("/api/health"),
@@ -111,7 +111,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       if (isAdmin) {
         fetches.push(
           devenv ? fetch("/api/containers") : noInstances(),
-          fetch("/api/container-metrics?action=current"),
+          devenv ? fetch("/api/container-metrics?action=current") : Promise.resolve(Response.json({ success: false, data: null })),
           fetch("/api/usage?action=total_spend"),
           fetch(`/api/usage?action=total_spend&start_date=${today}&end_date=${today}`),
         );
