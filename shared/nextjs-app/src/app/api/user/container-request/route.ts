@@ -18,6 +18,9 @@ import {
 import { annotateIamRequest } from "@/lib/iam-resource-annotator";
 import { devenvDisabledResponse } from "@/lib/deployment-mode";
 
+// DEPLOYMENT_MODE is a runtime env; never prerender or cache this handler at build time.
+export const dynamic = "force-dynamic";
+
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
 

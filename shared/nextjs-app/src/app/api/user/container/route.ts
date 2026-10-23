@@ -12,6 +12,9 @@ import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { deriveDevenvHealth } from "@/lib/devenv-health";
 import { devenvDisabledResponse } from "@/lib/deployment-mode";
 
+// DEPLOYMENT_MODE is a runtime env; never prerender or cache this handler at build time.
+export const dynamic = "force-dynamic";
+
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const dynamodb = new DynamoDBClient({ region });
