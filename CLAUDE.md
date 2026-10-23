@@ -11,13 +11,13 @@ Multi-user Claude Code (and OpenAI Codex CLI) development platform on Amazon Bed
 ## Deployment profiles
 
 Terraform `deployment_mode` selects one of two profiles (ADR-006 amendment 2026-10-23):
-- **`governance`** (default): admin dashboard (usage, cost, budgets, approvals) plus the local installer (`curl <dashboard>/api/install | bash`). Users run Claude Code / Codex on their own PC; the CLI signs in with Cognito and gets 1h STS credentials for their per-user role and inference profile, renewed through `credential_process`. No Bedrock API key, no EC2.
+- **`governance`** (default when `deployment_mode` is unset): admin dashboard (usage, cost, budgets, approvals) plus the local installer (`curl <dashboard>/api/install | bash`). Users run Claude Code / Codex on their own PC; the CLI signs in with Cognito and gets 1h STS credentials for their per-user role and inference profile, renewed through `credential_process`. No Bedrock API key, no EC2.
 - **`devenv`**: everything in `governance` plus per-user ARM64 EC2 DevEnvs (code-server, Claude Code, Kiro, Codex) behind CloudFront (ADR-002/003), the OTEL collector and the EC2 idle/hibernate schedules. Local mode keeps working alongside.
-The deprecated `governance_only` bool overrides `deployment_mode` when set (`true` = governance, `false` = devenv), so older tfvars keep their profile.
+The deprecated `governance_only` bool overrides `deployment_mode` when set (`true` = governance, `false` = devenv), so older tfvars keep their profile. If neither is set and DevEnv security groups already exist in the VPC, `terraform plan` fails rather than destroying them (`data.aws_security_groups.existing_devenv` in `terraform/main.tf`).
 
 ## Stack
 
-- IaC: Terraform >= 1.5 is the only IaC (ADR-001). State lives in the S3 backend `cc-on-bedrock-tfstate-{account}`. Lambda sources live in repo-root `lambda/`, and Terraform packages them with `archive_file`.
+- IaC: Terraform >= 1.7 (`removed` blocks; `use_lockfile` needs >= 1.10) is the only IaC (ADR-001). State lives in the S3 backend `cc-on-bedrock-tfstate-{account}`. Lambda sources live in repo-root `lambda/`, and Terraform packages them with `archive_file`.
 - Compute: per-user EC2 DevEnv (ADR-002); the dashboard runs on an EC2 Auto Scaling group that pulls the Next.js container from a Terraform-managed ECR repo (ADR-011); the nginx router and OTel collectors run on ECS Fargate.
 - Frontend: Next.js 14 (App Router), Tailwind CSS, Recharts. Auth: Cognito + NextAuth (ADR-004).
 - Data: DynamoDB for usage, routing, instances and limits. Usage comes from Application Inference Profiles + Bedrock Invocation Logs (ADR-005), not account-wide CloudWatch metrics.

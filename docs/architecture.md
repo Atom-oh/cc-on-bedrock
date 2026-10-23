@@ -38,8 +38,8 @@ graph LR
   BR -. invocation logs .-> AGG[Inference Profile + Invocation Log → DynamoDB]
 ```
 
-> **Deployment profiles:** `deployment_mode = "governance"` (default) deploys only the Dashboard and Local Mode paths. The EC2 Mode path, the OTEL collector and the EC2 idle/hibernate schedules exist only with `deployment_mode = "devenv"`.
-> 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx) and dashboard(→ALB→EC2 ASG), 분리.
+> **Deployment profiles:** `deployment_mode = "governance"` (default) deploys only the Dashboard and Local Mode paths. The EC2 Mode path, the OTEL collector and the EC2 idle/hibernate schedules exist only with `deployment_mode = "devenv"`. With the mode unset, `terraform plan` fails if DevEnv security groups already exist, so an older tfvars cannot silently destroy DevEnvs.
+> 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx, devenv profile only) and dashboard(→ALB→EC2 ASG), 분리.
 > 두 LB 모두 **internal**(private subnet)이며 CloudFront **VPC origin**으로만 도달한다. LB SG ingress는 `CloudFront-VPCOrigins-Service-SG`만 허용하고, nginx는 NLB SG만 허용한다. 공인 IP·internet-facing LB 없음.
 > **Network (BYO VPC):** 스택은 VPC·서브넷·NAT·IGW·게이트웨이 엔드포인트를 만들지 않는다. `vpc_id`와 subnet ID 목록을 tfvars로 받고(ADR-015), VPC에 없는 interface endpoint만 `interface_endpoint_services`로 추가한다. Route 53 공용 zone(`domain_name`)은 다른 프로젝트와 공유하므로 data source로 조회하고 레코드만 추가한다.
 > Dashboard runs the real Next.js standalone container from Terraform-managed ECR. `dashboard_image_tag`
