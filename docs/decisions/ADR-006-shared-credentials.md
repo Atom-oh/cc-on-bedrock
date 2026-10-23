@@ -116,8 +116,12 @@ variable `deployment_mode`:
 - **`devenv`.** Adds all of the above. Local Mode keeps working alongside.
 - The deprecated `governance_only` bool overrides `deployment_mode` when set, so existing
   tfvars keep their profile.
+- Upgrade guard: when neither variable is set, the plan fails if DevEnv security groups already
+  exist in the VPC, so a tfvars written before this amendment cannot silently destroy DevEnvs.
 - The dashboard reads `DEPLOYMENT_MODE` at runtime. In governance mode it hides DevEnv pages,
-  shows the local setup as the user portal, and DevEnv lifecycle APIs return 404.
+  shows the local setup as the user portal, and DevEnv lifecycle APIs return 404. Self-service
+  requests (`/api/user/container-request`: tier, DLP and IAM-extension requests) are DevEnv-only
+  in this amendment and also return 404; `/admin/approvals` still lists existing requests.
 
 **Consequences.**
 - A fresh deploy is cheaper and has a smaller attack surface; turning DevEnv on later is a

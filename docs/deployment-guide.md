@@ -179,7 +179,7 @@ terraform apply           # 확인 메시지에 'yes'
 | `local-governance` | STS issuer / token-limit enforcer / reset (ADR-006/008) |
 | `waf` | CLOUDFRONT-scope WebACL (us-east-1) |
 
-> **Deployment profiles (ADR-006):** `deployment_mode = "governance"` (default) deploys the admin dashboard, usage/budget governance and the local installer, with no `ecs-devenv`/`ec2-devenv` modules, OTEL collector or EC2 schedules. Users install the CLI with `curl -fsSL https://<dashboard>/api/install | bash`, sign in with Cognito and receive 1h STS credentials; no Bedrock API key is issued. `deployment_mode = "devenv"` adds per-user EC2 DevEnvs. An existing tfvars with `governance_only = false` stays on devenv; set `deployment_mode = "devenv"` before removing that line. Onboarding: `docs/runbooks/local-governance-onboarding.md`.
+> **Deployment profiles (ADR-006):** `deployment_mode = "governance"` (default) deploys the admin dashboard, usage/budget governance and the local installer, with no `ecs-devenv`/`ec2-devenv` modules, OTEL collector or EC2 schedules. Users install the CLI with `curl -fsSL https://<dashboard>/api/install | bash`, sign in with Cognito and receive 1h STS credentials; no Bedrock API key is issued. `deployment_mode = "devenv"` adds per-user EC2 DevEnvs. An existing tfvars with `governance_only = false` stays on devenv; set `deployment_mode = "devenv"` before removing that line. If neither variable is set and DevEnv security groups exist in the VPC, `terraform plan` fails instead of destroying them; set `deployment_mode` explicitly. Onboarding: `docs/runbooks/local-governance-onboarding.md`.
 
 출력 확인:
 ```bash

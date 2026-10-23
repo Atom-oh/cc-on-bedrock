@@ -53,11 +53,13 @@ terraform -chdir=terraform validate
 terraform -chdir=terraform plan
 ```
 
-> **Deployment profiles.** `deployment_mode = "governance"` (default) deploys the admin
+> **Deployment profiles.** `deployment_mode = "governance"` (default when unset) deploys the admin
 > dashboard and the local installer only: users run Claude Code / Codex on their own PC with
 > Cognito-issued STS credentials, and no EC2 DevEnv is created. Set
 > `deployment_mode = "devenv"` to add per-user EC2 DevEnvs. The deprecated `governance_only`
 > bool still works and overrides `deployment_mode` when set.
+
+> **Upgrading an existing stack.** Older tfvars that set neither `deployment_mode` nor `governance_only` used to deploy DevEnvs. The default is now governance, which destroys them. Add `deployment_mode = "devenv"` before upgrading to keep them. If DevEnv security groups exist and the mode is unset, `terraform plan` fails instead of destroying them.
 
 Important outputs include:
 

@@ -4,7 +4,7 @@
 
 locals {
   lambda_src_dir  = abspath("${path.module}/../lambda")
-  deployment_mode = var.governance_only == null ? var.deployment_mode : (var.governance_only ? "governance" : "devenv")
+  deployment_mode = var.governance_only != null ? (var.governance_only ? "governance" : "devenv") : coalesce(var.deployment_mode, "governance")
   devenv_enabled  = local.deployment_mode == "devenv"
   default_dev_env = ""
 }
@@ -17,6 +17,30 @@ moved {
 moved {
   from = module.ec2_devenv
   to   = module.ec2_devenv[0]
+}
+
+# Upgrade guard: the default profile is governance, which removes every DevEnv resource.
+# With neither deployment_mode nor governance_only set, refuse to plan while DevEnv
+# security groups exist in the VPC, so an older tfvars cannot silently destroy DevEnvs.
+data "aws_security_groups" "existing_devenv" {
+  count = var.deployment_mode == null && var.governance_only == null ? 1 : 0
+
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+
+  filter {
+    name   = "group-name"
+    values = ["cc-devenv-open-*"]
+  }
+
+  lifecycle {
+    postcondition {
+      condition     = length(self.ids) == 0
+      error_message = "DevEnv security groups exist in this VPC but deployment_mode is not set. The default profile is now \"governance\", which destroys every DevEnv resource. Set deployment_mode = \"devenv\" to keep them, or deployment_mode = \"governance\" to remove them."
+    }
+  }
 }
 
 # ---- 01 Network -------------------------------------------------------------

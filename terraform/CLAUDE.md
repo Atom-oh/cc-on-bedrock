@@ -36,6 +36,7 @@ All 8 modules are wired into the root `main.tf` (ADR-001). `deployment_mode` pic
 - The deprecated `governance_only` bool overrides `deployment_mode` when set. A tfvars file
   with `governance_only = false` stays on devenv; deleting that line switches to governance and
   destroys every DevEnv resource, so set `deployment_mode = "devenv"` first.
+- Upgrade guard: when neither `deployment_mode` nor `governance_only` is set, `data.aws_security_groups.existing_devenv` fails the plan if `cc-devenv-open-*` security groups exist in the VPC. Set the mode explicitly to proceed.
 - The dashboard receives `DEPLOYMENT_MODE` and hides DevEnv pages; DevEnv lifecycle APIs return
   404 in governance mode.
 

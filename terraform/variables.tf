@@ -130,16 +130,16 @@ variable "monthly_budget_usd" {
   }
 }
 
-# Deployment profile. "governance" (default): admin dashboard (usage, cost, budgets) plus the
-# local installer; users run Claude Code / Codex on their own PC with Cognito-issued STS
-# credentials, no EC2. "devenv": also provisions per-user EC2 DevEnvs behind CloudFront.
+# Deployment profile. "governance" (effective default when unset): admin dashboard (usage,
+# cost, budgets) plus the local installer; users run Claude Code / Codex on their own PC with
+# Cognito-issued STS credentials, no EC2. "devenv": also provisions per-user EC2 DevEnvs behind CloudFront.
 variable "deployment_mode" {
-  description = "Deployment profile: \"governance\" (dashboard + local installer, no EC2) or \"devenv\" (adds per-user EC2 DevEnvs)"
+  description = "Deployment profile: \"governance\" (dashboard + local installer, no EC2) or \"devenv\" (adds per-user EC2 DevEnvs). null (unset) means \"governance\"; an unset mode refuses to plan while DevEnv security groups exist (upgrade guard)"
   type        = string
-  default     = "governance"
+  default     = null
 
   validation {
-    condition     = contains(["governance", "devenv"], var.deployment_mode)
+    condition     = contains(["governance", "devenv"], coalesce(var.deployment_mode, "governance"))
     error_message = "deployment_mode must be \"governance\" or \"devenv\"."
   }
 }
