@@ -27,20 +27,21 @@ const DEPT_FIELD: Record<BudgetPeriod, keyof DeptPeriodDefaults> = {
   daily: "perUserDailyBudget", weekly: "perUserWeeklyBudget", monthly: "perUserMonthlyBudget",
 };
 
-/** user explicit > dept per-user default > global (env); 0 everywhere = no cap. */
+/** user explicit > dept per-user default > global (env); 0 everywhere = no cap.
+ *  An active one-time grant is added only to a capped period (value = base + grant). */
 export function resolvePeriodBudget(
   period: BudgetPeriod,
   user: UserPeriodBudgets | undefined,
   dept: DeptPeriodDefaults | undefined,
   globals: Partial<PeriodValues> = {},
-): { value: number; source: BudgetSource } {
+  grant = 0,
+): { value: number; source: BudgetSource; base: number; grant: number } {
   const u = Number(user?.[USER_FIELD[period]] ?? 0);
-  if (u > 0) return { value: u, source: "user" };
   const d = Number(dept?.[DEPT_FIELD[period]] ?? 0);
-  if (d > 0) return { value: d, source: "dept" };
   const g = Number(globals[period] ?? 0);
-  if (g > 0) return { value: g, source: "global" };
-  return { value: 0, source: "none" };
+  const [base, source]: [number, BudgetSource] =
+    u > 0 ? [u, "user"] : d > 0 ? [d, "dept"] : g > 0 ? [g, "global"] : [0, "none"];
+  return { value: base > 0 ? base + grant : 0, source, base, grant };
 }
 
 /** Periods whose spend has reached its (non-zero) cap. */

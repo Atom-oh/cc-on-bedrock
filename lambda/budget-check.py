@@ -286,19 +286,25 @@ def _dept_per_user_default(dept_budgets: dict, dept: str) -> float:
     return float(entry.get("perUserMonthlyBudget", 0) or 0)
 
 
-def _effective_user_limits(user_budgets: dict, dept_budgets: dict, user: str, dept: str) -> dict:
+def _effective_user_limits(user_budgets: dict, dept_budgets: dict, user: str, dept: str,
+                           now: datetime | None = None) -> dict:
     """ADR-008: per-period USD caps {daily, weekly, monthly}; 0 = no cap for that period.
-    Each period resolves independently: user explicit > dept per-user default > global env."""
+    Each period resolves independently: user explicit > dept per-user default > global env.
+    Active one-time grants (u["grants"], computed once per scan by get_user_budgets) are
+    added only to a capped period; an uncapped period (0) stays unlimited. `now` is
+    accepted for interface symmetry; grant windows are already resolved at scan time."""
     u = user_budgets.get(user, {}) or {}
     d = dept_budgets.get(dept) if isinstance(dept_budgets.get(dept), dict) else {}
     limits = {}
     for period in BUDGET_PERIODS:
         cap = period.capitalize()  # daily → Daily
-        limits[period] = (
+        base = (
             float(u.get(f"{period}Budget", 0) or 0)
             or float(d.get(f"perUser{cap}Budget", 0) or 0)
             or float(_GLOBAL_BUDGETS[period])
         )
+        grant = float((u.get("grants") or {}).get(period, 0) or 0)
+        limits[period] = base + grant if base > 0 else 0.0
     return limits
 
 
@@ -337,6 +343,7 @@ def get_user_budgets():
         budgets = {}
         last_key = None
         pages = 0
+        now = datetime.utcnow()  # one clock for every row's grant window this scan
         while True:
             params = {}
             if last_key:
@@ -352,6 +359,7 @@ def get_user_budgets():
                         "monthlyBudget": float(item.get("monthlyBudget", 0) or 0),
                         "department": item.get("department", "default"),
                         "blocked": bool(item.get("budgetExceeded")),
+                        "grants": active_grants(item, now),
                     }
             last_key = result.get("LastEvaluatedKey")
             pages += 1
@@ -374,13 +382,15 @@ def write_current_spend(user_spend, dept_spend):
         try:
             ev = data.get("evaluation") or {}
             limits = data.get("limits") or {}
+            grants = data.get("grants") or {}
             user_budgets_table.update_item(
                 Key={"user_id": user},
                 UpdateExpression=(
                     "SET currentSpend = :spend, currentDailySpend = :d, currentWeeklySpend = :w, "
                     "currentMonthlySpend = :m, effectiveDailyBudget = :ld, effectiveWeeklyBudget = :lw, "
                     "effectiveMonthlyBudget = :lm, budgetExceeded = :ex, budgetReleaseAt = :rel, "
-                    "lastChecked = :ts, department = :dept"
+                    "lastChecked = :ts, department = :dept, activeGrantDaily = :gd, "
+                    "activeGrantWeekly = :gw, activeGrantMonthly = :gm"
                 ),
                 ExpressionAttributeValues={
                     ":spend": Decimal(str(round(data.get("monthly", data["cost"]), 6))),
@@ -394,6 +404,9 @@ def write_current_spend(user_spend, dept_spend):
                     ":rel": ev.get("release_at", ""),
                     ":ts": now,
                     ":dept": data["department"],
+                    ":gd": Decimal(str(grants.get("daily", 0))),
+                    ":gw": Decimal(str(grants.get("weekly", 0))),
+                    ":gm": Decimal(str(grants.get("monthly", 0))),
                 },
             )
         except Exception as e:
@@ -981,6 +994,7 @@ def handler(event, context):
         limits = _effective_user_limits(user_budgets, dept_budgets, user, data["department"])
         ev = evaluate_user_budget(data, limits)
         data["limits"], data["evaluation"] = limits, ev
+        data["grants"] = (user_budgets.get(user) or {}).get("grants", {})
         entry = {
             "user": user, "department": data["department"], "pct": ev["pct"],
             "spend": {p: data[p] for p in BUDGET_PERIODS}, "limits": limits,
@@ -1002,6 +1016,7 @@ def handler(event, context):
                      "department": b.get("department", "default")}
             stale["limits"] = _effective_user_limits(user_budgets, dept_budgets, user, stale["department"])
             stale["evaluation"] = evaluate_user_budget(stale, stale["limits"])
+            stale["grants"] = b.get("grants", {})
             user_spend[user] = stale
 
     # Write per-period spend + evaluation to budget tables for dashboard display. A
