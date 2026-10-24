@@ -95,6 +95,7 @@ export const APPROVAL_ERRORS = [
   "expired",
   "invalid_amount",
   "unlimited_period",
+  "malformed_request",
   "department_changed_retry",
   "already_decided",
   "retry",
@@ -119,6 +120,7 @@ export const MEMBER_LIMIT_ERRORS = [
   "limit_required",
   "no_department",
   "user_not_found",
+  "invalid_body",
 ] as const;
 
 export interface TokenReleaseResult {
@@ -135,15 +137,15 @@ export type ReleaseNotice =
   | { tone: "warn"; tokenUnknown: true; warning?: string };
 
 /**
- * What the approver sees after an approval. Never just "approved": when a token deny
- * stays (`released: false` with a reason other than no_token_limit) the user is still
- * blocked and the reason is shown; a failed release (no reason) is reported as unknown.
+ * What the approver sees after an approval. Never just "approved": `releaseTokenAxis`
+ * returns `released: false` with a reason only when a token deny exists and was kept,
+ * so every such reason means the user is still blocked; a failed release (no reason)
+ * is reported as unknown.
  */
 export function releaseNotice(tokenRelease: TokenReleaseResult | undefined): ReleaseNotice {
   if (!tokenRelease || tokenRelease.released) {
     return { tone: "ok", tokenCleared: !!tokenRelease?.denyCleared };
   }
-  if (tokenRelease.reason === "no_token_limit") return { tone: "ok", tokenCleared: false };
   if (tokenRelease.reason) return { tone: "warn", tokenHeldReason: tokenRelease.reason };
   return { tone: "warn", tokenUnknown: true, warning: tokenRelease.warning };
 }
@@ -164,4 +166,61 @@ export function fill(template: string, vars: Record<string, string | number>): s
 /** Period usage at or above 80% of a set cap (and not yet over it). */
 export function nearLimit(spend: number, cap: number): boolean {
   return cap > 0 && spend >= cap * 0.8 && spend < cap;
+}
+
+export const formatUsd = (n: number | undefined) => `$${(n ?? 0).toFixed(2)}`;
+
+/** limit_change fields holding USD (user and department per-user caps, department total). */
+const USD_LIMIT_FIELDS = new Set([
+  "dailyBudget",
+  "weeklyBudget",
+  "monthlyBudget",
+  "perUserDailyBudget",
+  "perUserWeeklyBudget",
+  "perUserMonthlyBudget",
+]);
+
+/** History value: USD fields as dollars, anything else (e.g. dailyTokenLimit) as a plain number. */
+export function formatLimitValue(field: string, value: number | undefined): string {
+  if (value === undefined) return "—";
+  return USD_LIMIT_FIELDS.has(field) ? formatUsd(value) : value.toLocaleString();
+}
+
+export interface ApprovalNoticeInput {
+  email: string;
+  amount: number;
+  releaseEtaMinutes?: number;
+  tokenRelease?: TokenReleaseResult;
+  /** The requester's department is over its monthly total (USD deny stays). */
+  departmentOver: boolean;
+}
+
+/**
+ * Approver notice after a budget_increase approval: the release ETA plus a warning for
+ * every axis that still blocks the user (token deny kept or unconfirmed, department total).
+ */
+export function approvalNotice(
+  i: ApprovalNoticeInput,
+  t: (key: string) => string,
+): { tone: "ok" | "warn"; lines: string[] } {
+  const lines = [
+    fill(t("approvals.approved"), { email: i.email, amount: formatUsd(i.amount) }),
+    fill(t("approvals.releaseEta"), { minutes: i.releaseEtaMinutes ?? 5 }),
+  ];
+  let tone: "ok" | "warn" = "ok";
+  const tr = releaseNotice(i.tokenRelease);
+  if ("tokenCleared" in tr && tr.tokenCleared) lines.push(t("approvals.tokenCleared"));
+  if ("tokenHeldReason" in tr) {
+    tone = "warn";
+    lines.push(fill(t("approvals.tokenHeld"), { reason: t(`approvals.tokenReason.${tr.tokenHeldReason}`) }));
+  }
+  if ("tokenUnknown" in tr) {
+    tone = "warn";
+    lines.push(fill(t("approvals.tokenUnknown"), { warning: tr.warning ?? "" }));
+  }
+  if (i.departmentOver) {
+    tone = "warn";
+    lines.push(t("approvals.deptStillOver"));
+  }
+  return { tone, lines };
 }

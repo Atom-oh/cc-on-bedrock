@@ -10,12 +10,13 @@ import type { DepartmentBudgetState } from "@/lib/approval-authz";
 import {
   APPROVAL_ERRORS,
   MAX_INCREASE_USD,
+  approvalNotice,
+  formatLimitValue,
   budgetRequestGate,
   errorKey,
   fill,
   isExpiredRequest,
   isRequestTypeVisible,
-  releaseNotice,
   type TokenReleaseResult,
 } from "@/lib/budget-ui";
 import {
@@ -200,30 +201,6 @@ export default function ApprovalsPage() {
     return raw === undefined ? req.requestedAmount ?? 0 : Number(raw);
   };
 
-  /** The approver-facing outcome of an approval: release ETA plus every axis still blocking. */
-  function approvalNotice(req: ApprovalRequest, applied: { releaseEtaMinutes?: number; tokenRelease?: TokenReleaseResult } | undefined): Notice {
-    const lines = [
-      fill(t("approvals.approved"), { email: req.email, amount: usd(requestAmount(req)) }),
-      fill(t("approvals.releaseEta"), { minutes: applied?.releaseEtaMinutes ?? 5 }),
-    ];
-    let tone: Notice["tone"] = "ok";
-    const tr = releaseNotice(applied?.tokenRelease);
-    if (tr.tone === "ok" && tr.tokenCleared) lines.push(t("approvals.tokenCleared"));
-    if ("tokenHeldReason" in tr) {
-      tone = "warn";
-      lines.push(fill(t("approvals.tokenHeld"), { reason: t(`approvals.tokenReason.${tr.tokenHeldReason}`) }));
-    }
-    if ("tokenUnknown" in tr) {
-      tone = "warn";
-      lines.push(fill(t("approvals.tokenUnknown"), { warning: tr.warning ?? "" }));
-    }
-    if (depts[req.department]?.over) {
-      tone = "warn";
-      lines.push(t("approvals.deptStillOver"));
-    }
-    return { tone, lines };
-  }
-
   async function handleAction(req: ApprovalRequest, action: "approve" | "reject") {
     const requestId = req.requestId;
     const isBudget = req.type === "budget_increase";
@@ -245,7 +222,16 @@ export default function ApprovalsPage() {
         } else if (action === "reject") {
           setNotice({ tone: "ok", lines: [fill(t("approvals.rejected"), { email: req.email })] });
         } else if (isBudget) {
-          setNotice(approvalNotice(req, data.data?.applied));
+          const applied = data.data?.applied as
+            | { releaseEtaMinutes?: number; tokenRelease?: TokenReleaseResult }
+            | undefined;
+          setNotice(approvalNotice({
+            email: req.email,
+            amount: requestAmount(req),
+            releaseEtaMinutes: applied?.releaseEtaMinutes,
+            tokenRelease: applied?.tokenRelease,
+            departmentOver: !!depts[req.department]?.over,
+          }, t));
         } else {
           setNotice({ tone: "ok", lines: [fill(t("approvals.applied"), { email: req.email })] });
         }
@@ -474,9 +460,9 @@ export default function ApprovalsPage() {
                     {fields.map((f) => (
                       <div key={f}>
                         <span className="text-gray-500">{f}</span>{" "}
-                        <span className="text-gray-400">{r.before?.[f] !== undefined ? usd(r.before[f]) : "—"}</span>
+                        <span className="text-gray-400">{formatLimitValue(f, r.before?.[f])}</span>
                         <span className="text-gray-600"> → </span>
-                        <span className="text-white">{r.after?.[f] !== undefined ? usd(r.after[f]) : "—"}</span>
+                        <span className="text-white">{formatLimitValue(f, r.after?.[f])}</span>
                       </div>
                     ))}
                   </td>

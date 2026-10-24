@@ -185,8 +185,9 @@ export async function GET(_req: NextRequest) {
         }));
         deptRow = d.Item ? unmarshall(d.Item) : undefined;
       }
-    } catch {
-      /* budget tables optional — ignore */
+    } catch (err) {
+      // Budget tables are optional: keep the rest of the response, but say why it is partial.
+      console.warn("[local/limits] budget/department lookup failed:", err instanceof Error ? err.message : err);
     }
 
     // USD caps as "base + current one-time grant", and the single block cause

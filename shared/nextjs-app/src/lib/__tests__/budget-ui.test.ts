@@ -8,6 +8,8 @@ import {
   isExpiredRequest,
   isRequestTypeVisible,
   releaseNotice,
+  approvalNotice,
+  formatLimitValue,
   validIncreaseForm,
   fill,
   nearLimit,
@@ -113,8 +115,9 @@ describe("releaseNotice — never just 'approved' while still token-blocked", ()
     expect(releaseNotice({ released: false, reason: "dept_scope" })).toEqual({ tone: "warn", tokenHeldReason: "dept_scope" });
   });
 
-  it("no_token_limit is not a held deny", () => {
-    expect(releaseNotice({ released: false, reason: "no_token_limit", noTokenLimit: true }).tone).toBe("ok");
+  it("every kept deny warns, no_token_limit included", () => {
+    expect(releaseNotice({ released: false, reason: "no_token_limit", noTokenLimit: true }))
+      .toEqual({ tone: "warn", tokenHeldReason: "no_token_limit" });
   });
 
   it("a failed release is reported as unknown", () => {
@@ -145,5 +148,47 @@ describe("fill / nearLimit", () => {
     expect(nearLimit(7.9, 10)).toBe(false);
     expect(nearLimit(10, 10)).toBe(false); // over, not near
     expect(nearLimit(100, 0)).toBe(false); // unlimited
+  });
+});
+
+describe("formatLimitValue — history before/after", () => {
+  it("USD fields as dollars, others as plain numbers, missing as a dash", () => {
+    expect(formatLimitValue("dailyBudget", 10)).toBe("$10.00");
+    expect(formatLimitValue("perUserMonthlyBudget", 200)).toBe("$200.00");
+    expect(formatLimitValue("dailyTokenLimit", 100000)).toBe((100000).toLocaleString());
+    expect(formatLimitValue("monthlyBudget", undefined)).toBe("—");
+  });
+});
+
+describe("approvalNotice — approval outcome with every axis still blocking", () => {
+  const t = (k: string) => k;
+  const base = { email: "dev@x.com", amount: 20, releaseEtaMinutes: 5, departmentOver: false };
+
+  it("approved + token held: warning names the reason", () => {
+    const n = approvalNotice({ ...base, tokenRelease: { released: false, reason: "dept_scope" } }, t);
+    expect(n.tone).toBe("warn");
+    expect(n.lines).toEqual(["approvals.approved", "approvals.releaseEta", "approvals.tokenHeld"]);
+    const n2 = approvalNotice({ ...base, tokenRelease: { released: false, reason: "no_token_limit" } },
+      (k) => (k === "approvals.tokenHeld" ? "held: {reason}" : k));
+    expect(n2.lines[2]).toBe("held: approvals.tokenReason.no_token_limit");
+  });
+
+  it("approved + released: ok with the release ETA and token cleared", () => {
+    const n = approvalNotice({ ...base, tokenRelease: { released: true, denyCleared: true } },
+      (k) => (k === "approvals.releaseEta" ? "within {minutes} min" : k === "approvals.approved" ? "{email} +{amount}" : k));
+    expect(n.tone).toBe("ok");
+    expect(n.lines).toEqual(["dev@x.com +$20.00", "within 5 min", "approvals.tokenCleared"]);
+  });
+
+  it("approved + department still over: warning even when the token axis is released", () => {
+    const n = approvalNotice({ ...base, departmentOver: true, tokenRelease: { released: true } }, t);
+    expect(n.tone).toBe("warn");
+    expect(n.lines).toContain("approvals.deptStillOver");
+  });
+
+  it("unconfirmed token release warns", () => {
+    const n = approvalNotice({ ...base, tokenRelease: { released: false, warning: "boom" } }, t);
+    expect(n.tone).toBe("warn");
+    expect(n.lines).toContain("approvals.tokenUnknown");
   });
 });
