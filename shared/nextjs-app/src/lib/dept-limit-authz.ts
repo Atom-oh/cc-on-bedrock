@@ -15,11 +15,17 @@ export const MEMBER_LIMIT_FIELDS = ["dailyBudget", "weeklyBudget", "monthlyBudge
 export type MemberLimitField = (typeof MEMBER_LIMIT_FIELDS)[number];
 export type MemberLimits = Partial<Record<MemberLimitField, number>>;
 
-export type MemberLimitError = "self" | "other_department" | "exceeds_department_total" | "not_manager";
+export type MemberLimitError =
+  | "self"
+  | "other_department"
+  | "exceeds_department_total"
+  | "not_manager"
+  | "target_is_manager";
 
 export function canSetMemberLimit(i: {
   actor: { email: string; role: Role; department?: string };
-  target: { email: string; department: string };
+  /** `role` is the target's FRESH role; required for a dept-manager actor (missing = denied). */
+  target: { email: string; department: string; role?: Role };
   monthlyBudget?: number;
   deptMonthlyBudget: number;
 }): { ok: true } | { ok: false; error: MemberLimitError } {
@@ -39,6 +45,9 @@ export function canSetMemberLimit(i: {
   if (!hasRealDepartment(actorDept) || !hasRealDepartment(i.target.department) || actorDept !== i.target.department) {
     return { ok: false, error: "other_department" };
   }
+
+  // Managers set limits for plain users only; other managers and admins are admin-managed.
+  if (i.target.role !== "user") return { ok: false, error: "target_is_manager" };
 
   // A set department total (> 0) caps any member's monthly limit; 0 = no total.
   if (i.monthlyBudget !== undefined && i.deptMonthlyBudget > 0 && i.monthlyBudget > i.deptMonthlyBudget) {

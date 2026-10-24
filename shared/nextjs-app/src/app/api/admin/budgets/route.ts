@@ -3,15 +3,15 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import {
   DynamoDBClient,
+  GetItemCommand,
   ScanCommand,
-  UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
 import { requireFreshRole } from "@/lib/role-admin";
 import { syncMonthlyLimitMirror } from "@/lib/limit-mirror";
-import { pickNumbers, recordLimitChange, type LimitChange } from "@/lib/limit-audit";
+import { applyLimitChange, pickNumbers, type LimitChange } from "@/lib/limit-audit";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -207,7 +207,11 @@ export async function PUT(req: NextRequest) {
     }
 
     const now = new Date().toISOString();
-    let audit: Omit<LimitChange, "actor" | "actorRole" | "appliedAt">;
+    const actor: Pick<LimitChange, "actor" | "actorRole" | "appliedAt"> = {
+      actor: session.user.email,
+      actorRole: fresh.role,
+      appliedAt: now,
+    };
 
     if (type === "department") {
       // ADR-023: dept rows carry `monthlyBudget` (total cap) plus per-member default
@@ -232,20 +236,25 @@ export async function PUT(req: NextRequest) {
         updateParts.push("allowedTiers = :tiers");
         exprVals[":tiers"] = { L: allowedTiers.map(t => ({ S: t })) };
       }
-      const updated = await dynamodb.send(new UpdateItemCommand({
-        TableName: DEPT_BUDGETS_TABLE,
-        Key: { dept_id: { S: id } },
-        UpdateExpression: `SET ${updateParts.join(", ")}`,
-        ExpressionAttributeValues: exprVals,
-        ReturnValues: "UPDATED_OLD",
-      }));
+      const Key = { dept_id: { S: id } };
+      const current = await dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key }));
       const changed = [...(monthlyBudget !== undefined ? ["monthlyBudget"] : []), ...deptFields];
-      audit = {
-        targetType: "department",
-        department: id,
-        before: pickNumbers(updated.Attributes ? unmarshall(updated.Attributes) : undefined, changed),
-        after: pickNumbers(body as Record<string, unknown>, changed),
-      };
+      // Row update + limit_change audit commit together (lib/limit-audit).
+      await applyLimitChange(
+        {
+          TableName: DEPT_BUDGETS_TABLE,
+          Key,
+          UpdateExpression: `SET ${updateParts.join(", ")}`,
+          ExpressionAttributeValues: exprVals,
+        },
+        {
+          ...actor,
+          targetType: "department",
+          department: id,
+          before: pickNumbers(current.Item ? unmarshall(current.Item) : undefined, changed),
+          after: pickNumbers(body as Record<string, unknown>, changed),
+        }
+      );
     } else if (type === "user") {
       // ADR-031 (B′): the per-user canonical key is the lowercased email. Normalize
       // once so BOTH the cc-user-budgets row AND the mirrored LIMIT#monthly land
@@ -273,48 +282,41 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "dailyBudget, weeklyBudget, monthlyBudget or dailyTokenLimit required" }, { status: 400 });
       }
 
-      const updated = await dynamodb.send(new UpdateItemCommand({
-        TableName: USER_BUDGETS_TABLE,
-        Key: { user_id: { S: userId } },
-        UpdateExpression: `SET ${updateParts.join(", ")}`,
-        ExpressionAttributeValues: exprValues,
-        ReturnValues: "UPDATED_OLD",
-      }));
+      const Key = { user_id: { S: userId } };
+      const current = await dynamodb.send(new GetItemCommand({ TableName: USER_BUDGETS_TABLE, Key }));
+      const changed = [
+        ...PERIOD_FIELDS.filter((f) => (body as Record<string, unknown>)[f] !== undefined),
+        ...(dailyTokenLimit !== undefined ? ["dailyTokenLimit"] : []),
+      ];
+      // Row update + limit_change audit commit together (lib/limit-audit).
+      await applyLimitChange(
+        {
+          TableName: USER_BUDGETS_TABLE,
+          Key,
+          UpdateExpression: `SET ${updateParts.join(", ")}`,
+          ExpressionAttributeValues: exprValues,
+        },
+        {
+          ...actor,
+          targetType: "user",
+          email: userId,
+          department: await auditDepartment(userId),
+          before: pickNumbers(current.Item ? unmarshall(current.Item) : undefined, changed),
+          after: pickNumbers(body as Record<string, unknown>, changed),
+        }
+      );
 
       // monthlyBudget > 0 → upsert LIMIT#monthly; 0 → delete it (lib/limit-mirror).
       if (monthlyBudget !== undefined) {
         await syncMonthlyLimitMirror(userId, monthlyBudget, now);
       }
-
-      const changed = [
-        ...PERIOD_FIELDS.filter((f) => (body as Record<string, unknown>)[f] !== undefined),
-        ...(dailyTokenLimit !== undefined ? ["dailyTokenLimit"] : []),
-      ];
-      audit = {
-        targetType: "user",
-        email: userId,
-        department: await auditDepartment(userId),
-        before: pickNumbers(updated.Attributes ? unmarshall(updated.Attributes) : undefined, changed),
-        after: pickNumbers(body as Record<string, unknown>, changed),
-      };
     } else {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
-    }
-
-    // Audit after the change fully applied (row + mirror). A failed audit write does
-    // not roll the change back: report it instead of a misleading 500.
-    let auditRecorded = true;
-    try {
-      await recordLimitChange({ ...audit, actor: session.user.email, actorRole: fresh.role, appliedAt: now });
-    } catch (err) {
-      auditRecorded = false;
-      console.error("[admin/budgets] limit_change audit failed:", err instanceof Error ? err.message : err);
     }
 
     return NextResponse.json({
       success: true,
       message: `${type} budget updated`,
-      ...(auditRecorded ? {} : { warning: "audit_failed" }),
     });
   } catch (err) {
     console.error("[admin/budgets] PUT", err instanceof Error ? err.message : err);

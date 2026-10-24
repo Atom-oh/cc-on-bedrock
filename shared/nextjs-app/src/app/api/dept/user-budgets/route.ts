@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, GetItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { getCognitoUser } from "@/lib/aws-clients";
-import { requireFreshRole } from "@/lib/role-admin";
-import { hasRealDepartment } from "@/lib/roles";
+import { getRoleGroups, requireFreshRole } from "@/lib/role-admin";
+import { hasRealDepartment, roleFromGroups, type Role } from "@/lib/roles";
 import { DEPT_BUDGETS_TABLE, USER_BUDGETS_TABLE } from "@/lib/budget-increase";
 import { canSetMemberLimit, validateMemberLimits, MEMBER_LIMIT_FIELDS } from "@/lib/dept-limit-authz";
 import { syncMonthlyLimitMirror } from "@/lib/limit-mirror";
-import { pickNumbers, recordLimitChange } from "@/lib/limit-audit";
+import { applyLimitChange, pickNumbers } from "@/lib/limit-audit";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const dynamodb = new DynamoDBClient({ region });
@@ -50,22 +50,39 @@ export async function PUT(req: NextRequest) {
 
   // Fresh departments. A dept-manager without a real department can manage nobody.
   let actorDepartment: string | undefined;
-  let targetDepartment: string;
-  try {
-    if (fresh.role !== "admin") {
-      const d = (await getCognitoUser(actorEmail)).department ?? "";
-      if (!hasRealDepartment(d)) {
+  if (fresh.role !== "admin") {
+    try {
+      actorDepartment = (await getCognitoUser(actorEmail)).department ?? "";
+    } catch (err) {
+      if (isUserNotFound(err)) {
         return NextResponse.json({ error: "no_department" }, { status: 403 });
       }
-      actorDepartment = d;
+      console.error("[dept/user-budgets] actor lookup failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
     }
+    if (!hasRealDepartment(actorDepartment)) {
+      return NextResponse.json({ error: "no_department" }, { status: 403 });
+    }
+  }
+  let targetDepartment: string;
+  try {
     targetDepartment = (await getCognitoUser(targetEmail)).department ?? "";
   } catch (err) {
     if (isUserNotFound(err)) {
       return NextResponse.json({ error: "user_not_found" }, { status: 404 });
     }
-    console.error("[dept/user-budgets] Cognito lookup failed:", err instanceof Error ? err.message : err);
+    console.error("[dept/user-budgets] target lookup failed:", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+  }
+  // A manager may only manage plain users: the target's FRESH role decides (fail closed).
+  let targetRole: Role | undefined;
+  if (fresh.role !== "admin") {
+    try {
+      targetRole = roleFromGroups(await getRoleGroups(targetEmail)).role;
+    } catch (err) {
+      console.error("[dept/user-budgets] target role lookup failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+    }
   }
 
   try {
@@ -81,13 +98,18 @@ export async function PUT(req: NextRequest) {
 
     const decision = canSetMemberLimit({
       actor: { email: actorEmail, role: fresh.role, department: actorDepartment },
-      target: { email: targetEmail, department: targetDepartment },
+      target: { email: targetEmail, department: targetDepartment, role: targetRole },
       monthlyBudget: limits.monthlyBudget,
       deptMonthlyBudget,
     });
     if (!decision.ok) {
       const status = decision.error === "exceeds_department_total" ? 400 : 403;
-      return NextResponse.json({ error: decision.error, deptMonthlyBudget }, { status });
+      return NextResponse.json(
+        decision.error === "exceeds_department_total"
+          ? { error: decision.error, deptMonthlyBudget }
+          : { error: decision.error },
+        { status }
+      );
     }
 
     const now = new Date().toISOString();
@@ -99,41 +121,32 @@ export async function PUT(req: NextRequest) {
       exprValues[`:${f}`] = { N: String(limits[f]) };
     }
     // ADR-031 (B′): cc-user-budgets and LIMIT#monthly are keyed by the lowercased email.
-    const updated = await dynamodb.send(new UpdateItemCommand({
-      TableName: USER_BUDGETS_TABLE,
-      Key: { user_id: { S: targetEmail } },
-      UpdateExpression: `SET ${updateParts.join(", ")}`,
-      ExpressionAttributeValues: exprValues,
-      ReturnValues: "UPDATED_OLD",
-    }));
-    if (limits.monthlyBudget !== undefined) {
-      await syncMonthlyLimitMirror(targetEmail, limits.monthlyBudget, now);
-    }
-
-    // Audit after the change fully applied (row + mirror); a failed audit write does
-    // not roll it back, so report it rather than a misleading 500.
-    let auditRecorded = true;
-    try {
-      await recordLimitChange({
+    const Key = { user_id: { S: targetEmail } };
+    const current = await dynamodb.send(new GetItemCommand({ TableName: USER_BUDGETS_TABLE, Key }));
+    // Row update + limit_change audit commit together (lib/limit-audit).
+    await applyLimitChange(
+      {
+        TableName: USER_BUDGETS_TABLE,
+        Key,
+        UpdateExpression: `SET ${updateParts.join(", ")}`,
+        ExpressionAttributeValues: exprValues,
+      },
+      {
         actor: actorEmail,
         actorRole: fresh.role,
         targetType: "user",
         email: targetEmail,
         department: targetDepartment,
-        before: pickNumbers(updated.Attributes ? unmarshall(updated.Attributes) : undefined, changed),
+        before: pickNumbers(current.Item ? unmarshall(current.Item) : undefined, changed),
         after: pickNumbers(limits, changed),
         appliedAt: now,
-      });
-    } catch (err) {
-      auditRecorded = false;
-      console.error("[dept/user-budgets] limit_change audit failed:", err instanceof Error ? err.message : err);
+      }
+    );
+    if (limits.monthlyBudget !== undefined) {
+      await syncMonthlyLimitMirror(targetEmail, limits.monthlyBudget, now);
     }
 
-    return NextResponse.json({
-      success: true,
-      data: { email: targetEmail, ...limits },
-      ...(auditRecorded ? {} : { warning: "audit_failed" }),
-    });
+    return NextResponse.json({ success: true, data: { email: targetEmail, ...limits } });
   } catch (err) {
     console.error("[dept/user-budgets] PUT", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });

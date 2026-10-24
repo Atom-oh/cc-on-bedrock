@@ -3,7 +3,7 @@ import { canSetMemberLimit, validateMemberLimits, MAX_STANDING_LIMIT_USD } from 
 
 const mgr = { email: "m@x.com", role: "dept-manager" as const, department: "engineering" };
 const admin = { email: "a@x.com", role: "admin" as const, department: undefined };
-const member = { email: "u@x.com", department: "engineering" };
+const member = { email: "u@x.com", department: "engineering", role: "user" as const };
 
 describe("canSetMemberLimit", () => {
   it("dept-manager cannot change their own limits", () => {
@@ -41,13 +41,31 @@ describe("canSetMemberLimit", () => {
     expect(canSetMemberLimit({ actor: mgr, target: member, deptMonthlyBudget: 10 })).toEqual({ ok: true });
   });
 
+  it("dept-manager may not set limits for another manager or an admin", () => {
+    for (const role of ["dept-manager", "admin"] as const) {
+      expect(canSetMemberLimit({ actor: mgr, target: { ...member, role }, deptMonthlyBudget: 0 })).toEqual({
+        ok: false,
+        error: "target_is_manager",
+      });
+    }
+  });
+
+  it("dept-manager with an unknown target role is denied (fail-closed)", () => {
+    expect(
+      canSetMemberLimit({ actor: mgr, target: { email: "u@x.com", department: "engineering" }, deptMonthlyBudget: 0 })
+    ).toEqual({ ok: false, error: "target_is_manager" });
+  });
+
   it("plain user is not a manager", () => {
     expect(
       canSetMemberLimit({ actor: { email: "p@x.com", role: "user", department: "engineering" }, target: member, deptMonthlyBudget: 0 })
     ).toEqual({ ok: false, error: "not_manager" });
   });
 
-  it("admin may change anyone, self included", () => {
+  it("admin may change anyone, self and managers included", () => {
+    for (const role of ["dept-manager", "admin", undefined] as const) {
+      expect(canSetMemberLimit({ actor: admin, target: { ...member, role }, deptMonthlyBudget: 0 })).toEqual({ ok: true });
+    }
     expect(canSetMemberLimit({ actor: admin, target: { email: "a@x.com", department: "default" }, deptMonthlyBudget: 0 })).toEqual({ ok: true });
     expect(
       canSetMemberLimit({ actor: admin, target: { email: "u@x.com", department: "research" }, monthlyBudget: 5000, deptMonthlyBudget: 1000 })

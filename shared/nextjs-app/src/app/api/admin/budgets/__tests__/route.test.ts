@@ -16,13 +16,14 @@ vi.mock('@aws-sdk/client-dynamodb', async (orig) => {
 
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { DeleteItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { DeleteItemCommand, GetItemCommand, TransactWriteItemsCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { PUT } from '../route';
 
 const asReq = (body: unknown) => ({ json: async () => body } as never);
 const sentOf = <T>(cls: new (...a: never[]) => T): T[] =>
   m.send.mock.calls.map((c) => c[0]).filter((c): c is T => c instanceof cls);
+const auditOf = (tx: TransactWriteItemsCommand) => unmarshall(tx.input.TransactItems![1].Put!.Item!);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -30,7 +31,7 @@ beforeEach(() => {
   m.requireFreshRole.mockResolvedValue({ ok: true, role: 'admin' });
   m.getCognitoUser.mockResolvedValue({ department: 'eng' });
   m.send.mockImplementation(async (c: unknown) =>
-    c instanceof UpdateItemCommand ? { Attributes: { monthlyBudget: { N: '7' } } } : {}
+    c instanceof GetItemCommand ? { Item: { monthlyBudget: { N: '7' } } } : {}
   );
 });
 
@@ -50,7 +51,9 @@ describe('PUT /api/admin/budgets', () => {
     const res = await PUT(asReq({ type: 'user', id: 'Admin@x.com', monthlyBudget: 0 }));
     expect(res.status).toBe(200);
     expect(sentOf(DeleteItemCommand)[0].input.Key).toEqual({ PK: { S: 'USER#admin@x.com' }, SK: { S: 'LIMIT#monthly' } });
-    expect(unmarshall(sentOf(PutItemCommand)[0].input.Item!)).toMatchObject({
+    const [tx] = sentOf(TransactWriteItemsCommand);
+    expect(tx.input.TransactItems![0].Update!.Key).toEqual({ user_id: { S: 'admin@x.com' } });
+    expect(auditOf(tx)).toMatchObject({
       type: 'limit_change',
       status: 'applied',
       actor: 'admin@x.com',
@@ -65,7 +68,9 @@ describe('PUT /api/admin/budgets', () => {
   it('department change is audited under that department without an email', async () => {
     const res = await PUT(asReq({ type: 'department', id: 'eng', monthlyBudget: 900, perUserDailyBudget: 3 }));
     expect(res.status).toBe(200);
-    const item = unmarshall(sentOf(PutItemCommand)[0].input.Item!);
+    const [tx] = sentOf(TransactWriteItemsCommand);
+    expect(tx.input.TransactItems![0].Update!.Key).toEqual({ dept_id: { S: 'eng' } });
+    const item = auditOf(tx);
     expect(item).toMatchObject({
       targetType: 'department',
       department: 'eng',
@@ -73,5 +78,16 @@ describe('PUT /api/admin/budgets', () => {
       after: { monthlyBudget: 900, perUserDailyBudget: 3 },
     });
     expect(item.email).toBeUndefined();
+  });
+
+  it('a failed transaction returns 500 and skips the mirror', async () => {
+    m.send.mockImplementation(async (c: unknown) => {
+      if (c instanceof TransactWriteItemsCommand) throw new Error('TransactionCanceledException');
+      return {};
+    });
+    const res = await PUT(asReq({ type: 'user', id: 'bob@x.com', monthlyBudget: 5 }));
+    expect(res.status).toBe(500);
+    expect(sentOf(UpdateItemCommand)).toHaveLength(0);
+    expect(sentOf(DeleteItemCommand)).toHaveLength(0);
   });
 });

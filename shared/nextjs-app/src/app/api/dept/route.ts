@@ -39,8 +39,11 @@ export async function GET(req: NextRequest) {
     try {
       department = (await getCognitoUser(session.user.email)).department ?? "";
     } catch (err) {
-      console.error("[dept] department lookup failed:", err instanceof Error ? err.message : err);
-      return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+      if ((err as { name?: string })?.name !== "UserNotFoundException") {
+        console.error("[dept] department lookup failed:", err instanceof Error ? err.message : err);
+        return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+      }
+      department = ""; // deleted actor: no department → empty results below
     }
     // fail-closed: a manager without a real department sees nothing.
     if (!hasRealDepartment(department)) {

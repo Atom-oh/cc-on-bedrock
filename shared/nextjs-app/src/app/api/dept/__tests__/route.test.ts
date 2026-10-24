@@ -52,6 +52,19 @@ describe('GET /api/dept', () => {
     expect(m.listCognitoUsers).not.toHaveBeenCalled();
   });
 
+  it('deleted manager (UserNotFound) gets empty results, not 503', async () => {
+    m.getCognitoUser.mockRejectedValue(Object.assign(new Error('gone'), { name: 'UserNotFoundException' }));
+    const res = await route.GET(asReq());
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.members).toEqual([]);
+  });
+
+  it('other Cognito errors → 503', async () => {
+    m.getCognitoUser.mockRejectedValue(new Error('throttled'));
+    const res = await route.GET(asReq());
+    expect(res.status).toBe(503);
+  });
+
   it('admin keeps the ?department filter', async () => {
     m.requireFreshRole.mockResolvedValue({ ok: true, role: 'admin' });
     const res = await route.GET(asReq('?department=eng'));

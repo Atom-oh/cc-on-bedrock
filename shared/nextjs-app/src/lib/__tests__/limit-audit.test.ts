@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { DeleteItemCommand, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { DeleteItemCommand, TransactWriteItemsCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
-import { buildLimitChangeItem, pickNumbers, recordLimitChange } from "../limit-audit";
+import { applyLimitChange, buildLimitChangeItem, pickNumbers } from "../limit-audit";
 import { syncMonthlyLimitMirror } from "../limit-mirror";
 import { NORMALIZED_PER_USD } from "../budget-increase";
 
@@ -41,14 +41,30 @@ describe("limit_change audit record", () => {
     expect(item.targetType).toBe("department");
   });
 
-  it("recordLimitChange puts a new item without overwriting", async () => {
+  it("applyLimitChange commits the row update and the audit Put in one transaction", async () => {
     const sent: unknown[] = [];
-    const id = await recordLimitChange(change, async (c) => void sent.push(c));
+    const update = {
+      TableName: "cc-user-budgets",
+      Key: { user_id: { S: "u@x.com" } },
+      UpdateExpression: "SET monthlyBudget = :m",
+      ExpressionAttributeValues: { ":m": { N: "200" } },
+    };
+    const id = await applyLimitChange(update, change, async (c) => void sent.push(c));
     expect(sent).toHaveLength(1);
-    const put = sent[0] as PutItemCommand;
-    expect(put).toBeInstanceOf(PutItemCommand);
-    expect(put.input.ConditionExpression).toBe("attribute_not_exists(PK)");
-    expect(unmarshall(put.input.Item!)).toMatchObject({ PK: `REQUEST#${id}`, type: "limit_change" });
+    const tx = sent[0] as TransactWriteItemsCommand;
+    expect(tx).toBeInstanceOf(TransactWriteItemsCommand);
+    const [first, second] = tx.input.TransactItems!;
+    expect(first.Update).toEqual(update);
+    expect(second.Put!.ConditionExpression).toBe("attribute_not_exists(PK)");
+    expect(unmarshall(second.Put!.Item!)).toMatchObject({ PK: `REQUEST#${id}`, type: "limit_change" });
+  });
+
+  it("applyLimitChange propagates a failed transaction", async () => {
+    await expect(
+      applyLimitChange({ TableName: "t", Key: {}, UpdateExpression: "SET a = :a" }, change, async () => {
+        throw new Error("TransactionCanceledException");
+      })
+    ).rejects.toThrow();
   });
 
   it("pickNumbers keeps only present numeric fields", () => {
