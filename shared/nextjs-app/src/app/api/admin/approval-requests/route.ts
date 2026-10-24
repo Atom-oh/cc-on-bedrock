@@ -11,14 +11,10 @@ import {
   IAM_POLICY_SETS,
 } from "@/lib/ec2-clients";
 import type { IamStatement } from "@/lib/iam-request-validation";
-import {
-  canApproveBudgetIncrease,
-  canApproveRequest,
-  type ApproverUser,
-} from "@/lib/approval-authz";
+import { canApproveRequest, type ApproverUser } from "@/lib/approval-authz";
 import { getRoleGroups, requireFreshRole } from "@/lib/role-admin";
-import { hasRealDepartment, roleFromGroups } from "@/lib/roles";
-import { BUDGET_PERIODS } from "@/lib/budget-periods";
+import { hasRealDepartment, roleFromGroups, type Role } from "@/lib/roles";
+import { BUDGET_PERIODS, type BudgetPeriod } from "@/lib/budget-periods";
 import { grantAttr, periodKey } from "@/lib/budget-grants";
 import {
   DEPT_BUDGETS_TABLE,
@@ -28,20 +24,23 @@ import {
   buildApproveTransaction,
   buildExpireTransaction,
   buildRejectTransaction,
+  classifyCancellation,
+  decideBudgetAction,
   isBudgetPeriod,
-  isTransactionCanceled,
-  isValidIncreaseAmount,
+  periodBaseCap,
   periodIsCapped,
   removeStaleGrants,
   runTransaction,
   staleGrantAttrs,
   type BudgetIncreaseRecord,
+  type StoredBudgetRequest,
 } from "@/lib/budget-increase";
 import {
   DynamoDBClient,
   ScanCommand,
   UpdateItemCommand,
   GetItemCommand,
+  type TransactWriteItemsInput,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { Session } from "next-auth";
@@ -52,6 +51,9 @@ const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-req
 const dynamodb = new DynamoDBClient({ region });
 
 // ADR-026 T7 — approval authz lives in @/lib/approval-authz (pure, unit-tested).
+
+/** Request types a dept-manager may see (and, for budget_increase, decide). */
+const MANAGER_VISIBLE_TYPES = ["budget_increase", "limit_change"];
 
 /**
  * The approver built from FRESH Cognito data: the session's groups and department
@@ -151,12 +153,15 @@ export async function GET(req: NextRequest) {
 
     requests.sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
 
-    // dept-manager (non-admin) sees only their own department's requests.
-    // fail-closed: a dept-manager with no department sees nothing (gate round-1 Codex MAJOR).
+    // dept-manager (non-admin) sees only their own department's budget requests
+    // (budget_increase, plus limit_change history). fail-closed: a dept-manager with
+    // no department sees nothing (gate round-1 Codex MAJOR).
     const visible = approver.isAdmin
       ? requests
       : approver.department
-        ? requests.filter((r) => r.department === approver.department)
+        ? requests.filter(
+            (r) => r.department === approver.department && MANAGER_VISIBLE_TYPES.includes(r.type)
+          )
         : [];
 
     return NextResponse.json({
@@ -207,6 +212,10 @@ export async function POST(req: NextRequest) {
     const request = unmarshall(getResult.Item);
     if (request.type === "budget_increase") {
       return await decideBudgetIncrease(request, approver, action, body);
+    }
+    // Dept-managers decide only budget_increase; every other request type is admin-only.
+    if (!approver.isAdmin) {
+      return NextResponse.json({ error: "admin_only_request_type" }, { status: 403 });
     }
     // Pass the STORED department verbatim (empty string when missing) — do NOT
     // coerce to "default", else a default-dept manager could approve dept-less
@@ -316,8 +325,27 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * budget_increase approve/reject. Every write is one conditional transaction on
- * `status = pending`, so a concurrent decision loses with 409 already_decided.
+ * Map a failed transaction to a response: a failed request condition means another
+ * approver decided first; a failed department condition means the department's month
+ * grants moved since the cap check; anything else (conflict, throttling) is a retry.
+ * Non-cancellation errors are rethrown.
+ */
+function txFailure(err: unknown, tx: TransactWriteItemsInput): NextResponse {
+  const c = classifyCancellation(err, tx);
+  if (c === null) throw err;
+  if (c !== "retry" && c.failed.includes("request")) {
+    return NextResponse.json({ error: "already_decided" }, { status: 409 });
+  }
+  if (c !== "retry" && c.failed.includes("department")) {
+    return NextResponse.json({ error: "department_changed_retry" }, { status: 409 });
+  }
+  return NextResponse.json({ error: "retry" }, { status: 503 });
+}
+
+/**
+ * budget_increase approve/reject. The decision is the pure `decideBudgetAction` on
+ * fresh reads; every write is one transaction conditional on `status = pending`
+ * (plus, for a dept-manager approval, on the department's month grant total).
  */
 async function decideBudgetIncrease(
   request: Record<string, unknown>,
@@ -328,98 +356,107 @@ async function decideBudgetIncrease(
   const requestId = String(request.requestId ?? "");
   const email = String(request.email ?? "").trim().toLowerCase();
   const department = String(request.department ?? "");
-
-  // Self ban + department scope first, so the status of another department's
-  // request is not disclosed.
-  if (!canApproveRequest(approver, department, email)) {
-    const self = !email || email === approver.email.trim().toLowerCase();
-    return NextResponse.json({ error: self ? "self" : "other_department" }, { status: 403 });
-  }
-
-  const currentStatus = (request.status as string) ?? "pending";
-  if (currentStatus !== "pending") {
-    return NextResponse.json({ success: true, data: { requestId, status: currentStatus, alreadyProcessed: true } });
-  }
-
-  if (!isBudgetPeriod(request.period) || typeof request.periodKey !== "string") {
-    return NextResponse.json({ error: "Malformed budget_increase request" }, { status: 400 });
-  }
-  const record: BudgetIncreaseRecord = {
-    requestId,
+  const stored: StoredBudgetRequest = {
+    type: "budget_increase",
     email,
     department,
+    status: String(request.status ?? "pending"),
     period: request.period,
     periodKey: request.periodKey,
+    requestedAmount: request.requestedAmount,
   };
   const now = new Date();
 
-  if (action === "reject") {
-    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 500) : "";
-    try {
-      await runTransaction(buildRejectTransaction(record, approver.email, reason, now));
-    } catch (err) {
-      if (isTransactionCanceled(err)) return NextResponse.json({ error: "already_decided" }, { status: 409 });
-      throw err;
-    }
-    return NextResponse.json({ success: true, data: { requestId, status: "rejected" } });
-  }
-
-  const amount = body.amount === undefined ? Number(request.requestedAmount) : body.amount;
-  if (!isValidIncreaseAmount(amount)) {
-    return NextResponse.json({ error: "invalid_amount" }, { status: 400 });
-  }
-
-  // Fresh reads: requester's current role, the department's cap state, the user's caps.
-  let requesterIsDeptManager: boolean;
+  // Requester's CURRENT role (before the approve/reject split: a manager's or admin's
+  // request is admin-only for both).
+  let requesterRole: Role;
   try {
-    const { role } = roleFromGroups(await getRoleGroups(email));
-    requesterIsDeptManager = role !== "user"; // a manager (or admin) request needs an admin
+    requesterRole = roleFromGroups(await getRoleGroups(email)).role;
   } catch (err) {
     console.error("[admin/approval-requests] requester role lookup failed:", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
   }
-  const [deptRes, userRes] = await Promise.all([
-    department
-      ? dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key: { dept_id: { S: department } } }))
-      : Promise.resolve(undefined),
-    dynamodb.send(new GetItemCommand({ TableName: USER_BUDGETS_TABLE, Key: { user_id: { S: email } } })),
-  ]);
-  const deptRow = deptRes?.Item ? unmarshall(deptRes.Item) : undefined;
-  const userRow = userRes.Item ? unmarshall(userRes.Item) : undefined;
 
-  const decision = canApproveBudgetIncrease(
+  // Cap state is only needed to approve.
+  let deptRow: Record<string, unknown> | undefined;
+  let userRow: Record<string, unknown> | undefined;
+  let seenDeptGrant: string | null = null;
+  const monthGrant = grantAttr("monthly", periodKey("monthly", now));
+  if (action === "approve") {
+    const [deptRes, userRes] = await Promise.all([
+      department
+        ? dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key: { dept_id: { S: department } } }))
+        : Promise.resolve(undefined),
+      dynamodb.send(new GetItemCommand({ TableName: USER_BUDGETS_TABLE, Key: { user_id: { S: email } } })),
+    ]);
+    deptRow = deptRes?.Item ? unmarshall(deptRes.Item) : undefined;
+    userRow = userRes.Item ? unmarshall(userRes.Item) : undefined;
+    seenDeptGrant = deptRes?.Item?.[monthGrant]?.N ?? null;
+  }
+
+  const decision = decideBudgetAction({
     approver,
-    { ...record, requesterIsDeptManager },
-    amount,
-    {
+    request: stored,
+    requesterRole,
+    action,
+    amount: body.amount,
+    dept: {
       monthlyBudget: Number(deptRow?.monthlyBudget ?? 0),
       monthSpend: Number(deptRow?.currentSpend ?? 0),
-      monthGranted: Number(deptRow?.[grantAttr("monthly", periodKey("monthly", now))] ?? 0),
+      monthGranted: Number(deptRow?.[monthGrant] ?? 0),
     },
-    now
-  );
-  if (!decision.ok) {
-    if (decision.reason === "invalid_amount") {
-      return NextResponse.json({ error: "invalid_amount" }, { status: 400 });
+    seenDeptGrant,
+    baseCap: isBudgetPeriod(stored.period) ? periodBaseCap(stored.period, userRow, deptRow) : 0,
+    now,
+  });
+
+  if (decision.kind === "deny") {
+    return NextResponse.json({ error: decision.error }, { status: decision.status });
+  }
+  if (decision.kind === "already_processed") {
+    return NextResponse.json({ success: true, data: { requestId, status: decision.status, alreadyProcessed: true } });
+  }
+
+  // decideBudgetAction validated period/periodKey for every remaining kind.
+  const record: BudgetIncreaseRecord = {
+    requestId,
+    email,
+    department,
+    period: stored.period as BudgetPeriod,
+    periodKey: stored.periodKey as string,
+  };
+
+  if (decision.kind === "expire") {
+    const tx = buildExpireTransaction(record, now);
+    try {
+      await runTransaction(tx);
+    } catch (err) {
+      if (classifyCancellation(err, tx) === null) throw err; // decided concurrently — nothing to expire
     }
-    if (decision.reason === "expired") {
-      try {
-        await runTransaction(buildExpireTransaction(record, now));
-      } catch (err) {
-        if (!isTransactionCanceled(err)) throw err; // decided concurrently — nothing to expire
-      }
-      return NextResponse.json({ error: "expired" }, { status: 409 });
+    return NextResponse.json({ error: "expired" }, { status: 409 });
+  }
+
+  if (decision.kind === "reject") {
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 500) : "";
+    const tx = buildRejectTransaction(record, approver.email, reason, now);
+    try {
+      await runTransaction(tx);
+    } catch (err) {
+      return txFailure(err, tx);
     }
-    return NextResponse.json({ error: decision.reason }, { status: 403 });
+    return NextResponse.json({ success: true, data: { requestId, status: "rejected" } });
   }
 
   // A period with no base cap stays unlimited; a grant there would be meaningless.
   const skipPeriods = BUDGET_PERIODS.filter((p) => !periodIsCapped(p, userRow, deptRow));
+  const tx = buildApproveTransaction(record, decision.amount, approver.email, now, {
+    skipPeriods,
+    deptCondition: decision.deptCondition,
+  });
   try {
-    await runTransaction(buildApproveTransaction(record, amount, approver.email, now, { skipPeriods }));
+    await runTransaction(tx);
   } catch (err) {
-    if (isTransactionCanceled(err)) return NextResponse.json({ error: "already_decided" }, { status: 409 });
-    throw err;
+    return txFailure(err, tx);
   }
   if (userRow) await removeStaleGrants(email, staleGrantAttrs(userRow, now));
 
@@ -429,7 +466,7 @@ async function decideBudgetIncrease(
       requestId,
       status: "approved",
       applied: {
-        grants: approvedGrants(record, amount, now, skipPeriods),
+        grants: approvedGrants(record, decision.amount, now, skipPeriods),
         releaseEtaMinutes: RELEASE_ETA_MINUTES,
       },
     },

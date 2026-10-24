@@ -13,7 +13,14 @@ import {
   type TransactWriteItemsInput,
 } from "@aws-sdk/client-dynamodb";
 import { BUDGET_PERIODS, resolvePeriodBudget, type BudgetPeriod } from "./budget-periods";
-import { cascadeTargets, grantAttr, periodKey } from "./budget-grants";
+import { cascadeTargets, grantAttr, isCurrentPeriodKey, periodKey } from "./budget-grants";
+import {
+  canApproveBudgetIncrease,
+  canApproveRequest,
+  type ApproverUser,
+  type DepartmentBudgetState,
+} from "./approval-authz";
+import type { Role } from "./roles";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 export const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
@@ -105,6 +112,22 @@ export function periodIsCapped(period: BudgetPeriod, userRow: Row, deptRow: Row)
   return Number(userRow?.[EFFECTIVE_FIELD[period]] ?? 0) > 0;
 }
 
+const ACTIVE_GRANT_FIELD: Record<BudgetPeriod, string> = {
+  daily: "activeGrantDaily",
+  weekly: "activeGrantWeekly",
+  monthly: "activeGrantMonthly",
+};
+
+/** The period's base cap (without grants); 0 = uncapped. Same sources as `periodIsCapped`. */
+export function periodBaseCap(period: BudgetPeriod, userRow: Row, deptRow: Row): number {
+  const mirror = resolvePeriodBudget(period, userRow, deptRow).base;
+  if (mirror > 0) return mirror;
+  const enforced = Number(userRow?.[EFFECTIVE_FIELD[period]] ?? 0) || 0;
+  if (enforced <= 0) return 0;
+  const base = enforced - (Number(userRow?.[ACTIVE_GRANT_FIELD[period]] ?? 0) || 0);
+  return base > 0 ? base : enforced;
+}
+
 /** Spend and resolved cap at request time, shown to the approver. */
 export function periodSnapshot(period: BudgetPeriod, userRow: Row, deptRow: Row): { spend: number; budget: number } {
   const spend = Number(userRow?.[SPEND_FIELD[period]] ?? 0) || 0;
@@ -186,7 +209,7 @@ export function buildApproveTransaction(
   amount: number,
   approverEmail: string,
   now: Date,
-  opts: { skipPeriods?: BudgetPeriod[] } = {},
+  opts: { skipPeriods?: BudgetPeriod[]; deptCondition?: DeptCondition } = {},
 ): TransactWriteItemsInput {
   const items: TransactWriteItem[] = [
     {
@@ -224,13 +247,19 @@ export function buildApproveTransaction(
   }
 
   if (req.department) {
+    // Optimistic guard for the department-cap check: the month's granted total must
+    // still be what the approver's check read (absent/0 → still absent).
+    const seen = opts.deptCondition?.seenGrant;
+    const guarded = opts.deptCondition !== undefined;
+    const hasSeen = guarded && seen !== null && seen !== undefined && Number(seen) !== 0;
     items.push({
       Update: {
         TableName: DEPT_BUDGETS_TABLE,
         Key: { dept_id: { S: req.department } },
         UpdateExpression: "ADD #g :amt",
+        ...(guarded ? { ConditionExpression: hasSeen ? "#g = :seen" : "attribute_not_exists(#g)" } : {}),
         ExpressionAttributeNames: { "#g": grantAttr("monthly", periodKey("monthly", now)) },
-        ExpressionAttributeValues: { ":amt": num(amount) },
+        ExpressionAttributeValues: { ":amt": num(amount), ...(hasSeen ? { ":seen": { N: String(seen) } } : {}) },
       },
     });
   }
@@ -279,6 +308,124 @@ export function buildExpireTransaction(req: BudgetIncreaseRecord, now: Date): Tr
   return closeTransaction(req, "expired", ["expiredAt = :at"], { ":at": { S: now.toISOString() } });
 }
 
+/** Raw DynamoDB N string of the department's month grant as read (null = absent). */
+export interface DeptCondition {
+  seenGrant: string | null;
+}
+
+export interface StoredBudgetRequest {
+  type: string;
+  email: string;
+  department: string;
+  status: string;
+  period: unknown;
+  periodKey: unknown;
+  requestedAmount: unknown;
+}
+
+export type BudgetAction =
+  | { kind: "deny"; status: number; error: string }
+  | { kind: "already_processed"; status: string }
+  | { kind: "expire" }
+  | { kind: "reject" }
+  | { kind: "approve"; amount: number; deptCondition?: DeptCondition };
+
+function sameEmail(a: string | undefined, b: string | undefined): boolean {
+  const x = (a ?? "").trim().toLowerCase();
+  const y = (b ?? "").trim().toLowerCase();
+  return x === "" || y === "" || x === y; // missing identity fails closed as "self"
+}
+
+/**
+ * The approval decision for one request, from fresh inputs. Order:
+ * self -> admin_only_request_type -> other_department -> requester_is_manager ->
+ * status pending -> expired -> (reject) -> invalid_amount -> unlimited_period ->
+ * exceeds_department -> approve. A dept-manager approval carries a department
+ * condition so a concurrent grant cannot slip past the department cap.
+ */
+export function decideBudgetAction(input: {
+  approver: ApproverUser;
+  request: StoredBudgetRequest;
+  requesterRole: Role;
+  action: "approve" | "reject";
+  amount?: unknown;
+  dept: DepartmentBudgetState;
+  seenDeptGrant?: string | null;
+  baseCap: number;
+  now: Date;
+}): BudgetAction {
+  const { approver, request, now } = input;
+  const deny = (status: number, error: string): BudgetAction => ({ kind: "deny", status, error });
+
+  if (sameEmail(approver.email, request.email)) return deny(403, "self");
+  if (!approver.isAdmin && request.type !== "budget_increase") return deny(403, "admin_only_request_type");
+  if (!canApproveRequest(approver, request.department, request.email)) return deny(403, "other_department");
+  if (!approver.isAdmin && input.requesterRole !== "user") return deny(403, "requester_is_manager");
+  if (request.status !== "pending") return { kind: "already_processed", status: request.status };
+  if (request.type !== "budget_increase" || !isBudgetPeriod(request.period) || typeof request.periodKey !== "string") {
+    return deny(400, "malformed_request");
+  }
+  if (!isCurrentPeriodKey(request.period, request.periodKey, now)) return { kind: "expire" };
+  if (input.action === "reject") return { kind: "reject" };
+
+  const amount = input.amount === undefined ? Number(request.requestedAmount) : input.amount;
+  if (!isValidIncreaseAmount(amount)) return deny(400, "invalid_amount");
+  if (!(input.baseCap > 0)) return deny(409, "unlimited_period");
+
+  const check = canApproveBudgetIncrease(
+    approver,
+    {
+      email: request.email,
+      department: request.department,
+      period: request.period,
+      periodKey: request.periodKey,
+      requesterIsDeptManager: input.requesterRole !== "user",
+    },
+    amount,
+    input.dept,
+    now,
+  );
+  if (!check.ok) return deny(check.reason === "invalid_amount" ? 400 : 403, check.reason);
+
+  const guard = !approver.isAdmin && input.dept.monthlyBudget > 0;
+  return guard
+    ? { kind: "approve", amount, deptCondition: { seenGrant: input.seenDeptGrant ?? null } }
+    : { kind: "approve", amount };
+}
+
+export type TxItemRole = "request" | "lock" | "user" | "department";
+
+function txItemRole(item: TransactWriteItem): TxItemRole {
+  const op = item.Put ?? item.Update ?? item.Delete ?? item.ConditionCheck;
+  if (op?.TableName === USER_BUDGETS_TABLE) return "user";
+  if (op?.TableName === DEPT_BUDGETS_TABLE) return "department";
+  const pk = (item.Put?.Item ?? (op as { Key?: Record<string, { S?: string }> } | undefined)?.Key)?.PK?.S ?? "";
+  return pk.startsWith("PENDING#") ? "lock" : "request";
+}
+
+/**
+ * Why a transaction was canceled: null = not a cancellation; "retry" = a non-condition
+ * cause (TransactionConflict, throttling, missing reasons); otherwise the items whose
+ * condition failed.
+ */
+export function classifyCancellation(
+  err: unknown,
+  tx: TransactWriteItemsInput,
+): null | "retry" | { failed: TxItemRole[] } {
+  if (!(err instanceof Error) || err.name !== "TransactionCanceledException") return null;
+  const reasons = (err as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons;
+  if (!Array.isArray(reasons) || reasons.length === 0) return "retry";
+  const failed: TxItemRole[] = [];
+  for (let i = 0; i < reasons.length; i++) {
+    const code = reasons[i]?.Code ?? "None";
+    if (code === "None") continue;
+    if (code !== "ConditionalCheckFailed") return "retry";
+    const item = tx.TransactItems?.[i];
+    if (item) failed.push(txItemRole(item));
+  }
+  return failed.length > 0 ? { failed } : "retry";
+}
+
 // ─── Execution ───
 
 const dynamodb = new DynamoDBClient({ region });
@@ -287,10 +434,6 @@ export async function runTransaction(input: TransactWriteItemsInput): Promise<vo
   await dynamodb.send(new TransactWriteItemsCommand(input));
 }
 
-/** A failed condition (request no longer pending / lock already held). */
-export function isTransactionCanceled(err: unknown): boolean {
-  return err instanceof Error && err.name === "TransactionCanceledException";
-}
 
 /** Best-effort removal of past-window grants from the user row; failures are ignored. */
 export async function removeStaleGrants(email: string, attrs: string[]): Promise<void> {

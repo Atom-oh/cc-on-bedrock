@@ -6,14 +6,14 @@ import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { randomUUID } from "crypto";
 import { getCognitoUser } from "@/lib/aws-clients";
 import { getRoleGroups } from "@/lib/role-admin";
-import { roleFromGroups } from "@/lib/roles";
+import { hasRealDepartment, roleFromGroups } from "@/lib/roles";
 import { periodKey } from "@/lib/budget-grants";
 import {
   APPROVAL_TABLE,
   DEPT_BUDGETS_TABLE,
   USER_BUDGETS_TABLE,
   buildCreateTransaction,
-  isTransactionCanceled,
+  classifyCancellation,
   periodIsCapped,
   periodSnapshot,
   runTransaction,
@@ -108,7 +108,10 @@ export async function POST(req: NextRequest) {
   let requesterRole: string;
   try {
     const [user, groups] = await Promise.all([getCognitoUser(sessionEmail), getRoleGroups(sessionEmail)]);
-    department = user.department ?? "default";
+    // No real department (blank / "default" placeholder) is stored as "": only an
+    // admin can approve such a request and no department grant is written.
+    const d = user.department ?? "";
+    department = hasRealDepartment(d) ? d : "";
     subdomain = user.subdomain ?? "";
     requesterRole = roleFromGroups(groups).role;
   } catch (err) {
@@ -119,10 +122,12 @@ export async function POST(req: NextRequest) {
   try {
     const [userRes, deptRes] = await Promise.all([
       dynamodb.send(new GetItemCommand({ TableName: USER_BUDGETS_TABLE, Key: { user_id: { S: email } } })),
-      dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key: { dept_id: { S: department } } })),
+      department
+        ? dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key: { dept_id: { S: department } } }))
+        : Promise.resolve(undefined),
     ]);
     const userRow = userRes.Item ? unmarshall(userRes.Item) : undefined;
-    const deptRow = deptRes.Item ? unmarshall(deptRes.Item) : undefined;
+    const deptRow = deptRes?.Item ? unmarshall(deptRes.Item) : undefined;
 
     // 0 = unlimited: nothing to raise for this period.
     if (!periodIsCapped(input.period, userRow, deptRow)) {
@@ -133,28 +138,27 @@ export async function POST(req: NextRequest) {
     const snapshot = periodSnapshot(input.period, userRow, deptRow);
     const requestId = randomUUID();
     const key = periodKey(input.period, now);
+    const tx = buildCreateTransaction({
+      requestId,
+      email,
+      department,
+      period: input.period,
+      periodKey: key,
+      subdomain,
+      requesterRole,
+      requestedAmount: input.requestedAmount,
+      reason: input.reason,
+      snapshotSpend: snapshot.spend,
+      snapshotBudget: snapshot.budget,
+      requestedAt: now.toISOString(),
+    });
     try {
-      await runTransaction(
-        buildCreateTransaction({
-          requestId,
-          email,
-          department,
-          period: input.period,
-          periodKey: key,
-          subdomain,
-          requesterRole,
-          requestedAmount: input.requestedAmount,
-          reason: input.reason,
-          snapshotSpend: snapshot.spend,
-          snapshotBudget: snapshot.budget,
-          requestedAt: now.toISOString(),
-        })
-      );
+      await runTransaction(tx);
     } catch (err) {
-      if (isTransactionCanceled(err)) {
-        return NextResponse.json({ error: "pending_exists" }, { status: 409 });
-      }
-      throw err;
+      const c = classifyCancellation(err, tx);
+      if (c === null) throw err;
+      if (c === "retry") return NextResponse.json({ error: "retry" }, { status: 503 });
+      return NextResponse.json({ error: "pending_exists" }, { status: 409 });
     }
 
     return NextResponse.json({
