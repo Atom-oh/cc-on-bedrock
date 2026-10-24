@@ -40,6 +40,7 @@
 - **Kiro 거버넌스 제외** — Kiro는 IAM Identity Center 구독 라이선스; Cognito/Bedrock 토큰 한도 집행 대상 아님.
 - **Codex = bedrock-runtime only** — Codex CLI calls Bedrock only via the `amazon-bedrock-runtime` provider (Responses API). Never grant `bedrock-mantle:*` (it escapes invocation-log metering, management-event audit and the IAM deny). Every per-user Bedrock allow-list copy includes the OpenAI GPT and default-project ARNs (`tests/unit/test_bedrock_iam_codex_parity.py`) (ADR-014).
 - **No public ingress, no owned VPC** — Every LB is `internal`, reached only by CloudFront VPC origins, and admits only the CloudFront VPC-origin SG. There are no public IPs on compute. Terraform takes `vpc_id` and subnet IDs and never declares `aws_vpc`. In a shared VPC, SG rules reference SGs instead of the VPC CIDR (interface endpoints excepted) (ADR-015).
+- **역할 = Cognito 그룹 하나** — 모든 사용자는 `admin` / `dept-manager` / `user` 그룹을 정확히 하나 가진다. 역할을 커스텀 속성·DynamoDB에 따로 두지 않는다. 지정·변경은 admin만 관리자 사용자 페이지에서 하며 저장 즉시 Cognito 그룹에 반영된다. `dept-manager`는 실제 부서(빈 값·`default` 아님) 필수. 특권 쓰기는 세션 그룹이 아니라 현재 Cognito 그룹을 다시 확인한다 (ADR-008 amendment 2026-10-24).
 - **anti-drift** — 새 ADR/flag/status 변경은 **같은 PR에서 이 §3(또는 §2)를 갱신**. 갱신 없으면 "not live". 옛 ADR 본문은 트리에서 제거(git tag + `../history/ADR-MAPPING.md` 보존), **번호 재사용 금지** (2026-06-23 BASELINE reset의 일괄 재번호는 일회성 예외; 이후 신규 ADR에 적용).
 
 ---
@@ -51,6 +52,8 @@
 | **LIVE (default)** | Governance deployment profile | `deployment_mode = "governance"` (default): dashboard + local installer (Cognito → 1h STS, no Bedrock key), no EC2/ECS DevEnv, OTEL collector or EC2 schedules. `deployment_mode = "devenv"` adds EC2 DevEnvs; deprecated `governance_only` overrides when set | ADR-006 (amendment 2026-10-23) |
 | **LIVE(flag)** | EC2 Hibernation | `HIBERNATE_ENABLED=true`. 유휴 stop/hibernate + 만료 회전, 암호화 root (`deployment_mode = "devenv"` 전용) | ADR-002 |
 | **GATED** | 셀프서비스 IAM 권한 확장 | UI 신청 → **admin 승인** 필수 + permission boundary 내. 신청 API(`/api/user/container-request`)는 `deployment_mode = "devenv"` 전용 (ADR-006 amendment 2026-10-23) | ADR-007 |
+| **LIVE** | 예산 증액 요청·승인 (일회성 grant) | 두 에디션 공통. 사용자 요청 → admin 또는 자기 부서 dept-manager(부서 월 총액 안, plain user 요청만) 승인, 자기 승인 금지. 승인은 현재 UTC 기간 창에만 적용되고 상위 기간(일→주→월)으로 연쇄; 토큰 deny는 조건부 해제. dept-manager는 부서원 상시 한도도 설정(부서 총액·인당 기본값은 admin 전용) | ADR-008 (amendment 2026-10-24) |
+| **LIVE(flag)** | ccdash 연동 | Terraform `ccdash_url` 설정 시 사이드바 링크 + 수집기 설치 안내만 표시(미설정 = 숨김). cc는 텔레메트리 설정을 쓰지 않고 ccdash를 배포·수정하지 않음 | ADR-008 (amendment 2026-10-24) |
 | **LIVE** | Codex on Bedrock | Codex CLI preinstalled on EC2 DevEnv + Local `cc-bedrock-local codex` / `ccx`; bedrock-runtime Responses API sharing usage, budget and audit. Codex OTEL productivity rollup is a follow-up | ADR-014 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
@@ -78,7 +81,7 @@
 | 005 | 사용량 집계 | Inference Profile + Invocation Log → DynamoDB, email canonical key, 모델 정규화 | 011·019·031 · ~~025~~ |
 | 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신; amendment 2026-10-23: `deployment_mode` profiles, `governance` default | 014·029 |
 | 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude; 셀프서비스 신청 UI/API는 devenv 프로파일 전용 | 005·020·021·030·034 · ~~026~~ |
-| 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18) | 006·015·023 |
+| 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18). 일회성 증액 요청·승인(UTC 창 grant, 상위 기간 연쇄, 자기 승인 금지), dept-manager 위임(부서원 상시 한도 + 부서 총액 안 증액 승인), 역할 = Cognito 그룹 하나 (amendment 2026-10-24) | 006·015·023 |
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |

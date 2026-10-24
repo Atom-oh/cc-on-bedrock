@@ -93,11 +93,12 @@ export default function AdminGuidePage() {
         <div className="space-y-2">
           {[
             { field: ko ? "이메일" : "Email", desc: ko ? "Cognito 사용자 ID + 로그인 ID" : "Cognito user ID + login ID", required: true },
+            { field: ko ? "역할" : "Role", desc: ko ? "admin / dept-manager / user 중 하나 (Cognito 그룹)" : "One of admin / dept-manager / user (Cognito group)", required: true },
             { field: ko ? "서브도메인" : "Subdomain", desc: ko ? "이메일에서 자동 파생. 수동 오버라이드 가능." : "Auto-derived from email. Manual override possible.", required: true },
             { field: "OS", desc: "Ubuntu 24.04 / Amazon Linux 2023", required: true },
             { field: ko ? "리소스 등급" : "Resource Tier", desc: "Light (1vCPU/4GB) / Standard (2vCPU/8GB) / Power (4vCPU/12GB)", required: true },
             { field: ko ? "보안 정책" : "Security Policy", desc: "Open / Restricted / Locked", required: true },
-            { field: ko ? "부서" : "Department", desc: ko ? "부서별 예산/사용량 추적용" : "For department budget/usage tracking", required: false },
+            { field: ko ? "부서" : "Department", desc: ko ? "부서별 예산/사용량 추적용. dept-manager는 필수 (빈 값·default 불가)" : "For department budget/usage tracking. Required for dept-manager (not blank or default)", required: false },
           ].map((f) => (
             <div key={f.field} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-white/5 text-xs">
               <span className={`w-1.5 h-1.5 rounded-full ${f.required ? "bg-rose-400" : "bg-gray-600"} shrink-0`} />
@@ -106,6 +107,17 @@ export default function AdminGuidePage() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="rounded-xl bg-[#0d1117] border border-violet-500/20 p-5 mb-4">
+        <h3 className="text-sm font-bold text-white mb-3">{ko ? "역할 = Cognito 그룹 (필수 제약)" : "Role = Cognito group (required)"}</h3>
+        <ul className="space-y-1.5 text-xs text-gray-400 list-disc pl-5">
+          <li>{ko ? "모든 사용자는 Cognito 그룹 admin / dept-manager / user 중 정확히 하나를 가집니다. 역할은 이 그룹에서만 나옵니다." : "Every user has exactly one Cognito group: admin, dept-manager or user. The role comes from that group only."}</li>
+          <li>{ko ? "역할은 admin이 Admin > 사용자 페이지에서 지정합니다 (생성 시 필수, 목록의 역할 열에서 변경). 저장하면 Cognito 그룹에 바로 반영되고 나머지 역할 그룹은 제거됩니다." : "Admins assign the role on Admin > Users (required on create, changed from the Role column). Saving writes straight to Cognito and removes the other role groups."}</li>
+          <li>{ko ? "역할을 바꾸면 대상 사용자의 Cognito 토큰을 무효화(global sign-out)하며, 화면 메뉴 등 세션 기반 표시는 다음 로그인부터 적용됩니다. 승인·한도·역할 변경 같은 쓰기는 서버가 현재 Cognito 그룹을 다시 확인하므로, 회수된 권한은 세션이 남아 있어도 바로 막힙니다." : "Changing a role revokes the user's Cognito tokens (global sign-out); session-based UI such as menus updates from the next sign-in. Privileged writes (approvals, limits, roles) re-check the current Cognito group, so a revoked role is blocked even while an old session lasts."}</li>
+          <li>{ko ? "dept-manager는 부서(custom:department)가 있어야 지정할 수 있습니다. admin은 자기 자신을 강등할 수 없고, 마지막 활성 admin은 강등·비활성화·삭제할 수 없습니다." : "dept-manager requires a department (custom:department). Admins cannot demote themselves, and the last enabled admin cannot be demoted, disabled or deleted."}</li>
+          <li>{ko ? "그룹이 없는 사용자는 user로 간주합니다. 그룹이 여러 개면 목록에 '역할 정리 필요'가 표시되며, 저장하면 하나로 정리됩니다." : "A user with no group counts as user. A user in several groups is flagged 'needs cleanup' and is normalized to one group on save."}</li>
+        </ul>
       </div>
 
       <CodeBlock title={ko ? "CLI로 사용자 생성 (대안)" : "CLI User Creation (Alternative)"}>{`USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 10 \\
@@ -122,7 +134,11 @@ aws cognito-idp admin-create-user \\
     Name=custom:resource_tier,Value=standard \\
     Name=custom:security_policy,Value=restricted \\
     Name=custom:department,Value=engineering \\
-  --temporary-password 'TempPass123!'`}</CodeBlock>
+  --temporary-password 'TempPass123!'
+
+# CLI-created users also need exactly one role group
+aws cognito-idp admin-add-user-to-group \\
+  --user-pool-id "$USER_POOL_ID" --username alice@company.com --group-name user`}</CodeBlock>
 
       {/* Instance Management */}
       <SectionTitle id="instances">{ko ? "인스턴스 관리" : "Instance Management"}</SectionTitle>
@@ -185,9 +201,26 @@ aws cognito-idp admin-create-user \\
           <span className="text-sm font-bold text-white">{ko ? "주의사항" : "Important Notes"}</span>
         </div>
         <ul className="space-y-1 text-xs text-gray-400">
-          <li>{ko ? "예산 초과로 차단된 사용자는 다음 달 또는 예산 증액 시 자동 복구됩니다." : "Users blocked due to budget overrun are auto-restored next month or when budget is increased."}</li>
-          <li>{ko ? "개별 사용자의 일일 한도도 별도 설정 가능합니다." : "Individual user daily limits can also be configured separately."}</li>
+          <li>{ko ? "예산 초과로 차단된 사용자는 기간이 바뀌거나, 한도를 올리거나, 일회성 증액이 승인되면 다음 5분 주기에 자동 복구됩니다. 부서 총액 초과는 admin이 부서 총액을 올려야 풀립니다." : "Blocked users are restored on the next 5-minute run after the period rolls over, the cap is raised, or a one-time increase is approved. A department-total block lifts only when an admin raises the department total."}</li>
+          <li>{ko ? "개별 사용자의 일·주·월 한도를 따로 설정할 수 있습니다 (UTC 기준). dept-manager는 자기 부서 user 역할 구성원의 한도를 부서 대시보드에서 설정할 수 있고, 부서 총액·인당 기본값은 admin만 바꿉니다." : "Per-user daily / weekly / monthly caps can be set (UTC). A dept-manager can set them for user-role members of their department from the department dashboard; department totals and per-user defaults are admin-only."}</li>
           <li>{ko ? "예산은 Bedrock API 비용만 추적합니다 (EC2 인프라 비용 제외)." : "Budget tracks Bedrock API cost only (excludes EC2 infra cost)."}</li>
+        </ul>
+      </div>
+
+      {/* Budget Increase */}
+      <SectionTitle id="budget-increase">{ko ? "예산 증액 요청·승인" : "Budget Increase Requests"}</SectionTitle>
+      <P>
+        {ko
+          ? "차단되었거나 한도에 가까운 사용자는 대시보드에서 기간(일·주·월), 금액, 사유를 담아 일회성 증액을 요청합니다. 두 에디션(governance, devenv) 모두에서 동작합니다."
+          : "Blocked or near-limit users request a one-time increase from the dashboard with a period (daily / weekly / monthly), an amount and a reason. Works in both editions (governance and devenv)."}
+      </P>
+      <div className="rounded-xl bg-[#0d1117] border border-white/5 p-5 mb-4">
+        <ul className="space-y-1.5 text-xs text-gray-400 list-disc pl-5">
+          <li>{ko ? "승인 범위: admin은 모든 요청. dept-manager는 자기 부서 user 역할 구성원의 요청만, 그리고 부서 월 총액(부서 지출 + 이번 달 승인된 증액 + 이번 금액) 안에서만 승인합니다. 넘는 요청은 'admin 승인 필요'로 표시됩니다." : "Who approves: admins approve anything. A dept-manager approves only requests from user-role members of their own department, and only within the department monthly total (department spend + increases approved this month + this amount). Requests over it show 'admin approval required'."}</li>
+          <li>{ko ? "본인 요청은 아무도 직접 승인·거절할 수 없습니다. dept-manager 본인의 요청은 admin이, admin 본인의 요청은 다른 admin이 처리합니다. admin이 한 명뿐이면 Admin > 예산에서 본인 한도를 직접 바꾸며, 이 변경도 감사 기록에 남습니다." : "Nobody approves or rejects their own request. A dept-manager's request goes to an admin, and an admin's request to another admin. A sole admin changes their own cap in Admin > Budgets instead; that change is audited too."}</li>
+          <li>{ko ? "승인은 일회성입니다. 요청한 기간의 현재 창(오늘 / 이번 ISO 주 / 이번 달, UTC)에만 적용되고, 짧은 기간 증액은 그 기간을 포함하는 긴 기간에도 더해집니다 (일 → 주·월, 주 → 월). 다음 기간에는 원래 한도로 돌아갑니다." : "Approvals are one-time: they apply only to the current window of the period (today / this ISO week / this month, UTC), and a shorter-period increase is also added to the longer periods that contain it (daily → weekly and monthly, weekly → monthly). The next window falls back to the standing cap."}</li>
+          <li>{ko ? "승인자는 금액을 조정하거나 사유와 함께 거절할 수 있습니다. 기간이 끝난 요청은 '만료'되어 승인할 수 없습니다." : "Approvers may adjust the amount, or reject with a reason. A request whose window has ended is expired and cannot be approved."}</li>
+          <li>{ko ? "차단 해제는 다음 budget-check 주기(최대 5분)에 이루어집니다. 토큰 한도 차단은 개인 월 토큰 한도 때문이고 다른 토큰 한도가 모두 미만일 때만 함께 풀립니다. 그 밖의 경우 승인 화면에 '토큰 한도로 계속 차단' 경고가 표시되며, 부서 총액 초과는 admin이 부서 총액을 올려야 합니다." : "The block lifts on the next budget-check run (up to 5 minutes). A token-limit block is lifted too only when it came from the personal monthly token cap and every other token cap is under; otherwise the approvals page warns that the user is still token-blocked, and a department-total block needs an admin to raise the department total."}</li>
         </ul>
       </div>
 
@@ -195,14 +228,20 @@ aws cognito-idp admin-create-user \\
       <SectionTitle id="approvals">{ko ? "승인 워크플로우" : "Approval Workflow"}</SectionTitle>
       <P>
         {ko
-          ? "사용자의 리소스 등급 변경, 보안 정책 변경, IAM 권한 확장 요청을 관리자가 승인/거부합니다."
-          : "Admin approves or rejects user requests for tier changes, security policy changes, and IAM permission extensions."}
+          ? "예산 증액(budget_increase)은 두 에디션 모두에서 admin 또는 해당 부서 dept-manager가 처리합니다. 리소스 등급 변경, 보안 정책 변경, IAM 권한 확장 요청은 devenv 에디션 전용이며 admin만 승인/거부합니다."
+          : "Budget increases (budget_increase) are handled in both editions by an admin or the department's dept-manager. Tier changes, security policy changes and IAM permission extensions are devenv-only and approved or rejected by admins only."}
       </P>
 
       <div className="rounded-xl bg-[#0d1117] border border-white/5 p-5 mb-4">
         <h3 className="text-sm font-bold text-white mb-3">{ko ? "승인 가능 유형" : "Approval Request Types"}</h3>
         <div className="space-y-3">
           {[
+            {
+              type: "budget_increase",
+              label: ko ? "예산 증액 (일회성)" : "Budget Increase (one-time)",
+              action: ko ? "현재 기간 창에 grant 추가 (상위 기간 연쇄), 최대 5분 내 차단 해제" : "Add a grant to the current window (cascades to longer periods); block lifts within 5 minutes",
+              color: "border-emerald-500/20",
+            },
             {
               type: "tier_change",
               label: ko ? "리소스 등급 변경" : "Resource Tier Change",
@@ -236,15 +275,15 @@ aws cognito-idp admin-create-user \\
       <CodeBlock title={ko ? "승인 API" : "Approval API"}>{`# List pending requests
 GET /api/admin/approval-requests?status=pending
 
-# Approve a request
-PUT /api/admin/approval-requests
+# Approve a request (budget_increase: optional adjusted "amount" in USD)
+POST /api/admin/approval-requests
 {
   "requestId": "req_abc123",
   "action": "approve"
 }
 
 # Reject with reason
-PUT /api/admin/approval-requests
+POST /api/admin/approval-requests
 {
   "requestId": "req_abc123",
   "action": "reject",
