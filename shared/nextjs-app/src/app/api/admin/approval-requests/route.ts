@@ -146,6 +146,13 @@ export async function GET(req: NextRequest) {
         snapshotBudget: u.snapshotBudget !== undefined ? Number(u.snapshotBudget) : undefined,
         rejectReason: u.rejectReason,
         expiredAt: u.expiredAt,
+        // limit_change (already-applied audit record)
+        actor: u.actor,
+        actorRole: u.actorRole,
+        targetType: u.targetType,
+        before: u.before,
+        after: u.after,
+        appliedAt: u.appliedAt,
         // Legacy fields
         resourceTier: u.resourceTier,
         containerOs: u.containerOs,

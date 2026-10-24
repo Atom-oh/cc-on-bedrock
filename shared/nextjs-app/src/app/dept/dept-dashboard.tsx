@@ -151,10 +151,10 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
     setActionLoading(requestId);
     setError(null);
     try {
-      const res = await fetch("/api/dept", {
+      const res = await fetch("/api/admin/approval-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "approve", requestId }),
+        body: JSON.stringify({ requestId, action: "approve" }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -173,10 +173,10 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
     setActionLoading(requestId);
     setError(null);
     try {
-      const res = await fetch("/api/dept", {
+      const res = await fetch("/api/admin/approval-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "reject", requestId }),
+        body: JSON.stringify({ requestId, action: "reject" }),
       });
       const data = await res.json();
       if (!data.success) {

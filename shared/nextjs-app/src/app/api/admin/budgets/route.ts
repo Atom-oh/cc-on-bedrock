@@ -5,24 +5,24 @@ import {
   DynamoDBClient,
   ScanCommand,
   UpdateItemCommand,
-  DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
-import { listCognitoUsers } from "@/lib/aws-clients";
-import { NORMALIZED_PER_USD } from "@/lib/budget-increase";
+import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
+import { requireFreshRole } from "@/lib/role-admin";
+import { syncMonthlyLimitMirror } from "@/lib/limit-mirror";
+import { pickNumbers, recordLimitChange, type LimitChange } from "@/lib/limit-audit";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
-const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 
-// USD → normalized-token conversion for syncing $ budgets into the ADR-006(legacy 014)/015
-// cc-on-bedrock-limits table. Default 66667 = 1_000_000 / $15: token-limit-enforcer
-// weights are exactly list price / $15 for every model (Claude and OpenAI GPT,
-// derived from bedrock-usage-tracker PRICING and test-enforced), so N USD mirrors to
-// the same spend on the token axis. Only change this together with that $15 basis.
-// Single source: lib/budget-increase (one-time grants convert with the same rate).
+// USD → normalized-token conversion for the LIMIT#monthly mirror (lib/limit-mirror,
+// rate from lib/budget-increase NORMALIZED_PER_USD). Default 66667 = 1_000_000 / $15:
+// token-limit-enforcer weights are exactly list price / $15 for every model (Claude
+// and OpenAI GPT, derived from bedrock-usage-tracker PRICING and test-enforced), so
+// N USD mirrors to the same spend on the token axis. Only change this together with
+// that $15 basis. One-time grants convert with the same rate.
 
 const dynamodb = new DynamoDBClient({ region });
 
@@ -64,6 +64,16 @@ const DEPT_PERIOD_FIELDS = ["perUserDailyBudget", "perUserWeeklyBudget", "perUse
 
 function isValidUsd(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1_000_000;
+}
+
+/** Target user's department for the audit record (fresh from Cognito); "" when unknown. */
+async function auditDepartment(email: string): Promise<string> {
+  try {
+    return (await getCognitoUser(email)).department ?? "";
+  } catch (err) {
+    console.warn("[admin/budgets] audit department lookup failed:", err instanceof Error ? err.message : err);
+    return "";
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -166,6 +176,9 @@ export async function PUT(req: NextRequest) {
   if (!session.user.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
+  // The session's groups can be up to 8h stale: re-check the CURRENT role before writing.
+  const fresh = await requireFreshRole(session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
 
   try {
     const body = await req.json();
@@ -194,6 +207,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const now = new Date().toISOString();
+    let audit: Omit<LimitChange, "actor" | "actorRole" | "appliedAt">;
 
     if (type === "department") {
       // ADR-023: dept rows carry `monthlyBudget` (total cap) plus per-member default
@@ -218,12 +232,20 @@ export async function PUT(req: NextRequest) {
         updateParts.push("allowedTiers = :tiers");
         exprVals[":tiers"] = { L: allowedTiers.map(t => ({ S: t })) };
       }
-      await dynamodb.send(new UpdateItemCommand({
+      const updated = await dynamodb.send(new UpdateItemCommand({
         TableName: DEPT_BUDGETS_TABLE,
         Key: { dept_id: { S: id } },
         UpdateExpression: `SET ${updateParts.join(", ")}`,
         ExpressionAttributeValues: exprVals,
+        ReturnValues: "UPDATED_OLD",
       }));
+      const changed = [...(monthlyBudget !== undefined ? ["monthlyBudget"] : []), ...deptFields];
+      audit = {
+        targetType: "department",
+        department: id,
+        before: pickNumbers(updated.Attributes ? unmarshall(updated.Attributes) : undefined, changed),
+        after: pickNumbers(body as Record<string, unknown>, changed),
+      };
     } else if (type === "user") {
       // ADR-031 (B′): the per-user canonical key is the lowercased email. Normalize
       // once so BOTH the cc-user-budgets row AND the mirrored LIMIT#monthly land
@@ -251,60 +273,48 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "dailyBudget, weeklyBudget, monthlyBudget or dailyTokenLimit required" }, { status: 400 });
       }
 
-      await dynamodb.send(new UpdateItemCommand({
+      const updated = await dynamodb.send(new UpdateItemCommand({
         TableName: USER_BUDGETS_TABLE,
         Key: { user_id: { S: userId } },
         UpdateExpression: `SET ${updateParts.join(", ")}`,
         ExpressionAttributeValues: exprValues,
+        ReturnValues: "UPDATED_OLD",
       }));
 
-      // ADR-006(legacy 014)/015: mirror $ monthlyBudget into cc-on-bedrock-limits LIMIT#monthly so
-      // the Stream-driven token-limit-enforcer (near-real-time) can enforce it on the
-      // Local Governance role. Without this, the only enforcement path is budget-check
-      // (5-min cron) which used to silently skip Local-only users.
-      // monthlyBudget > 0 → upsert LIMIT row; monthlyBudget === 0 → delete row so
-      // dept.perUserMonthlyBudget (ADR-023) takes over.
+      // monthlyBudget > 0 → upsert LIMIT#monthly; 0 → delete it (lib/limit-mirror).
       if (monthlyBudget !== undefined) {
-        if (monthlyBudget > 0) {
-          const maxNormalized = Math.floor(monthlyBudget * NORMALIZED_PER_USD);
-          await dynamodb.send(new UpdateItemCommand({
-            TableName: LIMITS_TABLE,
-            Key: {
-              PK: { S: `USER#${userId}` },
-              SK: { S: "LIMIT#monthly" },
-            },
-            UpdateExpression: "SET max_normalized = :mx, source_usd = :usd, normalized_per_usd = :rate, updatedAt = :now",
-            ExpressionAttributeValues: {
-              ":mx": { N: String(maxNormalized) },
-              ":usd": { N: String(monthlyBudget) },
-              ":rate": { N: String(NORMALIZED_PER_USD) },
-              ":now": { S: now },
-            },
-          }));
-        } else {
-          // DynamoDB DeleteItem is a no-op when the item doesn't exist (it does
-          // NOT throw ResourceNotFoundException for missing rows — that exception
-          // is reserved for missing tables). Any other error (throttling,
-          // AccessDenied, network) must propagate to the outer catch so the PUT
-          // returns 500: swallowing here would let cc-user-budgets.monthlyBudget=0
-          // commit while LIMIT#monthly keeps the stale cap, leaving
-          // token-limit-enforcer blocking the user on an old threshold.
-          await dynamodb.send(new DeleteItemCommand({
-            TableName: LIMITS_TABLE,
-            Key: {
-              PK: { S: `USER#${userId}` },
-              SK: { S: "LIMIT#monthly" },
-            },
-          }));
-        }
+        await syncMonthlyLimitMirror(userId, monthlyBudget, now);
       }
+
+      const changed = [
+        ...PERIOD_FIELDS.filter((f) => (body as Record<string, unknown>)[f] !== undefined),
+        ...(dailyTokenLimit !== undefined ? ["dailyTokenLimit"] : []),
+      ];
+      audit = {
+        targetType: "user",
+        email: userId,
+        department: await auditDepartment(userId),
+        before: pickNumbers(updated.Attributes ? unmarshall(updated.Attributes) : undefined, changed),
+        after: pickNumbers(body as Record<string, unknown>, changed),
+      };
     } else {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
+    }
+
+    // Audit after the change fully applied (row + mirror). A failed audit write does
+    // not roll the change back: report it instead of a misleading 500.
+    let auditRecorded = true;
+    try {
+      await recordLimitChange({ ...audit, actor: session.user.email, actorRole: fresh.role, appliedAt: now });
+    } catch (err) {
+      auditRecorded = false;
+      console.error("[admin/budgets] limit_change audit failed:", err instanceof Error ? err.message : err);
     }
 
     return NextResponse.json({
       success: true,
       message: `${type} budget updated`,
+      ...(auditRecorded ? {} : { warning: "audit_failed" }),
     });
   } catch (err) {
     console.error("[admin/budgets] PUT", err instanceof Error ? err.message : err);

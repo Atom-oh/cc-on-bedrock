@@ -5,11 +5,11 @@ import {
   DynamoDBClient,
   GetItemCommand,
   ScanCommand,
-  PutItemCommand,
-  UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
-import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
-import { listCognitoUsers } from "@/lib/aws-clients";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
+import { requireFreshRole } from "@/lib/role-admin";
+import { hasRealDepartment } from "@/lib/roles";
 import { getUsageRecords } from "@/lib/usage-client";
 import type { DeptBudget, PendingRequest } from "@/lib/types";
 
@@ -25,29 +25,38 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
 
-  // Check if user is dept-manager or admin
-  const groups = session.user.groups ?? [];
-  const isDeptManager = groups.includes("dept-manager") || groups.includes("admin");
-  const isAdmin = groups.includes("admin");
+  // Fresh role (session groups can be up to 8h stale).
+  const fresh = await requireFreshRole(session, ["admin", "dept-manager"]);
+  if (!fresh.ok) return fresh.response;
+  const isAdmin = fresh.role === "admin";
 
-  if (!isDeptManager) {
-    return NextResponse.json({ error: "Department manager access required" }, { status: 403 });
+  // A dept-manager's department is read fresh from Cognito (never the session or
+  // the email domain). Admin can filter by department via query parameter.
+  let department: string;
+  if (isAdmin) {
+    department = req.nextUrl.searchParams.get("department") ?? "all";
+  } else {
+    try {
+      department = (await getCognitoUser(session.user.email)).department ?? "";
+    } catch (err) {
+      console.error("[dept] department lookup failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+    }
+    // fail-closed: a manager without a real department sees nothing.
+    if (!hasRealDepartment(department)) {
+      return NextResponse.json({
+        success: true,
+        data: { department: "", members: [], budget: null, pendingRequests: [], monthlyUsage: [] },
+      });
+    }
   }
 
   try {
-    // Get department from user email domain or custom attribute
-    // Admin can filter by department via query parameter
-    const userEmail = session.user.email;
-    const deptFilter = req.nextUrl.searchParams.get("department");
-    const department = isAdmin
-      ? (deptFilter ?? "all")
-      : (userEmail.split("@")[1]?.split(".")[0] ?? "default");
-
     // Fetch department members from Cognito
     const allUsers = await listCognitoUsers();
     const members = department === "all"
       ? allUsers
-      : allUsers.filter((u) => u.department === department || u.department === "default");
+      : allUsers.filter((u) => u.department === department);
 
     // Fetch department budget from DynamoDB
     let budget: DeptBudget | null = null;
@@ -200,70 +209,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     console.error("[dept] GET", err instanceof Error ? err.message : err);
-    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
-  }
-}
-
-export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-  }
-
-  // Check if user is dept-manager or admin
-  const groups = session.user.groups ?? [];
-  const isDeptManager = groups.includes("dept-manager") || groups.includes("admin");
-
-  if (!isDeptManager) {
-    return NextResponse.json({ error: "Department manager access required" }, { status: 403 });
-  }
-
-  try {
-    const body = await req.json();
-    const { action, requestId } = body;
-
-    if (!action || !requestId) {
-      return NextResponse.json({ error: "action and requestId required" }, { status: 400 });
-    }
-
-    if (action !== "approve" && action !== "reject") {
-      return NextResponse.json({ error: "Invalid action" }, { status: 400 });
-    }
-
-    // Update the approval request status in DynamoDB
-    try {
-      await dynamodb.send(
-        new UpdateItemCommand({
-          TableName: APPROVAL_REQUESTS_TABLE,
-          Key: {
-            PK: { S: `REQUEST#${requestId}` },
-            SK: { S: "META" },
-          },
-          UpdateExpression: "SET #status = :status, updatedAt = :now, updatedBy = :user",
-          ExpressionAttributeNames: {
-            "#status": "status",
-          },
-          ExpressionAttributeValues: {
-            ":status": { S: action === "approve" ? "approved" : "rejected" },
-            ":now": { S: new Date().toISOString() },
-            ":user": { S: session.user.email },
-          },
-        })
-      );
-    } catch (err) {
-      console.error("[dept] Update request error:", err);
-      // If table doesn't exist or item not found, just log and continue
-    }
-
-    // If approved, we could trigger user creation here
-    // For now, just update the status
-
-    return NextResponse.json({
-      success: true,
-      data: { requestId, action },
-    });
-  } catch (err) {
-    console.error("[dept] POST", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }
