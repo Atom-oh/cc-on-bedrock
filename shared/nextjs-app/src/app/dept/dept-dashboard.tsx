@@ -735,7 +735,7 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                         </td>
                       )}
                       <td className="py-3 text-right">
-                        {member.limits && member.email.toLowerCase() !== viewerEmail && (
+                        {member.limits && member.email.toLowerCase() !== viewerEmail && (member.role ?? "user") === "user" && (
                           <button
                             onClick={() => openLimitEdit(member)}
                             className="px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300"

@@ -8,8 +8,8 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
-import { requireFreshRole } from "@/lib/role-admin";
-import { hasRealDepartment } from "@/lib/roles";
+import { listGroupMembers, requireFreshRole } from "@/lib/role-admin";
+import { hasRealDepartment, roleFromGroups, ROLES } from "@/lib/roles";
 import { getUsageRecords } from "@/lib/usage-client";
 import type { DeptBudget, MemberBudgetStatus, PendingRequest } from "@/lib/types";
 import { budgetStatus, readTokenDeniedUsers, readUserBudgetRows } from "@/lib/budget-status";
@@ -220,6 +220,18 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Each member's role group (3 group listings). Best-effort: on failure `role` is
+    // omitted and the UI keeps "Edit limits" (the limits route still enforces).
+    let groupsByUser: Map<string, string[]> | null = null;
+    try {
+      const lists = await Promise.all(ROLES.map((r) => listGroupMembers(r)));
+      const map = new Map<string, string[]>();
+      lists.forEach((list, i) => list.forEach((u) => map.set(u.username, [...(map.get(u.username) ?? []), ROLES[i]])));
+      groupsByUser = map;
+    } catch (err) {
+      console.warn("[dept] Member role fetch error:", err instanceof Error ? err.message : err);
+    }
+
     // Format members for response
     const formattedMembers = members.map((m) => {
       const key = (m.email ?? "").trim().toLowerCase();
@@ -234,6 +246,7 @@ export async function GET(req: NextRequest) {
         containerOs: m.containerOs,
         resourceTier: m.resourceTier,
         status: m.status,
+        ...(groupsByUser ? { role: roleFromGroups(groupsByUser.get(m.username) ?? []).role } : {}),
         ...(statusAvailable
           ? {
               limits: {

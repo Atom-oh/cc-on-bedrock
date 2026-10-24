@@ -193,6 +193,8 @@ export interface DeptMember {
   limits?: { dailyBudget: number; weeklyBudget: number; monthlyBudget: number };
   /** Per-period caps with current grants and the block cause. Detail view only. */
   budgetStatus?: MemberBudgetStatus;
+  /** Current role group; omitted when the lookup failed. */
+  role?: Role;
 }
 
 export interface MemberPeriodStatus {

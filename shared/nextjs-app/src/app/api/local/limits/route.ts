@@ -5,6 +5,7 @@ import { DynamoDBClient, ScanCommand, GetItemCommand } from "@aws-sdk/client-dyn
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { budgetStatus } from "@/lib/budget-status";
 import { BUDGET_PERIODS } from "@/lib/budget-periods";
+import { userTokenCap } from "@/lib/budget-increase";
 
 // ADR-006 (legacy ADR-014): returns the current normalized-token usage and limits for the logged-in user
 // across daily / weekly / monthly periods, plus department aggregates.
@@ -116,7 +117,8 @@ export async function GET(_req: NextRequest) {
       summary.push({
         period: p,
         userUsed: Number(userCounter?.normalized ?? 0),
-        userLimit: Number(userLimit?.max_normalized ?? 0),
+        // Enforced cap: includes an active monthly grant (mirrors the enforcer).
+        userLimit: userTokenCap(userLimit, p, new Date()),
         deptUsed: Number(deptCounter?.normalized ?? 0),
         deptLimit: Number(deptLimit?.max_normalized ?? 0),
         resetAt: nextResetIso(p),

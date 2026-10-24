@@ -98,6 +98,7 @@ export const APPROVAL_ERRORS = [
   "malformed_request",
   "department_changed_retry",
   "already_decided",
+  "requester_not_found",
   "retry",
 ] as const;
 

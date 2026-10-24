@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { releaseTokenDeny, TokenDenyDetachError } from "@/lib/token-deny";
+import { requireFreshRole } from "@/lib/role-admin";
 
 // ADR-031 (B′): admin force-reset for a single user's token-deny.
 // Body: { email: string }  (canonical key; legacy alias `sub` accepted for old non-email rows)
@@ -12,6 +13,8 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   if (!session.user.isAdmin) return NextResponse.json({ error: "Admin access required" }, { status: 403 });
+  const fresh = await requireFreshRole(session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
 
   let body: { email?: string; sub?: string };
   try {

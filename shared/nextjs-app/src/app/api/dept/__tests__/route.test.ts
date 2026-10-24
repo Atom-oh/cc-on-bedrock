@@ -5,11 +5,12 @@ const m = vi.hoisted(() => ({
   getCognitoUser: vi.fn(),
   listCognitoUsers: vi.fn(),
   requireFreshRole: vi.fn(),
+  listGroupMembers: vi.fn(),
 }));
 vi.mock('next-auth', () => ({ getServerSession: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ authOptions: {} }));
 vi.mock('@/lib/aws-clients', () => ({ getCognitoUser: m.getCognitoUser, listCognitoUsers: m.listCognitoUsers }));
-vi.mock('@/lib/role-admin', () => ({ requireFreshRole: m.requireFreshRole }));
+vi.mock('@/lib/role-admin', () => ({ requireFreshRole: m.requireFreshRole, listGroupMembers: m.listGroupMembers }));
 vi.mock('@/lib/usage-client', () => ({ getUsageRecords: vi.fn(async () => []) }));
 vi.mock('@aws-sdk/client-dynamodb', async (orig) => {
   const actual = await orig<typeof import('@aws-sdk/client-dynamodb')>();
@@ -35,6 +36,7 @@ beforeEach(() => {
     { username: 'b', email: 'b@x.com', department: 'eng' },
     { username: 'c', email: 'c@x.com', department: 'default' },
   ]);
+  m.listGroupMembers.mockRejectedValue(new Error('cognito down'));
   m.send.mockResolvedValue({});
 });
 
@@ -110,6 +112,15 @@ describe('GET /api/dept', () => {
     expect(a.budgetStatus.tokenDenied).toBe(true);
     expect(a.budgetStatus.blockCause).toBe('user_daily');
     expect(body.data.pendingRequests[0]).toMatchObject({ type: 'budget_increase', period: 'daily', requestedAmount: 7 });
+  });
+
+  it('includes each member role from 3 group listings; omits it when the lookup fails', async () => {
+    m.listGroupMembers.mockImplementation(async (g: string) => (g === 'dept-manager' ? [{ username: 'a' }] : []));
+    const body = await (await route.GET(asReq())).json();
+    expect(m.listGroupMembers).toHaveBeenCalledTimes(3);
+    expect(body.data.members[0].role).toBe('dept-manager');
+    m.listGroupMembers.mockRejectedValue(new Error('down'));
+    expect((await (await route.GET(asReq())).json()).data.members[0].role).toBeUndefined();
   });
 
   it('no longer exposes the unauthenticated approve POST', () => {

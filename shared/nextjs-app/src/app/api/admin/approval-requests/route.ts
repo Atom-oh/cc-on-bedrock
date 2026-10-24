@@ -383,6 +383,9 @@ async function decideBudgetIncrease(
     try {
       requesterRole = roleFromGroups(await getRoleGroups(email)).role;
     } catch (err) {
+      if ((err as { name?: string })?.name === "UserNotFoundException") {
+        return NextResponse.json({ error: "requester_not_found" }, { status: 403 });
+      }
       console.error("[admin/approval-requests] requester role lookup failed:", err instanceof Error ? err.message : err);
       return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
     }
