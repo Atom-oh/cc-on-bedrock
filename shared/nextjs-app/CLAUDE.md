@@ -24,6 +24,7 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 - `users` - Cognito 사용자 관리 · `security` - 보안 현황
 - `usage` - Usage Analytics. `action=user_daily_trend`(사용자별 일별 cost/token), `action=tool_summaries`(Claude Code/Codex 도구별 비용; admin은 전체, 그 외 본인). 서버측 fail-closed RBAC(admin=전체, dept-manager=자기 부서, user=본인, 스코프 속성 없으면 403), 날짜창 ≤ 92일
 - `admin/ebs-resize`, `admin/budgets`, `admin/tokens`, `admin/approval-requests`, `admin/dlp/domains`
+- `admin/approval-requests` - admin + dept-manager (middleware `APPROVER_PATHS` 예외; 라우트가 Cognito에서 현재 역할·부서를 재확인). 모든 타입에 자기 승인 금지. `budget_increase` 승인은 `canApproveBudgetIncrease` 후 조건부 트랜잭션(요청 `pending`→`approved`, 잠금 삭제, 사용자 행 cascade `grant#{period}#{key}` ADD, 부서 `grant#monthly#{key}` ADD); 만료 409 `expired`, 동시 결정 409 `already_decided`
 - `admin/mcp/{catalog,gateways,gateways/sync,assignments,marketplaces}` - MCP 카탈로그·게이트웨이·마켓플레이스 (MCP Gateway는 BASELINE 범위 밖 기능으로 유지만 됨)
 - `admin/limits` - Local Governance normalized token 한도 CRUD. USER 키는 소문자 email (ADR-005)
 - `admin/limits/reset` - 한도 강제 reset + Deny policy detach. body `{email}`로 `USER#{email}/DENY#active`를 조회하고, 행의 `subdomain`으로 Local 롤명 `local-user-{subdomain}`을 해석해 detach·삭제한다(키=email, 롤명=subdomain). 활성 deny가 없으면 404
@@ -33,6 +34,7 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 - `user/ebs-resize` (신청/상태/취소), `user/keep-alive` (유휴 타임아웃 연장), `user/resource-review` (EBS 확장 전 AI 사용량 분석)
 - `user/password` (Cognito + Secrets Manager), `user/usage` (일일 토큰 사용량)
 - `user/custom-routes` - 포트 노출 GET/PUT: 본인 customRoutes, 최대 5개, version CAS, routing-table 미러 (ADR-003)
+- `user/budget-increase` - 1회성 USD 한도 증액 요청 (두 배포 모드 공통). GET 본인 이력, POST `{period, requestedAmount, reason}` (0 < 금액 ≤ 10000, 사유 1–500자, 무제한 기간 400 `unlimited_period`, 기간 창당 pending 1건 — 잠금 `PENDING#{email}#{period}#{key}`, 중복 409 `pending_exists`). 부서·역할은 Cognito에서 읽는다
 - `local/credentials` - STS Issuer Lambda 호출, 1h Bedrock 자격증명 반환 (role-chaining 1h 한도, CLI가 자동 갱신; ADR-006)
 - `local/limits` - 본인 normalized token 한도/사용량/Deny 상태
 
@@ -56,7 +58,7 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 - `usage-client.ts` - DynamoDB 사용량 조회. `buildUserDailyTrend`(순수 pivot: user×date, Top-N+others, zero-fill) + `getUserDailyTrend`
 - `iam-request-validation.ts` - IAM 권한 신청 검증의 단일 출처(클라이언트·서버 공유): `Resource:*`·쓰기/임베디드 와일드카드·위험 액션·교차계정 거부, 읽기 와일드카드(Get*/List*/Describe*/BatchGet*/Query*/Scan*) 허용, `buildIamExtensionRequest`, `DEFAULT_SERVICE_ALLOWLIST`/`WILDCARD_OK_ACTIONS` (ADR-007)
 - `iam-resource-annotator.ts` - 신청 statement의 advisory LLM 위험 주석 (프롬프트 인젝션 격리) · `approval-authz.ts` - 승인 인가 (admin 또는 저장된 부서의 dept-manager)
-- `codex-model.ts` (Codex 모델 ID·고정 CLI 버전 sanitizer, 기본값 `global.openai.gpt-6.1-sol`; 값이 root user-data로 들어가므로 검증 필수), `client-tool.ts` (CloudTrail userAgent/모델 vendor로 Claude Code vs Codex 귀속), `budget-periods.ts` (budget-check의 기간별 cap 해석 미러; ADR-014/008), `budget-display.ts` (cap ≤ 0 = Unlimited 표시, budget-check 의미와 일치)
+- `codex-model.ts` (Codex 모델 ID·고정 CLI 버전 sanitizer, 기본값 `global.openai.gpt-6.1-sol`; 값이 root user-data로 들어가므로 검증 필수), `client-tool.ts` (CloudTrail userAgent/모델 vendor로 Claude Code vs Codex 귀속), `budget-periods.ts` (budget-check의 기간별 cap 해석 미러; ADR-014/008), `budget-display.ts` (cap ≤ 0 = Unlimited 표시, budget-check 의미와 일치), `budget-increase.ts` (증액 요청 생성/승인/거절/만료 트랜잭션 순수 빌더 + 실행), `route-access.ts` (middleware 경로 게이팅 순수 함수 `isAllowedPath`)
 - `slack-client.ts`, `validation.ts`, `utils.ts`, `i18n.tsx`(한/영), `types.ts`
 - `src/middleware.ts` - 인증 + admin/dept-manager 라우트 보호
 
