@@ -86,6 +86,43 @@ def period_bounds(now: datetime | None = None) -> dict:
     }
 
 
+PERIODS = ("daily", "weekly", "monthly")
+
+
+def period_key(period: str, now: datetime | None = None) -> str:
+    """UTC key identifying the current window of `period`: day `YYYY-MM-DD`,
+    ISO week `YYYY-Www` (ISO year), month `YYYY-MM`."""
+    now = now or datetime.utcnow()
+    if period == "daily":
+        return now.date().isoformat()
+    if period == "weekly":
+        iso_year, iso_week, _ = now.isocalendar()
+        return f"{iso_year}-W{iso_week:02d}"
+    if period == "monthly":
+        return f"{now.year:04d}-{now.month:02d}"
+    raise ValueError(f"unknown period: {period}")
+
+
+def cascade_targets(period: str, now: datetime | None = None) -> list[tuple[str, str]]:
+    """[(period, key), ...] from the requested period up through monthly. A one-time
+    grant raises its own window and every longer window that contains it."""
+    return [(p, period_key(p, now)) for p in PERIODS[PERIODS.index(period):]]
+
+
+def grant_attr(period: str, key: str) -> str:
+    """Flat numeric attribute on the cc-user-budgets row (atomic DynamoDB ADD)."""
+    return f"grant#{period}#{key}"
+
+
+def active_grants(row: dict, now: datetime | None = None) -> dict:
+    """{daily, weekly, monthly} grant amounts whose key matches the current window;
+    grants for past windows are ignored."""
+    return {
+        p: float(row.get(grant_attr(p, period_key(p, now)), 0) or 0)
+        for p in PERIODS
+    }
+
+
 def get_user_period_usage(now: datetime | None = None) -> dict:
     """Scan USER# usage rows from the earliest open period start through today and
     sum cost per user into daily / weekly / monthly buckets (with pagination).
