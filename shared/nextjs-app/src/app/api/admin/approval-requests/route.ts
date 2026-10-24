@@ -378,10 +378,17 @@ async function decideBudgetIncrease(
   // Requester's CURRENT role, needed only for a dept-manager approver (before the
   // approve/reject split: a manager's or admin's request is admin-only for both).
   // Admins skip the lookup, so a deleted requester's request stays decidable.
+  // A requester who moved department since filing is admin-only: the stored
+  // department would otherwise let the old department's manager decide it.
   let requesterRole: Role = "user";
   if (!approver.isAdmin) {
     try {
-      requesterRole = roleFromGroups(await getRoleGroups(email)).role;
+      const [groups, requester] = await Promise.all([getRoleGroups(email), getCognitoUser(email)]);
+      requesterRole = roleFromGroups(groups).role;
+      const current = requester.department ?? "";
+      if ((hasRealDepartment(current) ? current : "") !== department) {
+        return NextResponse.json({ error: "requester_department_changed" }, { status: 403 });
+      }
     } catch (err) {
       if ((err as { name?: string })?.name === "UserNotFoundException") {
         return NextResponse.json({ error: "requester_not_found" }, { status: 403 });

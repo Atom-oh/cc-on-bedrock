@@ -99,6 +99,7 @@ export const APPROVAL_ERRORS = [
   "department_changed_retry",
   "already_decided",
   "requester_not_found",
+  "requester_department_changed",
   "retry",
 ] as const;
 
