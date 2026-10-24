@@ -34,8 +34,3 @@ monthly_budget_usd      = 0  # 0 = no global monthly cap
 # "governance" (default): dashboard + local installer, no EC2. "devenv": adds per-user EC2 DevEnvs.
 # Existing devenv stacks: set "devenv" here; "governance" destroys every DevEnv resource.
 deployment_mode = "governance"
-# Reuse an existing Cognito user pool (shared with another app) instead of creating one.
-# Adds cc app clients, groups (admin/user/dept-manager) and custom attributes to it; the pool's
-# own Lambda triggers are left alone. Switching an existing stack destroys cc-on-bedrock-users.
-# Every other app client on that pool must restrict write_attributes (no custom:*) first.
-# existing_cognito_user_pool_id = "ap-northeast-2_XXXXXXXXX"

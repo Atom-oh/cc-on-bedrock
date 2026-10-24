@@ -72,25 +72,7 @@ resource "aws_ecr_lifecycle_policy" "dashboard" {
 }
 
 # ---- Cognito User Pool -------------------------------------------------------
-# existing_user_pool_id set: reuse that pool (shared with another app) instead of creating one.
-# Only app clients, groups and the custom attributes below are added to it; its Lambda
-# triggers stay the owner's, so the ADR-028 trigger shim is not wired there.
-locals {
-  create_user_pool = var.existing_user_pool_id == null
-  user_pool_id     = local.create_user_pool ? aws_cognito_user_pool.this[0].id : var.existing_user_pool_id
-  user_pool_arn = local.create_user_pool ? aws_cognito_user_pool.this[0].arn : (
-    "arn:aws:cognito-idp:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:userpool/${var.existing_user_pool_id}"
-  )
-
-  user_pool_custom_attributes = [
-    "subdomain", "container_os", "resource_tier", "security_policy", "container_id",
-    "department", "budget_exceeded", "storage_type", "dept_manager_sub",
-  ]
-}
-
 resource "aws_cognito_user_pool" "this" {
-  count = local.create_user_pool ? 1 : 0
-
   name = "cc-on-bedrock-users"
 
   auto_verified_attributes = ["email"]
@@ -103,14 +85,67 @@ resource "aws_cognito_user_pool" "this" {
     temporary_password_validity_days = 7
   }
 
-  dynamic "schema" {
-    for_each = local.user_pool_custom_attributes
-    content {
-      name                = schema.value
-      attribute_data_type = "String"
-      mutable             = true
-      string_attribute_constraints {}
-    }
+  schema {
+    name                = "subdomain"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "container_os"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "resource_tier"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "security_policy"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "container_id"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "department"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "budget_exceeded"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "storage_type"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
+  }
+
+  schema {
+    name                = "dept_manager_sub"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {}
   }
 
   # Sign-in aliases
@@ -128,37 +163,9 @@ resource "aws_cognito_user_pool" "this" {
   }
 }
 
-# Cognito custom attributes can be added but never removed; this adds only missing ones.
-resource "terraform_data" "shared_pool_custom_attributes" {
-  count = local.create_user_pool ? 0 : 1
-
-  triggers_replace = [var.existing_user_pool_id, local.user_pool_custom_attributes]
-
-  provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
-    environment = {
-      REGION = data.aws_region.current.name
-      POOL   = var.existing_user_pool_id
-      ATTRS  = join(" ", local.user_pool_custom_attributes)
-    }
-    command = <<-EOT
-      set -euo pipefail
-      have=$(aws cognito-idp describe-user-pool --region "$REGION" --user-pool-id "$POOL" \
-        --query 'UserPool.SchemaAttributes[].Name' --output text | tr '\t' '\n')
-      add=()
-      for a in $ATTRS; do
-        grep -qxF "custom:$a" <<<"$have" || add+=("Name=$a,AttributeDataType=String,Mutable=true")
-      done
-      if [ $${#add[@]} -gt 0 ]; then
-        aws cognito-idp add-custom-attributes --region "$REGION" --user-pool-id "$POOL" --custom-attributes "$${add[@]}"
-      fi
-    EOT
-  }
-}
-
 resource "aws_cognito_user_pool_client" "this" {
   name         = "AppClient"
-  user_pool_id = local.user_pool_id
+  user_pool_id = aws_cognito_user_pool.this.id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -182,7 +189,7 @@ resource "aws_cognito_user_pool_client" "this" {
 # Public app client for cc-bedrock-local USER_PASSWORD_AUTH.
 resource "aws_cognito_user_pool_client" "cli_public" {
   name         = "cc-on-bedrock-cli-public"
-  user_pool_id = local.user_pool_id
+  user_pool_id = aws_cognito_user_pool.this.id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -212,19 +219,19 @@ resource "aws_cognito_user_pool_client" "cli_public" {
 # Cognito Groups
 resource "aws_cognito_user_group" "admin" {
   name         = "admin"
-  user_pool_id = local.user_pool_id
+  user_pool_id = aws_cognito_user_pool.this.id
   description  = "Dashboard administrators"
 }
 
 resource "aws_cognito_user_group" "user" {
   name         = "user"
-  user_pool_id = local.user_pool_id
+  user_pool_id = aws_cognito_user_pool.this.id
   description  = "Dev environment users"
 }
 
 resource "aws_cognito_user_group" "dept_manager" {
   name         = "dept-manager"
-  user_pool_id = local.user_pool_id
+  user_pool_id = aws_cognito_user_pool.this.id
   description  = "Department managers"
   precedence   = 5
 }
@@ -558,7 +565,7 @@ data "aws_iam_policy_document" "dashboard_cognito" {
       "cognito-idp:ListGroups",
       "cognito-idp:ListUsers",
     ]
-    resources = [local.user_pool_arn]
+    resources = [aws_cognito_user_pool.this.arn]
   }
 }
 
@@ -901,11 +908,9 @@ resource "aws_lambda_function" "cognito_provisioner_trigger" {
 }
 
 resource "aws_lambda_permission" "cognito_invoke_trigger" {
-  count = local.create_user_pool ? 1 : 0
-
   statement_id  = "AllowCognitoInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.cognito_provisioner_trigger.function_name
   principal     = "cognito-idp.amazonaws.com"
-  source_arn    = local.user_pool_arn
+  source_arn    = aws_cognito_user_pool.this.arn
 }

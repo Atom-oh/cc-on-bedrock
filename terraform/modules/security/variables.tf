@@ -39,9 +39,3 @@ variable "devenv_enabled" {
   type        = bool
   default     = true
 }
-
-variable "existing_user_pool_id" {
-  description = "Reuse this Cognito user pool instead of creating cc-on-bedrock-users (null = create)"
-  type        = string
-  default     = null
-}

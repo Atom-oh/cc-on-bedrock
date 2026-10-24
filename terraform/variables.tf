@@ -130,14 +130,6 @@ variable "monthly_budget_usd" {
   }
 }
 
-# Shared Cognito: reuse another app's user pool (e.g. one org-wide pool) instead of creating
-# cc-on-bedrock-users. Terraform adds its app clients, groups and missing custom attributes to it.
-variable "existing_cognito_user_pool_id" {
-  description = "Existing Cognito user pool ID to reuse (null = create cc-on-bedrock-users). Switching an existing stack destroys the old pool and its users"
-  type        = string
-  default     = null
-}
-
 # Deployment profile. "governance" (effective default when unset): admin dashboard (usage,
 # cost, budgets) plus the local installer; users run Claude Code / Codex on their own PC with
 # Cognito-issued STS credentials, no EC2. "devenv": also provisions per-user EC2 DevEnvs behind CloudFront.

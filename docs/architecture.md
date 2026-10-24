@@ -47,8 +47,6 @@ graph LR
 > `NEXTAUTH_SECRET` is fetched from SSM at boot, DevEnv edge auth strips NextAuth cookies before
 > forwarding to per-user origins, and dashboard ECR is bootstrapped before image push on fresh deploys.
 
-> **Shared Cognito:** `existing_cognito_user_pool_id` points every path at an existing user pool instead of creating `cc-on-bedrock-users`. Terraform adds only the cc app clients, groups and custom attributes to it and does not wire the ADR-028 trigger shim, so per-user IAM roles are created on first credential issue (`sts-issuer` `ensure_role`).
-
 ## Canonical decisions (the 9 pillars)
 
 1. **Tools on Bedrock.** Claude Code and the **OpenAI Codex CLI** both run on Bedrock under the same
