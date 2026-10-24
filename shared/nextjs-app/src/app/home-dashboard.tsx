@@ -309,10 +309,12 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         >
           <SectionHeader title={t("home.modelUsage")} subtitle="Compute Distribution" icon={Zap} />
           <div className="space-y-3 mt-4">
-            <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Active Instances</p>
-              <p className="text-2xl font-black text-white">{data.activeContainers}</p>
-            </div>
+            {devenv && (
+              <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Active Instances</p>
+                <p className="text-2xl font-black text-white">{data.activeContainers}</p>
+              </div>
+            )}
             <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Architecture</p>
               <p className="text-sm font-black text-primary-400 uppercase">Direct Bedrock</p>
@@ -321,42 +323,44 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         </motion.div>
       </div>
 
-      {/* Cluster Detail Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      {/* Cluster Detail Section (cluster metrics are DevEnv-only) */}
+      <div className={`grid grid-cols-1 ${devenv ? "lg:grid-cols-2" : ""} gap-8`}>
         {/* Cluster Metrics */}
-        <div className="space-y-6">
-          <SectionHeader title="Cluster Insights" subtitle="Infrastructure Performance" icon={Cpu} />
-          {data.cwMetrics ? (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl"
-            >
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Avg CPU</p>
-                  <p className="text-xl font-black text-white">{data.cwMetrics.avgCpu.toFixed(1)}%</p>
+        {devenv && (
+          <div className="space-y-6">
+            <SectionHeader title="Cluster Insights" subtitle="Infrastructure Performance" icon={Cpu} />
+            {data.cwMetrics ? (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl"
+              >
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Avg CPU</p>
+                    <p className="text-xl font-black text-white">{data.cwMetrics.avgCpu.toFixed(1)}%</p>
+                  </div>
+                  <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Avg Memory</p>
+                    <p className="text-xl font-black text-white">{data.cwMetrics.avgMemory.toFixed(1)}%</p>
+                  </div>
+                  <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Instances</p>
+                    <p className="text-xl font-black text-white">{data.cwMetrics.instanceCount}</p>
+                  </div>
+                  <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Network</p>
+                    <p className="text-xl font-black text-white">{formatNum(data.cwMetrics.totalNetworkRx + data.cwMetrics.totalNetworkTx)}B</p>
+                  </div>
                 </div>
-                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Avg Memory</p>
-                  <p className="text-xl font-black text-white">{data.cwMetrics.avgMemory.toFixed(1)}%</p>
-                </div>
-                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Instances</p>
-                  <p className="text-xl font-black text-white">{data.cwMetrics.instanceCount}</p>
-                </div>
-                <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Network</p>
-                  <p className="text-xl font-black text-white">{formatNum(data.cwMetrics.totalNetworkRx + data.cwMetrics.totalNetworkTx)}B</p>
-                </div>
+              </motion.div>
+            ) : (
+              <div className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 text-center">
+                <p className="text-gray-500 text-sm">No running instances. Start an instance to see metrics.</p>
               </div>
-            </motion.div>
-          ) : (
-            <div className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 text-center">
-              <p className="text-gray-500 text-sm">No running instances. Start an instance to see metrics.</p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* System Health */}
         <div className="space-y-6">

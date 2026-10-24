@@ -8,6 +8,7 @@ import StatCard from "@/components/cards/stat-card";
 import ContainersTable from "@/components/tables/containers-table";
 import AreaTrendChart from "@/components/charts/area-trend-chart";
 import UserDailyTrendChart from "@/components/charts/user-daily-trend-chart";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import type { HealthStatus, ContainerInfo, ApiResponse } from "@/lib/types";
 import type { UserDailyTrend } from "@/lib/usage-client";
 
@@ -122,6 +123,8 @@ export default function MonitoringDashboard({
   devSubdomain = "dev",
 }: MonitoringDashboardProps) {
   const { t, locale } = useI18n();
+  // Governance mode has no per-user EC2 DevEnv: no instances, EC2/EBS costs or container sessions.
+  const devenv = useDeploymentMode() === "devenv";
   const [healthStatuses, setHealthStatuses] = useState<HealthStatus[]>([]);
   const [filterUser, setFilterUser] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -141,9 +144,10 @@ export default function MonitoringDashboard({
 
   const fetchData = useCallback(async () => {
     try {
+      // Governance mode keeps the response order without calling the DevEnv-only /api/containers.
       const [healthRes, containersRes, sysRes] = await Promise.all([
         fetch("/api/health"),
-        fetch("/api/containers"),
+        devenv ? fetch("/api/containers") : Promise.resolve(Response.json({ success: true, data: [] })),
         fetch("/api/usage?action=system_health"),
       ]);
 
@@ -168,27 +172,29 @@ export default function MonitoringDashboard({
       const sysJson = (await sysRes.json()) as ApiResponse<SystemHealth>;
       setSystemHealth(sysJson.data ?? null);
 
-      // EC2 Instance Metrics - fetch separately to avoid blocking other data
-      try {
-        const [ec2Res, ec2TsRes, instRes] = await Promise.all([
-          fetch("/api/container-metrics?action=current"),
-          fetch("/api/container-metrics?action=timeseries&hours=6"),
-          fetch("/api/container-metrics?action=instances"),
-        ]);
-        if (ec2Res.ok) {
-          const ec2Json = (await ec2Res.json()) as ApiResponse<Ec2Metrics>;
-          setEc2Metrics(ec2Json.data ?? null);
+      // EC2 Instance Metrics - fetch separately to avoid blocking other data (DevEnv only)
+      if (devenv) {
+        try {
+          const [ec2Res, ec2TsRes, instRes] = await Promise.all([
+            fetch("/api/container-metrics?action=current"),
+            fetch("/api/container-metrics?action=timeseries&hours=6"),
+            fetch("/api/container-metrics?action=instances"),
+          ]);
+          if (ec2Res.ok) {
+            const ec2Json = (await ec2Res.json()) as ApiResponse<Ec2Metrics>;
+            setEc2Metrics(ec2Json.data ?? null);
+          }
+          if (ec2TsRes.ok) {
+            const ec2TsJson = (await ec2TsRes.json()) as ApiResponse<Ec2TimeSeries>;
+            setEc2TimeSeries(ec2TsJson.data ?? null);
+          }
+          if (instRes.ok) {
+            const instJson = (await instRes.json()) as ApiResponse<InstanceMetricsRow[]>;
+            setInstanceMetrics(instJson.data ?? []);
+          }
+        } catch (ec2Err) {
+          console.error("EC2 metrics fetch failed:", ec2Err);
         }
-        if (ec2TsRes.ok) {
-          const ec2TsJson = (await ec2TsRes.json()) as ApiResponse<Ec2TimeSeries>;
-          setEc2TimeSeries(ec2TsJson.data ?? null);
-        }
-        if (instRes.ok) {
-          const instJson = (await instRes.json()) as ApiResponse<InstanceMetricsRow[]>;
-          setInstanceMetrics(instJson.data ?? []);
-        }
-      } catch (ec2Err) {
-        console.error("EC2 metrics fetch failed:", ec2Err);
       }
 
       // Bedrock Usage metrics (DynamoDB — cc-on-bedrock project only)
@@ -230,7 +236,7 @@ export default function MonitoringDashboard({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [devenv]);
 
   useEffect(() => {
     void fetchData();
@@ -291,10 +297,14 @@ export default function MonitoringDashboard({
               {healthyServices}/{totalServices} {t("monitoring.servicesHealthy")}
             </span>
           </div>
-          <span className="text-gray-700">|</span>
-          <span className="text-sm text-gray-400">
-            {runningContainers.length} {t("monitoring.containersRunning")}
-          </span>
+          {devenv && (
+            <>
+              <span className="text-gray-700">|</span>
+              <span className="text-sm text-gray-400">
+                {runningContainers.length} {t("monitoring.containersRunning")}
+              </span>
+            </>
+          )}
           {lastRefresh && (
             <>
               <span className="text-gray-700">|</span>
@@ -450,29 +460,34 @@ export default function MonitoringDashboard({
           const bedrockCostHr = bedrockMetrics?.costPerHour ?? 0;
           const ebsTotalGb = devCount * 30;
           const ebsCostHr = (ebsTotalGb * EBS_GP3_PER_GB_MONTH) / 730;
-          const totalCostHr = bedrockCostHr + devCostHr + dashCostHr + ebsCostHr;
+          // Governance mode: no Dev EC2 / EBS line items (the dashboard host still runs).
+          const totalCostHr = bedrockCostHr + dashCostHr + (devenv ? devCostHr + ebsCostHr : 0);
           return (
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium text-gray-300">Infrastructure Cost / hr</h3>
                 <span className="text-lg font-bold text-white">${totalCostHr.toFixed(2)}/hr</span>
               </div>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className={`grid grid-cols-2 ${devenv ? "lg:grid-cols-4" : ""} gap-4`}>
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider">Bedrock API</p>
                   <p className="text-sm font-semibold text-rose-400">${bedrockCostHr.toFixed(2)}</p>
                   <p className="text-[10px] text-gray-600">Token usage</p>
                 </div>
-                <div>
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dev Instances</p>
-                  <p className="text-sm font-semibold text-cyan-400">${devCostHr.toFixed(2)}</p>
-                  <p className="text-[10px] text-gray-600">{devCount} running</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">EBS Storage</p>
-                  <p className="text-sm font-semibold text-emerald-400">${ebsCostHr.toFixed(4)}</p>
-                  <p className="text-[10px] text-gray-600">{ebsTotalGb}GB gp3 (~${(ebsTotalGb * EBS_GP3_PER_GB_MONTH).toFixed(1)}/mo)</p>
-                </div>
+                {devenv && (
+                  <>
+                    <div>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dev Instances</p>
+                      <p className="text-sm font-semibold text-cyan-400">${devCostHr.toFixed(2)}</p>
+                      <p className="text-[10px] text-gray-600">{devCount} running</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wider">EBS Storage</p>
+                      <p className="text-sm font-semibold text-emerald-400">${ebsCostHr.toFixed(4)}</p>
+                      <p className="text-[10px] text-gray-600">{ebsTotalGb}GB gp3 (~${(ebsTotalGb * EBS_GP3_PER_GB_MONTH).toFixed(1)}/mo)</p>
+                    </div>
+                  </>
+                )}
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dashboard EC2</p>
                   <p className="text-sm font-semibold text-purple-400">${dashCostHr.toFixed(2)}</p>
@@ -484,16 +499,16 @@ export default function MonitoringDashboard({
                 {totalCostHr > 0 && (
                   <>
                     <div className="h-full bg-rose-500" style={{ width: `${(bedrockCostHr / totalCostHr) * 100}%` }} />
-                    <div className="h-full bg-cyan-500" style={{ width: `${(devCostHr / totalCostHr) * 100}%` }} />
-                    <div className="h-full bg-emerald-500" style={{ width: `${(ebsCostHr / totalCostHr) * 100}%` }} />
+                    {devenv && <div className="h-full bg-cyan-500" style={{ width: `${(devCostHr / totalCostHr) * 100}%` }} />}
+                    {devenv && <div className="h-full bg-emerald-500" style={{ width: `${(ebsCostHr / totalCostHr) * 100}%` }} />}
                     <div className="h-full bg-purple-500" style={{ width: `${(dashCostHr / totalCostHr) * 100}%` }} />
                   </>
                 )}
               </div>
               <div className="flex gap-4 mt-1.5">
                 <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />Bedrock</span>
-                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />Dev EC2</span>
-                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />EBS</span>
+                {devenv && <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />Dev EC2</span>}
+                {devenv && <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />EBS</span>}
                 <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500 inline-block" />Dashboard</span>
               </div>
             </div>
@@ -538,39 +553,41 @@ export default function MonitoringDashboard({
       </section>
 
       {/* Resource Insights */}
-      <section>
-        <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.resourceInsights")}</h2>
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard
-            title={t("monitoring.running")}
-            value={runningContainers.length}
-            description={t("monitoring.allContainers")}
-          />
-          <StatCard
-            title={t("monitoring.pending")}
-            value={pendingContainers.length}
-            description={t("monitoring.allContainers")}
-          />
-          <StatCard
-            title={t("monitoring.totalVcpu")}
-            value={totalCpu > 0 ? `${(totalCpu / 1024).toFixed(0)}` : String(runningContainers.length)}
-            description={t("monitoring.allocatedCpu")}
-          />
-          <StatCard
-            title={t("monitoring.totalMemory")}
-            value={totalMem > 0 ? `${(totalMem / 1024).toFixed(1)} GiB` : "-"}
-            description={t("monitoring.allocatedRam")}
-          />
-          <StatCard
-            title={t("monitoring.allContainers")}
-            value={containers.length}
-            description={t("monitoring.allStates")}
-          />
-        </div>
-      </section>
+      {devenv && (
+        <section>
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.resourceInsights")}</h2>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            <StatCard
+              title={t("monitoring.running")}
+              value={runningContainers.length}
+              description={t("monitoring.allContainers")}
+            />
+            <StatCard
+              title={t("monitoring.pending")}
+              value={pendingContainers.length}
+              description={t("monitoring.allContainers")}
+            />
+            <StatCard
+              title={t("monitoring.totalVcpu")}
+              value={totalCpu > 0 ? `${(totalCpu / 1024).toFixed(0)}` : String(runningContainers.length)}
+              description={t("monitoring.allocatedCpu")}
+            />
+            <StatCard
+              title={t("monitoring.totalMemory")}
+              value={totalMem > 0 ? `${(totalMem / 1024).toFixed(1)} GiB` : "-"}
+              description={t("monitoring.allocatedRam")}
+            />
+            <StatCard
+              title={t("monitoring.allContainers")}
+              value={containers.length}
+              description={t("monitoring.allStates")}
+            />
+          </div>
+        </section>
+      )}
 
       {/* Container Distribution */}
-      {runningContainers.length > 0 && (
+      {devenv && runningContainers.length > 0 && (
         <section>
           <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.containerDist")}</h2>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -616,7 +633,7 @@ export default function MonitoringDashboard({
       )}
 
       {/* Instance Metrics - EC2 Utilization */}
-      {ec2Metrics && (
+      {devenv && ec2Metrics && (
         <section>
           <h2 className="text-lg font-semibold text-gray-100 mb-4">Instance Metrics</h2>
 
@@ -735,22 +752,24 @@ export default function MonitoringDashboard({
       )}
 
       {/* Active Sessions */}
-      <section>
-        <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.activeSessions")}</h2>
-        <ContainersTable
-          containers={containers.filter((c) => {
-            if (filterUser !== "all" && (c.username || c.subdomain) !== filterUser) return false;
-            if (filterStatus !== "all" && c.status !== filterStatus) return false;
-            if (filterDept !== "all" && c.department !== filterDept) return false;
-            if (filterTier !== "all" && c.resourceTier !== filterTier) return false;
-            if (searchText && !(c.username || "").toLowerCase().includes(searchText.toLowerCase()) && !(c.subdomain || "").toLowerCase().includes(searchText.toLowerCase())) return false;
-            return true;
-          })}
-          onStop={handleStopContainer}
-          domainName={domainName}
-          devSubdomain={devSubdomain}
-        />
-      </section>
+      {devenv && (
+        <section>
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">{t("monitoring.activeSessions")}</h2>
+          <ContainersTable
+            containers={containers.filter((c) => {
+              if (filterUser !== "all" && (c.username || c.subdomain) !== filterUser) return false;
+              if (filterStatus !== "all" && c.status !== filterStatus) return false;
+              if (filterDept !== "all" && c.department !== filterDept) return false;
+              if (filterTier !== "all" && c.resourceTier !== filterTier) return false;
+              if (searchText && !(c.username || "").toLowerCase().includes(searchText.toLowerCase()) && !(c.subdomain || "").toLowerCase().includes(searchText.toLowerCase())) return false;
+              return true;
+            })}
+            onStop={handleStopContainer}
+            domainName={domainName}
+            devSubdomain={devSubdomain}
+          />
+        </section>
+      )}
     </div>
   );
 }

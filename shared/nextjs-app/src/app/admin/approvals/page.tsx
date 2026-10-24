@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import {
   CheckCircle,
   XCircle,
@@ -51,6 +52,10 @@ const TYPE_LABELS: Record<string, { label: string; icon: typeof Cpu; color: stri
   container_request: { label: "Container Request", icon: Cpu, color: "text-gray-400" },
 };
 
+// Request types that act on the per-user EC2 DevEnv (instance tier, DLP security group, container
+// provisioning); hidden in governance mode, where only IAM extension requests apply.
+const DEVENV_REQUEST_TYPES = new Set(["tier_change", "dlp_change", "container_request"]);
+
 const STATUS_STYLES: Record<string, string> = {
   pending: "bg-amber-500/10 text-amber-400 border-amber-500/20",
   approved: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
@@ -59,6 +64,7 @@ const STATUS_STYLES: Record<string, string> = {
 
 export default function ApprovalsPage() {
   const { t } = useI18n();
+  const devenv = useDeploymentMode() === "devenv";
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [policyCatalog, setPolicyCatalog] = useState<PolicySetInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,7 +78,7 @@ export default function ApprovalsPage() {
       const res = await fetch(url);
       const data = await res.json();
       if (data.success) {
-        setRequests(data.data);
+        setRequests(devenv ? data.data : (data.data as ApprovalRequest[]).filter((r) => !DEVENV_REQUEST_TYPES.has(r.type)));
         if (data.meta?.policySetCatalog) setPolicyCatalog(data.meta.policySetCatalog);
       }
     } catch (err) {
@@ -80,7 +86,7 @@ export default function ApprovalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, devenv]);
 
   useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
@@ -180,7 +186,7 @@ export default function ApprovalsPage() {
         <div>
           <h1 className="text-2xl font-black text-white tracking-tight">Approval Requests</h1>
           <p className="text-xs text-gray-500 uppercase tracking-widest mt-1">
-            Manage tier, DLP, and IAM change requests
+            {devenv ? "Manage tier, DLP, and IAM change requests" : "Manage IAM extension requests"}
           </p>
         </div>
         <button

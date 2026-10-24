@@ -22,6 +22,7 @@ import {
   ListUsersCommand,
   type AttributeType,
 } from "@aws-sdk/client-cognito-identity-provider";
+import { getDeploymentMode } from "@/lib/deployment-mode";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const vpcId = process.env.VPC_ID ?? "";
@@ -78,11 +79,11 @@ export async function GET(req: NextRequest) {
           ruleGroups.push({ ...assoc, rules });
         }
 
-        // Get Security Groups
+        // Get Security Groups (DevEnv DLP SGs; governance mode has none, so skip the lookup)
         const sgIds = Object.values(DLP_SGS);
-        const sgResult = await ec2Client.send(
-          new DescribeSecurityGroupsCommand({ GroupIds: sgIds })
-        );
+        const sgResult = getDeploymentMode() === "devenv"
+          ? await ec2Client.send(new DescribeSecurityGroupsCommand({ GroupIds: sgIds }))
+          : { SecurityGroups: [] };
         const securityGroups = (sgResult.SecurityGroups ?? []).map((sg) => {
           const policy = Object.entries(DLP_SGS).find(([, id]) => id === sg.GroupId)?.[0] ?? "unknown";
           return {
