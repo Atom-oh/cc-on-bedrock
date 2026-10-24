@@ -465,7 +465,7 @@ async function decideBudgetIncrease(
   if (userRow) await removeStaleGrants(email, staleGrantAttrs(userRow, now));
 
   // The approval is committed; lifting the token axis is best-effort and never fails it.
-  const tokenRelease = await releaseTokenAxis(email, decision.amount, now);
+  const tokenRelease = await releaseTokenAxis(email, decision.amount, now, department);
   try {
     await dynamodb.send(new UpdateItemCommand({
       TableName: APPROVAL_TABLE,

@@ -75,7 +75,7 @@ def test_attach_deny_owner_tag_mismatch_blocks_attach():
 def test_process_record_passes_subdomain_to_attach():
     captured = {}
 
-    def fake_attach(user_key, subdomain, reason, period, reset_at, scope=None):
+    def fake_attach(user_key, subdomain, reason, period, reset_at, scope=None, dept=None):
         captured["user_key"] = user_key
         captured["subdomain"] = subdomain
         return True

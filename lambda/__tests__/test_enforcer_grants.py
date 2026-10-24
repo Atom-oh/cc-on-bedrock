@@ -78,7 +78,9 @@ def test_enforcer_denies_past_granted_cap():
 
 
 def test_enforcer_user_cap_deny_has_user_scope():
-    assert _run(1500).call_args.kwargs["scope"] == "user"
+    kw = _run(1500).call_args.kwargs
+    assert kw["scope"] == "user"
+    assert kw["dept"] == "eng"
 
 
 def test_enforcer_dept_cap_deny_has_dept_scope():
@@ -90,21 +92,25 @@ def test_enforcer_dept_cap_deny_has_dept_scope():
         enf.process_record(_rec(10), cache)
     assert deny.call_args.args[3] == "daily"
     assert deny.call_args.kwargs["scope"] == "dept"
+    assert deny.call_args.kwargs["dept"] == "eng"
 
 
-def _attach(scope_kw):
+def _attach(kw):
     iam = mock.Mock()
     iam.list_role_tags.return_value = {"Tags": [{"Key": "email", "Value": "dev@x.com"}]}
     iam.exceptions.NoSuchEntityException = enf.iam.exceptions.NoSuchEntityException
     with mock.patch.object(enf, "iam", iam), \
          mock.patch.object(enf.limits, "put_item") as put, \
          mock.patch.object(enf, "_publish_sns"):
-        assert enf._attach_deny("dev@x.com", "dev", "r", "monthly", "x", **scope_kw) is True
+        assert enf._attach_deny("dev@x.com", "dev", "r", "monthly", "x", **kw) is True
     return put.call_args.kwargs["Item"]
 
 
-def test_deny_row_records_scope_and_period():
-    item = _attach({"scope": "dept"})
+def test_deny_row_records_scope_period_and_dept():
+    item = _attach({"scope": "dept", "dept": "eng"})
     assert item["scope"] == "dept"
     assert item["period"] == "monthly"
-    assert _attach({"scope": "user"})["scope"] == "user"
+    assert item["dept"] == "eng"
+    plain = _attach({"scope": "user"})
+    assert plain["scope"] == "user"
+    assert "dept" not in plain

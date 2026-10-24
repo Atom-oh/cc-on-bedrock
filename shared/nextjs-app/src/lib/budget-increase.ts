@@ -8,6 +8,7 @@
 // `releaseTokenAxis` once the approval has committed.
 
 import {
+  BatchGetItemCommand,
   ConditionalCheckFailedException,
   DynamoDBClient,
   GetItemCommand,
@@ -470,14 +471,26 @@ export async function removeStaleGrants(email: string, attrs: string[]): Promise
 
 // ─── Token axis ───
 
+/** KST bucket: token-limit-enforcer `_bucket_for(now, period)` (day, ISO week, month). */
+export function kstBucket(period: BudgetPeriod, now: Date): string {
+  // periodKey reads UTC fields; shifting by +9h makes them the KST calendar fields.
+  return periodKey(period, new Date(now.getTime() + 9 * 3_600_000));
+}
+
 /** KST `YYYY-MM`: token-limit-enforcer `_bucket_for(now, "monthly")`. */
 export function kstMonthBucket(now: Date): string {
-  const kst = new Date(now.getTime() + 9 * 3_600_000);
-  return `${String(kst.getUTCFullYear()).padStart(4, "0")}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
+  return kstBucket("monthly", now);
 }
 
 /** Why an active token deny was left in place. */
-export type TokenHoldReason = "dept_scope" | "non_monthly" | "legacy_deny" | "no_token_limit" | "still_over_cap";
+export type TokenHoldReason =
+  | "dept_scope"
+  | "non_monthly"
+  | "legacy_deny"
+  | "no_token_limit"
+  | "still_over_cap"
+  | "other_cap_exceeded"
+  | "role_unresolved";
 
 export interface TokenRelease {
   /** false = the user may still be blocked on the token axis (see `reason`). */
@@ -545,12 +558,76 @@ async function addTokenGrant(
   throw new Error("token grant contention");
 }
 
-async function monthCounter(email: string, bucket: string): Promise<number> {
-  const got = await dynamodb.send(new GetItemCommand({
-    TableName: LIMITS_TABLE,
-    Key: { PK: { S: `USER#${email}` }, SK: { S: `COUNTER#monthly#${bucket}` } },
-  }));
-  return Number(got.Item?.normalized?.N ?? 0) || 0;
+type LimitItem = Record<string, unknown> | undefined;
+
+/**
+ * Mirror of token-limit-enforcer `_user_cap`: `max_normalized`, plus the one-time grant
+ * for the monthly period of the matching KST month. 0 = uncapped (a grant never caps).
+ */
+export function userTokenCap(item: LimitItem, period: BudgetPeriod, now: Date): number {
+  const cap = Number(item?.max_normalized ?? 0) || 0;
+  if (cap <= 0) return 0;
+  if (period !== "monthly" || item?.grant_bucket !== kstBucket("monthly", now)) return cap;
+  return cap + (Number(item?.grant_normalized ?? 0) || 0);
+}
+
+export interface TokenCapBreach {
+  scope: "user" | "dept";
+  period: BudgetPeriod;
+  total: number;
+  cap: number;
+}
+
+/**
+ * Every token cap the enforcer would deny on right now (`total >= cap`; uncapped skipped),
+ * in the enforcer's order: per period, user then department. `rows` maps `PK|SK` to items.
+ */
+export function tokenCapBreaches(
+  rows: Map<string, Record<string, unknown>>,
+  email: string,
+  dept: string,
+  now: Date,
+): TokenCapBreach[] {
+  const out: TokenCapBreach[] = [];
+  const counter = (pk: string, period: BudgetPeriod) =>
+    Number(rows.get(`${pk}|COUNTER#${period}#${kstBucket(period, now)}`)?.normalized ?? 0) || 0;
+  for (const period of BUDGET_PERIODS) {
+    const userPk = `USER#${email}`;
+    const userCap = userTokenCap(rows.get(`${userPk}|LIMIT#${period}`), period, now);
+    const userTotal = counter(userPk, period);
+    if (userCap > 0 && userTotal >= userCap) out.push({ scope: "user", period, total: userTotal, cap: userCap });
+    if (!dept) continue;
+    const deptPk = `DEPT#${dept}`;
+    const deptCap = Number(rows.get(`${deptPk}|LIMIT#${period}`)?.max_normalized ?? 0) || 0;
+    const deptTotal = counter(deptPk, period);
+    if (deptCap > 0 && deptTotal >= deptCap) out.push({ scope: "dept", period, total: deptTotal, cap: deptCap });
+  }
+  return out;
+}
+
+/** One consistent BatchGetItem of every user/department LIMIT + current COUNTER row. */
+async function readTokenState(email: string, dept: string, now: Date): Promise<Map<string, Record<string, unknown>>> {
+  const keys: Array<{ PK: { S: string }; SK: { S: string } }> = [];
+  for (const pk of dept ? [`USER#${email}`, `DEPT#${dept}`] : [`USER#${email}`]) {
+    for (const period of BUDGET_PERIODS) {
+      keys.push({ PK: { S: pk }, SK: { S: `LIMIT#${period}` } });
+      keys.push({ PK: { S: pk }, SK: { S: `COUNTER#${period}#${kstBucket(period, now)}` } });
+    }
+  }
+  const rows = new Map<string, Record<string, unknown>>();
+  let pending: typeof keys = keys;
+  for (let attempt = 0; attempt < 4 && pending.length > 0; attempt++) {
+    const r = await dynamodb.send(new BatchGetItemCommand({
+      RequestItems: { [LIMITS_TABLE]: { Keys: pending, ConsistentRead: true } },
+    }));
+    for (const raw of r.Responses?.[LIMITS_TABLE] ?? []) {
+      const item = unmarshall(raw);
+      rows.set(`${item.PK}|${item.SK}`, item);
+    }
+    pending = (r.UnprocessedKeys?.[LIMITS_TABLE]?.Keys ?? []) as typeof keys;
+  }
+  if (pending.length > 0) throw new Error("token cap state read incomplete (unprocessed keys)");
+  return rows;
 }
 
 /**
@@ -558,38 +635,59 @@ async function monthCounter(email: string, bucket: string): Promise<number> {
  * cascades to monthly, so floor(amount × NORMALIZED_PER_USD) is added to the user's
  * LIMIT#monthly grant for the KST month (only if the row exists). An active token deny
  * is released only when this grant cures it: a personal (`scope = user`) monthly deny,
- * the grant was written, and this month's counter is now below max + grant. Any other
- * deny stays and is reported with a `reason`. Never throws: a failure is
+ * the grant was written, and — re-checking every cap the enforcer applies (user and
+ * department, daily/weekly/monthly, current KST buckets) — every capped period is now
+ * strictly under its cap. DENY#active keeps only the first cause, so a co-tripped cap
+ * would otherwise be hidden. The department is the deny row's `dept`, else `department`.
+ * Any other deny stays and is reported with a `reason`. Never throws: a failure is
  * `{ released: false, warning }`.
  */
-export async function releaseTokenAxis(email: string, amount: number, now: Date): Promise<TokenRelease> {
+export async function releaseTokenAxis(
+  email: string,
+  amount: number,
+  now: Date,
+  department = "",
+): Promise<TokenRelease> {
   const user = email.trim().toLowerCase();
   const bucket = kstMonthBucket(now);
   const normalized = Math.floor(amount * NORMALIZED_PER_USD);
   let granted = 0;
   try {
     const deny = await readTokenDeny(user);
-    const row = normalized > 0 ? await addTokenGrant(user, bucket, normalized) : null;
+    const row = normalized > 0 ? await addTokenGrant(user, bucket, normalized) : undefined;
     if (row) granted = normalized;
     const base: TokenRelease = { released: true, bucket, normalizedGranted: granted, denyCleared: false };
-    if (!row) base.noTokenLimit = true;
+    if (row === null) base.noTokenLimit = true; // addTokenGrant found no LIMIT#monthly row
     if (!deny) return base;
 
-    const hold = (reason: TokenHoldReason, source: string): TokenRelease => ({
+    const hold = (reason: TokenHoldReason, warning: string): TokenRelease => ({
       ...base,
       released: false,
       reason,
-      warning: `token deny from ${source} cap — not lifted by a personal grant`,
+      warning,
     });
-    if (deny.scope === undefined || deny.scope === null) return hold("legacy_deny", "legacy");
-    if (deny.scope !== "user") return hold("dept_scope", "dept");
-    if (deny.period !== "monthly") return hold("non_monthly", String(deny.period ?? "unknown"));
-    if (!row) return hold("no_token_limit", "unset personal monthly");
-    const cap = (Number(row.max_normalized ?? 0) || 0) + (Number(row.grant_normalized ?? 0) || 0);
-    if (!((await monthCounter(user, bucket)) < cap)) return hold("still_over_cap", "insufficient grant");
+    const notLifted = (source: string) => `token deny from ${source} cap — not lifted by a personal grant`;
+    if (deny.scope === undefined || deny.scope === null) return hold("legacy_deny", notLifted("legacy"));
+    if (deny.scope !== "user") return hold("dept_scope", notLifted("dept"));
+    if (deny.period !== "monthly") return hold("non_monthly", notLifted(String(deny.period ?? "unknown")));
+    if (row === null) return hold("no_token_limit", notLifted("unset personal monthly"));
+    if (!row) return hold("still_over_cap", notLifted("insufficient grant")); // grant floored to 0
+
+    const dept = typeof deny.dept === "string" && deny.dept ? deny.dept : department;
+    const breaches = tokenCapBreaches(await readTokenState(user, dept, now), user, dept, now);
+    if (breaches.some((b) => b.scope === "user" && b.period === "monthly")) {
+      return hold("still_over_cap", notLifted("insufficient grant"));
+    }
+    if (breaches.length > 0) {
+      const b = breaches[0];
+      return hold(
+        "other_cap_exceeded",
+        `token deny kept — ${b.scope} ${b.period} cap also exceeded (${b.total}/${b.cap}); not lifted by a personal grant`,
+      );
+    }
 
     const released = await releaseTokenDeny(user);
-    if (released.found && !released.released) return { ...base, released: false, warning: released.warning };
+    if (released.found && !released.released) return hold("role_unresolved", released.warning ?? "role unresolved");
     return { ...base, denyCleared: released.released };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

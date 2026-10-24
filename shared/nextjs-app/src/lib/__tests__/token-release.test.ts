@@ -21,14 +21,16 @@ vi.mock("@aws-sdk/client-iam", async (importOriginal) => {
   };
 });
 
+import { marshall } from "@aws-sdk/util-dynamodb";
 import {
+  BatchGetItemCommand,
   ConditionalCheckFailedException,
   DeleteItemCommand,
   GetItemCommand,
   UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { NoSuchEntityException } from "@aws-sdk/client-iam";
-import { kstMonthBucket, releaseTokenAxis } from "../budget-increase";
+import { kstBucket, kstMonthBucket, releaseTokenAxis, userTokenCap } from "../budget-increase";
 import { releaseTokenDeny, ROLE_UNRESOLVED_WARNING, TokenDenyDetachError } from "../token-deny";
 
 const NOW = new Date("2026-10-24T12:00:00Z");
@@ -53,10 +55,23 @@ function table(opts: {
   limit?: { grant_bucket?: string; grant_normalized?: number; max_normalized?: number } | null;
   deny?: Record<string, { S: string }> | null;
   counter?: number;
+  /** Extra limits-table rows for the cap re-check, keyed "PK|SK". */
+  rows?: Record<string, Record<string, unknown>>;
 }) {
   const limit = opts.limit === undefined ? { max_normalized: 1000 } : opts.limit;
   ddbSend.mockImplementation(async (cmd: unknown) => {
     const i = input(cmd);
+    if (cmd instanceof BatchGetItemCommand) {
+      const all: Record<string, Record<string, unknown>> = { ...(opts.rows ?? {}) };
+      if (limit) all["USER#dev@x.com|LIMIT#monthly"] = { ...limit };
+      if (opts.counter !== undefined) all[`USER#dev@x.com|COUNTER#monthly#${kstMonthBucket(NOW)}`] = { normalized: opts.counter };
+      const keys = (cmd.input.RequestItems?.["cc-on-bedrock-limits"]?.Keys ?? []) as Array<{ PK: { S: string }; SK: { S: string } }>;
+      const found = keys
+        .map((k) => [k, all[`${k.PK.S}|${k.SK.S}`]] as const)
+        .filter(([, v]) => v)
+        .map(([k, v]) => marshall({ PK: k.PK.S, SK: k.SK.S, ...v }));
+      return { Responses: { "cc-on-bedrock-limits": found } };
+    }
     if (cmd instanceof GetItemCommand) {
       if (isDeny(cmd)) return { Item: opts.deny ?? undefined };
       if (i.Key?.SK?.S?.startsWith("COUNTER#")) {
@@ -90,7 +105,12 @@ beforeEach(() => {
   iamSend.mockReset();
 });
 
-describe("kstMonthBucket", () => {
+describe("KST buckets", () => {
+  it("match the enforcer's day / ISO week / month", () => {
+    expect(kstBucket("daily", new Date("2026-10-24T15:30:00Z"))).toBe("2026-10-25");
+    expect(kstBucket("weekly", new Date("2026-10-25T15:30:00Z"))).toBe("2026-W44"); // Mon 26 Oct KST
+    expect(kstBucket("weekly", new Date("2026-10-25T14:30:00Z"))).toBe("2026-W43"); // Sun 25 Oct KST
+  });
   it("uses the KST month", () => {
     expect(kstMonthBucket(NOW)).toBe("2026-10");
     expect(kstMonthBucket(new Date("2026-10-31T15:00:00Z"))).toBe("2026-11");
@@ -144,6 +164,19 @@ describe("releaseTokenDeny", () => {
     iamSend.mockRejectedValue(new Error("AccessDenied"));
     await expect(releaseTokenDeny("dev@x.com")).rejects.toThrow(TokenDenyDetachError);
     expect(deletes()).toHaveLength(0);
+  });
+});
+
+describe("userTokenCap", () => {
+  const item = { max_normalized: 1000, grant_bucket: "2026-10", grant_normalized: 500 };
+  it("adds the current-month grant for monthly only", () => {
+    expect(userTokenCap(item, "monthly", NOW)).toBe(1500);
+    expect(userTokenCap(item, "weekly", NOW)).toBe(1000);
+    expect(userTokenCap({ ...item, grant_bucket: "2026-09" }, "monthly", NOW)).toBe(1000);
+  });
+  it("an uncapped row ignores the grant", () => {
+    expect(userTokenCap({ ...item, max_normalized: 0 }, "monthly", NOW)).toBe(0);
+    expect(userTokenCap(undefined, "monthly", NOW)).toBe(0);
   });
 });
 
@@ -231,7 +264,12 @@ describe("releaseTokenAxis", () => {
   it("surfaces the unresolved-role warning", async () => {
     table({ deny: { scope: { S: "user" }, period: { S: "monthly" } }, counter: 0 });
     const r = await releaseTokenAxis("dev@x.com", 20, NOW);
-    expect(r).toMatchObject({ released: false, warning: ROLE_UNRESOLVED_WARNING, denyCleared: false });
+    expect(r).toMatchObject({
+      released: false,
+      reason: "role_unresolved",
+      warning: ROLE_UNRESOLVED_WARNING,
+      denyCleared: false,
+    });
   });
   it("never throws: a DynamoDB failure is a warning", async () => {
     ddbSend.mockRejectedValue(new Error("Throttled"));
@@ -245,5 +283,75 @@ describe("releaseTokenAxis", () => {
     const r = await releaseTokenAxis("dev@x.com", 20, NOW);
     expect(r).toMatchObject({ released: false, normalizedGranted: 1333340 });
     expect(r.warning).toContain("AccessDenied");
+  });
+  const deptDeny = { ...userMonthlyDeny, dept: { S: "eng" } };
+  it("keeps a user-monthly deny while the department's monthly cap is exceeded", async () => {
+    table({
+      limit: { max_normalized: 1000 },
+      deny: deptDeny,
+      counter: 0,
+      rows: {
+        "DEPT#eng|LIMIT#monthly": { max_normalized: 5000 },
+        [`DEPT#eng|COUNTER#monthly#${kstBucket("monthly", NOW)}`]: { normalized: 5000 },
+      },
+    });
+    const r = await releaseTokenAxis("dev@x.com", 1, NOW);
+    expect(r).toMatchObject({ released: false, reason: "other_cap_exceeded", denyCleared: false });
+    expect(r.warning).toContain("dept monthly cap also exceeded (5000/5000)");
+    expect(deletes()).toHaveLength(0);
+  });
+  it("uses the caller's department when the deny row has none", async () => {
+    table({
+      limit: { max_normalized: 1000 },
+      deny: userMonthlyDeny,
+      counter: 0,
+      rows: {
+        "DEPT#ops|LIMIT#daily": { max_normalized: 10 },
+        [`DEPT#ops|COUNTER#daily#${kstBucket("daily", NOW)}`]: { normalized: 11 },
+      },
+    });
+    const r = await releaseTokenAxis("dev@x.com", 1, NOW, "ops");
+    expect(r).toMatchObject({ released: false, reason: "other_cap_exceeded" });
+    expect(r.warning).toContain("dept daily cap");
+  });
+  it("keeps a user-monthly deny while the user's weekly cap is exceeded", async () => {
+    table({
+      limit: { max_normalized: 1000 },
+      deny: deptDeny,
+      counter: 0,
+      rows: {
+        "USER#dev@x.com|LIMIT#weekly": { max_normalized: 300 },
+        [`USER#dev@x.com|COUNTER#weekly#${kstBucket("weekly", NOW)}`]: { normalized: 300 },
+      },
+    });
+    const r = await releaseTokenAxis("dev@x.com", 1, NOW);
+    expect(r).toMatchObject({ released: false, reason: "other_cap_exceeded" });
+    expect(r.warning).toContain("user weekly cap also exceeded (300/300)");
+    expect(deletes()).toHaveLength(0);
+  });
+  it("releases when every capped period is under its cap", async () => {
+    table({
+      limit: { max_normalized: 1000 },
+      deny: deptDeny,
+      counter: 1200,
+      rows: {
+        "USER#dev@x.com|LIMIT#weekly": { max_normalized: 300 },
+        [`USER#dev@x.com|COUNTER#weekly#${kstBucket("weekly", NOW)}`]: { normalized: 299 },
+        "DEPT#eng|LIMIT#monthly": { max_normalized: 5000 },
+        [`DEPT#eng|COUNTER#monthly#${kstBucket("monthly", NOW)}`]: { normalized: 4999 },
+        "DEPT#eng|LIMIT#daily": { max_normalized: 0 }, // uncapped
+        [`DEPT#eng|COUNTER#daily#${kstBucket("daily", NOW)}`]: { normalized: 999999 },
+      },
+    });
+    iamSend.mockResolvedValue({});
+    expect(await releaseTokenAxis("dev@x.com", 1, NOW)).toMatchObject({ released: true, denyCleared: true });
+    expect(deletes()).toHaveLength(1);
+  });
+  it("a grant that floors to 0 holds as still_over_cap without noTokenLimit", async () => {
+    table({ limit: { max_normalized: 1000 }, deny: userMonthlyDeny, counter: 0 });
+    const r = await releaseTokenAxis("dev@x.com", 0.00001, NOW);
+    expect(r).toMatchObject({ released: false, reason: "still_over_cap", normalizedGranted: 0 });
+    expect(r.noTokenLimit).toBeUndefined();
+    expect(updates()).toHaveLength(0);
   });
 });
