@@ -23,12 +23,12 @@ import {
 } from "@aws-sdk/client-secrets-manager";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
+export const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
 const domainName = process.env.DOMAIN_NAME ?? "atomai.click";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
 const MAX_COGNITO_PAGES = 20;
 
-const cognitoClient = new CognitoIdentityProviderClient({ region });
+export const cognitoClient = new CognitoIdentityProviderClient({ region });
 const secretsClient = new SecretsManagerClient({ region });
 
 // ─── Helper: Parse Cognito attributes ───
