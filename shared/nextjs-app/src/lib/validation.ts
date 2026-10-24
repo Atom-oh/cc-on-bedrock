@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ROLES } from "./roles";
 
 const subdomain = z.string().min(3).max(30).regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/, "Invalid subdomain format");
 
@@ -27,10 +28,12 @@ export const createUserSchema = z.object({
   containerOs: z.enum(["ubuntu", "al2023"]),
   resourceTier: z.enum(["light", "standard", "power"]),
   securityPolicy: z.enum(["open", "restricted", "locked"]),
+  role: z.enum(ROLES),
 });
 
 export const updateUserSchema = z.object({
   username: z.string().min(1),
+  role: z.enum(ROLES).optional(),
   containerOs: z.enum(["ubuntu", "al2023"]).optional(),
   resourceTier: z.enum(["light", "standard", "power"]).optional(),
   securityPolicy: z.enum(["open", "restricted", "locked"]).optional(),

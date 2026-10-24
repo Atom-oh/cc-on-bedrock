@@ -173,12 +173,12 @@ export async function createCognitoUser(
     }
   }
 
-  // Add to 'user' group by default
+  // Role group chosen by the admin (required on create)
   await cognitoClient.send(
     new AdminAddUserToGroupCommand({
       UserPoolId: userPoolId,
       Username: result.User?.Username ?? input.email,
-      GroupName: "user",
+      GroupName: input.role,
     })
   );
 

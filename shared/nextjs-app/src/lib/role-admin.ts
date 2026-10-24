@@ -50,19 +50,33 @@ export async function setUserRole(
   await send(new AdminUserGlobalSignOutCommand({ UserPoolId: userPoolId, Username: username }));
 }
 
-export async function countAdmins(): Promise<number> {
-  let count = 0;
+/** All members of one role group (paginated). */
+export async function listGroupMembers(
+  group: Role
+): Promise<{ username: string; email?: string; enabled: boolean }[]> {
+  const members: { username: string; email?: string; enabled: boolean }[] = [];
   let nextToken: string | undefined;
   let pages = 0;
   do {
     const res = await cognitoClient.send(
-      new ListUsersInGroupCommand({ UserPoolId: userPoolId, GroupName: "admin", NextToken: nextToken })
+      new ListUsersInGroupCommand({ UserPoolId: userPoolId, GroupName: group, NextToken: nextToken })
     );
-    count += res.Users?.length ?? 0;
+    for (const u of res.Users ?? []) {
+      members.push({
+        username: u.Username ?? "",
+        email: u.Attributes?.find((a) => a.Name === "email")?.Value,
+        enabled: u.Enabled !== false,
+      });
+    }
     nextToken = res.NextToken;
     pages++;
   } while (nextToken && pages < MAX_PAGES);
-  return count;
+  return members;
+}
+
+/** Enabled admins only: a disabled admin cannot act, so it must not satisfy the last-admin guard. */
+export async function countAdmins(): Promise<number> {
+  return (await listGroupMembers("admin")).filter((m) => m.enabled).length;
 }
 
 /** Re-check the caller's CURRENT Cognito role (sessions last 8h and carry stale groups). */

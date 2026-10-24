@@ -1,3 +1,5 @@
+import type { Role } from "./roles";
+
 // ─── Auth & User Types ───
 
 export interface UserSession {
@@ -31,6 +33,8 @@ export interface CognitoUser {
   storageType?: "ebs" | "efs";
   containerId?: string;
   groups: string[];
+  role?: Role;                // highest-privilege role group (set by GET /api/users)
+  roleNeedsCleanup?: boolean; // user holds more than one role group
   customRoutes?: CustomRoute[];
 }
 
@@ -42,10 +46,12 @@ export interface CreateUserInput {
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
   storageType?: "ebs" | "efs";
+  role: Role;
 }
 
 export interface UpdateUserInput {
   username: string;
+  role?: Role;
   containerOs?: "ubuntu" | "al2023";
   resourceTier?: "light" | "standard" | "power";
   securityPolicy?: "open" | "restricted" | "locked";

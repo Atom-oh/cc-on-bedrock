@@ -13,6 +13,8 @@ import {
 } from "@/lib/aws-clients";
 import { createUserSchema, updateUserSchema } from "@/lib/validation";
 import { batchGetCustomRoutes } from "@/lib/ec2-clients";
+import { ROLES, roleFromGroups, validateRoleChange } from "@/lib/roles";
+import { countAdmins, getRoleGroups, listGroupMembers, requireFreshRole, setUserRole } from "@/lib/role-admin";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -28,7 +30,19 @@ export async function GET(req: NextRequest) {
       const user = await getCognitoUser(username);
       return NextResponse.json({ success: true, data: user });
     }
-    const users = await listCognitoUsers();
+    // Three ListUsersInGroup calls (one per role) instead of a per-user group lookup.
+    const [users, ...roleMembers] = await Promise.all([
+      listCognitoUsers(),
+      ...ROLES.map((r) => listGroupMembers(r)),
+    ]);
+    const groupsByUser = new Map<string, string[]>();
+    ROLES.forEach((role, i) => {
+      for (const m of roleMembers[i]) {
+        for (const key of [m.username, m.email].filter((k): k is string => !!k).map((k) => k.toLowerCase())) {
+          groupsByUser.set(key, [...(groupsByUser.get(key) ?? []), role]);
+        }
+      }
+    });
     // M2: single BatchGetItem instead of N+1 per-user GetItem.
     let routesBySubdomain = new Map<string, { path: string; port: number; label: string }[]>();
     try {
@@ -38,10 +52,21 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       console.warn("[users] batchGetCustomRoutes failed:", err instanceof Error ? err.message : err);
     }
-    const withRoutes = users.map((u) => ({
-      ...u,
-      customRoutes: routesBySubdomain.get(u.subdomain) ?? [],
-    }));
+    const withRoutes = users.map((u) => {
+      const groups = [
+        ...new Set([
+          ...(groupsByUser.get(u.username.toLowerCase()) ?? []),
+          ...(groupsByUser.get(u.email.toLowerCase()) ?? []),
+        ]),
+      ];
+      const { role, needsCleanup } = roleFromGroups(groups);
+      return {
+        ...u,
+        role,
+        roleNeedsCleanup: needsCleanup,
+        customRoutes: routesBySubdomain.get(u.subdomain) ?? [],
+      };
+    });
     return NextResponse.json({ success: true, data: withRoutes });
   } catch (err) {
     console.error("[users] GET", err instanceof Error ? err.message : err);
@@ -55,13 +80,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
+  const fresh = await requireFreshRole(session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
+
   try {
     const raw = await req.json();
+    // Empty department for a dept-manager gets the specific error, not the generic min(1) message.
+    if (raw?.role === "dept-manager" && typeof raw.department === "string" && !raw.department.trim()) {
+      return NextResponse.json({ success: false, error: "dept_required" }, { status: 400 });
+    }
     const parsed = createUserSchema.safeParse(raw);
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
     }
     const body = parsed.data;
+    const roleCheck = validateRoleChange({
+      actorEmail: session.user.email ?? "",
+      targetEmail: body.email,
+      currentRole: "user",
+      newRole: body.role,
+      targetDepartment: body.department,
+      adminCount: 0,
+    });
+    if (!roleCheck.ok) {
+      return NextResponse.json({ success: false, error: roleCheck.error }, { status: 400 });
+    }
     const cognitoUser = await createCognitoUser(body);
     return NextResponse.json({ success: true, data: cognitoUser });
   } catch (err) {
@@ -81,6 +124,9 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
+  const fresh = await requireFreshRole(session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
+
   try {
     const raw = await req.json();
 
@@ -99,8 +145,35 @@ export async function PUT(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
     }
-    await updateCognitoUser(parsed.data);
-    return NextResponse.json({ success: true });
+    const { role: newRole, ...attrs } = parsed.data;
+    let roleChanged = false;
+    if (newRole) {
+      const currentRole = roleFromGroups(await getRoleGroups(attrs.username)).role;
+      if (newRole !== currentRole) {
+        const target = await getCognitoUser(attrs.username);
+        const check = validateRoleChange({
+          actorEmail: session.user.email ?? "",
+          targetEmail: target.email || attrs.username,
+          currentRole,
+          newRole,
+          targetDepartment: target.department,
+          adminCount: await countAdmins(),
+        });
+        if (!check.ok) {
+          return NextResponse.json({ success: false, error: check.error }, { status: 400 });
+        }
+        try {
+          await setUserRole(attrs.username, newRole);
+        } catch (err) {
+          // The user may now hold both groups; surface failure so the UI never shows success.
+          console.error("[users] PUT setUserRole", err instanceof Error ? err.message : err);
+          return NextResponse.json({ success: false, error: "role_change_failed" }, { status: 500 });
+        }
+        roleChanged = true;
+      }
+    }
+    await updateCognitoUser(attrs);
+    return NextResponse.json({ success: true, data: { roleChanged } });
   } catch (err) {
     console.error("[users] PUT", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
@@ -112,6 +185,9 @@ export async function DELETE(req: NextRequest) {
   if (!session?.user?.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
+
+  const fresh = await requireFreshRole(session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
 
   const { searchParams } = new URL(req.url);
   const username = searchParams.get("username");
