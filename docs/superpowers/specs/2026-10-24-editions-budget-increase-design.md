@@ -141,8 +141,18 @@ CC-on-Bedrock은 **LLM gateway 없이** Bedrock 사용을 통제한다. 사용�
 
 ## 7. ccdash 연동 (선택, 부가 기능)
 - ccdash(`Atom-oh/claude-code-usage-dashboard`)는 별도 저장소·별도 배포. cc는 배포하지 않는다.
-- cc Terraform 선택 변수 2개 (내 판단): `ccdash_url`(대시보드 "상세 관측" 링크; 미설정 시 링크 숨김), `ccdash_otlp_endpoint`(설정 시 로컬 설치 스크립트가 사용자 PC에 `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_METRICS_EXPORTER=otlp`, `OTEL_LOGS_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_ENDPOINT` 등을 설정; Codex도 ccdash가 받는 형식으로).
-- 현재 로컬 모드는 `CLAUDE_CODE_ENABLE_TELEMETRY`를 설정하지 않으며 `LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT`는 TF가 넣지 않는다 (`app/api/install/route.ts:68,117-122`) — 이 경로를 `ccdash_otlp_endpoint`로 연결한다.
+- **ccdash 저장소는 수정하지 않는다** (사용자 결정). cc 쪽에서만 연결한다.
+- ccdash 수집 구조 (확인됨, ccdash `main` d039ea1 기준):
+  - 사용자 PC마다 ccdash 전용 수집기가 로컬(127.0.0.1:4317 gRPC / 4318 HTTP)에서 받는다 (`collector-config.yaml:21-29`).
+  - 수집기는 기기별 토큰(`Authorization: Bearer ccd1.…`, 30일 만료)으로 ccdash `/api/ingest/v1/*`에 보낸다 (`dashboard/server/collectorRoutes.js:10,180-181`). 토큰은 ccdash `/collector` SSO 화면에서 발급한다.
+  - ccdash 설치 스크립트가 Claude Code `settings.json` env와 Codex `config.toml [otel]`을 직접 쓰고, 다른 OTLP 설정이 있으면 거부한다 (`scripts/configure-client-telemetry.py:14-40,79-81,113-118`).
+  - 사용자 식별은 `user.email` 리소스 속성뿐이며(자기 신고), 수집기 allowlist가 부서 같은 커스텀 속성을 버린다 (`collector-config.yaml:153`). 부서·예산 개념은 없다.
+- 그래서 cc는 **텔레메트리 설정을 쓰지 않는다**. ccdash 설치는 ccdash 자체 설치 스크립트 몫이다. cc 설치 스크립트가 OTLP 주소를 넣으면 인증이 없어 거부되고 ccdash 설치와 충돌한다.
+- cc Terraform 선택 변수 1개 (내 판단): `ccdash_url`. 설정 시:
+  - 대시보드 사이드바에 "상세 관측 (ccdash)" 외부 링크.
+  - 로컬 설치 화면(LocalSetup)과 `/local`에 "ccdash 수집기 설치" 안내 + `{ccdash_url}/collector` 링크, 그리고 Cognito 로그인 이메일을 `user.email` 값으로 미리 보여 준다 (ccdash 사용자 구분과 cc 비용 데이터를 같은 이메일로 맞추기 위해). cc는 이 값을 사용자 PC에 쓰지 않는다.
+  - 미설정 시 링크·안내 모두 숨김.
+- 기존 cc 자체 `LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT` 경로(`app/api/install/route.ts:68,117-122`)는 손대지 않는다 (TF가 값을 넣지 않으므로 기본 비활성).
 - 비용 통제(차단·증액)는 ccdash에 의존하지 않는다. ccdash가 없어도 cc 기능은 100% 동작.
 - 텔레메트리를 CloudWatch Logs로 보내지 않는다.
 
