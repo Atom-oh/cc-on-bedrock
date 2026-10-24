@@ -103,38 +103,38 @@ graph LR
 
 ## Budget increase & roles (ADR-008 amendment 2026-10-24)
 
-두 에디션 모두에서 동작한다. IAM 확장·컨테이너·티어·DLP 승인은 `devenv` 전용이며 admin만 처리한다.
+Works in both editions. IAM extension, container, tier and DLP approvals are `devenv`-only and handled by admins only.
 
-| | `governance` (기본) | `devenv` |
+| | `governance` (default) | `devenv` |
 |---|---|---|
-| 비용 현황 · 부서 예산 · 사용자 한도 · 차단 목록 | O | O |
-| 예산 증액 요청 · 승인 | O | O |
-| 부서장의 부서원 상시 한도 | O | O |
-| IAM 확장 / 컨테이너 / 티어 / DLP 승인 | X | O (admin) |
-| ccdash 링크 (`ccdash_url`) | 선택 | 선택 |
+| Cost overview · department budgets · user caps · blocked list | O | O |
+| Budget increase request · approval | O | O |
+| Dept-manager standing limits for members | O | O |
+| IAM extension / container / tier / DLP approvals | X | O (admin) |
+| ccdash link (`ccdash_url`) | optional | optional |
 
 ```text
-사용자 (/local, LocalSetup, devEnv 포털)
+User (/local, LocalSetup, devEnv portal)
   └─ POST /api/user/budget-increase {period, requestedAmount, reason}
-       → 승인 테이블 REQUEST#{id} (pending) + 잠금 PENDING#{email}#{period}#{UTC key}
-승인자 (/admin/approvals — admin, 또는 middleware APPROVER_PATHS로 dept-manager)
+       → approval table REQUEST#{id} (pending) + lock PENDING#{email}#{period}#{UTC key}
+Approver (/admin/approvals — admin, or a dept-manager via middleware APPROVER_PATHS)
   └─ POST /api/admin/approval-requests {requestId, action, amount?, reason?}
-       → requireFreshRole + Cognito 부서 재조회 → decideBudgetAction
-       → TransactWriteItems: 요청 approved · 잠금 삭제
-                             · cc-user-budgets  ADD grant#{period}#{key} (요청 기간→월 연쇄, 무제한 기간 제외)
-                             · cc-department-budgets ADD grant#monthly#{key} (금액 1회; manager 승인은 낙관적 조건)
-       → releaseTokenAxis: LIMIT#monthly grant_bucket/grant_normalized (KST 월), 모든 토큰 cap 미만일 때만 DENY#active 해제
-budget-check (5분, UTC)
-  └─ cap(period) = 기존 해석(user > dept 인당 > 전역) + 현재 창 grant (cap > 0일 때만)
-       → USD deny 해제, activeGrant* 기록 → 대시보드 "기본 + 증액" 표시
+       → requireFreshRole + fresh Cognito department → decideBudgetAction
+       → TransactWriteItems: request approved · lock deleted
+                             · cc-user-budgets  ADD grant#{period}#{key} (requested period → monthly cascade, uncapped periods skipped)
+                             · cc-department-budgets ADD grant#monthly#{key} (amount once; manager approvals carry an optimistic condition)
+       → releaseTokenAxis: LIMIT#monthly grant_bucket/grant_normalized (KST month); DENY#active released only when every token cap is under
+budget-check (5 min, UTC)
+  └─ cap(period) = standing resolution (user > dept per-user > global) + current-window grant (only when cap > 0)
+       → USD deny released, activeGrant* written → dashboard shows "base + increase"
 ```
 
-- **일회성**: grant는 승인 시점의 UTC 창(오늘 / 이번 ISO 주 / 이번 달)에만 맞는 키로 저장되므로 다음 창에서는 자동으로 원래 한도로 돌아간다. 영구 한도는 바뀌지 않는다.
-- **승인 권한**: 자기 승인 금지(모든 타입). admin은 전부. dept-manager는 자기 부서 plain user의 `budget_increase`만, 부서 월 총액(budget-check이 기록한 부서 지출 + 이번 달 부서 grant + 금액) 안에서만. 지난 창의 pending 요청은 `expired`.
-- **부서장 상시 한도**: `PUT /api/dept/user-budgets` — 같은 부서 plain user의 일·주·월 한도(0 = 상속, 개인 월 ≤ 부서 총액). 부서 총액·인당 기본값은 admin 전용(`PUT /api/admin/budgets`). 두 경로 모두 행 갱신과 `limit_change` 감사를 한 트랜잭션으로 기록한다.
-- **역할**: Cognito 그룹 `admin` / `dept-manager` / `user` 중 정확히 하나. admin이 관리자 사용자 페이지에서 지정하면 즉시 Cognito에 반영되고 대상 세션은 global sign-out된다. 특권 쓰기는 `AdminListGroupsForUser`로 현재 그룹을 재확인한다(세션 8h).
-- **ccdash**: 별도 제품. `ccdash_url`이 있으면 사이드바 링크와 수집기 설치 안내(`{ccdash_url}/collector`, `user.email` = Cognito 이메일)만 보여준다. cc는 텔레메트리 설정을 쓰지 않는다.
-- 알려진 제약은 ADR-008 "알려진 제약 (2026-10-24)"에 모아 둔다.
+- **One-time**: a grant is stored under the key of the UTC window at approval time (today / this ISO week / this month), so the next window automatically falls back to the standing cap. Standing caps never change.
+- **Approval authority**: no self-approval (all types). Admins approve anything. A dept-manager approves only `budget_increase` from plain users of their own department, and only within the department monthly total (department spend recorded by budget-check + this month's department grants + amount). Pending requests from a past window are `expired`.
+- **Dept-manager standing limits**: `PUT /api/dept/user-budgets` — daily/weekly/monthly caps for plain users of the same department (0 = inherit, personal monthly ≤ department total). Department totals and per-user defaults are admin-only (`PUT /api/admin/budgets`). Both routes record the row update and a `limit_change` audit in one transaction.
+- **Roles**: exactly one Cognito group of `admin` / `dept-manager` / `user`. When an admin assigns it on the admin users page it is written to Cognito immediately and the target is globally signed out. Privileged writes re-check the current group with `AdminListGroupsForUser` (sessions last 8h).
+- **ccdash**: a separate product. With `ccdash_url` set, the dashboard shows only a sidebar link and collector setup guidance (`{ccdash_url}/collector`, `user.email` = Cognito email). cc writes no telemetry settings.
+- Known limitations are collected in ADR-008 "Known limitations (2026-10-24)".
 
 ## IaC
 - **Terraform is the only IaC.** CDK/CloudFormation removed (ADR-001). Lambda handlers in `lambda/`
