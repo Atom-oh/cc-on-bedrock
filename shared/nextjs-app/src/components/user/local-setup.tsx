@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import LocalModeTab from "./local-mode-tab";
+import CcdashSetupCard from "./ccdash-setup-card";
 
 // ADR-006 local setup: one-line installer plus the credentials/usage panel. The CLI
 // authenticates with Cognito and receives 1-hour STS credentials scoped to the user's
@@ -22,6 +23,7 @@ export default function LocalSetup() {
           자격증명은 1시간 후 자동 만료되며 재실행 시 cache된 refresh token으로 무인터랙션 갱신됩니다.
         </div>
       </div>
+      <CcdashSetupCard />
       <LocalModeTab />
     </>
   );

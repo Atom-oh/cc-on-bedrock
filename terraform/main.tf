@@ -160,6 +160,7 @@ module "dashboard" {
   dns_firewall_rule_group_id          = module.network.dns_firewall_rule_group_id
   codex_model_id                      = var.codex_model_id
   deployment_mode                     = local.deployment_mode
+  ccdash_url                          = var.ccdash_url
 }
 
 # ---- 06 WAF ------------------------------------------------------------------

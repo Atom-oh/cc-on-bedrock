@@ -8,6 +8,7 @@ import { useI18n } from "@/lib/i18n";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useDeploymentMode } from "@/components/deployment-mode-provider";
+import { useCcdashLinks } from "@/components/ccdash-provider";
 import { actionableCount, type ViewRequest } from "@/lib/budget-ui";
 import {
   Home,
@@ -26,6 +27,7 @@ import {
   LogOut,
   ChevronRight,
   Globe,
+  ExternalLink,
 } from "lucide-react";
 
 interface NavItem {
@@ -72,6 +74,7 @@ export default function Sidebar() {
   const { data: session } = useSession();
   const { locale, setLocale, t } = useI18n();
   const deploymentMode = useDeploymentMode();
+  const ccdash = useCcdashLinks();
   const isAdmin = session?.user?.isAdmin ?? false;
   const groups = session?.user?.groups ?? [];
   const isDeptManager = groups.includes("dept-manager") || isAdmin;
@@ -195,6 +198,17 @@ export default function Sidebar() {
             </Link>
           );
         })}
+        {ccdash && (
+          <a
+            href={ccdash.home}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent transition-all duration-200"
+          >
+            <ExternalLink className="w-5 h-5 text-gray-500" />
+            <span className="text-sm font-bold tracking-tight">{t("nav.ccdash")}</span>
+          </a>
+        )}
       </nav>
 
       {/* User Section */}

@@ -142,3 +142,9 @@ variable "deployment_mode" {
   type        = string
   default     = "governance"
 }
+
+variable "ccdash_url" {
+  description = "Optional ccdash base URL (https, no trailing slash); empty hides the dashboard's ccdash link and setup guidance"
+  type        = string
+  default     = ""
+}

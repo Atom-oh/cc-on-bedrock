@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import CcdashSetupCard from "@/components/user/ccdash-setup-card";
 import BudgetIncreaseRequest, { type BudgetLimits } from "@/components/budget/budget-increase-request";
 
 type CredentialsResponse = {
@@ -260,6 +261,8 @@ export default function LocalGovernancePage() {
           </div>
         )}
       </section>
+
+      <CcdashSetupCard tone="light" />
 
       {/* CLI helper download */}
       <section className="border rounded p-4 bg-white">
