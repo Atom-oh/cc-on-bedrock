@@ -11,7 +11,9 @@ import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
 import { requireFreshRole } from "@/lib/role-admin";
 import { hasRealDepartment } from "@/lib/roles";
 import { getUsageRecords } from "@/lib/usage-client";
-import type { DeptBudget, PendingRequest } from "@/lib/types";
+import type { DeptBudget, MemberBudgetStatus, PendingRequest } from "@/lib/types";
+import { budgetStatus, readTokenDeniedUsers, readUserBudgetRows } from "@/lib/budget-status";
+import { grantAttr, periodKey } from "@/lib/budget-grants";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -63,6 +65,7 @@ export async function GET(req: NextRequest) {
 
     // Fetch department budget from DynamoDB
     let budget: DeptBudget | null = null;
+    let deptRow: Record<string, unknown> | undefined;
     try {
       if (department === "all") {
         // For "all" view, aggregate budget across all departments
@@ -86,6 +89,7 @@ export async function GET(req: NextRequest) {
 
         if (budgetResult.Item) {
           const item = unmarshall(budgetResult.Item);
+          deptRow = item;
           budget = {
             department: item.department ?? department,
             // 0 = unlimited (matches budget-check.py: cap <= 0 → no deny). Don't
@@ -94,6 +98,9 @@ export async function GET(req: NextRequest) {
             currentSpend: item.currentSpend ?? 0,
             monthlyTokenLimit: item.monthlyTokenLimit ?? 0,
             currentTokens: item.currentTokens ?? 0,
+            // Inputs of the approval route's department-cap check (pre-check in the UI).
+            recordedSpend: Number(item.currentSpend ?? 0) || 0,
+            monthGranted: Number(item[grantAttr("monthly", periodKey("monthly", new Date()))] ?? 0) || 0,
           };
         } else {
           // No budget row → unlimited (0), consistent with enforcement.
@@ -139,6 +146,10 @@ export async function GET(req: NextRequest) {
         const u = unmarshall(item);
         return {
           requestId: u.requestId ?? u.PK?.replace("REQUEST#", "") ?? "",
+          type: u.type ?? "container_request", // legacy requests don't have type
+          period: u.period,
+          periodKey: u.periodKey,
+          requestedAmount: u.requestedAmount !== undefined ? Number(u.requestedAmount) : undefined,
           email: u.email ?? "",
           subdomain: u.subdomain ?? "",
           containerOs: u.containerOs ?? "ubuntu",
@@ -190,15 +201,51 @@ export async function GET(req: NextRequest) {
       console.warn("[dept] Monthly usage fetch error:", err);
     }
 
+    // One department: each member's standing limits, caps with current grants and
+    // block cause (blocked list). Best-effort: the members list still renders without it.
+    const budgetRows = new Map<string, Record<string, unknown>>();
+    let tokenDenied = new Set<string>();
+    let statusAvailable = false;
+    if (department !== "all" && members.length > 0) {
+      try {
+        const [rows, denied] = await Promise.all([
+          readUserBudgetRows(members.map((m) => m.email)),
+          readTokenDeniedUsers(),
+        ]);
+        rows.forEach((v, k) => budgetRows.set(k, v));
+        tokenDenied = denied;
+        statusAvailable = true;
+      } catch (err) {
+        console.warn("[dept] Member budget status fetch error:", err instanceof Error ? err.message : err);
+      }
+    }
+
     // Format members for response
-    const formattedMembers = members.map((m) => ({
-      username: m.username,
-      email: m.email,
-      subdomain: m.subdomain,
-      containerOs: m.containerOs,
-      resourceTier: m.resourceTier,
-      status: m.status,
-    }));
+    const formattedMembers = members.map((m) => {
+      const key = (m.email ?? "").trim().toLowerCase();
+      const row = budgetRows.get(key);
+      const status: MemberBudgetStatus | undefined = statusAvailable
+        ? budgetStatus(row, deptRow, now, tokenDenied.has(key))
+        : undefined;
+      return {
+        username: m.username,
+        email: m.email,
+        subdomain: m.subdomain,
+        containerOs: m.containerOs,
+        resourceTier: m.resourceTier,
+        status: m.status,
+        ...(statusAvailable
+          ? {
+              limits: {
+                dailyBudget: Number(row?.dailyBudget ?? 0) || 0,
+                weeklyBudget: Number(row?.weeklyBudget ?? 0) || 0,
+                monthlyBudget: Number(row?.monthlyBudget ?? 0) || 0,
+              },
+              budgetStatus: status,
+            }
+          : {}),
+      };
+    });
 
     return NextResponse.json({
       success: true,

@@ -1,9 +1,23 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useDeploymentMode } from "@/components/deployment-mode-provider";
+import type { DepartmentBudgetState } from "@/lib/approval-authz";
+import {
+  APPROVAL_ERRORS,
+  MAX_INCREASE_USD,
+  budgetRequestGate,
+  errorKey,
+  fill,
+  isExpiredRequest,
+  isRequestTypeVisible,
+  releaseNotice,
+  type TokenReleaseResult,
+} from "@/lib/budget-ui";
 import {
   CheckCircle,
   XCircle,
@@ -14,6 +28,8 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronUp,
+  Wallet,
+  History,
 } from "lucide-react";
 
 interface ApprovalRequest {
@@ -37,6 +53,33 @@ interface ApprovalRequest {
   llmNote?: string;
   reason?: string;
   resourceTier?: string;
+  // budget_increase
+  requesterRole?: string;
+  period?: string;
+  periodKey?: string;
+  requestedAmount?: number;
+  approvedAmount?: number;
+  snapshotSpend?: number;
+  snapshotBudget?: number;
+  rejectReason?: string;
+  // limit_change (applied audit record)
+  actor?: string;
+  actorRole?: string;
+  targetType?: string;
+  before?: Record<string, number>;
+  after?: Record<string, number>;
+  appliedAt?: string;
+}
+
+/** Department state for the budget_increase cap pre-check and the department-deny hint. */
+interface DeptState extends DepartmentBudgetState {
+  /** Spend reached the department total: budget-check denies every member. */
+  over: boolean;
+}
+
+interface Notice {
+  tone: "ok" | "warn" | "error";
+  lines: string[];
 }
 
 interface PolicySetInfo {
@@ -50,35 +93,53 @@ const TYPE_LABELS: Record<string, { label: string; icon: typeof Cpu; color: stri
   dlp_change: { label: "DLP Change", icon: Shield, color: "text-amber-400" },
   iam_extension: { label: "IAM Extension", icon: Key, color: "text-purple-400" },
   container_request: { label: "Container Request", icon: Cpu, color: "text-gray-400" },
+  budget_increase: { label: "Budget Increase", icon: Wallet, color: "text-emerald-400" },
+  limit_change: { label: "Limit Change", icon: History, color: "text-sky-400" },
 };
 
-// Request types that act on the per-user EC2 DevEnv (instance tier, DLP security group, container
-// provisioning); hidden in governance mode, where only IAM extension requests apply.
-const DEVENV_REQUEST_TYPES = new Set(["tier_change", "dlp_change", "container_request"]);
+// Instance-permission requests (tier, DLP, container, IAM extension) belong to the devEnv
+// edition only; governance mode shows budget_increase (and limit_change history) only.
+const FILTERS = ["pending", "approved", "rejected", "", "history"] as const;
+type Filter = (typeof FILTERS)[number];
 
 const STATUS_STYLES: Record<string, string> = {
   pending: "bg-amber-500/10 text-amber-400 border-amber-500/20",
   approved: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
   rejected: "bg-red-500/10 text-red-400 border-red-500/20",
+  expired: "bg-gray-500/10 text-gray-400 border-gray-500/20",
 };
+
+const usd = (n: number | undefined) => `$${(n ?? 0).toFixed(2)}`;
 
 export default function ApprovalsPage() {
   const { t } = useI18n();
-  const devenv = useDeploymentMode() === "devenv";
+  const mode = useDeploymentMode();
+  const devenv = mode === "devenv";
+  const { data: session } = useSession();
+  const viewer = { email: session?.user?.email ?? "", isAdmin: session?.user?.isAdmin ?? false };
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [policyCatalog, setPolicyCatalog] = useState<PolicySetInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
-  const [filter, setFilter] = useState<string>("pending");
+  const [filter, setFilter] = useState<Filter>("pending");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [depts, setDepts] = useState<Record<string, DeptState>>({});
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [rejectReasons, setRejectReasons] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState<Notice | null>(null);
 
   const fetchRequests = useCallback(async () => {
     try {
-      const url = filter ? `/api/admin/approval-requests?status=${filter}` : "/api/admin/approval-requests";
+      // limit_change audit records are stored as status "applied".
+      const status = filter === "history" ? "applied" : filter;
+      const url = status ? `/api/admin/approval-requests?status=${status}` : "/api/admin/approval-requests";
       const res = await fetch(url);
       const data = await res.json();
       if (data.success) {
-        setRequests(devenv ? data.data : (data.data as ApprovalRequest[]).filter((r) => !DEVENV_REQUEST_TYPES.has(r.type)));
+        const list = (data.data as ApprovalRequest[]).filter((r) => isRequestTypeVisible(r.type, mode));
+        setRequests(filter === "history"
+          ? list.filter((r) => r.type === "limit_change")
+          : list.filter((r) => r.type !== "limit_change"));
         if (data.meta?.policySetCatalog) setPolicyCatalog(data.meta.policySetCatalog);
       }
     } catch (err) {
@@ -86,26 +147,119 @@ export default function ApprovalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filter, devenv]);
+  }, [filter, mode]);
 
   useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
-  async function handleAction(requestId: string, action: "approve" | "reject") {
-    setProcessing(requestId);
+  // Department totals: a dept-manager's cap pre-check (/api/dept) and, for both roles,
+  // the hint that a department-total deny is not lifted by a personal grant.
+  const fetchDepts = useCallback(async () => {
+    if (!session?.user) return;
     try {
+      if (session.user.isAdmin) {
+        const res = await fetch("/api/admin/budgets?type=department");
+        const json = await res.json();
+        const out: Record<string, DeptState> = {};
+        for (const d of (json.data?.departments ?? []) as Array<{ department: string; monthlyBudget: number; currentSpend: number }>) {
+          out[d.department] = {
+            monthlyBudget: d.monthlyBudget,
+            monthSpend: d.currentSpend,
+            monthGranted: 0,
+            over: d.monthlyBudget > 0 && d.currentSpend >= d.monthlyBudget,
+          };
+        }
+        setDepts(out);
+      } else {
+        const res = await fetch("/api/dept");
+        const json = await res.json();
+        const b = json.data?.budget as
+          | { department: string; monthlyBudget: number; recordedSpend?: number; monthGranted?: number }
+          | null
+          | undefined;
+        if (b?.department) {
+          const spend = b.recordedSpend ?? 0;
+          setDepts({
+            [b.department]: {
+              monthlyBudget: b.monthlyBudget,
+              monthSpend: spend,
+              monthGranted: b.monthGranted ?? 0,
+              over: b.monthlyBudget > 0 && spend >= b.monthlyBudget,
+            },
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch department budgets:", err);
+    }
+  }, [session?.user]);
+
+  useEffect(() => { void fetchDepts(); }, [fetchDepts]);
+
+  const requestAmount = (req: ApprovalRequest) => {
+    const raw = amounts[req.requestId];
+    return raw === undefined ? req.requestedAmount ?? 0 : Number(raw);
+  };
+
+  /** The approver-facing outcome of an approval: release ETA plus every axis still blocking. */
+  function approvalNotice(req: ApprovalRequest, applied: { releaseEtaMinutes?: number; tokenRelease?: TokenReleaseResult } | undefined): Notice {
+    const lines = [
+      fill(t("approvals.approved"), { email: req.email, amount: usd(requestAmount(req)) }),
+      fill(t("approvals.releaseEta"), { minutes: applied?.releaseEtaMinutes ?? 5 }),
+    ];
+    let tone: Notice["tone"] = "ok";
+    const tr = releaseNotice(applied?.tokenRelease);
+    if (tr.tone === "ok" && tr.tokenCleared) lines.push(t("approvals.tokenCleared"));
+    if ("tokenHeldReason" in tr) {
+      tone = "warn";
+      lines.push(fill(t("approvals.tokenHeld"), { reason: t(`approvals.tokenReason.${tr.tokenHeldReason}`) }));
+    }
+    if ("tokenUnknown" in tr) {
+      tone = "warn";
+      lines.push(fill(t("approvals.tokenUnknown"), { warning: tr.warning ?? "" }));
+    }
+    if (depts[req.department]?.over) {
+      tone = "warn";
+      lines.push(t("approvals.deptStillOver"));
+    }
+    return { tone, lines };
+  }
+
+  async function handleAction(req: ApprovalRequest, action: "approve" | "reject") {
+    const requestId = req.requestId;
+    const isBudget = req.type === "budget_increase";
+    setProcessing(requestId);
+    setNotice(null);
+    try {
+      const body: Record<string, unknown> = { requestId, action };
+      if (isBudget && action === "approve") body.amount = requestAmount(req);
+      if (isBudget && action === "reject" && rejectReasons[requestId]?.trim()) body.reason = rejectReasons[requestId].trim();
       const res = await fetch("/api/admin/approval-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId, action }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.success) {
+        if (data.data?.alreadyProcessed) {
+          setNotice({ tone: "warn", lines: [t("approvals.error.already_decided")] });
+        } else if (action === "reject") {
+          setNotice({ tone: "ok", lines: [fill(t("approvals.rejected"), { email: req.email })] });
+        } else if (isBudget) {
+          setNotice(approvalNotice(req, data.data?.applied));
+        } else {
+          setNotice({ tone: "ok", lines: [fill(t("approvals.applied"), { email: req.email })] });
+        }
         await fetchRequests();
+        void fetchDepts();
+        // Sidebar pending badge listens for this.
+        window.dispatchEvent(new Event("approvals:changed"));
       } else {
-        alert(`Failed: ${data.error}`);
+        const key = errorKey("approvals.error", data.error, APPROVAL_ERRORS);
+        const text = key.endsWith(".unknown") && data.error ? `${t(key)} (${data.error})` : t(key);
+        setNotice({ tone: "error", lines: [text] });
       }
     } catch (err) {
-      alert(`Error: ${err}`);
+      setNotice({ tone: "error", lines: [`${t("approvals.error.unknown")} (${err})`] });
     } finally {
       setProcessing(null);
     }
@@ -116,6 +270,22 @@ export default function ApprovalsPage() {
   }
 
   function renderTypeDetails(req: ApprovalRequest) {
+    if (req.type === "budget_increase") {
+      return (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-gray-400">{t(`budgetIncrease.period.${req.period}`)}</span>
+          <span className="text-gray-600 font-mono text-xs">{req.periodKey} UTC</span>
+          <span className="text-white font-bold">+{usd(req.approvedAmount ?? req.requestedAmount)}</span>
+        </div>
+      );
+    }
+    if (req.type === "limit_change") {
+      return (
+        <span className="text-gray-400 text-sm">
+          {req.targetType === "department" ? req.department : req.email}
+        </span>
+      );
+    }
     if (req.type === "tier_change") {
       return (
         <div className="flex items-center gap-2 text-sm">
@@ -172,6 +342,153 @@ export default function ApprovalsPage() {
     return <span className="text-gray-500 text-sm">Tier: {req.resourceTier ?? "standard"}</span>;
   }
 
+  /** Budget increase detail: snapshot, approver amount, reject reason and why buttons are off. */
+  function renderBudgetPanel(req: ApprovalRequest) {
+    const amount = requestAmount(req);
+    const dept = depts[req.department];
+    const gate = budgetRequestGate(req, viewer, amount, viewer.isAdmin ? null : dept ?? null, new Date());
+    const amountValid = Number.isFinite(amount) && amount > 0 && amount <= MAX_INCREASE_USD;
+    const pending = req.status === "pending";
+    return {
+      canApprove: pending && gate === "actionable" && amountValid,
+      canReject: pending && gate === "actionable",
+      body: (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div>
+              <span className="text-gray-600 uppercase tracking-widest text-[10px]">{t("approvals.field.period")}</span>
+              <p className="text-white font-bold mt-0.5">{t(`budgetIncrease.period.${req.period}`)} · {req.periodKey} (UTC)</p>
+            </div>
+            <div>
+              <span className="text-gray-600 uppercase tracking-widest text-[10px]">{t("approvals.field.requested")}</span>
+              <p className="text-white font-bold mt-0.5">{usd(req.requestedAmount)}</p>
+            </div>
+            <div>
+              <span className="text-gray-600 uppercase tracking-widest text-[10px]">{t("approvals.field.snapshot")}</span>
+              <p className="text-white font-bold mt-0.5">{usd(req.snapshotSpend)} / {usd(req.snapshotBudget)}</p>
+            </div>
+            {req.approvedAmount !== undefined && (
+              <div>
+                <span className="text-gray-600 uppercase tracking-widest text-[10px]">{t("approvals.field.approvedAmount")}</span>
+                <p className="text-white font-bold mt-0.5">{usd(req.approvedAmount)}</p>
+              </div>
+            )}
+          </div>
+
+          {req.rejectReason && (
+            <div className="bg-[#0d1117] rounded-xl p-3 border border-white/5">
+              <span className="text-[10px] text-gray-600 uppercase tracking-widest">{t("approvals.field.rejectReason")}</span>
+              <p className="text-sm text-gray-300 mt-1">{req.rejectReason}</p>
+            </div>
+          )}
+
+          {dept?.over && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
+              {t("approvals.deptOverHint")}{" "}
+              {viewer.isAdmin && (
+                <Link href="/admin/budgets" className="underline text-amber-300">{t("approvals.deptOverLink")}</Link>
+              )}
+            </div>
+          )}
+
+          {pending && gate !== "actionable" && (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-gray-300">
+              {t(`approvals.gate.${gate}`)}
+            </div>
+          )}
+
+          {pending && gate === "actionable" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label htmlFor={`amt-${req.requestId}`} className="text-[10px] text-gray-600 uppercase tracking-widest">
+                  {t("approvals.field.adjustAmount")}
+                </label>
+                <input
+                  id={`amt-${req.requestId}`}
+                  type="number"
+                  min={0.01}
+                  max={MAX_INCREASE_USD}
+                  step="0.01"
+                  value={amounts[req.requestId] ?? String(req.requestedAmount ?? "")}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setAmounts((a) => ({ ...a, [req.requestId]: e.target.value }))}
+                  className="mt-1 w-full px-3 py-2 text-sm bg-[#0d1117] border border-white/10 text-gray-200 rounded-lg"
+                />
+                {!amountValid && <p className="mt-1 text-[11px] text-red-400">{t("approvals.error.invalid_amount")}</p>}
+              </div>
+              <div>
+                <label htmlFor={`rr-${req.requestId}`} className="text-[10px] text-gray-600 uppercase tracking-widest">
+                  {t("approvals.field.rejectReasonInput")}
+                </label>
+                <input
+                  id={`rr-${req.requestId}`}
+                  type="text"
+                  maxLength={500}
+                  value={rejectReasons[req.requestId] ?? ""}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setRejectReasons((r) => ({ ...r, [req.requestId]: e.target.value }))}
+                  className="mt-1 w-full px-3 py-2 text-sm bg-[#0d1117] border border-white/10 text-gray-200 rounded-lg"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      ),
+    };
+  }
+
+  function renderHistory() {
+    if (requests.length === 0) {
+      return (
+        <div className="text-center py-16 text-gray-500">
+          <History className="w-8 h-8 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">{t("approvals.historyEmpty")}</p>
+        </div>
+      );
+    }
+    return (
+      <div className="overflow-x-auto bg-[#161b22]/60 rounded-2xl border border-white/5 p-5">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/5">
+              <th className="pb-2 font-bold">{t("approvals.history.time")}</th>
+              <th className="pb-2 font-bold">{t("approvals.history.actor")}</th>
+              <th className="pb-2 font-bold">{t("approvals.history.target")}</th>
+              <th className="pb-2 font-bold">{t("approvals.history.change")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {requests.map((r) => {
+              const fields = [...new Set([...Object.keys(r.before ?? {}), ...Object.keys(r.after ?? {})])];
+              return (
+                <tr key={r.requestId} className="border-b border-white/5 align-top">
+                  <td className="py-2 text-gray-400 text-xs">{new Date(r.appliedAt ?? r.requestedAt).toLocaleString()}</td>
+                  <td className="py-2 text-gray-200">
+                    {r.actor}
+                    {r.actorRole && <span className="ml-1 text-[10px] text-gray-500">({r.actorRole})</span>}
+                  </td>
+                  <td className="py-2 text-gray-200">
+                    {r.targetType === "department" ? `${t("approvals.history.department")}: ${r.department}` : r.email}
+                  </td>
+                  <td className="py-2 text-xs font-mono">
+                    {fields.map((f) => (
+                      <div key={f}>
+                        <span className="text-gray-500">{f}</span>{" "}
+                        <span className="text-gray-400">{r.before?.[f] !== undefined ? usd(r.before[f]) : "—"}</span>
+                        <span className="text-gray-600"> → </span>
+                        <span className="text-white">{r.after?.[f] !== undefined ? usd(r.after[f]) : "—"}</span>
+                      </div>
+                    ))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[40vh]">
@@ -184,22 +501,38 @@ export default function ApprovalsPage() {
     <div className="space-y-6 max-w-[1200px] mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-white tracking-tight">Approval Requests</h1>
+          <h1 className="text-2xl font-black text-white tracking-tight">{t("approvals.title")}</h1>
           <p className="text-xs text-gray-500 uppercase tracking-widest mt-1">
-            {devenv ? "Manage tier, DLP, and IAM change requests" : "Manage IAM extension requests"}
+            {viewer.isAdmin
+              ? devenv ? t("approvals.subtitle.devenv") : t("approvals.subtitle.governance")
+              : t("approvals.subtitle.manager")}
           </p>
         </div>
         <button
           onClick={fetchRequests}
           className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#161b22] border border-white/5 text-gray-300 hover:text-white text-xs font-bold"
         >
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          <RefreshCw className="w-3.5 h-3.5" /> {t("common.refresh")}
         </button>
       </div>
 
+      {notice && (
+        <div
+          role="status"
+          className={cn(
+            "rounded-xl border p-4 text-sm space-y-1",
+            notice.tone === "ok" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+            notice.tone === "warn" && "border-amber-500/40 bg-amber-500/10 text-amber-200",
+            notice.tone === "error" && "border-red-500/30 bg-red-500/10 text-red-300",
+          )}
+        >
+          {notice.lines.map((l, i) => <p key={i}>{l}</p>)}
+        </div>
+      )}
+
       {/* Filter tabs */}
       <div className="flex gap-2">
-        {["pending", "approved", "rejected", ""].map(f => (
+        {FILTERS.map(f => (
           <button
             key={f || "all"}
             onClick={() => { setFilter(f); setLoading(true); }}
@@ -210,16 +543,16 @@ export default function ApprovalsPage() {
                 : "bg-[#161b22] text-gray-500 border border-white/5 hover:text-gray-300"
             )}
           >
-            {f || "All"}
+            {t(`approvals.filter.${f || "all"}`)}
           </button>
         ))}
       </div>
 
       {/* Request list */}
-      {requests.length === 0 ? (
+      {filter === "history" ? renderHistory() : requests.length === 0 ? (
         <div className="text-center py-16 text-gray-500">
           <Clock className="w-8 h-8 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">No {filter || ""} requests</p>
+          <p className="text-sm">{t("approvals.empty")}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -227,6 +560,12 @@ export default function ApprovalsPage() {
             const typeInfo = TYPE_LABELS[req.type] ?? TYPE_LABELS.container_request;
             const TypeIcon = typeInfo.icon;
             const isExpanded = expandedId === req.requestId;
+            const isBudget = req.type === "budget_increase";
+            const budget = isBudget ? renderBudgetPanel(req) : null;
+            // Computed at read time: a pending request whose UTC window ended shows as expired.
+            const shownStatus = isExpiredRequest(req, new Date()) ? "expired" : req.status;
+            const canApprove = budget ? budget.canApprove : req.email.toLowerCase() !== viewer.email.toLowerCase();
+            const canReject = budget ? budget.canReject : canApprove;
 
             return (
               <div
@@ -246,9 +585,9 @@ export default function ApprovalsPage() {
                         <span className="text-sm font-bold text-white">{req.email}</span>
                         <span className={cn(
                           "px-2 py-0.5 rounded-full text-[10px] font-black border",
-                          STATUS_STYLES[req.status] ?? "bg-gray-500/10 text-gray-400"
+                          STATUS_STYLES[shownStatus] ?? "bg-gray-500/10 text-gray-400"
                         )}>
-                          {req.status.toUpperCase()}
+                          {t(`approvals.status.${shownStatus}`)}
                         </span>
                       </div>
                       <div className="flex items-center gap-3 mt-1">
@@ -271,22 +610,24 @@ export default function ApprovalsPage() {
                 {isExpanded && (
                   <div className="px-5 pb-5 border-t border-white/5 pt-4 space-y-4">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                      {!isBudget && (
+                        <div>
+                          <span className="text-gray-600 uppercase tracking-widest text-[10px]">Subdomain</span>
+                          <p className="text-white font-bold mt-0.5">{req.subdomain || "—"}</p>
+                        </div>
+                      )}
                       <div>
-                        <span className="text-gray-600 uppercase tracking-widest text-[10px]">Subdomain</span>
-                        <p className="text-white font-bold mt-0.5">{req.subdomain || "—"}</p>
+                        <span className="text-gray-600 uppercase tracking-widest text-[10px]">{t("approvals.field.department")}</span>
+                        <p className="text-white font-bold mt-0.5">{req.department || "—"}</p>
                       </div>
                       <div>
-                        <span className="text-gray-600 uppercase tracking-widest text-[10px]">Department</span>
-                        <p className="text-white font-bold mt-0.5">{req.department}</p>
-                      </div>
-                      <div>
-                        <span className="text-gray-600 uppercase tracking-widest text-[10px]">Requested</span>
+                        <span className="text-gray-600 uppercase tracking-widest text-[10px]">{t("approvals.field.requestedAt")}</span>
                         <p className="text-white font-bold mt-0.5">{new Date(req.requestedAt).toLocaleString()}</p>
                       </div>
-                      {req.approvedBy && (
+                      {(req.approvedBy || req.rejectedBy) && (
                         <div>
                           <span className="text-gray-600 uppercase tracking-widest text-[10px]">
-                            {req.status === "rejected" ? "Rejected By" : "Approved By"}
+                            {req.status === "rejected" ? t("approvals.field.rejectedBy") : t("approvals.field.approvedBy")}
                           </span>
                           <p className="text-white font-bold mt-0.5">{req.approvedBy ?? req.rejectedBy}</p>
                         </div>
@@ -295,27 +636,29 @@ export default function ApprovalsPage() {
 
                     {req.reason && (
                       <div className="bg-[#0d1117] rounded-xl p-3 border border-white/5">
-                        <span className="text-[10px] text-gray-600 uppercase tracking-widest">Reason</span>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-widest">{t("approvals.field.reason")}</span>
                         <p className="text-sm text-gray-300 mt-1">{req.reason}</p>
                       </div>
                     )}
 
+                    {budget?.body}
+
                     {req.status === "pending" && (
                       <div className="flex gap-3 pt-2">
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleAction(req.requestId, "approve"); }}
-                          disabled={!!processing}
+                          onClick={(e) => { e.stopPropagation(); handleAction(req, "approve"); }}
+                          disabled={!!processing || !canApprove}
                           className="flex items-center gap-2 px-5 py-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 text-xs font-black uppercase tracking-widest disabled:opacity-50"
                         >
                           <CheckCircle className="w-3.5 h-3.5" />
-                          {processing === req.requestId ? "Applying..." : "Approve & Apply"}
+                          {processing === req.requestId ? t("approvals.applying") : t("approvals.approve")}
                         </button>
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleAction(req.requestId, "reject"); }}
-                          disabled={!!processing}
+                          onClick={(e) => { e.stopPropagation(); handleAction(req, "reject"); }}
+                          disabled={!!processing || !canReject}
                           className="flex items-center gap-2 px-5 py-2 rounded-xl bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 text-xs font-black uppercase tracking-widest disabled:opacity-50"
                         >
-                          <XCircle className="w-3.5 h-3.5" /> Reject
+                          <XCircle className="w-3.5 h-3.5" /> {t("approvals.reject")}
                         </button>
                       </div>
                     )}

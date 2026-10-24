@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { DynamoDBClient, ScanCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { budgetStatus } from "@/lib/budget-status";
+import { BUDGET_PERIODS } from "@/lib/budget-periods";
 
 // ADR-006 (legacy ADR-014): returns the current normalized-token usage and limits for the logged-in user
 // across daily / weekly / monthly periods, plus department aggregates.
@@ -10,6 +12,7 @@ import { unmarshall } from "@aws-sdk/util-dynamodb";
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
+const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 
 const dynamo = new DynamoDBClient({ region });
 
@@ -136,6 +139,8 @@ export async function GET(_req: NextRequest) {
     let budgetDeny: {
       active: boolean; currentSpend: number; budget: number; releaseAt: string; periods: string[];
     } | null = null;
+    let budgetRow: Record<string, unknown> | undefined;
+    let deptRow: Record<string, unknown> | undefined;
     const subdomain = (session.user as { subdomain?: string }).subdomain;
     const budgetKeys = [userKey, ...(subdomain && subdomain !== userKey ? [subdomain] : [])];
     try {
@@ -146,6 +151,7 @@ export async function GET(_req: NextRequest) {
         }));
         if (!r.Item) continue;
         const b = unmarshall(r.Item);
+        budgetRow = b;
         // ADR-008: budget-check writes the exceeded periods + release time; prefer them.
         const periods: string[] = Array.isArray(b.budgetExceeded) ? b.budgetExceeded.map(String) : [];
         if (periods.length > 0) {
@@ -169,11 +175,40 @@ export async function GET(_req: NextRequest) {
         }
         break; // first existing row wins (canonical email key preferred)
       }
+      // Department total + per-user defaults. budget-check records the member's
+      // department on the budget row; the session value is the fallback.
+      const budgetDept = String(budgetRow?.department ?? "") || dept;
+      if (budgetDept) {
+        const d = await dynamo.send(new GetItemCommand({
+          TableName: DEPT_BUDGETS_TABLE,
+          Key: { dept_id: { S: budgetDept } },
+        }));
+        deptRow = d.Item ? unmarshall(d.Item) : undefined;
+      }
     } catch {
-      /* budget table optional — ignore */
+      /* budget tables optional — ignore */
     }
 
-    return NextResponse.json({ user: userKey, department: dept, summary, denyActive, budgetDeny });
+    // USD caps as "base + current one-time grant", and the single block cause
+    // (department total first: a personal grant cannot lift it).
+    const status = budgetStatus(budgetRow, deptRow, new Date(), !!denyItem);
+    const usdPeriods = BUDGET_PERIODS.map((p) => ({ period: p, ...status.periods[p] }));
+    const activeGrants = {
+      daily: status.periods.daily.grant,
+      weekly: status.periods.weekly.grant,
+      monthly: status.periods.monthly.grant,
+    };
+
+    return NextResponse.json({
+      user: userKey,
+      department: dept,
+      summary,
+      denyActive,
+      budgetDeny,
+      usdPeriods,
+      activeGrants,
+      blockCause: status.blockCause,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "lookup failed";
     return NextResponse.json({ error: msg }, { status: 500 });

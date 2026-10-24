@@ -17,6 +17,9 @@ vi.mock('@aws-sdk/client-dynamodb', async (orig) => {
 });
 
 import { getServerSession } from 'next-auth';
+import { BatchGetItemCommand, GetItemCommand, ScanCommand } from '@aws-sdk/client-dynamodb';
+import { marshall } from '@aws-sdk/util-dynamodb';
+import { periodKey } from '@/lib/budget-grants';
 import * as route from '../route';
 
 const asReq = (query = '') => ({ nextUrl: new URL(`http://x/api/dept${query}`) } as never);
@@ -71,6 +74,42 @@ describe('GET /api/dept', () => {
     const body = await res.json();
     expect(body.data.department).toBe('eng');
     expect(m.getCognitoUser).not.toHaveBeenCalled();
+  });
+
+  it('returns member limits, current grants and block cause for one department', async () => {
+    const now = new Date();
+    const day = periodKey('daily', now);
+    const month = periodKey('monthly', now);
+    m.send.mockImplementation(async (c: unknown) => {
+      if (c instanceof GetItemCommand) {
+        return { Item: marshall({ dept_id: 'research', monthlyBudget: 1000, currentSpend: 100, [`grant#monthly#${month}`]: 30 }) };
+      }
+      if (c instanceof BatchGetItemCommand) {
+        return {
+          Responses: {
+            'cc-user-budgets': [
+              marshall({ user_id: 'a@x.com', dailyBudget: 10, currentDailySpend: 12, [`grant#daily#${day}`]: 5, budgetExceeded: ['daily'] }),
+            ],
+          },
+        };
+      }
+      if (c instanceof ScanCommand && c.input.TableName === 'cc-on-bedrock-limits') {
+        return { Items: [marshall({ PK: 'USER#a@x.com' })] };
+      }
+      if (c instanceof ScanCommand) {
+        return { Items: [marshall({ requestId: 'r1', type: 'budget_increase', period: 'daily', periodKey: day, requestedAmount: 7, email: 'a@x.com', status: 'pending', department: 'research' })] };
+      }
+      return {};
+    });
+    const res = await route.GET(asReq());
+    const body = await res.json();
+    expect(body.data.budget).toMatchObject({ monthlyBudget: 1000, recordedSpend: 100, monthGranted: 30 });
+    const a = body.data.members[0];
+    expect(a.limits).toEqual({ dailyBudget: 10, weeklyBudget: 0, monthlyBudget: 0 });
+    expect(a.budgetStatus.periods.daily).toEqual({ spend: 12, base: 10, grant: 5, cap: 15 });
+    expect(a.budgetStatus.tokenDenied).toBe(true);
+    expect(a.budgetStatus.blockCause).toBe('user_daily');
+    expect(body.data.pendingRequests[0]).toMatchObject({ type: 'budget_increase', period: 'daily', requestedAmount: 7 });
   });
 
   it('no longer exposes the unauthenticated approve POST', () => {

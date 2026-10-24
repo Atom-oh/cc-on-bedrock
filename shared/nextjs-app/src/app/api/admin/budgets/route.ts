@@ -12,6 +12,9 @@ import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
 import { requireFreshRole } from "@/lib/role-admin";
 import { syncMonthlyLimitMirror } from "@/lib/limit-mirror";
 import { applyLimitChange, pickNumbers, type LimitChange } from "@/lib/limit-audit";
+import { budgetStatus, readTokenDeniedUsers, type PeriodStatus } from "@/lib/budget-status";
+import type { BlockCause } from "@/lib/budget-display";
+import type { BudgetPeriod } from "@/lib/budget-periods";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -57,6 +60,11 @@ export interface UserBudget {
   budgetReleaseAt: string;       // ISO time the USD deny can lift ("" when not blocked)
   periodAware: boolean; // budget-check has written per-period evaluation (budgetExceeded present)
   updatedAt: string;
+  // Caps as "base + current one-time grant" and why the user is blocked (null = not blocked).
+  periods: Record<BudgetPeriod, PeriodStatus>;
+  tokenDenied: boolean;
+  departmentOver: boolean;
+  blockCause: BlockCause;
 }
 
 const PERIOD_FIELDS = ["dailyBudget", "weeklyBudget", "monthlyBudget"] as const;
@@ -91,10 +99,17 @@ export async function GET(req: NextRequest) {
   try {
     const results: { departments?: DepartmentBudget[]; users?: UserBudget[] } = {};
 
+    // Department rows are needed for both views (user caps inherit per-user defaults).
+    const deptResult = await dynamodb.send(new ScanCommand({
+      TableName: DEPT_BUDGETS_TABLE,
+    }));
+    const deptRows = new Map<string, Record<string, unknown>>();
+    for (const item of deptResult.Items ?? []) {
+      const u = unmarshall(item);
+      deptRows.set(String(u.dept_id ?? u.department ?? ""), u);
+    }
+
     if (!type || type === "department") {
-      const deptResult = await dynamodb.send(new ScanCommand({
-        TableName: DEPT_BUDGETS_TABLE,
-      }));
       results.departments = (deptResult.Items ?? []).map((item) => {
         const u = unmarshall(item);
         return {
@@ -110,10 +125,16 @@ export async function GET(req: NextRequest) {
     }
 
     if (!type || type === "user") {
-      const [userResult, cognitoUsers] = await Promise.all([
+      const [userResult, cognitoUsers, tokenDenied] = await Promise.all([
         dynamodb.send(new ScanCommand({ TableName: USER_BUDGETS_TABLE })),
         listCognitoUsers(),
+        // Best-effort: without it the token cause is just not shown.
+        readTokenDeniedUsers().catch((err) => {
+          console.warn("[admin/budgets] token deny scan failed:", err instanceof Error ? err.message : err);
+          return new Set<string>();
+        }),
       ]);
+      const now = new Date();
 
       // Only surface budget rows that map to a real Cognito user. cc-user-budgets
       // rows are written by budget-check.py from cc-on-bedrock-usage PKs, which
@@ -135,8 +156,10 @@ export async function GET(req: NextRequest) {
       results.users = (userResult.Items ?? [])
         .map((item) => {
           const u = unmarshall(item);
+          const userId = String(u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown");
+          const status = budgetStatus(u, deptRows.get(String(u.department ?? "")), now, tokenDenied.has(userId.toLowerCase()));
           return {
-            userId: u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
+            userId,
             department: u.department ?? "default",
             dailyTokenLimit: Number(u.dailyTokenLimit ?? 100000),
             dailyBudget: Number(u.dailyBudget ?? 0),
@@ -153,6 +176,10 @@ export async function GET(req: NextRequest) {
             budgetReleaseAt: String(u.budgetReleaseAt ?? ""),
             periodAware: Array.isArray(u.budgetExceeded),
             updatedAt: u.updatedAt ?? "",
+            periods: status.periods,
+            tokenDenied: status.tokenDenied,
+            departmentOver: status.departmentOver,
+            blockCause: status.blockCause,
           };
         })
         .filter((u) => validUserKeys.has(String(u.userId).toLowerCase()));

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import BudgetIncreaseRequest, { type BudgetLimits } from "@/components/budget/budget-increase-request";
 
 type CredentialsResponse = {
   credentials: {
@@ -23,7 +24,7 @@ type CredentialsResponse = {
   };
 };
 
-type UsageResponse = {
+type UsageResponse = BudgetLimits & {
   sub: string;
   department: string;
   summary: Array<{
@@ -140,6 +141,9 @@ export default function LocalGovernancePage() {
           </div>
         </div>
       )}
+
+      {/* One-time budget increase: cause of the block, request form and history */}
+      <BudgetIncreaseRequest limits={usage} tone="light" />
 
       {/* Get credentials */}
       <section className="border rounded p-4 bg-white">

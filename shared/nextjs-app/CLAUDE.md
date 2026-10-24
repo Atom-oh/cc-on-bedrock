@@ -36,18 +36,19 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 - `user/custom-routes` - 포트 노출 GET/PUT: 본인 customRoutes, 최대 5개, version CAS, routing-table 미러 (ADR-003)
 - `user/budget-increase` - 1회성 USD 한도 증액 요청 (두 배포 모드 공통). GET 본인 이력, POST `{period, requestedAmount, reason}` (0 < 금액 ≤ 10000, 사유 1–500자, 무제한 기간 400 `unlimited_period`, 기간 창당 pending 1건 — 잠금 `PENDING#{email}#{period}#{key}`, 중복 409 `pending_exists`). 부서·역할은 Cognito에서 읽는다
 - `local/credentials` - STS Issuer Lambda 호출, 1h Bedrock 자격증명 반환 (role-chaining 1h 한도, CLI가 자동 갱신; ADR-006)
-- `local/limits` - 본인 normalized token 한도/사용량/Deny 상태
+- `local/limits` - 본인 normalized token 한도/사용량/Deny 상태 + USD `usdPeriods`(기간별 spend·기본 cap·현재 창 grant·cap), `activeGrants`, `blockCause` (`lib/budget-status`)
 
 ### Common
 - `ai` - Bedrock Converse (Tool Use, 최대 5 iteration) · `ai/memory`, `ai/runtime` - AgentCore Memory/Runtime
-- `dept`, `dept/list`, `dept/mcp` · `health` · `auth/[...nextauth]`
+- `dept` (단일 부서 조회 시 멤버별 `limits`·`budgetStatus`(기본+grant, 차단 원인), 예산에 `recordedSpend`·`monthGranted`, pending에 `type`/`period`/`requestedAmount`), `dept/list`, `dept/mcp` · `health` · `auth/[...nextauth]`
 - `install`, `install/cli`, `install/otel` - Local CLI 설치 스크립트 (`cc()` / `ccx()` 셸 함수 포함)
 - `slack/commands`, `slack/events`
 
 ## Components
 - `src/components/user/` - `environment-tab`(프로비저닝, 상태, IDE/WEB/API URL, 메트릭), `provisioning-progress`(SSE 진행, Cancel, ARIA), `storage-tab`(디스크 게이지, EBS 확장, Keep-Alive), `settings-tab`(비밀번호, 계정, 포트 노출 CRUD, resource-specific IAM 권한 신청 폼; ADR-003/007), `local-mode-tab`, `first-launch-guide`, `welcome-onboarding`
 - `src/components/charts/` - Recharts (token-usage, model-ratio, cost-trend, leaderboard, horizontal-bar, area-trend, multi-line, donut)
-- `tables/`, `cards/`, `dept/`, `app-shell.tsx`, `sidebar.tsx`, `filter-bar.tsx`, `container-metrics.tsx`
+- `src/components/budget/budget-increase-request.tsx` - 증액 요청 폼(기간·금액 1–10000·사유, UTC 기준, 무제한 기간 비활성) + 차단 원인 + 본인 이력; `/local`, `local-mode-tab`, devEnv 포털에서 사용
+- `tables/`, `cards/`, `dept/`, `app-shell.tsx`, `sidebar.tsx`(승인 메뉴는 admin·dept-manager, 처리 가능한 pending 건수 배지), `filter-bar.tsx`, `container-metrics.tsx`
 
 ## Lib (`src/lib/`)
 - `auth.ts` - Cognito + NextAuth (JWT, 8h 세션, custom attributes, 쿠키 도메인은 `COOKIE_DOMAIN` env)
@@ -58,7 +59,7 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 - `usage-client.ts` - DynamoDB 사용량 조회. `buildUserDailyTrend`(순수 pivot: user×date, Top-N+others, zero-fill) + `getUserDailyTrend`
 - `iam-request-validation.ts` - IAM 권한 신청 검증의 단일 출처(클라이언트·서버 공유): `Resource:*`·쓰기/임베디드 와일드카드·위험 액션·교차계정 거부, 읽기 와일드카드(Get*/List*/Describe*/BatchGet*/Query*/Scan*) 허용, `buildIamExtensionRequest`, `DEFAULT_SERVICE_ALLOWLIST`/`WILDCARD_OK_ACTIONS` (ADR-007)
 - `iam-resource-annotator.ts` - 신청 statement의 advisory LLM 위험 주석 (프롬프트 인젝션 격리) · `approval-authz.ts` - 승인 인가 (admin 또는 저장된 부서의 dept-manager)
-- `codex-model.ts` (Codex 모델 ID·고정 CLI 버전 sanitizer, 기본값 `global.openai.gpt-6.1-sol`; 값이 root user-data로 들어가므로 검증 필수), `client-tool.ts` (CloudTrail userAgent/모델 vendor로 Claude Code vs Codex 귀속), `budget-periods.ts` (budget-check의 기간별 cap 해석 미러; ADR-014/008), `budget-display.ts` (cap ≤ 0 = Unlimited 표시, budget-check 의미와 일치), `budget-increase.ts` (증액 요청 생성/승인/거절/만료 트랜잭션 순수 빌더 + 실행, 토큰 축 해제 `releaseTokenAxis`), `token-deny.ts` (토큰 deny detach + `DENY#active` 삭제, 역할 미해석 시 보존), `route-access.ts` (middleware 경로 게이팅 순수 함수 `isAllowedPath`)
+- `codex-model.ts` (Codex 모델 ID·고정 CLI 버전 sanitizer, 기본값 `global.openai.gpt-6.1-sol`; 값이 root user-data로 들어가므로 검증 필수), `client-tool.ts` (CloudTrail userAgent/모델 vendor로 Claude Code vs Codex 귀속), `budget-periods.ts` (budget-check의 기간별 cap 해석 미러; ADR-014/008), `budget-display.ts` (cap ≤ 0 = Unlimited 표시, budget-check 의미와 일치; `blockCause` = 부서 → 개인 일/주/월 → 토큰 순), `budget-status.ts` (서버: 기간별 기본+현재 grant, 차단 원인, 토큰 deny 사용자 스캔), `budget-ui.ts` (승인 화면·배지·폼의 순수 규칙: 만료/본인/admin 승인 필요 판정, 에러 코드 → i18n 키, 승인 후 토큰 축 경고), `budget-increase.ts` (증액 요청 생성/승인/거절/만료 트랜잭션 순수 빌더 + 실행, 토큰 축 해제 `releaseTokenAxis`), `token-deny.ts` (토큰 deny detach + `DENY#active` 삭제, 역할 미해석 시 보존), `route-access.ts` (middleware 경로 게이팅 순수 함수 `isAllowedPath`)
 - `slack-client.ts`, `validation.ts`, `utils.ts`, `i18n.tsx`(한/영), `types.ts`
 - `src/middleware.ts` - 인증 + admin/dept-manager 라우트 보호
 
@@ -86,6 +87,6 @@ draft. Disable saving until the existing settings have loaded successfully.
 - Server Components가 기본이고, 차트/인터랙티브 UI만 `'use client'`.
 - Bedrock 사용량은 DynamoDB `cc-on-bedrock-usage`에서 읽는다. CloudWatch `AWS/Bedrock`은 계정 전체 수치라 사용자별 집계에 맞지 않는다.
 - Local Governance UI(`/local`, `/admin/limits`) 사이드바 노출은 `NEXT_PUBLIC_LOCAL_MODE_ENABLED=true`로 제어한다.
-- `DEPLOYMENT_MODE` (runtime env from Terraform `deployment_mode`; unset or unknown = `governance`) is read by `lib/deployment-mode.ts` in the root layout and exposed to client components through `useDeploymentMode()`. In governance mode `/user` renders `components/user/local-setup.tsx` (installer + credentials/usage), the Instances menu and EC2 home cards are hidden, and DevEnv lifecycle APIs (`/api/containers`, `/api/user/container`, `/api/user/container/stream`) and DevEnv self-service requests (`/api/user/container-request`: tier, DLP, IAM extension) return 404 through `devenvDisabledResponse()`. The EC2 actions of `/api/container-metrics` (`current`, `timeseries`, `instances`) also 404 in governance; its `bedrock` / `bedrock_timeseries` actions are served in both modes. Admin/dept/monitoring/security/approvals pages hide EC2 DevEnv UI in governance (OS / tier / DLP policy / storage / ports columns and form fields, Reset Env, container status, EC2/EBS cost and instance metrics, DLP SG sections and EC2/EBS checklist rows, `tier_change` / `dlp_change` / `container_request` approvals), and `/admin/instances` redirects to `/admin`.
+- `DEPLOYMENT_MODE` (runtime env from Terraform `deployment_mode`; unset or unknown = `governance`) is read by `lib/deployment-mode.ts` in the root layout and exposed to client components through `useDeploymentMode()`. In governance mode `/user` renders `components/user/local-setup.tsx` (installer + credentials/usage), the Instances menu and EC2 home cards are hidden, and DevEnv lifecycle APIs (`/api/containers`, `/api/user/container`, `/api/user/container/stream`) and DevEnv self-service requests (`/api/user/container-request`: tier, DLP, IAM extension) return 404 through `devenvDisabledResponse()`. The EC2 actions of `/api/container-metrics` (`current`, `timeseries`, `instances`) also 404 in governance; its `bedrock` / `bedrock_timeseries` actions are served in both modes. Admin/dept/monitoring/security/approvals pages hide EC2 DevEnv UI in governance (OS / tier / DLP policy / storage / ports columns and form fields, Reset Env, container status, EC2/EBS cost and instance metrics, DLP SG sections and EC2/EBS checklist rows, `tier_change` / `dlp_change` / `container_request` / `iam_extension` approvals; dept dashboard shows instance-request approve/reject to admins only), and `/admin/instances` redirects to `/admin`.
 - 접근성: 탭(tablist/tab/tabpanel), 프로그레스바(progressbar), 폼(htmlFor/id), 알림(aria-live).
 - 환경변수 목록은 `.env.example`; 배포 시 값은 Terraform `modules/dashboard`의 runtime env가 주입한다.

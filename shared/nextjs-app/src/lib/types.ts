@@ -189,6 +189,25 @@ export interface DeptMember {
   resourceTier: string;
   status: string;
   containerStatus?: string;
+  /** Standing explicit limits (USD; 0 = inherit). Detail view of one department only. */
+  limits?: { dailyBudget: number; weeklyBudget: number; monthlyBudget: number };
+  /** Per-period caps with current grants and the block cause. Detail view only. */
+  budgetStatus?: MemberBudgetStatus;
+}
+
+export interface MemberPeriodStatus {
+  spend: number;
+  base: number;
+  grant: number;
+  cap: number;
+}
+
+export interface MemberBudgetStatus {
+  periods: Record<"daily" | "weekly" | "monthly", MemberPeriodStatus>;
+  exceeded: Array<"daily" | "weekly" | "monthly">;
+  departmentOver: boolean;
+  tokenDenied: boolean;
+  blockCause: "user_daily" | "user_weekly" | "user_monthly" | "department" | "token" | null;
 }
 
 export interface DeptBudget {
@@ -197,6 +216,10 @@ export interface DeptBudget {
   currentSpend: number;
   monthlyTokenLimit: number;
   currentTokens: number;
+  /** Spend budget-check last recorded on the department row (the cap check's input). */
+  recordedSpend?: number;
+  /** One-time grants approved in this department this month (department-cap accounting). */
+  monthGranted?: number;
 }
 
 export interface PendingRequest {
@@ -208,6 +231,10 @@ export interface PendingRequest {
   requestedAt: string;
   status: "pending" | "approved" | "rejected";
   department: string;
+  type?: string;
+  period?: string;
+  periodKey?: string;
+  requestedAmount?: number;
 }
 
 export interface MonthlyUsage {

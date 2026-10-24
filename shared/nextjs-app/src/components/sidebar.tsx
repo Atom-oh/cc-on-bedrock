@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
@@ -7,6 +8,7 @@ import { useI18n } from "@/lib/i18n";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useDeploymentMode } from "@/components/deployment-mode-provider";
+import { actionableCount, type ViewRequest } from "@/lib/budget-ui";
 import {
   Home,
   Terminal,
@@ -32,10 +34,16 @@ interface NavItem {
   icon: any;
   adminOnly?: boolean;
   deptManagerOnly?: boolean;
+  /** Approvers: admin or dept-manager (budget_increase of their own department). */
+  approverOnly?: boolean;
   showForAll?: boolean;
   localModeOnly?: boolean;
   devenvOnly?: boolean;
 }
+
+// Pending-approval badge: fetched on mount, then at most once a minute on navigation, and
+// right away when the approvals page reports a decision ("approvals:changed").
+const BADGE_MIN_INTERVAL_MS = 60_000;
 
 // ADR-006 (legacy ADR-014): Local Governance Mode menu items only render when the env flag is set.
 const LOCAL_MODE_ENABLED =
@@ -54,7 +62,7 @@ const navItems: NavItem[] = [
   { href: "/admin/instances", labelKey: "nav.containers", icon: Server, adminOnly: true, devenvOnly: true },
   { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
   { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
-  { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
+  { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, approverOnly: true },
   { href: "/admin/dlp", labelKey: "nav.dlpManagement", icon: ShieldCheck, adminOnly: true },
   { href: "/docs", labelKey: "nav.docs", icon: BookOpen, showForAll: true },
 ];
@@ -67,10 +75,41 @@ export default function Sidebar() {
   const isAdmin = session?.user?.isAdmin ?? false;
   const groups = session?.user?.groups ?? [];
   const isDeptManager = groups.includes("dept-manager") || isAdmin;
+  const isApprover = isDeptManager;
+  const viewerEmail = session?.user?.email ?? "";
+  const [pendingCount, setPendingCount] = useState(0);
+  const lastBadgeFetch = useRef(0);
+
+  useEffect(() => {
+    if (!isApprover) return;
+    const load = async (force: boolean) => {
+      if (!force && Date.now() - lastBadgeFetch.current < BADGE_MIN_INTERVAL_MS) return;
+      lastBadgeFetch.current = Date.now();
+      try {
+        const res = await fetch("/api/admin/approval-requests?status=pending", { cache: "no-store" });
+        const json = await res.json();
+        if (json.success) {
+          setPendingCount(actionableCount(
+            json.data as ViewRequest[],
+            { email: viewerEmail, isAdmin },
+            deploymentMode,
+            new Date(),
+          ));
+        }
+      } catch {
+        /* badge is best-effort */
+      }
+    };
+    void load(false);
+    const onChanged = () => void load(true);
+    window.addEventListener("approvals:changed", onChanged);
+    return () => window.removeEventListener("approvals:changed", onChanged);
+  }, [isApprover, isAdmin, viewerEmail, deploymentMode, pathname]);
 
   const filteredItems = navItems.filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
     if (item.deptManagerOnly && !isDeptManager) return false;
+    if (item.approverOnly && !isApprover) return false;
     if (item.localModeOnly && !LOCAL_MODE_ENABLED) return false;
     if (item.devenvOnly && deploymentMode !== "devenv") return false;
     return true;
@@ -143,7 +182,15 @@ export default function Sidebar() {
                 )}
                 <Icon className={cn("w-5 h-5 transition-transform duration-200 group-hover:scale-110", isActive ? "text-primary-400" : "text-gray-500 group-hover:text-gray-300")} />
                 <span className="text-sm font-bold tracking-tight">{t(item.labelKey)}</span>
-                {isActive && <ChevronRight className="w-3.5 h-3.5 ml-auto opacity-50" />}
+                {item.approverOnly && pendingCount > 0 && (
+                  <span
+                    className="ml-auto min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-black text-center"
+                    aria-label={`${pendingCount} ${t("approvals.pendingBadge")}`}
+                  >
+                    {pendingCount}
+                  </span>
+                )}
+                {isActive && <ChevronRight className={cn("w-3.5 h-3.5 opacity-50", !(item.approverOnly && pendingCount > 0) && "ml-auto")} />}
               </div>
             </Link>
           );
