@@ -16,11 +16,27 @@ import { batchGetCustomRoutes } from "@/lib/ec2-clients";
 import { ROLES, roleFromGroups, validateRoleChange } from "@/lib/roles";
 import { countAdmins, getRoleGroups, listGroupMembers, requireFreshRole, setUserRole } from "@/lib/role-admin";
 
+/** Refuse disabling yourself or the last enabled admin (same rules as demotion). */
+async function guardAdminLoss(actorEmail: string, username: string): Promise<NextResponse | null> {
+  const target = await getCognitoUser(username);
+  if ((target.email || username).toLowerCase() === actorEmail.toLowerCase()) {
+    return NextResponse.json({ success: false, error: "self_demotion" }, { status: 400 });
+  }
+  const { role } = roleFromGroups(await getRoleGroups(username));
+  if (role === "admin" && target.enabled && (await countAdmins()) <= 1) {
+    return NextResponse.json({ success: false, error: "last_admin" }, { status: 400 });
+  }
+  return null;
+}
+
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
+
+  const fresh = await requireFreshRole(session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
 
   const { searchParams } = new URL(req.url);
   const username = searchParams.get("username");
@@ -136,7 +152,11 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ success: false, error: "username is required" }, { status: 400 });
       }
       if (raw.action === "enable") await enableCognitoUser(raw.username);
-      else await disableCognitoUser(raw.username);
+      else {
+        const blocked = await guardAdminLoss(session.user.email ?? "", raw.username);
+        if (blocked) return blocked;
+        await disableCognitoUser(raw.username);
+      }
       return NextResponse.json({ success: true });
     }
 
@@ -145,25 +165,29 @@ export async function PUT(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
     }
-    const { role: newRole, ...attrs } = parsed.data;
+    const { role: requestedRole, ...attrs } = parsed.data;
     let roleChanged = false;
-    if (newRole) {
-      const currentRole = roleFromGroups(await getRoleGroups(attrs.username)).role;
-      if (newRole !== currentRole) {
-        const target = await getCognitoUser(attrs.username);
-        const check = validateRoleChange({
-          actorEmail: session.user.email ?? "",
-          targetEmail: target.email || attrs.username,
-          currentRole,
-          newRole,
-          targetDepartment: target.department,
-          adminCount: await countAdmins(),
-        });
-        if (!check.ok) {
-          return NextResponse.json({ success: false, error: check.error }, { status: 400 });
-        }
+    if (requestedRole || attrs.department) {
+      const current = roleFromGroups(await getRoleGroups(attrs.username));
+      const newRole = requestedRole ?? current.role;
+      const target = await getCognitoUser(attrs.username);
+      const check = validateRoleChange({
+        actorEmail: session.user.email ?? "",
+        targetEmail: target.email || attrs.username,
+        currentRole: current.role,
+        newRole,
+        // Validate against the NEW department when one is sent together with the role.
+        targetDepartment: attrs.department ?? target.department,
+        adminCount: await countAdmins(),
+        targetEnabled: target.enabled,
+      });
+      if (!check.ok) {
+        return NextResponse.json({ success: false, error: check.error }, { status: 400 });
+      }
+      // Also re-apply when the user holds several role groups, so the change normalizes them.
+      if (requestedRole && (requestedRole !== current.role || current.needsCleanup)) {
         try {
-          await setUserRole(attrs.username, newRole);
+          await setUserRole(attrs.username, requestedRole);
         } catch (err) {
           // The user may now hold both groups; surface failure so the UI never shows success.
           console.error("[users] PUT setUserRole", err instanceof Error ? err.message : err);
@@ -199,9 +223,12 @@ export async function DELETE(req: NextRequest) {
 
   try {
     switch (action) {
-      case "disable":
+      case "disable": {
+        const blocked = await guardAdminLoss(session.user.email ?? "", username);
+        if (blocked) return blocked;
         await disableCognitoUser(username);
         return NextResponse.json({ success: true });
+      }
       case "enable":
         await enableCognitoUser(username);
         return NextResponse.json({ success: true });

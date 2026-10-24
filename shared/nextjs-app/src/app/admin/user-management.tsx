@@ -37,6 +37,7 @@ export default function UserManagement() {
   const [storageType, setStorageType] = useState<CreateUserInput["storageType"]>("ebs");
   // No default: the admin must choose a role explicitly.
   const [role, setRole] = useState<Role | "">("");
+  const [department, setDepartment] = useState("");
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -68,7 +69,7 @@ export default function UserManagement() {
         body: JSON.stringify({
           email,
           subdomain,
-          department: "default",
+          department: department.trim() || "default",
           containerOs,
           resourceTier,
           securityPolicy,
@@ -89,6 +90,7 @@ export default function UserManagement() {
       setSecurityPolicy("restricted");
       setStorageType("ebs");
       setRole("");
+      setDepartment("");
       setShowCreateForm(false);
       void fetchUsers();
     } catch (err) {
@@ -117,12 +119,19 @@ export default function UserManagement() {
   // resync. Use `handleToggle(_, false)` (disable) to revoke access instead.
 
   const handleToggle = async (username: string, enable: boolean) => {
+    setUpdateError(null);
+    setNotice(null);
     try {
-      await fetch("/api/users", {
+      const res = await fetch("/api/users", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, action: enable ? "enable" : "disable" }),
       });
+      const json = (await res.json()) as ApiResponse<unknown>;
+      if (!json.success) {
+        setUpdateError(apiError(json.error, "Failed to update user"));
+        return;
+      }
       void fetchUsers();
     } catch (err) {
       console.error("Failed to toggle user:", err);
@@ -264,6 +273,20 @@ export default function UserManagement() {
                     <option key={r} value={r}>{t(`users.role.${r}` as Parameters<typeof t>[0])}</option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">
+                  {t("users.department")}
+                </label>
+                <input
+                  type="text"
+                  required={role === "dept-manager"}
+                  maxLength={50}
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 placeholder-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder={role === "dept-manager" ? t("users.department.required") : "default"}
+                />
               </div>
               {devenv && (
                 <>

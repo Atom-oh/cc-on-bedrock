@@ -35,6 +35,16 @@ describe("validateRoleChange", () => {
     expect(validateRoleChange({ ...base, newRole: "dept-manager", targetDepartment: "" }))
       .toEqual({ ok: false, error: "dept_required" });
   });
+  it("treats the placeholder department 'default' as no department", () => {
+    for (const d of ["default", " Default ", "  "]) {
+      expect(validateRoleChange({ ...base, newRole: "dept-manager", targetDepartment: d }))
+        .toEqual({ ok: false, error: "dept_required" });
+    }
+  });
+  it("does not apply the last-admin guard to a disabled admin target", () => {
+    expect(validateRoleChange({ ...base, currentRole: "admin", adminCount: 1, targetEnabled: false }))
+      .toEqual({ ok: true });
+  });
   it("allows a normal change", () => {
     expect(validateRoleChange({ ...base, currentRole: "admin", newRole: "dept-manager" })).toEqual({ ok: true });
   });

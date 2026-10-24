@@ -195,6 +195,8 @@ export async function updateCognitoUser(
   input: UpdateUserInput
 ): Promise<void> {
   const attrs: AttributeType[] = [];
+  if (input.department)
+    attrs.push({ Name: "custom:department", Value: input.department });
   if (input.containerOs)
     attrs.push({ Name: "custom:container_os", Value: input.containerOs });
   if (input.resourceTier)

@@ -52,6 +52,7 @@ export interface CreateUserInput {
 export interface UpdateUserInput {
   username: string;
   role?: Role;
+  department?: string;
   containerOs?: "ubuntu" | "al2023";
   resourceTier?: "light" | "standard" | "power";
   securityPolicy?: "open" | "restricted" | "locked";

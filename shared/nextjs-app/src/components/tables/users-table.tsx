@@ -202,6 +202,7 @@ export default function UsersTable({
             <tr className="border-b border-gray-800 bg-[#0d1117]">
               <th className={thClass} onClick={() => handleSort("email")}>User<SortIcon active={sortKey === "email"} dir={sortDir} /></th>
               <th className={thClass} onClick={() => handleSort("role")}>{t("users.role")}<SortIcon active={sortKey === "role"} dir={sortDir} /></th>
+              <th className="px-5 py-3 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">{t("users.department")}</th>
               <th className={thClass} onClick={() => handleSort("subdomain")}>Subdomain<SortIcon active={sortKey === "subdomain"} dir={sortDir} /></th>
               {devenv && <th className={thClass} onClick={() => handleSort("containerOs")}>OS<SortIcon active={sortKey === "containerOs"} dir={sortDir} /></th>}
               {devenv && <th className={thClass} onClick={() => handleSort("resourceTier")}>Tier<SortIcon active={sortKey === "resourceTier"} dir={sortDir} /></th>}
@@ -222,9 +223,11 @@ export default function UsersTable({
                 <td className="px-5 py-3.5 whitespace-nowrap">
                   {editingCell?.username === user.username && editingCell?.field === "role" ? (
                     <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
-                      defaultValue={user.role ?? "user"} disabled={saving}
+                      defaultValue={user.roleNeedsCleanup ? "" : (user.role ?? "user")} disabled={saving}
                       onChange={(e) => handleInlineChange(user.username, "role", e.target.value)}
                       onBlur={() => setEditingCell(null)}>
+                      {/* Multi-group users start unselected so re-picking the current role still fires onChange. */}
+                      {user.roleNeedsCleanup && <option value="" disabled>{t("users.role.select")}</option>}
                       {ROLES.map((r) => (
                         <option key={r} value={r}>{t(`users.role.${r}` as Parameters<typeof t>[0])}</option>
                       ))}
@@ -241,6 +244,25 @@ export default function UsersTable({
                         </span>
                       )}
                     </div>
+                  )}
+                </td>
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  {editingCell?.username === user.username && editingCell?.field === "department" ? (
+                    <input autoFocus maxLength={50} disabled={saving}
+                      className="w-32 px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.department}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setEditingCell(null);
+                        if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                          void handleInlineChange(user.username, "department", e.currentTarget.value.trim());
+                        }
+                      }}
+                      onBlur={() => setEditingCell(null)} />
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "department" })}
+                      className={`text-sm text-gray-400 ${onUpdate ? "hover:text-blue-400 cursor-pointer" : ""}`}>
+                      {user.department}
+                    </button>
                   )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-400">{user.subdomain}</td>
@@ -328,6 +350,14 @@ export default function UsersTable({
                 )}
                 <td className="px-5 py-3.5 whitespace-nowrap text-right">
                   <div className="flex items-center justify-end gap-2">
+                    {onUpdate && user.roleNeedsCleanup && (
+                      <button
+                        onClick={() => void onUpdate(user.username, "role", user.role ?? "user")}
+                        className="px-2 py-1 text-xs font-medium text-yellow-400 hover:bg-yellow-900/30 rounded-lg transition-colors"
+                      >
+                        {t("users.role.normalize")}
+                      </button>
+                    )}
                     {onToggle && (
                       <button
                         onClick={() => onToggle(user.username, !user.enabled)}
@@ -362,7 +392,7 @@ export default function UsersTable({
             ))}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={devenv ? 10 : 5} className="px-6 py-12 text-center text-sm text-gray-600">
+                <td colSpan={devenv ? 11 : 6} className="px-6 py-12 text-center text-sm text-gray-600">
                   No users found.
                 </td>
               </tr>

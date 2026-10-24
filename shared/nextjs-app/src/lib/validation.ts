@@ -34,6 +34,7 @@ export const createUserSchema = z.object({
 export const updateUserSchema = z.object({
   username: z.string().min(1),
   role: z.enum(ROLES).optional(),
+  department: z.string().min(1).max(50).optional(),
   containerOs: z.enum(["ubuntu", "al2023"]).optional(),
   resourceTier: z.enum(["light", "standard", "power"]).optional(),
   securityPolicy: z.enum(["open", "restricted", "locked"]).optional(),
