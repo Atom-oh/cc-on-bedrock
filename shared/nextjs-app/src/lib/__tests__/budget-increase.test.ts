@@ -225,20 +225,25 @@ describe("buildApproveTransaction department condition", () => {
     updates(tx).find((u) => "dept_id" in u.Key)!;
 
   it("is unconditional without deptCondition", () => {
-    expect(dept(buildApproveTransaction(REQ, 20, "m@x.com", NOW)).ConditionExpression).toBeUndefined();
+    const u = dept(buildApproveTransaction(REQ, 20, "m@x.com", NOW));
+    expect(u.ConditionExpression).toBeUndefined();
+    expect(u.ExpressionAttributeValues?.[":zero"]).toBeUndefined();
   });
   it("requires the grant to still be absent when none was read", () => {
     const u = dept(buildApproveTransaction(REQ, 20, "m@x.com", NOW, { deptCondition: { seenGrant: null } }));
-    expect(u.ConditionExpression).toBe("attribute_not_exists(#g)");
+    expect(u.ConditionExpression).toBe("attribute_not_exists(#g) OR #g = :zero");
+    expect(u.ExpressionAttributeValues?.[":zero"]).toEqual({ N: "0" });
     expect(u.ExpressionAttributeValues?.[":seen"]).toBeUndefined();
   });
-  it("treats a read 0 like absent", () => {
+  it("treats a read 0 like absent (still absent or still 0)", () => {
     const u = dept(buildApproveTransaction(REQ, 20, "m@x.com", NOW, { deptCondition: { seenGrant: "0" } }));
-    expect(u.ConditionExpression).toBe("attribute_not_exists(#g)");
+    expect(u.ConditionExpression).toBe("attribute_not_exists(#g) OR #g = :zero");
+    expect(u.ExpressionAttributeValues?.[":zero"]).toEqual({ N: "0" });
   });
   it("requires the exact value read otherwise", () => {
     const u = dept(buildApproveTransaction(REQ, 20, "m@x.com", NOW, { deptCondition: { seenGrant: "35.5" } }));
     expect(u.ConditionExpression).toBe("#g = :seen");
+    expect(u.ExpressionAttributeValues?.[":zero"]).toBeUndefined();
     expect(u.ExpressionAttributeNames?.["#g"]).toBe("grant#monthly#2026-10");
     expect(u.ExpressionAttributeValues?.[":seen"]).toEqual({ N: "35.5" });
   });

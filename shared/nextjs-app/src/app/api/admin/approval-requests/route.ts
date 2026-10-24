@@ -29,6 +29,7 @@ import {
   isBudgetPeriod,
   periodBaseCap,
   periodIsCapped,
+  releaseTokenAxis,
   removeStaleGrants,
   runTransaction,
   staleGrantAttrs,
@@ -367,14 +368,17 @@ async function decideBudgetIncrease(
   };
   const now = new Date();
 
-  // Requester's CURRENT role (before the approve/reject split: a manager's or admin's
-  // request is admin-only for both).
-  let requesterRole: Role;
-  try {
-    requesterRole = roleFromGroups(await getRoleGroups(email)).role;
-  } catch (err) {
-    console.error("[admin/approval-requests] requester role lookup failed:", err instanceof Error ? err.message : err);
-    return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+  // Requester's CURRENT role, needed only for a dept-manager approver (before the
+  // approve/reject split: a manager's or admin's request is admin-only for both).
+  // Admins skip the lookup, so a deleted requester's request stays decidable.
+  let requesterRole: Role = "user";
+  if (!approver.isAdmin) {
+    try {
+      requesterRole = roleFromGroups(await getRoleGroups(email)).role;
+    } catch (err) {
+      console.error("[admin/approval-requests] requester role lookup failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+    }
   }
 
   // Cap state is only needed to approve.
@@ -460,6 +464,19 @@ async function decideBudgetIncrease(
   }
   if (userRow) await removeStaleGrants(email, staleGrantAttrs(userRow, now));
 
+  // The approval is committed; lifting the token axis is best-effort and never fails it.
+  const tokenRelease = await releaseTokenAxis(email, decision.amount, now);
+  try {
+    await dynamodb.send(new UpdateItemCommand({
+      TableName: APPROVAL_TABLE,
+      Key: { PK: { S: `REQUEST#${requestId}` }, SK: { S: "META" } },
+      UpdateExpression: "SET tokenRelease = :tr",
+      ExpressionAttributeValues: { ":tr": { S: JSON.stringify(tokenRelease) } },
+    }));
+  } catch (err) {
+    console.warn("[admin/approval-requests] tokenRelease record failed:", err instanceof Error ? err.message : err);
+  }
+
   return NextResponse.json({
     success: true,
     data: {
@@ -468,6 +485,7 @@ async function decideBudgetIncrease(
       applied: {
         grants: approvedGrants(record, decision.amount, now, skipPeriods),
         releaseEtaMinutes: RELEASE_ETA_MINUTES,
+        tokenRelease,
       },
     },
   });

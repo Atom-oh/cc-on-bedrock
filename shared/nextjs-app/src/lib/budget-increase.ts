@@ -4,9 +4,13 @@
 // one pending request per user and period window. Approval ADDs the amount to every
 // cascade window's `grant#{period}#{key}` on the cc-user-budgets row and to the
 // department's `grant#monthly#{key}` running total (department-cap accounting).
+// The token axis (token-limit-enforcer, KST buckets) is lifted separately by
+// `releaseTokenAxis` once the approval has committed.
 
 import {
+  ConditionalCheckFailedException,
   DynamoDBClient,
+  GetItemCommand,
   TransactWriteItemsCommand,
   UpdateItemCommand,
   type TransactWriteItem,
@@ -21,11 +25,15 @@ import {
   type DepartmentBudgetState,
 } from "./approval-authz";
 import type { Role } from "./roles";
+import { releaseTokenDeny } from "./token-deny";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 export const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
 export const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
 export const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
+export const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
+// Same USD → normalized-token rate as the LIMIT#monthly mirror in /api/admin/budgets.
+export const NORMALIZED_PER_USD = Number(process.env.NORMALIZED_PER_USD ?? "66667");
 
 export const MAX_INCREASE_USD = 10000;
 export const MAX_REASON_LENGTH = 500;
@@ -248,7 +256,7 @@ export function buildApproveTransaction(
 
   if (req.department) {
     // Optimistic guard for the department-cap check: the month's granted total must
-    // still be what the approver's check read (absent/0 → still absent).
+    // still be what the approver's check read (absent/0 → still absent or 0).
     const seen = opts.deptCondition?.seenGrant;
     const guarded = opts.deptCondition !== undefined;
     const hasSeen = guarded && seen !== null && seen !== undefined && Number(seen) !== 0;
@@ -257,9 +265,14 @@ export function buildApproveTransaction(
         TableName: DEPT_BUDGETS_TABLE,
         Key: { dept_id: { S: req.department } },
         UpdateExpression: "ADD #g :amt",
-        ...(guarded ? { ConditionExpression: hasSeen ? "#g = :seen" : "attribute_not_exists(#g)" } : {}),
+        ...(guarded
+          ? { ConditionExpression: hasSeen ? "#g = :seen" : "attribute_not_exists(#g) OR #g = :zero" }
+          : {}),
         ExpressionAttributeNames: { "#g": grantAttr("monthly", periodKey("monthly", now)) },
-        ExpressionAttributeValues: { ":amt": num(amount), ...(hasSeen ? { ":seen": { N: String(seen) } } : {}) },
+        ExpressionAttributeValues: {
+          ":amt": num(amount),
+          ...(hasSeen ? { ":seen": { N: String(seen) } } : guarded ? { ":zero": num(0) } : {}),
+        },
       },
     });
   }
@@ -451,5 +464,93 @@ export async function removeStaleGrants(email: string, attrs: string[]): Promise
     );
   } catch (err) {
     console.warn("[budget-increase] stale grant cleanup failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+// ─── Token axis ───
+
+/** KST `YYYY-MM`: token-limit-enforcer `_bucket_for(now, "monthly")`. */
+export function kstMonthBucket(now: Date): string {
+  const kst = new Date(now.getTime() + 9 * 3_600_000);
+  return `${String(kst.getUTCFullYear()).padStart(4, "0")}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export interface TokenRelease {
+  released: boolean;
+  warning?: string;
+  /** KST month the grant was written under. */
+  bucket?: string;
+  /** Normalized tokens added to LIMIT#monthly (0 = no token limit row, nothing written). */
+  normalizedGranted?: number;
+  /** Whether an active token deny was detached and cleared. */
+  denyCleared?: boolean;
+}
+
+const isConditionFailure = (err: unknown) =>
+  err instanceof ConditionalCheckFailedException ||
+  (err instanceof Error && err.name === "ConditionalCheckFailedException");
+
+/**
+ * Add `normalized` to the user's LIMIT#monthly grant for `bucket`: ADD when the stored
+ * `grant_bucket` matches, otherwise replace the past month's grant. Returns false when
+ * the row does not exist (no token limit configured), in which case nothing is written.
+ */
+async function addTokenGrant(email: string, bucket: string, normalized: number): Promise<boolean> {
+  const Key = { PK: { S: `USER#${email}` }, SK: { S: "LIMIT#monthly" } };
+  const values = { ":b": { S: bucket }, ":n": num(normalized) };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await dynamodb.send(new UpdateItemCommand({
+        TableName: LIMITS_TABLE,
+        Key,
+        UpdateExpression: "ADD grant_normalized :n",
+        ConditionExpression: "attribute_exists(PK) AND grant_bucket = :b",
+        ExpressionAttributeValues: values,
+      }));
+      return true;
+    } catch (err) {
+      if (!isConditionFailure(err)) throw err;
+    }
+    try {
+      await dynamodb.send(new UpdateItemCommand({
+        TableName: LIMITS_TABLE,
+        Key,
+        UpdateExpression: "SET grant_bucket = :b, grant_normalized = :n",
+        ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(grant_bucket) OR grant_bucket <> :b)",
+        ExpressionAttributeValues: values,
+      }));
+      return true;
+    } catch (err) {
+      if (!isConditionFailure(err)) throw err;
+    }
+    // Both conditions failed: the row is absent, or a concurrent approval just moved
+    // the bucket to this month (then the ADD succeeds on the next attempt).
+    const got = await dynamodb.send(new GetItemCommand({ TableName: LIMITS_TABLE, Key, ProjectionExpression: "PK" }));
+    if (!got.Item) return false;
+  }
+  throw new Error("token grant contention");
+}
+
+/**
+ * Lift the normalized-token axis for an approved grant of `amount` USD: every approval
+ * cascades to monthly, so floor(amount × NORMALIZED_PER_USD) is added to the user's
+ * LIMIT#monthly grant for the KST month (only if the row exists), then an active token
+ * deny is released. Never throws: a failure is `{ released: false, warning }`.
+ */
+export async function releaseTokenAxis(email: string, amount: number, now: Date): Promise<TokenRelease> {
+  const user = email.trim().toLowerCase();
+  const bucket = kstMonthBucket(now);
+  const normalized = Math.floor(amount * NORMALIZED_PER_USD);
+  let granted = 0;
+  try {
+    if (normalized > 0 && (await addTokenGrant(user, bucket, normalized))) granted = normalized;
+    const deny = await releaseTokenDeny(user);
+    const base = { bucket, normalizedGranted: granted, denyCleared: deny.released };
+    if (deny.found && !deny.released) return { released: false, warning: deny.warning, ...base };
+    return { released: true, ...base };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[budget-increase] token axis release failed:", msg);
+    return { released: false, warning: `token axis not released: ${msg}`, bucket, normalizedGranted: granted };
   }
 }

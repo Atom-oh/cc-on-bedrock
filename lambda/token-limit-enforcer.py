@@ -205,6 +205,21 @@ def _get_dept_limit(dept: str, period: str, cache: dict | None = None) -> dict:
         return {}
 
 
+def _user_cap(limit_item: dict, period: str, now: datetime) -> Decimal:
+    """User cap for `period`: `max_normalized` plus an approved one-time grant.
+
+    A budget-increase approval writes `grant_normalized` with its KST month
+    `grant_bucket` onto LIMIT#monthly; it counts only for the monthly period of that
+    same month. A grant never turns an uncapped user (max <= 0) into a capped one.
+    """
+    cap = _decimal(limit_item.get("max_normalized", 0) or 0)
+    if cap <= 0 or period != "monthly":
+        return cap
+    if limit_item.get("grant_bucket") != _bucket_for(now, "monthly"):
+        return cap
+    return cap + _decimal(limit_item.get("grant_normalized", 0) or 0)
+
+
 def _prefetch_limits(records: list) -> dict:
     """ADR-021 follow-up (review #4): one BatchGetItem per invocation instead of
     up to 6 GetItem per stream record (3 periods × USER+DEPT). Returns a dict
@@ -472,7 +487,7 @@ def process_record(rec: dict, limit_cache: dict | None = None):
             dept_total = Decimal("0")
 
         user_limit_item = _get_user_limit(user_key, period, limit_cache)
-        user_max = _decimal(user_limit_item.get("max_normalized", 0))
+        user_max = _user_cap(user_limit_item, period, now)
         dept_limit_item = _get_dept_limit(dept, period, limit_cache)
         dept_max = _decimal(dept_limit_item.get("max_normalized", 0))
 
