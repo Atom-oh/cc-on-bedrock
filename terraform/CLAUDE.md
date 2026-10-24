@@ -11,7 +11,7 @@ Terraform HCL is the canonical IaC for this repository.
 - `outputs.tf` - Deployment outputs consumed by the dashboard and operators.
 - `providers.tf` - AWS providers, including `us-east-1` alias for CloudFront-scope WAF.
 - `modules/network/` - BYO VPC: takes `vpc_id` + subnet IDs (never creates a VPC/subnet/NAT/IGW), adds missing interface endpoints (`interface_endpoint_services`), DNS Firewall; looks up the shared public Route 53 zone as a data source.
-- `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM, permission boundary. `existing_cognito_user_pool_id` reuses a shared pool: only app clients, groups and missing custom attributes (`terraform_data` + AWS CLI; never removable) are added, and the ADR-028 trigger shim is not wired (the pool owner keeps its triggers; `sts-issuer` `ensure_role` self-heals instead).
+- `modules/security/` - Cognito, ACM, KMS, Secrets Manager, IAM, permission boundary. `existing_cognito_user_pool_id` reuses a shared pool: only app clients, groups and missing custom attributes (`terraform_data` + AWS CLI; never removable) are added, and the ADR-028 trigger shim is not wired (the pool owner keeps its triggers; `sts-issuer` `ensure_role` self-heals instead). cc app clients set `write_attributes = ["name"]`; the pool owner's other app clients must also restrict `write_attributes`, or their users can self-write `custom:subdomain` (the issued IAM role) and budget attributes.
 - `modules/ecs-devenv/` - Shared Nginx router, internal NLB behind a CloudFront VPC origin, routing table, config Lambda, OTEL Collector.
 - `modules/ec2-devenv/` - Per-user EC2 DevEnv launch template, EBS GP3, DLP security groups.
 - `modules/usage-tracking/` - Bedrock Invocation Logs, usage aggregation, budget checks. Also the

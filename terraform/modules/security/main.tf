@@ -160,6 +160,10 @@ resource "aws_cognito_user_pool_client" "this" {
   name         = "AppClient"
   user_pool_id = local.user_pool_id
 
+  # Users must not self-write custom:* (subdomain names the issued IAM role; department and
+  # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
+  write_attributes = ["name"]
+
   explicit_auth_flows = [
     "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_USER_SRP_AUTH",
@@ -179,6 +183,10 @@ resource "aws_cognito_user_pool_client" "this" {
 resource "aws_cognito_user_pool_client" "cli_public" {
   name         = "cc-on-bedrock-cli-public"
   user_pool_id = local.user_pool_id
+
+  # Users must not self-write custom:* (subdomain names the issued IAM role; department and
+  # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
+  write_attributes = ["name"]
 
   generate_secret = false
 
