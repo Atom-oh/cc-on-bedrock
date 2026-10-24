@@ -22,8 +22,11 @@ export function isApprover(user: ApproverUser): boolean {
   return !!user.isAdmin || (user.groups ?? []).includes("dept-manager");
 }
 
-function sameEmail(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
+// Fail closed: a missing identity on either side counts as "self".
+function isSelf(a: string | undefined, b: string | undefined): boolean {
+  const x = (a ?? "").trim().toLowerCase();
+  const y = (b ?? "").trim().toLowerCase();
+  return x === "" || y === "" || x === y;
 }
 
 export function canApproveRequest(
@@ -31,7 +34,7 @@ export function canApproveRequest(
   requestDepartment: string,
   requesterEmail: string,
 ): boolean {
-  if (sameEmail(user.email ?? "", requesterEmail)) return false;
+  if (isSelf(user.email, requesterEmail)) return false;
   if (user.isAdmin) return true;
   const isDeptMgr = (user.groups ?? []).includes("dept-manager");
   return isDeptMgr && !!user.department && user.department === requestDepartment;
@@ -43,6 +46,7 @@ export type BudgetDecision =
       ok: false;
       reason:
         | "self"
+        | "invalid_amount"
         | "not_approver"
         | "other_department"
         | "requester_is_manager"
@@ -62,7 +66,7 @@ export function exceedsDepartment(dept: DepartmentBudgetState, amount: number): 
 }
 
 /**
- * Order: self -> expired -> admin ok -> not_approver -> other_department ->
+ * Order: self -> invalid_amount -> expired -> admin ok -> not_approver -> other_department ->
  * requester_is_manager -> exceeds_department -> ok.
  */
 export function canApproveBudgetIncrease(
@@ -78,7 +82,16 @@ export function canApproveBudgetIncrease(
   dept: DepartmentBudgetState,
   now: Date,
 ): BudgetDecision {
-  if (sameEmail(user.email ?? "", req.email)) return { ok: false, reason: "self" };
+  if (isSelf(user.email, req.email)) return { ok: false, reason: "self" };
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    !Number.isFinite(dept.monthlyBudget) ||
+    !Number.isFinite(dept.monthSpend) ||
+    !Number.isFinite(dept.monthGranted)
+  ) {
+    return { ok: false, reason: "invalid_amount" };
+  }
   if (!isCurrentPeriodKey(req.period, req.periodKey, now)) return { ok: false, reason: "expired" };
   if (user.isAdmin) return { ok: true };
   if (!isApprover(user)) return { ok: false, reason: "not_approver" };

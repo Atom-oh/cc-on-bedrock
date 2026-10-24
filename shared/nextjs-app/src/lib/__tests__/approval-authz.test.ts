@@ -21,7 +21,7 @@ describe("canApproveRequest — admin OR dept-manager(stored department)", () =>
     expect(canApproveRequest(deptMgrNoDept, "engineering", "req@x.com")).toBe(false);
   });
 
-it("dept-manager denied when the request has no stored department (fail-closed)", () => {
+  it("dept-manager denied when the request has no stored department (fail-closed)", () => {
     expect(canApproveRequest(deptMgrEng, "", "req@x.com")).toBe(false);
   });
 
@@ -80,6 +80,36 @@ describe("canApproveBudgetIncrease", () => {
   it("self is checked before expired", () => {
     const r = { ...req, email: "a@x.com", period: "daily" as const, periodKey: "2026-10-23" };
     expect(canApproveBudgetIncrease(admin, r, 10, dept, now)).toEqual({ ok: false, reason: "self" });
+  });
+});
+
+describe("fail-closed identity and amount", () => {
+  const now = new Date("2026-10-24T05:00:00Z");
+  const req = { email: "u@x.com", department: "engineering", period: "monthly" as const, periodKey: "2026-10", requesterIsDeptManager: false };
+  const dept = { monthlyBudget: 1000, monthSpend: 100, monthGranted: 0 };
+  const noEmailAdmin = { ...admin, email: "" };
+
+  it("canApproveRequest denies on empty approver or requester email", () => {
+    expect(canApproveRequest(noEmailAdmin, "engineering", "u@x.com")).toBe(false);
+    expect(canApproveRequest(admin, "engineering", "")).toBe(false);
+    expect(canApproveRequest(admin, "engineering", "  ")).toBe(false);
+  });
+
+  it("canApproveBudgetIncrease treats empty identity as self", () => {
+    expect(canApproveBudgetIncrease(noEmailAdmin, req, 10, dept, now)).toEqual({ ok: false, reason: "self" });
+    expect(canApproveBudgetIncrease(admin, { ...req, email: "" }, 10, dept, now)).toEqual({ ok: false, reason: "self" });
+  });
+
+  it("rejects non-finite or non-positive amounts and non-finite dept fields", () => {
+    for (const a of [NaN, Infinity, 0, -5]) {
+      expect(canApproveBudgetIncrease(admin, req, a, dept, now)).toEqual({ ok: false, reason: "invalid_amount" });
+    }
+    expect(canApproveBudgetIncrease(admin, req, 10, { ...dept, monthSpend: NaN }, now)).toEqual({ ok: false, reason: "invalid_amount" });
+  });
+
+  it("dept-manager gets expired; dept-manager without department gets other_department", () => {
+    expect(canApproveBudgetIncrease(deptMgrEng, { ...req, period: "daily", periodKey: "2026-10-23" }, 10, dept, now)).toEqual({ ok: false, reason: "expired" });
+    expect(canApproveBudgetIncrease(deptMgrNoDept, req, 10, dept, now)).toEqual({ ok: false, reason: "other_department" });
   });
 });
 
