@@ -4,10 +4,15 @@ import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import UsersTable from "@/components/tables/users-table";
 import StatCard from "@/components/cards/stat-card";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import type { CognitoUser, CreateUserInput, ApiResponse } from "@/lib/types";
 
 export default function UserManagement() {
   const { t } = useI18n();
+  // Governance mode has no per-user EC2 DevEnv: OS / tier / DLP policy (EC2 SG) / storage /
+  // environment UI is hidden, but the create payload still carries the defaults so the API
+  // contract is unchanged.
+  const devenv = useDeploymentMode() === "devenv";
   const [users, setUsers] = useState<CognitoUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -144,16 +149,20 @@ export default function UserManagement() {
   return (
     <div className="space-y-6">
       {/* User Insights */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className={`grid grid-cols-2 ${devenv ? "lg:grid-cols-5" : "lg:grid-cols-2"} gap-4`}>
         <StatCard title={t("users.totalUsers")} value={users.length} description={t("users.registered")} />
         <StatCard title={t("users.active")} value={activeUsers.length} description={`${users.length > 0 ? ((activeUsers.length / users.length) * 100).toFixed(0) : 0}% ${t("users.enabled")}`} />
-        <StatCard title={t("users.withEnv")} value={withSubdomain.length} description={t("users.canUseCC")} />
-        <StatCard title={t("users.osSplit")} value={`${osCounts.ubuntu}/${osCounts.al2023}`} description="Ubuntu / AL2023" />
-        <StatCard title={t("users.tierSplit")} value={`${tierCounts.light}/${tierCounts.standard}/${tierCounts.power}`} description="L / S / P" />
+        {devenv && (
+          <>
+            <StatCard title={t("users.withEnv")} value={withSubdomain.length} description={t("users.canUseCC")} />
+            <StatCard title={t("users.osSplit")} value={`${osCounts.ubuntu}/${osCounts.al2023}`} description="Ubuntu / AL2023" />
+            <StatCard title={t("users.tierSplit")} value={`${tierCounts.light}/${tierCounts.standard}/${tierCounts.power}`} description="L / S / P" />
+          </>
+        )}
       </div>
 
       {/* Security Policy Distribution */}
-      {users.length > 0 && (
+      {devenv && users.length > 0 && (
         <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
           <h3 className="text-sm font-medium text-gray-300 mb-3">{t("users.securityDist")}</h3>
           <div className="flex gap-6">
@@ -224,59 +233,67 @@ export default function UserManagement() {
                   placeholder="user01"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">
-                  Container OS
-                </label>
-                <select
-                  value={containerOs}
-                  onChange={(e) => setContainerOs(e.target.value as CreateUserInput["containerOs"])}
-                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="ubuntu">Ubuntu 24.04</option>
-                  <option value="al2023">Amazon Linux 2023</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">
-                  Resource Tier
-                </label>
-                <select
-                  value={resourceTier}
-                  onChange={(e) => setResourceTier(e.target.value as CreateUserInput["resourceTier"])}
-                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="light">Light (1 vCPU / 4 GiB)</option>
-                  <option value="standard">Standard (2 vCPU / 8 GiB)</option>
-                  <option value="power">Power (4 vCPU / 12 GiB)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">
-                  Security Policy
-                </label>
-                <select
-                  value={securityPolicy}
-                  onChange={(e) => setSecurityPolicy(e.target.value as CreateUserInput["securityPolicy"])}
-                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="open">Open (Education/Lab)</option>
-                  <option value="restricted">Restricted (General)</option>
-                  <option value="locked">Locked (High Security)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">
-                  Storage Type
-                </label>
-                <select
-                  value={storageType}
-                  onChange={(e) => setStorageType(e.target.value as CreateUserInput["storageType"])}
-                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="ebs">EBS GP3</option>
-                </select>
-              </div>
+              {devenv && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">
+                      Container OS
+                    </label>
+                    <select
+                      value={containerOs}
+                      onChange={(e) => setContainerOs(e.target.value as CreateUserInput["containerOs"])}
+                      className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="ubuntu">Ubuntu 24.04</option>
+                      <option value="al2023">Amazon Linux 2023</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">
+                      Resource Tier
+                    </label>
+                    <select
+                      value={resourceTier}
+                      onChange={(e) => setResourceTier(e.target.value as CreateUserInput["resourceTier"])}
+                      className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="light">Light (1 vCPU / 4 GiB)</option>
+                      <option value="standard">Standard (2 vCPU / 8 GiB)</option>
+                      <option value="power">Power (4 vCPU / 12 GiB)</option>
+                    </select>
+                  </div>
+                </>
+              )}
+              {devenv && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">
+                    Security Policy
+                  </label>
+                  <select
+                    value={securityPolicy}
+                    onChange={(e) => setSecurityPolicy(e.target.value as CreateUserInput["securityPolicy"])}
+                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="open">Open (Education/Lab)</option>
+                    <option value="restricted">Restricted (General)</option>
+                    <option value="locked">Locked (High Security)</option>
+                  </select>
+                </div>
+              )}
+              {devenv && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">
+                    Storage Type
+                  </label>
+                  <select
+                    value={storageType}
+                    onChange={(e) => setStorageType(e.target.value as CreateUserInput["storageType"])}
+                    className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="ebs">EBS GP3</option>
+                  </select>
+                </div>
+              )}
             </div>
             <div className="flex justify-end">
               <button
@@ -299,7 +316,8 @@ export default function UserManagement() {
       ) : (
         <UsersTable
           users={users}
-          onResetEnvironment={handleResetEnvironment}
+          // Reset Env stops the EC2 DevEnv and clears the subdomain — DevEnv mode only.
+          onResetEnvironment={devenv ? handleResetEnvironment : undefined}
           // ADR-024: permanent delete intentionally not wired — disable-only.
           onToggle={handleToggle}
           onUpdate={handleUpdate}

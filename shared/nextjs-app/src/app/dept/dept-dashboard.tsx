@@ -29,6 +29,7 @@ interface MarketplaceInfo {
 import DeptSelector from "@/components/dept/dept-selector";
 import DeptCard from "@/components/dept/dept-card";
 import StatCard from "@/components/cards/stat-card";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import {
   BarChart,
   Bar,
@@ -52,6 +53,8 @@ function formatTokens(n: number): string {
 
 export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
   const { t } = useI18n();
+  // Governance mode has no per-user EC2 DevEnv: no container status, OS or tier columns.
+  const devenv = useDeploymentMode() === "devenv";
   const [selectedDepartment, setSelectedDepartment] = useState<string>(
     isAdmin ? "all" : ""
   );
@@ -74,9 +77,10 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
         ? `/api/dept?department=${selectedDepartment}`
         : "/api/dept";
 
+      // Governance mode keeps the response order without calling the DevEnv-only /api/containers.
       const fetches: Promise<Response>[] = [
         fetch(deptUrl),
-        fetch("/api/containers"),
+        devenv ? fetch("/api/containers") : Promise.resolve(Response.json({ success: true, data: [] })),
       ];
 
       if (isAdmin) {
@@ -135,7 +139,7 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, selectedDepartment]);
+  }, [isAdmin, selectedDepartment, devenv]);
 
   useEffect(() => {
     void fetchData();
@@ -282,8 +286,8 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                     <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
                       <th className="pb-3 font-medium">Email</th>
                       <th className="pb-3 font-medium">Subdomain</th>
-                      <th className="pb-3 font-medium">OS</th>
-                      <th className="pb-3 font-medium">Tier</th>
+                      {devenv && <th className="pb-3 font-medium">OS</th>}
+                      {devenv && <th className="pb-3 font-medium">Tier</th>}
                       <th className="pb-3 font-medium">Requested</th>
                       <th className="pb-3 font-medium">Actions</th>
                     </tr>
@@ -293,8 +297,8 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                       <tr key={req.requestId} className="text-sm">
                         <td className="py-3 text-gray-200">{req.email}</td>
                         <td className="py-3 text-gray-300">{req.subdomain}</td>
-                        <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>
-                        <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>
+                        {devenv && <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>}
+                        {devenv && <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>}
                         <td className="py-3 text-gray-400">
                           {new Date(req.requestedAt).toLocaleDateString()}
                         </td>
@@ -475,8 +479,8 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                     <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
                       <th className="pb-3 font-medium">Email</th>
                       <th className="pb-3 font-medium">Subdomain</th>
-                      <th className="pb-3 font-medium">OS</th>
-                      <th className="pb-3 font-medium">Tier</th>
+                      {devenv && <th className="pb-3 font-medium">OS</th>}
+                      {devenv && <th className="pb-3 font-medium">Tier</th>}
                       <th className="pb-3 font-medium">Requested</th>
                       <th className="pb-3 font-medium">Actions</th>
                     </tr>
@@ -486,8 +490,8 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                       <tr key={req.requestId} className="text-sm">
                         <td className="py-3 text-gray-200">{req.email}</td>
                         <td className="py-3 text-gray-300">{req.subdomain}</td>
-                        <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>
-                        <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>
+                        {devenv && <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>}
+                        {devenv && <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>}
                         <td className="py-3 text-gray-400">
                           {new Date(req.requestedAt).toLocaleDateString()}
                         </td>
@@ -532,10 +536,10 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                   <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
                     <th className="pb-3 font-medium">Email</th>
                     <th className="pb-3 font-medium">Subdomain</th>
-                    <th className="pb-3 font-medium">OS</th>
-                    <th className="pb-3 font-medium">Tier</th>
+                    {devenv && <th className="pb-3 font-medium">OS</th>}
+                    {devenv && <th className="pb-3 font-medium">Tier</th>}
                     <th className="pb-3 font-medium">User Status</th>
-                    <th className="pb-3 font-medium">Container</th>
+                    {devenv && <th className="pb-3 font-medium">Container</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
@@ -543,10 +547,12 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                     <tr key={member.email} className="text-sm">
                       <td className="py-3 text-gray-200">{member.email}</td>
                       <td className="py-3 text-gray-300">{member.subdomain || "-"}</td>
-                      <td className="py-3 text-gray-300 capitalize">
-                        {member.containerOs === "al2023" ? "AL2023" : "Ubuntu"}
-                      </td>
-                      <td className="py-3 text-gray-300 capitalize">{member.resourceTier}</td>
+                      {devenv && (
+                        <td className="py-3 text-gray-300 capitalize">
+                          {member.containerOs === "al2023" ? "AL2023" : "Ubuntu"}
+                        </td>
+                      )}
+                      {devenv && <td className="py-3 text-gray-300 capitalize">{member.resourceTier}</td>}
                       <td className="py-3">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full ${
@@ -558,30 +564,32 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                           {member.status}
                         </span>
                       </td>
-                      <td className="py-3">
-                        <span
-                          className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${
-                            member.containerStatus === "RUNNING"
-                              ? "bg-green-900/30 text-green-400"
-                              : member.containerStatus === "HIBERNATED"
-                              ? "bg-blue-900/30 text-blue-400"
-                              : member.containerStatus === "PENDING" ||
-                                member.containerStatus === "PROVISIONING"
-                              ? "bg-yellow-900/30 text-yellow-400"
-                              : "bg-gray-800 text-gray-400"
-                          }`}
-                        >
-                          {member.containerStatus === "RUNNING" && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                          )}
-                          {member.containerStatus}
-                        </span>
-                      </td>
+                      {devenv && (
+                        <td className="py-3">
+                          <span
+                            className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${
+                              member.containerStatus === "RUNNING"
+                                ? "bg-green-900/30 text-green-400"
+                                : member.containerStatus === "HIBERNATED"
+                                ? "bg-blue-900/30 text-blue-400"
+                                : member.containerStatus === "PENDING" ||
+                                  member.containerStatus === "PROVISIONING"
+                                ? "bg-yellow-900/30 text-yellow-400"
+                                : "bg-gray-800 text-gray-400"
+                            }`}
+                          >
+                            {member.containerStatus === "RUNNING" && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                            )}
+                            {member.containerStatus}
+                          </span>
+                        </td>
+                      )}
                     </tr>
                   ))}
                   {members.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-gray-500">
+                      <td colSpan={devenv ? 6 : 3} className="py-8 text-center text-gray-500">
                         No department members found
                       </td>
                     </tr>

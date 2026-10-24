@@ -67,6 +67,8 @@ module "security" {
   lambda_src_dir      = local.lambda_src_dir
   devenv_enabled      = local.devenv_enabled
 
+  existing_user_pool_id = var.existing_cognito_user_pool_id
+
   providers = {
     aws           = aws
     aws.us_east_1 = aws.us_east_1

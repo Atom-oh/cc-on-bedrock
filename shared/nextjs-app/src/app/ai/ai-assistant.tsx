@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useI18n } from "@/lib/i18n";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 
 interface Message {
   role: "user" | "assistant";
@@ -33,6 +34,9 @@ const PRESETS_EN = [
   "Review container resource usage and suggest optimizations",
   "Forecast monthly costs and recommend cost reduction strategies",
 ];
+
+// Index of the container-resource preset in both lists: DevEnv-only (no instances in governance mode).
+const CONTAINER_PRESET_INDEX = 4;
 
 // Markdown renderer using react-markdown + remark-gfm
 function MarkdownText({ text }: { text: string }) {
@@ -102,7 +106,9 @@ export default function AIAssistant() {
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const presets = locale === "ko" ? PRESETS_KO : PRESETS_EN;
+  const devenv = useDeploymentMode() === "devenv";
+  const allPresets = locale === "ko" ? PRESETS_KO : PRESETS_EN;
+  const presets = devenv ? allPresets : allPresets.filter((_, i) => i !== CONTAINER_PRESET_INDEX);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import MonitoringDashboard from "./monitoring-dashboard";
+import { getDeploymentMode } from "@/lib/deployment-mode";
 
 export default async function MonitoringPage() {
   const session = await getServerSession(authOptions);
@@ -15,7 +16,9 @@ export default async function MonitoringPage() {
           Operations Monitoring
         </h1>
         <p className="mt-1 text-sm text-gray-400">
-          Instance health, active sessions, and error rates
+          {getDeploymentMode() === "devenv"
+            ? "Instance health, active sessions, and error rates"
+            : "Service health, Bedrock usage, and error rates"}
         </p>
       </div>
       <MonitoringDashboard

@@ -10,6 +10,7 @@ import {
   getBedrockUsageSnapshot,
   getBedrockUsageTimeSeries,
 } from "@/lib/usage-client";
+import { devenvDisabledResponse } from "@/lib/deployment-mode";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -21,6 +22,21 @@ export async function GET(req: NextRequest) {
   const action = searchParams.get("action") ?? "current";
 
   try {
+    // Bedrock usage (DynamoDB) is served in every mode, before touching the EC2 instance table.
+    if (action === "bedrock") {
+      const brMetrics = await getBedrockUsageSnapshot();
+      return NextResponse.json({ success: true, data: brMetrics });
+    }
+    if (action === "bedrock_timeseries") {
+      const brDays = Math.min(Math.max(parseInt(searchParams.get("days") ?? "7", 10), 1), 90);
+      const brTs = await getBedrockUsageTimeSeries(brDays);
+      return NextResponse.json({ success: true, data: brTs });
+    }
+
+    // EC2 instance metrics below are DevEnv-only (404 in governance mode).
+    const disabled = devenvDisabledResponse();
+    if (disabled) return disabled;
+
     const instances = await listInstances();
     const runningIds = instances
       .filter((i) => i.status === "running")
@@ -59,15 +75,6 @@ export async function GET(req: NextRequest) {
             };
           });
         return NextResponse.json({ success: true, data: instanceData });
-      }
-      case "bedrock": {
-        const brMetrics = await getBedrockUsageSnapshot();
-        return NextResponse.json({ success: true, data: brMetrics });
-      }
-      case "bedrock_timeseries": {
-        const brDays = Math.min(Math.max(parseInt(searchParams.get("days") ?? "7", 10), 1), 90);
-        const brTs = await getBedrockUsageTimeSeries(brDays);
-        return NextResponse.json({ success: true, data: brTs });
       }
       default:
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });

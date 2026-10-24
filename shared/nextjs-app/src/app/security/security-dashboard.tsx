@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import FilterBar from "@/components/filter-bar";
+import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import type { ApiResponse } from "@/lib/types";
 
 interface FirewallRule {
@@ -121,6 +122,9 @@ const DLP_DESCRIPTIONS: Record<string, { title: string; titleEn: string; desc: s
 
 export default function SecurityDashboard() {
   const { t, locale } = useI18n();
+  // DLP (code-server flags + per-user EC2 security groups), OS / tier and EC2/EBS hardening rows
+  // describe the per-user DevEnv — hidden in governance mode (Cognito / DNS Firewall / audit stay).
+  const devenv = useDeploymentMode() === "devenv";
   const [data, setData] = useState<SecurityData | null>(null);
   const [users, setUsers] = useState<UserSecurity[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditEvent[]>([]);
@@ -188,7 +192,9 @@ export default function SecurityDashboard() {
           <div>
             <h1 className="text-lg font-bold text-white">{isKo ? "보안 관리" : "Security Management"}</h1>
             <p className="text-[10px] text-gray-500">
-              {isKo ? "DLP 정책, DNS Firewall, Security Groups" : "DLP Policies, DNS Firewall, Security Groups"}
+              {devenv
+                ? (isKo ? "DLP 정책, DNS Firewall, Security Groups" : "DLP Policies, DNS Firewall, Security Groups")
+                : (isKo ? "DNS Firewall, 사용자, 감사 로그" : "DNS Firewall, Users, Audit Logs")}
             </p>
           </div>
         </div>
@@ -201,12 +207,14 @@ export default function SecurityDashboard() {
       </div>
 
       {/* Overview Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">{isKo ? "DLP 정책" : "DLP Policies"}</p>
-          <p className="text-2xl font-bold text-white mt-1">3</p>
-          <p className="text-[10px] text-gray-600 mt-0.5">Open · Restricted · Locked</p>
-        </div>
+      <div className={`grid grid-cols-2 ${devenv ? "lg:grid-cols-4" : ""} gap-4`}>
+        {devenv && (
+          <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider">{isKo ? "DLP 정책" : "DLP Policies"}</p>
+            <p className="text-2xl font-bold text-white mt-1">3</p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Open · Restricted · Locked</p>
+          </div>
+        )}
         <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
           <p className="text-[10px] text-gray-500 uppercase tracking-wider">DNS Firewall</p>
           <p className="text-2xl font-bold text-green-400 mt-1">{activeAssociations.length}</p>
@@ -217,11 +225,13 @@ export default function SecurityDashboard() {
           <p className="text-2xl font-bold text-cyan-400 mt-1">{totalFWRules}</p>
           <p className="text-[10px] text-gray-600 mt-0.5">ALLOW + BLOCK</p>
         </div>
-        <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Security Groups</p>
-          <p className="text-2xl font-bold text-purple-400 mt-1">{data?.securityGroups.length ?? 0}</p>
-          <p className="text-[10px] text-gray-600 mt-0.5">{totalSGRules} {isKo ? "개 규칙" : "rules"}</p>
-        </div>
+        {devenv && (
+          <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider">Security Groups</p>
+            <p className="text-2xl font-bold text-purple-400 mt-1">{data?.securityGroups.length ?? 0}</p>
+            <p className="text-[10px] text-gray-600 mt-0.5">{totalSGRules} {isKo ? "개 규칙" : "rules"}</p>
+          </div>
+        )}
       </div>
 
       {/* Filters */}
@@ -230,7 +240,7 @@ export default function SecurityDashboard() {
         searchValue={searchText}
         onSearchChange={setSearchText}
         filters={[
-          {
+          ...(devenv ? [{
             key: "policy",
             label: isKo ? "보안 정책" : "Policy",
             value: filterPolicy,
@@ -241,7 +251,7 @@ export default function SecurityDashboard() {
               { value: "restricted", label: "🟡 Restricted", count: users.filter((u) => u.securityPolicy === "restricted").length },
               { value: "locked", label: "🔴 Locked", count: users.filter((u) => u.securityPolicy === "locked").length },
             ],
-          },
+          }] : []),
           {
             key: "logSource",
             label: isKo ? "로그 서비스" : "Log Source",
@@ -258,53 +268,57 @@ export default function SecurityDashboard() {
       />
 
       {/* DLP Policies Overview */}
-      <div>
-        <SectionHeader>{isKo ? "DLP (DATA LOSS PREVENTION) 정책" : "DLP (DATA LOSS PREVENTION) POLICIES"}</SectionHeader>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {Object.entries(DLP_DESCRIPTIONS).map(([key, dlp]) => (
-            <div key={key} className={`rounded-xl border ${dlp.color} p-5`}>
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-lg">{dlp.icon}</span>
-                <h3 className="text-sm font-bold text-gray-100">{dlp.title}</h3>
-              </div>
-              <p className="text-xs text-gray-400 leading-relaxed">{isKo ? dlp.desc : dlp.descEn}</p>
-              <div className="mt-3 pt-3 border-t border-gray-800/50">
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">{isKo ? "적용 범위" : "Scope"}</p>
-                <div className="flex flex-wrap gap-1">
-                  <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">Security Group</span>
-                  <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">DNS Firewall</span>
-                  <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">code-server flags</span>
-                  {key !== "open" && <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">Extension control</span>}
+      {devenv && (
+        <div>
+          <SectionHeader>{isKo ? "DLP (DATA LOSS PREVENTION) 정책" : "DLP (DATA LOSS PREVENTION) POLICIES"}</SectionHeader>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {Object.entries(DLP_DESCRIPTIONS).map(([key, dlp]) => (
+              <div key={key} className={`rounded-xl border ${dlp.color} p-5`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-lg">{dlp.icon}</span>
+                  <h3 className="text-sm font-bold text-gray-100">{dlp.title}</h3>
                 </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 4-Layer DLP Architecture */}
-      <div>
-        <SectionHeader>{isKo ? "4-LAYER DLP 아키텍처" : "4-LAYER DLP ARCHITECTURE"}</SectionHeader>
-        <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            {[
-              { layer: "Layer 1", name: "code-server Flags", desc: isKo ? "확장 마켓플레이스 비활성화, 터미널 제한" : "Extension marketplace disabled, terminal restrictions", status: "ACTIVE", color: "text-blue-400" },
-              { layer: "Layer 2", name: "Security Groups", desc: isKo ? "네트워크 레벨 아웃바운드 제어" : "Network-level outbound control", status: "ACTIVE", color: "text-green-400" },
-              { layer: "Layer 3", name: "DNS Firewall", desc: isKo ? "도메인 레벨 화이트리스트/블랙리스트" : "Domain-level whitelist/blacklist", status: "ACTIVE", color: "text-cyan-400" },
-              { layer: "Layer 4", name: "Extension Control", desc: isKo ? "VS Code 확장 설치 제한" : "VS Code extension installation restrictions", status: "PARTIAL", color: "text-yellow-400" },
-            ].map((layer) => (
-              <div key={layer.layer} className="bg-[#0a0f1a] rounded-lg p-4 border border-gray-800/30">
-                <p className="text-[9px] text-gray-600 uppercase">{layer.layer}</p>
-                <p className={`text-sm font-semibold ${layer.color} mt-1`}>{layer.name}</p>
-                <p className="text-[10px] text-gray-500 mt-1 leading-relaxed">{layer.desc}</p>
-                <div className="mt-2">
-                  <StatusBadge status={layer.status} size="xs" />
+                <p className="text-xs text-gray-400 leading-relaxed">{isKo ? dlp.desc : dlp.descEn}</p>
+                <div className="mt-3 pt-3 border-t border-gray-800/50">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">{isKo ? "적용 범위" : "Scope"}</p>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">Security Group</span>
+                    <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">DNS Firewall</span>
+                    <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">code-server flags</span>
+                    {key !== "open" && <span className="px-1.5 py-0.5 text-[9px] bg-gray-800 text-gray-400 rounded">Extension control</span>}
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         </div>
-      </div>
+      )}
+
+      {/* 4-Layer DLP Architecture */}
+      {devenv && (
+        <div>
+          <SectionHeader>{isKo ? "4-LAYER DLP 아키텍처" : "4-LAYER DLP ARCHITECTURE"}</SectionHeader>
+          <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              {[
+                { layer: "Layer 1", name: "code-server Flags", desc: isKo ? "확장 마켓플레이스 비활성화, 터미널 제한" : "Extension marketplace disabled, terminal restrictions", status: "ACTIVE", color: "text-blue-400" },
+                { layer: "Layer 2", name: "Security Groups", desc: isKo ? "네트워크 레벨 아웃바운드 제어" : "Network-level outbound control", status: "ACTIVE", color: "text-green-400" },
+                { layer: "Layer 3", name: "DNS Firewall", desc: isKo ? "도메인 레벨 화이트리스트/블랙리스트" : "Domain-level whitelist/blacklist", status: "ACTIVE", color: "text-cyan-400" },
+                { layer: "Layer 4", name: "Extension Control", desc: isKo ? "VS Code 확장 설치 제한" : "VS Code extension installation restrictions", status: "PARTIAL", color: "text-yellow-400" },
+              ].map((layer) => (
+                <div key={layer.layer} className="bg-[#0a0f1a] rounded-lg p-4 border border-gray-800/30">
+                  <p className="text-[9px] text-gray-600 uppercase">{layer.layer}</p>
+                  <p className={`text-sm font-semibold ${layer.color} mt-1`}>{layer.name}</p>
+                  <p className="text-[10px] text-gray-500 mt-1 leading-relaxed">{layer.desc}</p>
+                  <div className="mt-2">
+                    <StatusBadge status={layer.status} size="xs" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* DNS Firewall Rules */}
       {data?.dnsFirewall.ruleGroups && data.dnsFirewall.ruleGroups.length > 0 && (
@@ -358,7 +372,7 @@ export default function SecurityDashboard() {
       )}
 
       {/* Security Groups */}
-      {data?.securityGroups && data.securityGroups.length > 0 && (
+      {devenv && data?.securityGroups && data.securityGroups.length > 0 && (
         <div>
           <SectionHeader>SECURITY GROUPS (DLP)</SectionHeader>
           <div className="space-y-4">
@@ -431,16 +445,16 @@ export default function SecurityDashboard() {
               { item: isKo ? "Cognito 사용자 인증" : "Cognito User Authentication", status: true, detail: "OAuth2 + OIDC" },
               { item: isKo ? "CloudFront HTTPS" : "CloudFront HTTPS", status: true, detail: "ACM *.whchoi.net" },
               { item: isKo ? "VPC Endpoints (Private Link)" : "VPC Endpoints (Private Link)", status: true, detail: "8 endpoints" },
-              { item: isKo ? "KMS 암호화" : "KMS Encryption", status: true, detail: "EBS, Secrets Manager" },
+              { item: isKo ? "KMS 암호화" : "KMS Encryption", status: true, detail: devenv ? "EBS, Secrets Manager" : "Secrets Manager" },
               { item: isKo ? "Secrets Manager" : "Secrets Manager", status: true, detail: "NextAuth, CloudFront" },
               { item: "DNS Firewall", status: true, detail: isKo ? "Restricted 규칙 적용" : "Restricted rules applied" },
-              { item: isKo ? "Security Groups (3-tier DLP)" : "Security Groups (3-tier DLP)", status: true, detail: "Open/Restricted/Locked" },
-              { item: "SSM Session Manager", status: true, detail: isKo ? "SSH 비활성, SSM만 허용" : "SSH disabled, SSM only" },
-              { item: isKo ? "EBS 볼륨 암호화" : "EBS Volume Encryption", status: true, detail: "KMS encrypted" },
-              { item: isKo ? "IMDSv2 강제" : "IMDSv2 Enforced", status: true, detail: "AL2023 default" },
+              { item: isKo ? "Security Groups (3-tier DLP)" : "Security Groups (3-tier DLP)", status: true, detail: "Open/Restricted/Locked", devenvOnly: true },
+              { item: "SSM Session Manager", status: true, detail: isKo ? "SSH 비활성, SSM만 허용" : "SSH disabled, SSM only", devenvOnly: true },
+              { item: isKo ? "EBS 볼륨 암호화" : "EBS Volume Encryption", status: true, detail: "KMS encrypted", devenvOnly: true },
+              { item: isKo ? "IMDSv2 강제" : "IMDSv2 Enforced", status: true, detail: "AL2023 default", devenvOnly: true },
               { item: isKo ? "IAM 기반 사용량 제어" : "IAM-based Usage Control", status: true, detail: isKo ? "사용자별 Task Role" : "Per-user Task Role" },
               { item: isKo ? "DynamoDB 사용량 추적" : "DynamoDB Usage Tracking", status: true, detail: "CloudTrail → Lambda → DDB" },
-            ].map((check) => (
+            ].filter((check) => devenv || !check.devenvOnly).map((check) => (
               <div key={check.item} className="flex items-center gap-3 py-1.5">
                 <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${check.status ? "bg-green-900/30 text-green-400" : "bg-red-900/30 text-red-400"}`}>
                   {check.status ? "✓" : "✗"}
@@ -464,11 +478,15 @@ export default function SecurityDashboard() {
                 <tr className="border-b border-gray-800 bg-[#0a0f1a]">
                   <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">{isKo ? "사용자" : "User"}</th>
                   <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Subdomain</th>
-                  <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">{isKo ? "보안 정책" : "DLP Policy"}</th>
+                  {devenv && <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">{isKo ? "보안 정책" : "DLP Policy"}</th>}
                   <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">{isKo ? "계정 상태" : "Account"}</th>
-                  <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">API Key</th>
-                  <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">OS / Tier</th>
-                  <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">{isKo ? "보안 등급" : "Risk Level"}</th>
+                  {devenv && (
+                    <>
+                      <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">API Key</th>
+                      <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">OS / Tier</th>
+                      <th className="px-4 py-2.5 text-center text-[10px] font-medium text-gray-500 uppercase">{isKo ? "보안 등급" : "Risk Level"}</th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/50">
@@ -487,30 +505,36 @@ export default function SecurityDashboard() {
                         <p className="text-sm text-gray-200">{u.email}</p>
                       </td>
                       <td className="px-4 py-2.5 text-sm text-gray-400">{u.subdomain}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${policyColor}`}>
-                          {policyIcon} {u.securityPolicy}
-                        </span>
-                      </td>
+                      {devenv && (
+                        <td className="px-4 py-2.5 text-center">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${policyColor}`}>
+                            {policyIcon} {u.securityPolicy}
+                          </span>
+                        </td>
+                      )}
                       <td className="px-4 py-2.5 text-center">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${u.enabled ? "bg-green-900/30 text-green-400" : "bg-gray-800 text-gray-500"}`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${u.enabled ? "bg-green-400" : "bg-gray-600"}`} />
                           {u.enabled ? (u.status === "CONFIRMED" ? "Active" : u.status) : "Disabled"}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-center">
-                        <span className={`text-[10px] ${u.hasContainer ? "text-cyan-400" : "text-gray-600"}`}>
-                          {u.hasContainer ? "✓ Issued" : "✗ None"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-center">
-                        <span className="text-[10px] text-gray-400">
-                          {u.containerOs === "al2023" ? "AL2023" : "Ubuntu"} / {u.resourceTier}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-center">
-                        <span className={`text-[10px] font-bold ${riskColor}`}>{riskLevel}</span>
-                      </td>
+                      {devenv && (
+                        <>
+                          <td className="px-4 py-2.5 text-center">
+                            <span className={`text-[10px] ${u.hasContainer ? "text-cyan-400" : "text-gray-600"}`}>
+                              {u.hasContainer ? "✓ Issued" : "✗ None"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            <span className="text-[10px] text-gray-400">
+                              {u.containerOs === "al2023" ? "AL2023" : "Ubuntu"} / {u.resourceTier}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            <span className={`text-[10px] font-bold ${riskColor}`}>{riskLevel}</span>
+                          </td>
+                        </>
+                      )}
                     </tr>
                   );
                 })}
@@ -519,7 +543,7 @@ export default function SecurityDashboard() {
           </div>
           {/* Policy distribution summary */}
           <div className="mt-3 flex gap-4">
-            {["open", "restricted", "locked"].map((policy) => {
+            {devenv && ["open", "restricted", "locked"].map((policy) => {
               const count = users.filter((u) => u.securityPolicy === policy).length;
               const color = policy === "locked" ? "text-red-400" : policy === "restricted" ? "text-yellow-400" : "text-green-400";
               return (
@@ -529,7 +553,7 @@ export default function SecurityDashboard() {
                 </div>
               );
             })}
-            <span className="text-gray-700 mx-1">|</span>
+            {devenv && <span className="text-gray-700 mx-1">|</span>}
             <span className="text-[10px] text-gray-500">{users.filter((u) => u.enabled).length}/{users.length} {isKo ? "활성" : "active"}</span>
           </div>
         </div>
