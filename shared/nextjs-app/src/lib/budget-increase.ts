@@ -16,6 +16,7 @@ import {
   type TransactWriteItem,
   type TransactWriteItemsInput,
 } from "@aws-sdk/client-dynamodb";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { BUDGET_PERIODS, resolvePeriodBudget, type BudgetPeriod } from "./budget-periods";
 import { cascadeTargets, grantAttr, isCurrentPeriodKey, periodKey } from "./budget-grants";
 import {
@@ -25,7 +26,7 @@ import {
   type DepartmentBudgetState,
 } from "./approval-authz";
 import type { Role } from "./roles";
-import { releaseTokenDeny } from "./token-deny";
+import { readTokenDeny, releaseTokenDeny } from "./token-deny";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 export const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
@@ -475,13 +476,20 @@ export function kstMonthBucket(now: Date): string {
   return `${String(kst.getUTCFullYear()).padStart(4, "0")}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Why an active token deny was left in place. */
+export type TokenHoldReason = "dept_scope" | "non_monthly" | "legacy_deny" | "no_token_limit" | "still_over_cap";
+
 export interface TokenRelease {
+  /** false = the user may still be blocked on the token axis (see `reason`). */
   released: boolean;
+  reason?: TokenHoldReason;
   warning?: string;
   /** KST month the grant was written under. */
   bucket?: string;
-  /** Normalized tokens added to LIMIT#monthly (0 = no token limit row, nothing written). */
+  /** Normalized tokens added to LIMIT#monthly (0 = nothing written). */
   normalizedGranted?: number;
+  /** No LIMIT#monthly row: the user has no personal token limit to raise. */
+  noTokenLimit?: boolean;
   /** Whether an active token deny was detached and cleared. */
   denyCleared?: boolean;
 }
@@ -492,50 +500,67 @@ const isConditionFailure = (err: unknown) =>
 
 /**
  * Add `normalized` to the user's LIMIT#monthly grant for `bucket`: ADD when the stored
- * `grant_bucket` matches, otherwise replace the past month's grant. Returns false when
- * the row does not exist (no token limit configured), in which case nothing is written.
+ * `grant_bucket` matches, otherwise replace the past month's grant. Returns the row
+ * after the write, or null when it does not exist (no token limit; nothing written).
+ *
+ * Not idempotent: ADD is applied again if a request that already succeeded is retried
+ * (an SDK retry after a lost response, or a re-run by an operator). The approval itself
+ * is guarded by `status = pending`, so this runs once per approval; a lost-response
+ * double ADD over-grants the token axis by one amount for the rest of that KST month.
  */
-async function addTokenGrant(email: string, bucket: string, normalized: number): Promise<boolean> {
+async function addTokenGrant(
+  email: string,
+  bucket: string,
+  normalized: number,
+): Promise<Record<string, unknown> | null> {
   const Key = { PK: { S: `USER#${email}` }, SK: { S: "LIMIT#monthly" } };
   const values = { ":b": { S: bucket }, ":n": num(normalized) };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await dynamodb.send(new UpdateItemCommand({
-        TableName: LIMITS_TABLE,
-        Key,
-        UpdateExpression: "ADD grant_normalized :n",
-        ConditionExpression: "attribute_exists(PK) AND grant_bucket = :b",
-        ExpressionAttributeValues: values,
-      }));
-      return true;
-    } catch (err) {
-      if (!isConditionFailure(err)) throw err;
-    }
-    try {
-      await dynamodb.send(new UpdateItemCommand({
-        TableName: LIMITS_TABLE,
-        Key,
-        UpdateExpression: "SET grant_bucket = :b, grant_normalized = :n",
-        ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(grant_bucket) OR grant_bucket <> :b)",
-        ExpressionAttributeValues: values,
-      }));
-      return true;
-    } catch (err) {
-      if (!isConditionFailure(err)) throw err;
+  const attempts: Array<{ UpdateExpression: string; ConditionExpression: string }> = [
+    { UpdateExpression: "ADD grant_normalized :n", ConditionExpression: "attribute_exists(PK) AND grant_bucket = :b" },
+    {
+      UpdateExpression: "SET grant_bucket = :b, grant_normalized = :n",
+      ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(grant_bucket) OR grant_bucket <> :b)",
+    },
+  ];
+  for (let round = 0; round < 3; round++) {
+    for (const a of attempts) {
+      try {
+        const r = await dynamodb.send(new UpdateItemCommand({
+          TableName: LIMITS_TABLE,
+          Key,
+          ...a,
+          ExpressionAttributeValues: values,
+          ReturnValues: "ALL_NEW",
+        }));
+        return r.Attributes ? unmarshall(r.Attributes) : {};
+      } catch (err) {
+        if (!isConditionFailure(err)) throw err;
+      }
     }
     // Both conditions failed: the row is absent, or a concurrent approval just moved
-    // the bucket to this month (then the ADD succeeds on the next attempt).
+    // the bucket to this month (then the ADD succeeds next round).
     const got = await dynamodb.send(new GetItemCommand({ TableName: LIMITS_TABLE, Key, ProjectionExpression: "PK" }));
-    if (!got.Item) return false;
+    if (!got.Item) return null;
   }
   throw new Error("token grant contention");
+}
+
+async function monthCounter(email: string, bucket: string): Promise<number> {
+  const got = await dynamodb.send(new GetItemCommand({
+    TableName: LIMITS_TABLE,
+    Key: { PK: { S: `USER#${email}` }, SK: { S: `COUNTER#monthly#${bucket}` } },
+  }));
+  return Number(got.Item?.normalized?.N ?? 0) || 0;
 }
 
 /**
  * Lift the normalized-token axis for an approved grant of `amount` USD: every approval
  * cascades to monthly, so floor(amount × NORMALIZED_PER_USD) is added to the user's
- * LIMIT#monthly grant for the KST month (only if the row exists), then an active token
- * deny is released. Never throws: a failure is `{ released: false, warning }`.
+ * LIMIT#monthly grant for the KST month (only if the row exists). An active token deny
+ * is released only when this grant cures it: a personal (`scope = user`) monthly deny,
+ * the grant was written, and this month's counter is now below max + grant. Any other
+ * deny stays and is reported with a `reason`. Never throws: a failure is
+ * `{ released: false, warning }`.
  */
 export async function releaseTokenAxis(email: string, amount: number, now: Date): Promise<TokenRelease> {
   const user = email.trim().toLowerCase();
@@ -543,11 +568,29 @@ export async function releaseTokenAxis(email: string, amount: number, now: Date)
   const normalized = Math.floor(amount * NORMALIZED_PER_USD);
   let granted = 0;
   try {
-    if (normalized > 0 && (await addTokenGrant(user, bucket, normalized))) granted = normalized;
-    const deny = await releaseTokenDeny(user);
-    const base = { bucket, normalizedGranted: granted, denyCleared: deny.released };
-    if (deny.found && !deny.released) return { released: false, warning: deny.warning, ...base };
-    return { released: true, ...base };
+    const deny = await readTokenDeny(user);
+    const row = normalized > 0 ? await addTokenGrant(user, bucket, normalized) : null;
+    if (row) granted = normalized;
+    const base: TokenRelease = { released: true, bucket, normalizedGranted: granted, denyCleared: false };
+    if (!row) base.noTokenLimit = true;
+    if (!deny) return base;
+
+    const hold = (reason: TokenHoldReason, source: string): TokenRelease => ({
+      ...base,
+      released: false,
+      reason,
+      warning: `token deny from ${source} cap — not lifted by a personal grant`,
+    });
+    if (deny.scope === undefined || deny.scope === null) return hold("legacy_deny", "legacy");
+    if (deny.scope !== "user") return hold("dept_scope", "dept");
+    if (deny.period !== "monthly") return hold("non_monthly", String(deny.period ?? "unknown"));
+    if (!row) return hold("no_token_limit", "unset personal monthly");
+    const cap = (Number(row.max_normalized ?? 0) || 0) + (Number(row.grant_normalized ?? 0) || 0);
+    if (!((await monthCounter(user, bucket)) < cap)) return hold("still_over_cap", "insufficient grant");
+
+    const released = await releaseTokenDeny(user);
+    if (released.found && !released.released) return { ...base, released: false, warning: released.warning };
+    return { ...base, denyCleared: released.released };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[budget-increase] token axis release failed:", msg);

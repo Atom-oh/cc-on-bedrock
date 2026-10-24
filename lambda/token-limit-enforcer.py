@@ -315,8 +315,11 @@ def _role_owner_email(role_name: str):
     return None  # role exists but has no email tag → caller treats as not-owned (skip)
 
 
-def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str):
+def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str, *, scope: str = "user"):
     """Attach the Deny policy to the user's Local Governance role.
+
+    `scope` ("user" | "dept") names which cap tripped; it is stored on DENY#active
+    with `period` so a one-time personal grant releases only a deny it can cure.
 
     ADR-031 (B′): the usage PK is the email; the Local role name is
     `cc-on-bedrock-local-user-{subdomain}` (subdomain from the usage row, NOT the
@@ -359,6 +362,7 @@ def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: s
                 "SK": "DENY#active",
                 "policy_name": DENY_POLICY_NAME,
                 "subdomain": subdomain,
+                "scope": scope,
                 "reason": reason,
                 "period": period,
                 "reset_at": reset_at,
@@ -498,6 +502,7 @@ def process_record(rec: dict, limit_cache: dict | None = None):
                 f"user {period} normalized token limit reached ({user_total}/{user_max})",
                 period,
                 reset_iso,
+                scope="user",
             )
             return  # stop further period processing for this record once denied
         if dept_max > 0 and dept_total >= dept_max:
@@ -506,6 +511,7 @@ def process_record(rec: dict, limit_cache: dict | None = None):
                 f"dept '{dept}' {period} normalized token limit reached ({dept_total}/{dept_max})",
                 period,
                 reset_iso,
+                scope="dept",
             )
             return
 

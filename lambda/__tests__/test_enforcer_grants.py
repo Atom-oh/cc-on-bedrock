@@ -75,3 +75,36 @@ def test_enforcer_denies_past_granted_cap():
     deny = _run(1500)
     assert deny.called
     assert deny.call_args.args[3] == "monthly"
+
+
+def test_enforcer_user_cap_deny_has_user_scope():
+    assert _run(1500).call_args.kwargs["scope"] == "user"
+
+
+def test_enforcer_dept_cap_deny_has_dept_scope():
+    cache = {("DEPT#eng", "LIMIT#daily"): {"max_normalized": 10}}
+    with mock.patch.object(enf, "_now_kst", return_value=NOW), \
+         mock.patch.object(enf, "_add_counter", return_value=Decimal(50)), \
+         mock.patch.object(enf, "_attach_deny") as deny, \
+         mock.patch.object(enf, "_maybe_warn"):
+        enf.process_record(_rec(10), cache)
+    assert deny.call_args.args[3] == "daily"
+    assert deny.call_args.kwargs["scope"] == "dept"
+
+
+def _attach(scope_kw):
+    iam = mock.Mock()
+    iam.list_role_tags.return_value = {"Tags": [{"Key": "email", "Value": "dev@x.com"}]}
+    iam.exceptions.NoSuchEntityException = enf.iam.exceptions.NoSuchEntityException
+    with mock.patch.object(enf, "iam", iam), \
+         mock.patch.object(enf.limits, "put_item") as put, \
+         mock.patch.object(enf, "_publish_sns"):
+        assert enf._attach_deny("dev@x.com", "dev", "r", "monthly", "x", **scope_kw) is True
+    return put.call_args.kwargs["Item"]
+
+
+def test_deny_row_records_scope_and_period():
+    item = _attach({"scope": "dept"})
+    assert item["scope"] == "dept"
+    assert item["period"] == "monthly"
+    assert _attach({"scope": "user"})["scope"] == "user"

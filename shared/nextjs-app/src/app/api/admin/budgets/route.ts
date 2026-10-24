@@ -10,6 +10,7 @@ import {
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 import { listCognitoUsers } from "@/lib/aws-clients";
+import { NORMALIZED_PER_USD } from "@/lib/budget-increase";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -21,7 +22,7 @@ const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 // weights are exactly list price / $15 for every model (Claude and OpenAI GPT,
 // derived from bedrock-usage-tracker PRICING and test-enforced), so N USD mirrors to
 // the same spend on the token axis. Only change this together with that $15 basis.
-const NORMALIZED_PER_USD = Number(process.env.NORMALIZED_PER_USD ?? "66667");
+// Single source: lib/budget-increase (one-time grants convert with the same rate).
 
 const dynamodb = new DynamoDBClient({ region });
 

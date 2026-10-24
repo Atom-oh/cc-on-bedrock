@@ -50,6 +50,15 @@ function roleForRow(key: string, subdomain: string): string | null {
   return null;
 }
 
+/** The DENY#active row for a user (unmarshalled), or null when none is active. */
+export async function readTokenDeny(email: string): Promise<Record<string, unknown> | null> {
+  const got = await dynamo.send(new GetItemCommand({
+    TableName: LIMITS_TABLE,
+    Key: marshall({ PK: `USER#${email.trim().toLowerCase()}`, SK: "DENY#active" }),
+  }));
+  return got.Item ? unmarshall(got.Item) : null;
+}
+
 /**
  * Detach the token deny and clear DENY#active. No row → `{ released: false, found: false }`.
  * Unresolvable role → DENY#active is preserved with a warning (the IAM deny cannot be
