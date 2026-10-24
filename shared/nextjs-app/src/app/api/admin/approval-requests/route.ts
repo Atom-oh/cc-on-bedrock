@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
     // Pass the STORED department verbatim (empty string when missing) — do NOT
     // coerce to "default", else a default-dept manager could approve dept-less
     // requests. Missing department → dept-manager denied; admin still allowed.
-    if (!canApproveRequest(approver, (request.department as string) ?? "")) {
+    if (!canApproveRequest(approver, (request.department as string) ?? "", (request.email as string) ?? "")) {
       return NextResponse.json({ error: "Not authorized for this request's department" }, { status: 403 });
     }
 
