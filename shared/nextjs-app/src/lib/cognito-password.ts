@@ -25,6 +25,7 @@ export type PasswordErrorCode =
   | "code_expired"
   | "too_many_attempts"
   | "not_required"
+  | "challenge_required"
   | "unknown";
 
 export type PasswordResult = { ok: true } | { ok: false; code: PasswordErrorCode };
@@ -39,9 +40,16 @@ export function secretHash(username: string): string | undefined {
   return createHmac("sha256", secret).update(username + clientId()).digest("base64");
 }
 
+// Auth flows take the hash inside AuthParameters/ChallengeResponses as
+// SECRET_HASH; ForgotPassword/ConfirmForgotPassword take a top-level SecretHash.
 function withSecret(username: string): { SECRET_HASH?: string } {
   const h = secretHash(username);
   return h ? { SECRET_HASH: h } : {};
+}
+
+function withSecretHash(username: string): { SecretHash?: string } {
+  const h = secretHash(username);
+  return h ? { SecretHash: h } : {};
 }
 
 export function mapCognitoError(err: unknown): PasswordErrorCode {
@@ -106,13 +114,15 @@ export async function completeNewPassword(email: string, tempPassword: string, n
  * An invited user who never signed in (FORCE_CHANGE_PASSWORD) cannot use the code
  * flow, so they get the invitation (a fresh temporary password) re-sent instead.
  */
-export async function startForgotPassword(email: string): Promise<{ ok: true } | { ok: false; code: "too_many_attempts" }> {
+export async function startForgotPassword(email: string): Promise<{ ok: true }> {
   try {
-    await client.send(new ForgotPasswordCommand({ ClientId: clientId(), Username: email, ...withSecret(email) }));
+    await client.send(new ForgotPasswordCommand({ ClientId: clientId(), Username: email, ...withSecretHash(email) }));
     return { ok: true };
   } catch (err) {
     const name = (err as { name?: string })?.name;
-    if (mapCognitoError(err) === "too_many_attempts") return { ok: false, code: "too_many_attempts" };
+    // Cognito throttles per account, so a distinct "slow down" reply would tell
+    // an existing account from a missing one; throttling stays silent too.
+    if (mapCognitoError(err) === "too_many_attempts") return { ok: true };
     if (name === "NotAuthorizedException") await resendInviteIfPending(email);
     else if (name !== "UserNotFoundException") {
       console.error("[cognito-password] startForgotPassword:", err instanceof Error ? err.message : err);
@@ -154,7 +164,7 @@ export async function confirmForgotPassword(email: string, code: string, newPass
         Username: email,
         ConfirmationCode: code,
         Password: newPassword,
-        ...withSecret(email),
+        ...withSecretHash(email),
       })
     );
     return { ok: true };
@@ -168,7 +178,8 @@ export async function changePassword(email: string, currentPassword: string, new
   try {
     const auth = await passwordAuth(email, currentPassword);
     const accessToken = auth.AuthenticationResult?.AccessToken;
-    if (!accessToken) return { ok: false, code: "invalid_credentials" };
+    // A challenge (e.g. MFA) means the password was right but no token was issued.
+    if (!accessToken) return { ok: false, code: auth.ChallengeName ? "challenge_required" : "invalid_credentials" };
     await client.send(
       new ChangePasswordCommand({ AccessToken: accessToken, PreviousPassword: currentPassword, ProposedPassword: newPassword })
     );

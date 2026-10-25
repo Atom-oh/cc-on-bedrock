@@ -178,7 +178,8 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
       const data = await res.json();
       if (data.success) {
         setSuccess(data.message ?? "Password changed successfully");
-        setCurrentPassword(newPassword);
+        // Show the new code-server password only if the secret was actually saved.
+        if (data.codeServerSynced) setCurrentPassword(newPassword);
         setOldPassword("");
         setNewPassword("");
         setConfirmPassword("");

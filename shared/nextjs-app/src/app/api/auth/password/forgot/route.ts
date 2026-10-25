@@ -7,7 +7,6 @@ import { badRequest, normalizeEmail, readJson } from "@/lib/password-request";
 export async function POST(req: NextRequest) {
   const email = normalizeEmail((await readJson(req))?.email);
   if (!email) return badRequest("invalid_request");
-  const result = await startForgotPassword(email);
-  if (!result.ok) return NextResponse.json({ error: result.code }, { status: 429 });
+  await startForgotPassword(email);
   return NextResponse.json({ success: true });
 }

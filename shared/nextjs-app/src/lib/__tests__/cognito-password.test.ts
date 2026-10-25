@@ -94,6 +94,13 @@ describe("mapCognitoError", () => {
 });
 
 describe("completeNewPassword", () => {
+  it("puts the secret hash inside ChallengeResponses as SECRET_HASH", async () => {
+    process.env.COGNITO_CLIENT_SECRET = "s3cret";
+    sendMock.mockResolvedValueOnce({ ChallengeName: "NEW_PASSWORD_REQUIRED", Session: "s" }).mockResolvedValueOnce({});
+    await completeNewPassword("u@x.io", "Temp1!aa", "Newpass1!");
+    expect((input(0).AuthParameters as Record<string, string>).SECRET_HASH).toBe(secretHash("u@x.io"));
+    expect((input(1).ChallengeResponses as Record<string, string>).SECRET_HASH).toBe(secretHash("u@x.io"));
+  });
   it("answers the NEW_PASSWORD_REQUIRED challenge with the session", async () => {
     sendMock.mockResolvedValueOnce({ ChallengeName: "NEW_PASSWORD_REQUIRED", Session: "sess-1" }).mockResolvedValueOnce({});
     expect(await completeNewPassword("u@x.io", "Temp1!aa", "Newpass1!")).toEqual({ ok: true });
@@ -165,9 +172,17 @@ describe("startForgotPassword", () => {
     expect(await startForgotPassword("off@x.io")).toEqual({ ok: true });
     expect(calls()).toEqual(["ForgotPassword", "AdminGetUser"]);
   });
-  it("surfaces throttling", async () => {
+  it("keeps throttling silent (Cognito throttles per account)", async () => {
     sendMock.mockRejectedValueOnce(awsError("LimitExceededException"));
-    expect(await startForgotPassword("u@x.io")).toEqual({ ok: false, code: "too_many_attempts" });
+    expect(await startForgotPassword("u@x.io")).toEqual({ ok: true });
+    expect(calls()).toEqual(["ForgotPassword"]);
+  });
+  it("puts the client secret hash in the top-level SecretHash field", async () => {
+    process.env.COGNITO_CLIENT_SECRET = "s3cret";
+    sendMock.mockResolvedValueOnce({});
+    await startForgotPassword("u@x.io");
+    expect(input(0).SecretHash).toBe(secretHash("u@x.io"));
+    expect(input(0)).not.toHaveProperty("SECRET_HASH");
   });
 });
 
@@ -176,6 +191,13 @@ describe("confirmForgotPassword", () => {
     sendMock.mockResolvedValueOnce({});
     expect(await confirmForgotPassword("u@x.io", "123456", "Newpass1!")).toEqual({ ok: true });
     expect(input(0)).toMatchObject({ Username: "u@x.io", ConfirmationCode: "123456", Password: "Newpass1!" });
+  });
+  it("puts the client secret hash in the top-level SecretHash field", async () => {
+    process.env.COGNITO_CLIENT_SECRET = "s3cret";
+    sendMock.mockResolvedValueOnce({});
+    await confirmForgotPassword("u@x.io", "123456", "Newpass1!");
+    expect(input(0).SecretHash).toBe(secretHash("u@x.io"));
+    expect(input(0)).not.toHaveProperty("SECRET_HASH");
   });
   it("maps a wrong code", async () => {
     sendMock.mockRejectedValueOnce(awsError("CodeMismatchException"));
@@ -195,9 +217,10 @@ describe("changePassword", () => {
     expect(await changePassword("u@x.io", "wrong", "Newpass1!")).toEqual({ ok: false, code: "invalid_credentials" });
     expect(calls()).toEqual(["InitiateAuth"]);
   });
-  it("treats a pending challenge as not authenticated", async () => {
-    sendMock.mockResolvedValueOnce({ ChallengeName: "NEW_PASSWORD_REQUIRED", Session: "s" });
-    expect(await changePassword("u@x.io", "Temp1!aa", "Newpass1!")).toEqual({ ok: false, code: "invalid_credentials" });
+  it("reports a pending challenge (e.g. MFA) distinctly from a wrong password", async () => {
+    sendMock.mockResolvedValueOnce({ ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "s" });
+    expect(await changePassword("u@x.io", "Right1!aa", "Newpass1!")).toEqual({ ok: false, code: "challenge_required" });
+    expect(calls()).toEqual(["InitiateAuth"]);
   });
 });
 

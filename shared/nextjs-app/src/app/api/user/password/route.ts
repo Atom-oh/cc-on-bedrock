@@ -83,14 +83,20 @@ export async function POST(req: NextRequest) {
       result.code === "invalid_credentials" ? "Current password is incorrect"
       : result.code === "invalid_password" ? "New password does not meet the password policy"
       : result.code === "too_many_attempts" ? "Too many attempts. Try again later"
+      : result.code === "challenge_required" ? "Your account requires an extra sign-in step (e.g. MFA); change the password from the sign-in flow"
       : "Failed to change password";
-    const status = result.code === "invalid_credentials" ? 401 : result.code === "too_many_attempts" ? 429 : result.code === "invalid_password" ? 400 : 500;
+    const status =
+      result.code === "invalid_credentials" ? 401
+      : result.code === "too_many_attempts" ? 429
+      : result.code === "invalid_password" ? 400
+      : result.code === "challenge_required" ? 409
+      : 500;
     return NextResponse.json({ success: false, error }, { status });
   }
 
   const subdomain = user.subdomain;
   if (!subdomain) {
-    return NextResponse.json({ success: true, message: "Password changed successfully." });
+    return NextResponse.json({ success: true, codeServerSynced: false, message: "Password changed successfully." });
   }
 
   // DevEnv: keep the code-server password in sync with the login password.
@@ -117,12 +123,14 @@ export async function POST(req: NextRequest) {
     console.error("[user/password] code-server secret", err instanceof Error ? err.message : err);
     return NextResponse.json({
       success: true,
+      codeServerSynced: false,
       message: "Login password changed, but the code-server password could not be updated. Change it again to retry.",
     });
   }
 
   return NextResponse.json({
     success: true,
+    codeServerSynced: true,
     message: "Password changed successfully. Code-server will use the new password on next container start.",
   });
 }

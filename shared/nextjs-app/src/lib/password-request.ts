@@ -11,6 +11,7 @@ const STATUS: Record<PasswordErrorCode, number> = {
   code_expired: 400,
   too_many_attempts: 429,
   not_required: 409,
+  challenge_required: 409,
   unknown: 500,
 };
 
