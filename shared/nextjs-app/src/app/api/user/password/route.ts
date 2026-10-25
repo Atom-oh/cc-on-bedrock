@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import {
-  CognitoIdentityProviderClient,
-  AdminSetUserPasswordCommand,
-} from "@aws-sdk/client-cognito-identity-provider";
+import { changePassword } from "@/lib/cognito-password";
+import { validatePassword } from "@/lib/password-policy";
 import {
   SecretsManagerClient,
   GetSecretValueCommand,
@@ -13,9 +11,6 @@ import {
 } from "@aws-sdk/client-secrets-manager";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
-
-const cognitoClient = new CognitoIdentityProviderClient({ region });
 const secretsClient = new SecretsManagerClient({ region });
 
 // GET: Retrieve current code-server password from Secrets Manager
@@ -57,63 +52,55 @@ export async function GET() {
   }
 }
 
-// POST: Change password (updates both Cognito and Secrets Manager)
+// POST: Change the Cognito login password (re-authenticates with the current
+// password). In DevEnv mode the code-server secret follows the new password.
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) {
+  if (!session?.user?.email) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
 
   const user = session.user;
-  const subdomain = user.subdomain;
-  if (!subdomain) {
-    return NextResponse.json({ error: "No subdomain assigned" }, { status: 400 });
-  }
-
-  let body: { newPassword?: string };
+  let body: { currentPassword?: unknown; newPassword?: unknown };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const { newPassword } = body;
-  if (!newPassword) {
-    return NextResponse.json({ error: "newPassword is required" }, { status: 400 });
+  const { currentPassword, newPassword } = body;
+  if (typeof currentPassword !== "string" || !currentPassword) {
+    return NextResponse.json({ error: "currentPassword is required" }, { status: 400 });
+  }
+  const policyError = validatePassword(newPassword);
+  if (policyError) {
+    return NextResponse.json({ error: policyError }, { status: 400 });
   }
 
-  // Validate password policy (matching Cognito User Pool policy)
-  if (typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 128) {
-    return NextResponse.json({ error: "Password must be between 8 and 128 characters" }, { status: 400 });
-  }
-  if (!/[A-Z]/.test(newPassword)) {
-    return NextResponse.json({ error: "Password must contain an uppercase letter" }, { status: 400 });
-  }
-  if (!/[0-9]/.test(newPassword)) {
-    return NextResponse.json({ error: "Password must contain a number" }, { status: 400 });
-  }
-  if (!/[^A-Za-z0-9]/.test(newPassword)) {
-    return NextResponse.json({ error: "Password must contain a special character" }, { status: 400 });
+  const result = await changePassword(user.email, currentPassword, newPassword as string);
+  if (!result.ok) {
+    const error =
+      result.code === "invalid_credentials" ? "Current password is incorrect"
+      : result.code === "invalid_password" ? "New password does not meet the password policy"
+      : result.code === "too_many_attempts" ? "Too many attempts. Try again later"
+      : "Failed to change password";
+    const status = result.code === "invalid_credentials" ? 401 : result.code === "too_many_attempts" ? 429 : result.code === "invalid_password" ? 400 : 500;
+    return NextResponse.json({ success: false, error }, { status });
   }
 
+  const subdomain = user.subdomain;
+  if (!subdomain) {
+    return NextResponse.json({ success: true, message: "Password changed successfully." });
+  }
+
+  // DevEnv: keep the code-server password in sync with the login password.
   try {
-    // 1. Update Cognito password
-    await cognitoClient.send(
-      new AdminSetUserPasswordCommand({
-        UserPoolId: userPoolId,
-        Username: user.email,
-        Password: newPassword,
-        Permanent: true,
-      })
-    );
-
-    // 2. Update Secrets Manager for code-server
     const secretName = `cc-on-bedrock/codeserver/${subdomain}`;
     try {
       await secretsClient.send(
         new PutSecretValueCommand({
           SecretId: secretName,
-          SecretString: newPassword,
+          SecretString: newPassword as string,
         })
       );
     } catch {
@@ -121,18 +108,21 @@ export async function POST(req: NextRequest) {
       await secretsClient.send(
         new CreateSecretCommand({
           Name: secretName,
-          SecretString: newPassword,
+          SecretString: newPassword as string,
           Description: `code-server password for ${subdomain}`,
         })
       );
     }
-
+  } catch (err) {
+    console.error("[user/password] code-server secret", err instanceof Error ? err.message : err);
     return NextResponse.json({
       success: true,
-      message: "Password changed successfully. Code-server will use the new password on next container start.",
+      message: "Login password changed, but the code-server password could not be updated. Change it again to retry.",
     });
-  } catch (err) {
-    console.error("[user/password] POST", err instanceof Error ? err.message : err);
-    return NextResponse.json({ success: false, error: "Failed to change password" }, { status: 500 });
   }
+
+  return NextResponse.json({
+    success: true,
+    message: "Password changed successfully. Code-server will use the new password on next container start.",
+  });
 }
