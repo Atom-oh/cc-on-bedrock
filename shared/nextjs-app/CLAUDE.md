@@ -6,7 +6,7 @@
 ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 등)는 `docs/history/ADR-MAPPING.md`로 변환한다.
 
 ## Pages (`src/app/`)
-- `/` Home (비용/토큰/인스턴스 요약) · `/login` (직접 폼, Cognito Hosted UI 리다이렉트 없음). Also handles first-login `NEW_PASSWORD_REQUIRED` (set-new-password form) and forgot/reset-with-code; the credentials provider throws `NEW_PASSWORD_REQUIRED` / `PASSWORD_RESET_REQUIRED` (`lib/auth-errors.ts`) so the page can switch forms
+- `/` Home (비용/토큰/인스턴스 요약) · `/login` (직접 폼, Cognito Hosted UI 리다이렉트 없음). Also handles first-login `NEW_PASSWORD_REQUIRED` (set-new-password form) and forgot/reset-with-code; the credentials provider throws `NEW_PASSWORD_REQUIRED` (`lib/auth-errors.ts`) so the page can switch forms; `PasswordResetRequiredException` stays a generic failure because Cognito returns it before checking the password
 - `/user` 사용자 셀프서비스 포털 (환경/스토리지/설정 탭 + Local Mode 탭)
 - `/dept` 부서 관리자 대시보드 (멤버, 예산, 사용량)
 - `/analytics` 토큰·모델·비용 트렌드 · `/monitoring` EC2 메트릭 + DynamoDB 기반 Bedrock 사용량 · `/security` IAM/DLP/DNS Firewall 현황
@@ -39,7 +39,7 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 ### Common
 - `ai` - Bedrock Converse (Tool Use, 최대 5 iteration) · `ai/memory`, `ai/runtime` - AgentCore Memory/Runtime
 - `dept`, `dept/list`, `dept/mcp` · `health` · `auth/[...nextauth]`
-- `auth/password/{new,forgot,reset}` — public (middleware passes `/api/auth/*`): first-login new password (temp password authorizes), forgot (same response whether or not the account exists; a never-signed-in invitee gets the invitation re-sent via `AdminCreateUser RESEND`), reset with emailed code. Logic in `lib/cognito-password.ts`; policy in `lib/password-policy.ts` (must match the pool policy)
+- `auth/password/{new,forgot,reset}` — public (middleware passes `/api/auth/*`): first-login new password (temp password authorizes), forgot (same response whether or not the account exists; a never-signed-in invitee gets the invitation re-sent via `AdminCreateUser RESEND`, at most once per 15 min per account via `UserLastModifiedDate`), reset with emailed code. Logic in `lib/cognito-password.ts`; policy in `lib/password-policy.ts` (must match the pool policy)
 - `install`, `install/cli`, `install/otel` - Local CLI 설치 스크립트 (`cc()` / `ccx()` 셸 함수 포함)
 - `slack/commands`, `slack/events`
 

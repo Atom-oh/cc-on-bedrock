@@ -121,11 +121,18 @@ export async function startForgotPassword(email: string): Promise<{ ok: true } |
   }
 }
 
-async function resendInviteIfPending(email: string): Promise<void> {
+// The resend replaces the temporary password and is reachable without signing
+// in, so it is throttled per account: a RESEND bumps UserLastModifiedDate, and
+// no new invitation goes out within this window of the last change.
+export const INVITE_RESEND_COOLDOWN_MS = 15 * 60 * 1000;
+
+async function resendInviteIfPending(email: string, now: number = Date.now()): Promise<void> {
   const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
   try {
     const user = await client.send(new AdminGetUserCommand({ UserPoolId: userPoolId, Username: email }));
     if (!user.Enabled || user.UserStatus !== "FORCE_CHANGE_PASSWORD") return;
+    const lastChange = user.UserLastModifiedDate ? new Date(user.UserLastModifiedDate).getTime() : 0;
+    if (now - lastChange < INVITE_RESEND_COOLDOWN_MS) return;
     await client.send(
       new AdminCreateUserCommand({
         UserPoolId: userPoolId,

@@ -3,7 +3,7 @@
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { useState, Suspense } from "react";
-import { NEW_PASSWORD_REQUIRED, PASSWORD_RESET_REQUIRED } from "@/lib/auth-errors";
+import { NEW_PASSWORD_REQUIRED } from "@/lib/auth-errors";
 import { validatePassword } from "@/lib/password-policy";
 
 // signin → (invited user) newPassword → signed in
@@ -72,9 +72,6 @@ function LoginContent() {
     const result = await signIn("cognito-credentials", { email, password: pw, callbackUrl, redirect: false });
     if (result?.error === NEW_PASSWORD_REQUIRED) {
       switchMode("newPassword", "Welcome! Set a new password to finish your first sign-in.");
-      setLoading(false);
-    } else if (result?.error === PASSWORD_RESET_REQUIRED) {
-      switchMode("forgot", "An administrator reset your password. Request a verification code to set a new one.");
       setLoading(false);
     } else if (result?.error) {
       setLoginError("Invalid email or password");

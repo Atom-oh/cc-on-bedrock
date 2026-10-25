@@ -20,7 +20,7 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ### Password self-service
 - **Login page** handles the invited user's first sign-in: signing in with the temporary password opens a set-new-password form (Cognito `NEW_PASSWORD_REQUIRED`). Previously the dashboard reported "Invalid email or password" and an invited user could not sign in at all without an admin CLI reset.
-- **Forgot password?** on the login page: emailed verification code → new password. An invitee who never signed in (or whose 7-day temporary password expired) gets the invitation re-sent instead. The response does not reveal whether an account exists.
+- **Forgot password?** on the login page: emailed verification code → new password. An invitee who never signed in (or whose 7-day temporary password expired) gets the invitation re-sent instead (at most once per 15 minutes per account). The response does not reveal whether an account exists.
 - **Change password** for signed-in users in both editions (governance: My Environment → Account Password; DevEnv: Settings). `POST /api/user/password` now requires the current password and uses Cognito `ChangePassword`; it previously required a DevEnv subdomain (governance users got 400) and set the password with `AdminSetUserPassword` without checking the current one.
 
 ### Fixes

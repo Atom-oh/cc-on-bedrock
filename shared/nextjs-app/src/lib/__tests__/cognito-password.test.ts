@@ -26,6 +26,7 @@ import {
   changePassword,
   completeNewPassword,
   confirmForgotPassword,
+  INVITE_RESEND_COOLDOWN_MS,
   mapCognitoError,
   secretHash,
   startForgotPassword,
@@ -133,6 +134,29 @@ describe("startForgotPassword", () => {
     expect(await startForgotPassword("new@x.io")).toEqual({ ok: true });
     expect(calls()).toEqual(["ForgotPassword", "AdminGetUser", "AdminCreateUser"]);
     expect(input(2)).toMatchObject({ UserPoolId: "pool-1", Username: "new@x.io", MessageAction: "RESEND" });
+  });
+  it("does not re-send an invitation sent within the cooldown", async () => {
+    sendMock
+      .mockRejectedValueOnce(awsError("NotAuthorizedException"))
+      .mockResolvedValueOnce({
+        Enabled: true,
+        UserStatus: "FORCE_CHANGE_PASSWORD",
+        UserLastModifiedDate: new Date(Date.now() - INVITE_RESEND_COOLDOWN_MS + 60_000),
+      });
+    expect(await startForgotPassword("new@x.io")).toEqual({ ok: true });
+    expect(calls()).toEqual(["ForgotPassword", "AdminGetUser"]);
+  });
+  it("re-sends again once the cooldown has passed", async () => {
+    sendMock
+      .mockRejectedValueOnce(awsError("NotAuthorizedException"))
+      .mockResolvedValueOnce({
+        Enabled: true,
+        UserStatus: "FORCE_CHANGE_PASSWORD",
+        UserLastModifiedDate: new Date(Date.now() - INVITE_RESEND_COOLDOWN_MS - 60_000),
+      })
+      .mockResolvedValueOnce({});
+    expect(await startForgotPassword("new@x.io")).toEqual({ ok: true });
+    expect(calls()).toEqual(["ForgotPassword", "AdminGetUser", "AdminCreateUser"]);
   });
   it("does not re-send an invitation to a disabled user", async () => {
     sendMock
