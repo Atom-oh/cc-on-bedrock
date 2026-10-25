@@ -14,7 +14,8 @@ export type RoleChangeError = "self_demotion" | "last_admin" | "dept_required";
 /** Blank or the placeholder "default" is not a real department. */
 export function hasRealDepartment(department: string): boolean {
   const d = department.trim().toLowerCase();
-  return d !== "" && d !== "default";
+  // "all" is reserved: /api/dept treats it as the every-department aggregate.
+  return d !== "" && d !== "default" && d !== "all";
 }
 
 export function validateRoleChange(i: {

@@ -49,7 +49,8 @@ export function buildLimitChangeItem(change: LimitChange, requestId: string) {
     actorRole: change.actorRole,
     targetType: change.targetType,
     ...(change.email ? { email: change.email.trim().toLowerCase() } : {}),
-    department: change.department,
+    // GSI key (department-status-index): omitted when empty, never "".
+    ...(change.department ? { department: change.department } : {}),
     before: change.before,
     after: change.after,
     appliedAt: change.appliedAt,

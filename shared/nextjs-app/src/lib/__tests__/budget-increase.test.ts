@@ -160,6 +160,25 @@ describe("buildCreateTransaction", () => {
     // The lock must not look like a user's request to email-filtered scans.
     expect(lock.Item?.email).toBeUndefined();
   });
+
+  it("omits department when there is none (GSI keys reject empty strings)", () => {
+    const tx = buildCreateTransaction({
+      ...REQ,
+      department: "",
+      subdomain: "dev",
+      requesterRole: "user",
+      requestedAmount: 20,
+      reason: "x",
+      snapshotSpend: 0,
+      snapshotBudget: 50,
+      requestedAt: NOW.toISOString(),
+    });
+    const req = tx.TransactItems![0].Put!;
+    expect(req.Item).not.toHaveProperty("department");
+    expect(buildCreateTransaction({ ...REQ, subdomain: "dev", requesterRole: "user", requestedAmount: 20, reason: "x",
+      snapshotSpend: 0, snapshotBudget: 50, requestedAt: NOW.toISOString() }).TransactItems![0].Put!.Item?.department)
+      .toEqual({ S: REQ.department });
+  });
 });
 
 describe("validateIncreaseInput", () => {

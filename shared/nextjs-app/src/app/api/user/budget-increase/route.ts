@@ -108,7 +108,8 @@ export async function POST(req: NextRequest) {
   let requesterRole: string;
   try {
     const [user, groups] = await Promise.all([getCognitoUser(sessionEmail), getRoleGroups(sessionEmail)]);
-    // No real department (blank / "default" placeholder) is stored as "": only an
+    // No real department (blank / "default" placeholder) is "" here and the stored
+    // request omits the attribute (GSI key): only an
     // admin can approve such a request and no department grant is written.
     const d = user.department ?? "";
     department = hasRealDepartment(d) ? d : "";

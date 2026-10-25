@@ -164,7 +164,9 @@ export function buildCreateTransaction(req: NewBudgetIncreaseRequest): TransactW
             type: { S: "budget_increase" },
             email: { S: req.email.trim().toLowerCase() },
             subdomain: { S: req.subdomain },
-            department: { S: req.department },
+            // `department` keys the department-status-index GSI, which rejects an
+            // empty string: a request with no real department omits it (read as "").
+            ...(req.department ? { department: { S: req.department } } : {}),
             requesterRole: { S: req.requesterRole },
             period: { S: req.period },
             periodKey: { S: req.periodKey },

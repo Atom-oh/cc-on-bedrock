@@ -167,6 +167,7 @@ export async function PUT(req: NextRequest) {
     }
     const { role: requestedRole, ...attrs } = parsed.data;
     let roleChanged = false;
+    let attrsWritten = false;
     if (requestedRole || attrs.department) {
       const current = roleFromGroups(await getRoleGroups(attrs.username));
       const newRole = requestedRole ?? current.role;
@@ -184,6 +185,10 @@ export async function PUT(req: NextRequest) {
       if (!check.ok) {
         return NextResponse.json({ success: false, error: check.error }, { status: 400 });
       }
+      // Department first: if the role write then fails, the user is never a
+      // dept-manager of the department they were just moved out of.
+      await updateCognitoUser(attrs);
+      attrsWritten = true;
       // Also re-apply when the user holds several role groups, so the change normalizes them.
       if (requestedRole && (requestedRole !== current.role || current.needsCleanup)) {
         try {
@@ -196,7 +201,7 @@ export async function PUT(req: NextRequest) {
         roleChanged = true;
       }
     }
-    await updateCognitoUser(attrs);
+    if (!attrsWritten) await updateCognitoUser(attrs);
     return NextResponse.json({ success: true, data: { roleChanged } });
   } catch (err) {
     console.error("[users] PUT", err instanceof Error ? err.message : err);

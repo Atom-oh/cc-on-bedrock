@@ -35,6 +35,11 @@ describe("limit_change audit record", () => {
     });
   });
 
+  it("omits an empty department (GSI keys reject empty strings)", () => {
+    const item = buildLimitChangeItem({ ...change, department: "" }, "n");
+    expect("department" in item).toBe(false);
+  });
+
   it("department change carries no email attribute", () => {
     const item = buildLimitChangeItem({ ...change, targetType: "department", email: undefined }, "d");
     expect("email" in item).toBe(false);

@@ -36,7 +36,7 @@ describe("validateRoleChange", () => {
       .toEqual({ ok: false, error: "dept_required" });
   });
   it("treats the placeholder department 'default' as no department", () => {
-    for (const d of ["default", " Default ", "  "]) {
+    for (const d of ["default", " Default ", "  ", "all", "ALL"]) {
       expect(validateRoleChange({ ...base, newRole: "dept-manager", targetDepartment: d }))
         .toEqual({ ok: false, error: "dept_required" });
     }
