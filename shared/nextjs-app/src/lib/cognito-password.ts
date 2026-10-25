@@ -25,7 +25,6 @@ export type PasswordErrorCode =
   | "code_expired"
   | "too_many_attempts"
   | "not_required"
-  | "challenge_required"
   | "unknown";
 
 export type PasswordResult = { ok: true } | { ok: false; code: PasswordErrorCode };
@@ -178,8 +177,9 @@ export async function changePassword(email: string, currentPassword: string, new
   try {
     const auth = await passwordAuth(email, currentPassword);
     const accessToken = auth.AuthenticationResult?.AccessToken;
-    // A challenge (e.g. MFA) means the password was right but no token was issued.
-    if (!accessToken) return { ok: false, code: auth.ChallengeName ? "challenge_required" : "invalid_credentials" };
+    // A challenge (e.g. MFA) gets the same answer as a wrong password: telling
+    // them apart would let a hijacked session confirm a guessed password.
+    if (!accessToken) return { ok: false, code: "invalid_credentials" };
     await client.send(
       new ChangePasswordCommand({ AccessToken: accessToken, PreviousPassword: currentPassword, ProposedPassword: newPassword })
     );

@@ -217,9 +217,9 @@ describe("changePassword", () => {
     expect(await changePassword("u@x.io", "wrong", "Newpass1!")).toEqual({ ok: false, code: "invalid_credentials" });
     expect(calls()).toEqual(["InitiateAuth"]);
   });
-  it("reports a pending challenge (e.g. MFA) distinctly from a wrong password", async () => {
+  it("answers a pending challenge (e.g. MFA) like a wrong password (no password oracle)", async () => {
     sendMock.mockResolvedValueOnce({ ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "s" });
-    expect(await changePassword("u@x.io", "Right1!aa", "Newpass1!")).toEqual({ ok: false, code: "challenge_required" });
+    expect(await changePassword("u@x.io", "Right1!aa", "Newpass1!")).toEqual({ ok: false, code: "invalid_credentials" });
     expect(calls()).toEqual(["InitiateAuth"]);
   });
 });

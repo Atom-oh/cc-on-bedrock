@@ -83,13 +83,11 @@ export async function POST(req: NextRequest) {
       result.code === "invalid_credentials" ? "Current password is incorrect"
       : result.code === "invalid_password" ? "New password does not meet the password policy"
       : result.code === "too_many_attempts" ? "Too many attempts. Try again later"
-      : result.code === "challenge_required" ? "Your account requires an extra sign-in step (e.g. MFA); change the password from the sign-in flow"
       : "Failed to change password";
     const status =
       result.code === "invalid_credentials" ? 401
       : result.code === "too_many_attempts" ? 429
       : result.code === "invalid_password" ? 400
-      : result.code === "challenge_required" ? 409
       : 500;
     return NextResponse.json({ success: false, error }, { status });
   }
