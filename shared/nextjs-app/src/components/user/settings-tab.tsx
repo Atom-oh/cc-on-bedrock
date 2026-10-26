@@ -8,6 +8,7 @@ import {
   DEFAULT_WILDCARD_OK_ACTIONS,
   type IamStatement,
 } from "@/lib/iam-request-validation";
+import { validatePassword } from "@/lib/password-policy";
 
 interface SettingsTabProps {
   user: UserSession;
@@ -19,6 +20,7 @@ interface SettingsTabProps {
 export default function SettingsTab({ user, container, domainName, devSubdomain }: SettingsTabProps) {
   const [currentPassword, setCurrentPassword] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordTouched, setPasswordTouched] = useState(false);
@@ -144,14 +146,6 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
     };
   }, []);
 
-  const validatePassword = (pw: string): string | null => {
-    if (pw.length < 8) return "Password must be at least 8 characters";
-    if (!/[A-Z]/.test(pw)) return "Must contain an uppercase letter";
-    if (!/[0-9]/.test(pw)) return "Must contain a number";
-    if (!/[^A-Za-z0-9]/.test(pw)) return "Must contain a special character";
-    return null;
-  };
-
   const handleCopyPassword = useCallback(() => {
     if (!currentPassword) return;
     navigator.clipboard.writeText(currentPassword);
@@ -179,12 +173,14 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
       const res = await fetch("/api/user/password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPassword }),
+        body: JSON.stringify({ currentPassword: oldPassword, newPassword }),
       });
       const data = await res.json();
       if (data.success) {
         setSuccess(data.message ?? "Password changed successfully");
-        setCurrentPassword(newPassword);
+        // Show the new code-server password only if the secret was actually saved.
+        if (data.codeServerSynced) setCurrentPassword(newPassword);
+        setOldPassword("");
         setNewPassword("");
         setConfirmPassword("");
         setPasswordTouched(false);
@@ -281,6 +277,18 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
           )}
 
           <div>
+            <label htmlFor="old-password" className="block text-xs text-gray-500 mb-1">Current Login Password</label>
+            <input
+              id="old-password"
+              type="password"
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+              placeholder="Your current sign-in password"
+              className="w-full bg-[#0d1117] border border-gray-700 rounded-lg p-3 text-sm text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+              autoComplete="current-password"
+            />
+          </div>
+          <div>
             <label htmlFor="new-password" className="block text-xs text-gray-500 mb-1">New Password</label>
             <input
               id="new-password"
@@ -315,7 +323,7 @@ export default function SettingsTab({ user, container, domainName, devSubdomain 
 
           <button
             onClick={handleChangePassword}
-            disabled={passwordLoading || !newPassword || !confirmPassword || newPassword !== confirmPassword || !!validationError}
+            disabled={passwordLoading || !oldPassword || !newPassword || !confirmPassword || newPassword !== confirmPassword || !!validationError}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
           >
             {passwordLoading ? "Changing..." : "Change Password"}

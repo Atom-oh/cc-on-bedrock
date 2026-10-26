@@ -254,7 +254,7 @@ aws acm list-certificates --region us-east-1        # CloudFront 인증서 (ADR-
 
 1. 브라우저에서 `terraform output dashboard_url` 의 주소로 접속
 2. 대시보드 로그인 페이지(`/login`)에서 admin 계정 로그인
-3. 최초 로그인 시 임시 비밀번호 변경
+3. 최초 로그인 시 임시 비밀번호 변경 (`/login` shows a set-new-password form; forgotten passwords: **Forgot password?** on the same page)
 4. 대시보드 표시
 
 | 메뉴 | 설명 | 권한 |
