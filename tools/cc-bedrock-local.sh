@@ -605,6 +605,7 @@ configure_claude() {  # configure_claude <credential-export command>
   python3 - "${CLAUDE_SETTINGS_FILE}" "$1" "${CLAUDE_MANAGED_ENV[@]}" <<'PY'
 import json, os, sys
 path, export_cmd, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
+CRED_RULE = "Read(~/.config/cc-bedrock/**)"
 try:
     settings = json.load(open(path)) if os.path.exists(path) and os.path.getsize(path) else {}
 except ValueError as e:
@@ -617,6 +618,10 @@ for k in keys:
     else:
         env.pop(k, None)
 settings["awsCredentialExport"] = export_cmd
+# Claude's Read tool must not open the cached refresh token / STS keys.
+deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+if CRED_RULE not in deny:
+    deny.append(CRED_RULE)
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(settings, f, indent=2)
@@ -631,17 +636,19 @@ configure_codex() {  # configure_codex add|remove
   [[ "$1" == add || -f "${CODEX_CONFIG_FILE}" ]] || return 0
   mkdir -p "$(dirname "${CODEX_CONFIG_FILE}")"
   backup_once "${CODEX_CONFIG_FILE}"
-  python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" <<'PY'
+  python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" "${CFG_DIR}" <<'PY'
 import os, re, sys
-path, mode, mark, model, profile, region = sys.argv[1:7]
+path, mode, mark, model, profile, region, cfg_dir = sys.argv[1:8]
 lines = open(path).read().splitlines() if os.path.exists(path) else []
 TABLE = "[model_providers.amazon-bedrock-runtime.aws]"
+PERMS = "[permissions.cc-bedrock]"
+PERMS_FS = "[permissions.cc-bedrock.filesystem]"
 top_key = re.compile(r"^\s*(model_provider|model|web_search)\s*=")
 out, in_top, in_ours = [], True, False
 for line in lines:
     if line.strip().startswith("["):
         in_top = False
-        in_ours = line.split("#", 1)[0].strip() == TABLE
+        in_ours = line.split("#", 1)[0].strip() in (TABLE, PERMS, PERMS_FS)
         if in_ours:
             continue
     if in_ours or mark in line or (in_top and top_key.match(line)):
@@ -659,6 +666,20 @@ if mode == "add":
             f"model = {q(model)}  {mark}",
             f'web_search = "disabled"  {mark}']
     tail = ["", f"{TABLE}  {mark}", f"profile = {q(profile)}", f"region = {q(region)}"]
+    # Keep commands Codex runs away from the cached refresh token and STS keys:
+    # a permission profile on top of :workspace that denies the CLI's directory
+    # (enforced by the sandbox; Codex's own credential_process call is not
+    # sandboxed). Profiles and sandbox_mode don't compose, so a user who already
+    # chose a sandbox keeps it and gets a warning instead.
+    own = [l for l in out if re.match(r"^\s*(default_permissions|sandbox_mode)\s*=", l)
+           or l.split("#", 1)[0].strip() == "[sandbox_workspace_write]"]
+    if own:
+        sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml sets its own sandbox; "
+                         f"add a read deny for {cfg_dir} yourself (see Codex permissions docs)\n")
+    else:
+        head.append(f'default_permissions = "cc-bedrock"  {mark}')
+        tail += ["", f"{PERMS}  {mark}", 'extends = ":workspace"',
+                 "", f"{PERMS_FS}  {mark}", f'{q(cfg_dir)} = "deny"']
     out = head + ([""] + out if out else []) + tail
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
@@ -688,6 +709,10 @@ do_setup() {
   configure_codex add
   echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport)"
   echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: amazon-bedrock-runtime, profile=${AWS_PROFILE_NAME}, model=${CODEX_MODEL})"
+  # A Bedrock API key outranks the profile in both tools and would bypass the
+  # per-user role (metering, budget deny).
+  [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ]] ||
+    say "AWS_BEARER_TOKEN_BEDROCK is set — claude/codex would use that key instead of your cc-bedrock role; unset it (shell rc too)"
   have claude || say "claude not found — install: npm install -g @anthropic-ai/claude-code"
   have codex  || say "codex not found — install: npm install -g @openai/codex@0.163.0"
 }
@@ -705,6 +730,13 @@ if not env:
     settings.pop("env", None)
 if str(settings.get("awsCredentialExport", "")).endswith(" credential-process"):
     settings.pop("awsCredentialExport")
+perms = settings.get("permissions", {})
+if "Read(~/.config/cc-bedrock/**)" in perms.get("deny", []):
+    perms["deny"].remove("Read(~/.config/cc-bedrock/**)")
+    if not perms["deny"]:
+        perms.pop("deny")
+    if not perms:
+        settings.pop("permissions")
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(settings, f, indent=2)

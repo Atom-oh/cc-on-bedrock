@@ -45,6 +45,7 @@ run setup
 [[ "$(json 'd["permissions"]["allow"][0]')" == "Bash(ls)" ]] || fail "user settings lost"
 [[ "$(json 'd["awsCredentialExport"]')" == "${CLI} credential-process" ]] || fail "awsCredentialExport"
 [[ "$(json '"AWS_PROFILE" in d["env"]')" == False ]] || fail "AWS_PROFILE must not leak into Claude's subprocesses"
+[[ "$(json 'd["permissions"]["deny"]')" == "['Read(~/.config/cc-bedrock/**)']" ]] || fail "claude read deny on credential cache"
 
 [[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "model_provider"
 top_models="$(awk '/^\[/{exit} /^model = /{n++} END{print n+0}' "${H}/.codex/config.toml")"
@@ -61,6 +62,9 @@ first_table="$(grep -nE '^\[' "${H}/.codex/config.toml" | head -1 | cut -d: -f1)
 mp_line="$(grep -nE '^model_provider' "${H}/.codex/config.toml" | cut -d: -f1)"
 (( mp_line < first_table )) || fail "model_provider not at top level"
 grep -q '^credential_process = .* credential-process$' "${H}/.aws/config" || fail "credential_process profile"
+[[ "$(count '^default_permissions = "cc-bedrock"')" == 1 ]] || fail "codex default permission profile"
+grep -qxF "\"${H}/.config/cc-bedrock\" = \"deny\"" "${H}/.codex/config.toml" || fail "codex read deny on credential cache"
+grep -qxF 'extends = ":workspace"' "${H}/.codex/config.toml" || fail "codex profile must extend :workspace"
 [[ -f "${H}/.claude/settings.json.cc-bedrock.bak" && -f "${H}/.codex/config.toml.cc-bedrock.bak" ]] || fail "backups"
 
 snap_c="$(cat "${H}/.codex/config.toml")"; snap_s="$(cat "${H}/.claude/settings.json")"
@@ -80,6 +84,15 @@ run unsetup
 [[ "$(json '"awsCredentialExport" in d')" == False ]] || fail "unsetup left awsCredentialExport"
 [[ "$(count 'managed by cc-bedrock-local|amazon-bedrock-runtime|^profile = ')" == 0 ]] || fail "unsetup left codex keys"
 [[ "$(count '^approval_policy = "never"')" == 1 ]] || fail "unsetup dropped user codex key"
+[[ "$(json '"deny" in d["permissions"]')" == False ]] || fail "unsetup left the claude read deny"
+[[ "$(count 'permissions|deny')" == 0 ]] || fail "unsetup left the codex permission profile"
+
+# A user who already picked a Codex sandbox keeps it (profiles and sandbox_mode don't compose).
+printf 'sandbox_mode = "danger-full-access"\n' > "${H}/.codex/config.toml"
+run setup
+[[ "$(count '^default_permissions')" == 0 ]] || fail "overrode the user's sandbox_mode"
+[[ "$(count '^sandbox_mode = "danger-full-access"')" == 1 ]] || fail "user sandbox_mode lost"
+grep -q "sets its own sandbox" "${TMP}/stderr.log" || fail "no warning about the missing read deny"
 
 # A broken settings.json is reported, never overwritten.
 echo '{broken' > "${H}/.claude/settings.json"
