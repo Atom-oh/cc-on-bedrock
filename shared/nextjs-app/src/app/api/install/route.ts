@@ -12,7 +12,10 @@ export const dynamic = "force-dynamic";
 // without first visiting the dashboard in a browser. The script:
 //   1. Drops cc-bedrock-local into ~/.local/bin (PATH-friendly)
 //   2. Writes ~/.config/cc-bedrock/config with COGNITO values baked in here
-//   3. Prompts the user to add a `cc()` shell function to ~/.zshrc / ~/.bashrc
+//   3. Runs `cc-bedrock-local setup` so plain `claude` and `codex` use Bedrock
+//      (Claude Code settings env + awsCredentialExport, Codex config.toml on the
+//      credential_process profile), then `cc-bedrock-local login` once
+//   4. Removes the cc()/ccx() shell functions older installers added
 //
 // COGNITO_CLIENT_ID below is the **public app client** (no secret), see
 // CcOnBedrock-Security CliPublicClient. It safely identifies the client in
@@ -20,33 +23,6 @@ export const dynamic = "force-dynamic";
 
 // NOTE: env values are read inside GET() to avoid Next.js capturing them at
 // module init time (standalone build can otherwise embed empty strings).
-const CC_FUNCTION = `cc() {
-  # Thin wrapper - all logic lives in cc-bedrock-local
-  #   cc                       ensure session + run claude (model env from config)
-  #   cc --status              show session + limit state
-  #   cc --models              show current model config
-  #   cc --set-model K=V       change model in config (no zshrc edit needed)
-  #   cc --change-email        change Cognito email + re-login
-  #   cc --logout              clear cached session
-  case "\$1" in
-    --status)        cc-bedrock-local status ;;
-    --models)        cc-bedrock-local models ;;
-    --set-model)     shift; cc-bedrock-local set-model "\$@" ;;
-    --change-email)  cc-bedrock-local change-email ;;
-    --logout)        cc-bedrock-local logout ;;
-    *)               cc-bedrock-local claude "\$@" ;;
-  esac
-}
-
-ccx() {
-  # OpenAI Codex CLI on Bedrock (ADR-014) - same session, IAM, metering + budget as cc
-  #   ccx [codex args]         ensure session + run codex (bedrock-runtime provider)
-  #   ccx --set-model ID       change the codex default model (global.openai.* profile)
-  case "\$1" in
-    --set-model)     shift; cc-bedrock-local set-model codex "\$@" ;;
-    *)               cc-bedrock-local codex "\$@" ;;
-  esac
-}`;
 
 function installerScript(env: {
   dashboardUrl: string;
@@ -81,8 +57,8 @@ chmod +x "\${BIN_PATH}"
 curl -fsSL "\${DASHBOARD_URL}/api/install/otel" -o "\${OTEL_BIN_PATH}" 2>/dev/null && chmod +x "\${OTEL_BIN_PATH}" || true
 
 echo "[2/4] writing config to \${CFG_DIR}/config"
-# Email is asked once at install. Stored in config so 'cc' only prompts password
-# at runtime. Change later via 'cc-bedrock-local change-email' (or 'cc --change-email').
+# Email is asked once at install. Stored in config so login only prompts the
+# password. Change later via 'cc-bedrock-local change-email'.
 CC_EMAIL=""
 if [[ -e /dev/tty ]]; then
   read -p "  Cognito email: " CC_EMAIL < /dev/tty
@@ -90,10 +66,10 @@ fi
 cat > "\${CFG_DIR}/config" <<EOF
 # cc-bedrock-local config (mode 600). Edit as needed.
 # To change models without editing this file directly:
-#   cc --set-model sonnet 'global.anthropic.claude-sonnet-5'
-#   cc --set-model opus   'global.anthropic.claude-opus-4-8'
-#   cc --set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
-#   cc --models                         # show current values
+#   cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5'
+#   cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8'
+#   cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
+#   cc-bedrock-local models                 # show current values
 
 DASHBOARD_URL=\${DASHBOARD_URL}
 COGNITO_REGION=\${COGNITO_REGION}
@@ -111,7 +87,7 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
 ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
 CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5
 
-# Codex CLI (ADR-014): OpenAI on Bedrock via 'ccx'. Must be a global./us. profile.
+# Codex CLI (ADR-014): OpenAI on Bedrock. Must be a global./us. profile.
 CODEX_MODEL=${env.codexModelId}
 EOF
 if [[ -n "\${LOCAL_OTEL_EXPORTER_OTLP_ENDPOINT}" ]]; then
@@ -129,83 +105,52 @@ case ":\${PATH}:" in
   *) echo "    \${BIN_DIR} not in PATH — you may need to add: export PATH=\\"\${BIN_DIR}:\\\$PATH\\"" ;;
 esac
 
-# Pick the user shell rc file
-SHELL_RC=""
-case "\${SHELL:-/bin/bash}" in
-  *zsh)  SHELL_RC="\${HOME}/.zshrc" ;;
-  *bash) SHELL_RC="\${HOME}/.bashrc" ;;
-  *)     SHELL_RC="\${HOME}/.profile" ;;
-esac
-
-# Write the cc() function body to a temp file. Avoids the bash 3.2 (macOS default
-# /bin/bash) known bug of \$(cat <<EOF ... EOF) heredoc inside command substitution
-# parsing incorrectly.
-CC_FN_FILE="\$(mktemp /tmp/cc-fn.XXXXXX)"
-cat > "\${CC_FN_FILE}" <<'FNEOF'
-${CC_FUNCTION}
-FNEOF
-
-# Stable migration identifiers: preserve the markers used by existing installs.
+# Older installers added cc()/ccx() wrapper functions; plain claude/codex now
+# read their own settings, so drop that block (markers kept from those installs).
 MARKER_START="# >>> cc-bedrock-local (ADR-014) >>>"
 MARKER_END="# <<< cc-bedrock-local (ADR-014) <<<"
+for RC in "\${HOME}/.zshrc" "\${HOME}/.bashrc" "\${HOME}/.profile"; do
+  if [[ -f "\${RC}" ]] && grep -qF "\${MARKER_START}" "\${RC}"; then
+    python3 - "\${RC}" "\${MARKER_START}" "\${MARKER_END}" <<'PYEOF'
+import sys, re
+path, m_start, m_end = sys.argv[1:4]
+content = open(path).read()
+content = re.sub(rf"\\n?{re.escape(m_start)}.*?{re.escape(m_end)}\\n?", "\\n", content, flags=re.S)
+open(path, "w").write(content)
+PYEOF
+    echo "    removed the old cc()/ccx() functions from \${RC} (open a new shell)"
+  fi
+done
 
 echo
-echo "[4/4] add 'cc' (Claude Code) + 'ccx' (Codex) shell functions to \${SHELL_RC}? (y/N)"
+echo "[4/4] point 'claude' and 'codex' at Bedrock? (Y/n)"
+echo "    writes ~/.claude/settings.json (Bedrock env + awsCredentialExport) and"
+echo "    ~/.codex/config.toml (amazon-bedrock-runtime provider); undo: cc-bedrock-local unsetup"
+REPLY="n"
 if [[ -e /dev/tty ]]; then
-  read -r REPLY < /dev/tty
+  read -r REPLY < /dev/tty || REPLY="n"
+  [[ -z "\${REPLY}" ]] && REPLY="y"
 else
-  echo "  (no /dev/tty: skipping rc edit; append manually below)"
-  REPLY="n"
+  echo "  (no /dev/tty: skipping; run 'cc-bedrock-local setup' and 'cc-bedrock-local login' yourself)"
 fi
 
 if [[ "\${REPLY}" =~ ^[Yy] ]]; then
-  touch "\${SHELL_RC}"
-  if grep -qF "\${MARKER_START}" "\${SHELL_RC}"; then
-    # Replace existing block between markers (idempotent install)
-    python3 - "\${SHELL_RC}" "\${MARKER_START}" "\${MARKER_END}" "\${CC_FN_FILE}" <<'PYEOF'
-import sys, re
-path, m_start, m_end, body_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-body = open(body_file).read().rstrip("\\n")
-content = open(path).read()
-new_block = f"{m_start}\\n{body}\\n{m_end}"
-content = re.sub(rf"{re.escape(m_start)}.*?{re.escape(m_end)}", new_block, content, flags=re.S)
-open(path, "w").write(content)
-PYEOF
-    echo "    refreshed cc() block in \${SHELL_RC} (between markers)"
-  else
-    {
-      echo ""
-      echo "\${MARKER_START}"
-      cat "\${CC_FN_FILE}"
-      echo "\${MARKER_END}"
-    } >> "\${SHELL_RC}"
-    echo "    appended cc() to \${SHELL_RC}"
-  fi
+  "\${BIN_PATH}" setup
   echo
-  echo "    Open a new shell (or 'source \${SHELL_RC}') then run:"
-  echo "      cc                  # ensure session, launch claude (Bedrock)"
-  echo "      cc --change-email   # change Cognito email + re-login"
-  echo "      cc --logout         # clear cached session"
+  echo "Signing in once (the session then renews itself for 30 days):"
+  "\${BIN_PATH}" login || echo "  sign-in failed — retry with: cc-bedrock-local login"
 else
-  echo
-  echo "  Skipped \${SHELL_RC} edit. Add the following manually if desired:"
-  echo
-  echo "\${MARKER_START}"
-  cat "\${CC_FN_FILE}"
-  echo "\${MARKER_END}"
+  echo "  Skipped. Later: cc-bedrock-local setup && cc-bedrock-local login"
 fi
 
-rm -f "\${CC_FN_FILE}"
-
 echo
-echo "Done. First run of 'cc' will prompt for Cognito password (email taken from config)."
-echo "  cc                                 # launch claude on Bedrock"
-echo "  cc --status                        # session + limit state"
-echo "  cc --models                        # show current model config"
-echo "  cc --set-model opus=<model-id>     # change a model (no zshrc edit)"
-echo "  ccx                                # launch OpenAI codex on Bedrock (ADR-014)"
-echo "  cc --change-email                  # change Cognito email + re-login"
-echo "  cc --logout                        # clear cached refresh token"
+echo "Done. Run the tools directly — credentials renew in the background:"
+echo "  claude                                   # Claude Code on Bedrock"
+echo "  codex                                    # OpenAI Codex on Bedrock (ADR-014)"
+echo "  cc-bedrock-local status                  # session + limit state"
+echo "  cc-bedrock-local set-model opus=<id>     # change a model (claude/codex settings follow)"
+echo "  cc-bedrock-local login                   # sign in again (after logout or 30 days idle)"
+echo "  cc-bedrock-local logout                  # clear cached session"
 `;
 }
 

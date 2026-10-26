@@ -20,22 +20,33 @@ Related: [ADR-006](../decisions/ADR-006-shared-credentials.md),
 ```bash
 DASHBOARD_URL="$(terraform -chdir=terraform output -raw dashboard_url)"
 curl -fsSL "$DASHBOARD_URL/api/install" | bash
-cc
-ccx
+claude
+codex
 ```
 
-The first run prompts for Cognito email/password through the public client's
-password-auth flow. The CLI stores a refresh-token cache locally and configures
-AWS SDK `credential_process` in `~/.aws/config`. It does not depend on browser
-OIDC or an eight-hour static credentials file. `cc` runs governed Claude Code;
-`ccx` runs governed Codex with `amazon-bedrock-runtime`.
+Accept the installer's setup/login prompt. If declined or no terminal is
+available, run `cc-bedrock-local setup && cc-bedrock-local login` before starting
+the tools. The installer does not install Claude Code or Codex; install missing
+clients separately and ensure the helper is on PATH.
+
+Login uses Cognito email/password through the public client. Setup writes
+Claude's Bedrock environment and `awsCredentialExport` in
+`~/.claude/settings.json`, Codex's `amazon-bedrock-runtime` provider/profile
+in `~/.codex/config.toml`, and AWS SDK `credential_process` in `~/.aws/config`.
+The helper caches a refresh token locally. Neither browser OIDC nor an
+eight-hour static credentials file is required. Old managed `cc`/`ccx` shell
+functions are removed from shell configuration; open a new shell to discard
+functions already loaded.
 
 ## Verify identity and renewal
 
 ```bash
-cc --status
+cc-bedrock-local status
 aws sts get-caller-identity --profile cc-bedrock
 ```
+
+`status` reads the cached session/last-issued limit state; it does not query
+current limits. Use the dashboard and governance diagnostics for current denies.
 
 Expect the assumed role `cc-on-bedrock-local-user-{subdomain}` for that user.
 The canonical data key is lowercased **email**, while IAM/resource suffixes use
@@ -44,9 +55,17 @@ the CLI configuration was customized.
 
 STS role chaining caps the issued credentials at one hour. The SDK credential
 process renews them as needed; CLI `refresh` silently uses a cached Cognito
-refresh token, while `login` is the interactive recovery path. `cc --logout`
-clears the local session. Never paste refresh tokens or issued credentials into
-an issue or log.
+refresh token, while `login` is the interactive recovery path.
+`cc-bedrock-local logout` clears the cached session. `unsetup` removes managed
+client keys but does not clear the cache, remove the AWS profile or revoke
+issued sessions. It does not restore overwritten pre-setup settings; inspect
+the first-edit `.cc-bedrock.bak` backup when restoring them.
+Never paste refresh tokens or issued credentials into an issue or log.
+
+Unset an inherited `AWS_BEARER_TOKEN_BEDROCK` before validating governed role
+attribution: it can override the configured profile. If Codex already has custom
+sandbox settings, setup preserves them with a warning; apply the credential-cache
+directory deny manually as instructed by that warning.
 
 A real invocation should later appear in Dashboard → usage/local views. Metering
 is asynchronous; inspect the invocation-log tracker when records remain absent.
