@@ -26,15 +26,31 @@ export async function syncMonthlyLimitMirror(
   userId: string,
   monthlyBudget: number,
   now: string,
-  send: Send = defaultSend
-): Promise<void> {
+  send: Send = defaultSend,
+  opts: { mirrorRowsOnly?: boolean } = {}
+): Promise<"written" | "preserved"> {
   const Key = { PK: { S: `USER#${userId}` }, SK: { S: "LIMIT#monthly" } };
+  // mirrorRowsOnly (dept-manager writes): LIMIT#monthly is also the admin-only token cap
+  // (/admin/limits) and may carry an approved grant. Touch only rows this mirror created
+  // (source_usd present), never delete one holding a grant, and keep anything else.
+  const guarded = async (command: UpdateItemCommand | DeleteItemCommand): Promise<"written" | "preserved"> => {
+    try {
+      await send(command);
+      return "written";
+    } catch (err) {
+      if (opts.mirrorRowsOnly && (err as { name?: string })?.name === "ConditionalCheckFailedException") {
+        return "preserved";
+      }
+      throw err;
+    }
+  };
   if (monthlyBudget > 0) {
     const maxNormalized = Math.floor(monthlyBudget * NORMALIZED_PER_USD);
-    await send(new UpdateItemCommand({
+    return guarded(new UpdateItemCommand({
       TableName: LIMITS_TABLE,
       Key,
       UpdateExpression: "SET max_normalized = :mx, source_usd = :usd, normalized_per_usd = :rate, updatedAt = :now",
+      ...(opts.mirrorRowsOnly ? { ConditionExpression: "attribute_not_exists(PK) OR attribute_exists(source_usd)" } : {}),
       ExpressionAttributeValues: {
         ":mx": { N: String(maxNormalized) },
         ":usd": { N: String(monthlyBudget) },
@@ -42,7 +58,6 @@ export async function syncMonthlyLimitMirror(
         ":now": { S: now },
       },
     }));
-    return;
   }
   // DynamoDB DeleteItem is a no-op when the item doesn't exist (it does NOT throw
   // ResourceNotFoundException for missing rows — that exception is reserved for
@@ -50,5 +65,11 @@ export async function syncMonthlyLimitMirror(
   // propagate so the PUT returns 500: swallowing here would let
   // cc-user-budgets.monthlyBudget=0 commit while LIMIT#monthly keeps the stale cap,
   // leaving token-limit-enforcer blocking the user on an old threshold.
-  await send(new DeleteItemCommand({ TableName: LIMITS_TABLE, Key }));
+  return guarded(new DeleteItemCommand({
+    TableName: LIMITS_TABLE,
+    Key,
+    ...(opts.mirrorRowsOnly
+      ? { ConditionExpression: "attribute_exists(source_usd) AND attribute_not_exists(grant_normalized)" }
+      : {}),
+  }));
 }

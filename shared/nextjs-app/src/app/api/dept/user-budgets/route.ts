@@ -143,7 +143,13 @@ export async function PUT(req: NextRequest) {
       }
     );
     if (limits.monthlyBudget !== undefined) {
-      await syncMonthlyLimitMirror(targetEmail, limits.monthlyBudget, now);
+      // A manager's write must not remove or raise an admin-set token cap (or an approved grant).
+      const mirror = await syncMonthlyLimitMirror(targetEmail, limits.monthlyBudget, now, undefined, {
+        mirrorRowsOnly: fresh.role !== "admin",
+      });
+      if (mirror === "preserved") {
+        console.warn(`[dept/user-budgets] kept admin-managed LIMIT#monthly for ${targetEmail}`);
+      }
     }
 
     return NextResponse.json({ success: true, data: { email: targetEmail, ...limits } });

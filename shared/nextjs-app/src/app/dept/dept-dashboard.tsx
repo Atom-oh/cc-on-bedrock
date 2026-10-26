@@ -78,7 +78,11 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [limitEdit, setLimitEdit] = useState<{ email: string; values: Record<BudgetPeriod, string> } | null>(null);
+  const [limitEdit, setLimitEdit] = useState<{
+    email: string;
+    values: Record<BudgetPeriod, string>;
+    initial: Record<BudgetPeriod, string>;
+  } | null>(null);
   const [limitSaving, setLimitSaving] = useState(false);
   const [limitError, setLimitError] = useState<string | null>(null);
 
@@ -205,14 +209,12 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
   const openLimitEdit = (member: DeptMember) => {
     const l = member.limits;
     setLimitError(null);
-    setLimitEdit({
-      email: member.email,
-      values: {
-        daily: l?.dailyBudget ? String(l.dailyBudget) : "",
-        weekly: l?.weeklyBudget ? String(l.weeklyBudget) : "",
-        monthly: l?.monthlyBudget ? String(l.monthlyBudget) : "",
-      },
-    });
+    const values = {
+      daily: l?.dailyBudget ? String(l.dailyBudget) : "",
+      weekly: l?.weeklyBudget ? String(l.weeklyBudget) : "",
+      monthly: l?.monthlyBudget ? String(l.monthlyBudget) : "",
+    };
+    setLimitEdit({ email: member.email, values, initial: { ...values } });
   };
 
   // Standing per-member limits (0 / empty = inherit the department default).
@@ -222,7 +224,15 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
     setLimitError(null);
     try {
       const body: Record<string, unknown> = { email: limitEdit.email };
-      for (const p of BUDGET_PERIODS) body[LIMIT_FIELD[p]] = Number(limitEdit.values[p]) || 0;
+      // Send only the periods the manager changed: an untouched "inherit" monthly must not
+      // be written as 0 (that would also clear the member's LIMIT#monthly token cap).
+      for (const p of BUDGET_PERIODS) {
+        if (limitEdit.values[p] !== limitEdit.initial[p]) body[LIMIT_FIELD[p]] = Number(limitEdit.values[p]) || 0;
+      }
+      if (Object.keys(body).length === 1) {
+        setLimitEdit(null);
+        return;
+      }
       const res = await fetch("/api/dept/user-budgets", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

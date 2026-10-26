@@ -1,5 +1,6 @@
 import {
   AdminAddUserToGroupCommand,
+  AdminGetUserCommand,
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
   AdminUserGlobalSignOutCommand,
@@ -14,6 +15,14 @@ const MAX_PAGES = 100;
 type Send = (command: unknown) => Promise<unknown>;
 const defaultSend: Send = (command) =>
   (cognitoClient.send as (c: unknown) => Promise<unknown>)(command);
+
+/** Whether the Cognito user is enabled (a disabled user keeps its groups). */
+export async function getUserEnabled(username: string): Promise<boolean> {
+  const res = (await defaultSend(new AdminGetUserCommand({ UserPoolId: userPoolId, Username: username }))) as {
+    Enabled?: boolean;
+  };
+  return res.Enabled !== false;
+}
 
 /** Role groups (admin / dept-manager / user) the user is currently in. */
 export async function getRoleGroups(username: string): Promise<string[]> {
@@ -83,21 +92,24 @@ export async function countAdmins(): Promise<number> {
 export async function requireFreshRole(
   session: { user?: { email?: string | null } } | null | undefined,
   allowed: Role[],
-  getGroups: (username: string) => Promise<string[]> = getRoleGroups
+  getGroups: (username: string) => Promise<string[]> = getRoleGroups,
+  getEnabled: (username: string) => Promise<boolean> = getUserEnabled
 ): Promise<{ ok: true; role: Role } | { ok: false; response: NextResponse }> {
   const email = session?.user?.email;
   if (!email) {
     return { ok: false, response: NextResponse.json({ error: "Role changed — sign in again" }, { status: 403 }) };
   }
   let groups: string[];
+  let enabled: boolean;
   try {
-    groups = await getGroups(email);
+    // A disabled user keeps its groups and its 8h session JWT, so both are checked.
+    [groups, enabled] = await Promise.all([getGroups(email), getEnabled(email)]);
   } catch (err) {
     console.error("[requireFreshRole] Cognito group lookup failed:", err);
     return { ok: false, response: NextResponse.json({ error: "Role check unavailable" }, { status: 503 }) };
   }
   const { role } = roleFromGroups(groups);
-  if (!allowed.includes(role)) {
+  if (!enabled || !allowed.includes(role)) {
     return { ok: false, response: NextResponse.json({ error: "Role changed — sign in again" }, { status: 403 }) };
   }
   return { ok: true, role };

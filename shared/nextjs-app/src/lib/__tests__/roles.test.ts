@@ -53,7 +53,7 @@ describe("validateRoleChange", () => {
 describe("requireFreshRole", () => {
   const session = { user: { email: "a@x.com" } };
   it("403 when current role is not allowed", async () => {
-    const r = await requireFreshRole(session, ["admin"], async () => ["user"]);
+    const r = await requireFreshRole(session, ["admin"], async () => ["user"], async () => true);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.response.status).toBe(403);
@@ -61,15 +61,25 @@ describe("requireFreshRole", () => {
     }
   });
   it("ok when current role is allowed", async () => {
-    expect(await requireFreshRole(session, ["admin"], async () => ["admin"])).toEqual({ ok: true, role: "admin" });
+    expect(await requireFreshRole(session, ["admin"], async () => ["admin"], async () => true)).toEqual({ ok: true, role: "admin" });
   });
   it("403 without session email", async () => {
-    const r = await requireFreshRole({ user: {} }, ["admin"], async () => ["admin"]);
+    const r = await requireFreshRole({ user: {} }, ["admin"], async () => ["admin"], async () => true);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.response.status).toBe(403);
   });
+  it("403 for a disabled user who still holds the role group", async () => {
+    const r = await requireFreshRole(session, ["admin"], async () => ["admin"], async () => false);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.response.status).toBe(403);
+  });
+  it("fails closed with 503 when the enabled lookup throws", async () => {
+    const r = await requireFreshRole(session, ["admin"], async () => ["admin"], async () => { throw new Error("x"); });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.response.status).toBe(503);
+  });
   it("fails closed with 503 when lookup throws", async () => {
-    const r = await requireFreshRole(session, ["admin"], async () => { throw new Error("boom"); });
+    const r = await requireFreshRole(session, ["admin"], async () => { throw new Error("boom"); }, async () => true);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.response.status).toBe(503);
