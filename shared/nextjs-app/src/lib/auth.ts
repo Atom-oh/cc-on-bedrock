@@ -5,6 +5,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { CognitoIdentityProviderClient, InitiateAuthCommand, GetUserCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { createHmac } from "crypto";
 import type { UserSession } from "./types";
+import { NEW_PASSWORD_REQUIRED } from "./auth-errors";
 
 const cognitoClientSecret = process.env.COGNITO_CLIENT_SECRET;
 
@@ -76,6 +77,11 @@ export const authOptions: NextAuthOptions = {
               ...(secretHash ? { SECRET_HASH: secretHash } : {}),
             },
           }));
+          // Invited user on first login: the login page switches to the
+          // set-new-password form (NextAuth passes the message as `error`).
+          if (authResult.ChallengeName === "NEW_PASSWORD_REQUIRED") {
+            throw new Error(NEW_PASSWORD_REQUIRED);
+          }
           const accessToken = authResult.AuthenticationResult?.AccessToken;
           if (!accessToken) return null;
           // Fetch user attributes
@@ -94,6 +100,11 @@ export const authOptions: NextAuthOptions = {
             ...attrs,
           };
         } catch (err) {
+          // Only the temporary-password challenge is surfaced: it requires the
+          // right password. PasswordResetRequiredException is returned before the
+          // password is checked, so it stays a generic failure (no account probing);
+          // those users recover through "Forgot password?".
+          if ((err as Error).message === NEW_PASSWORD_REQUIRED) throw err;
           console.error("[auth] Cognito InitiateAuth failed:", (err as Error).message);
           return null;
         }
