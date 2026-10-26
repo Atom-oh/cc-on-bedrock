@@ -187,3 +187,46 @@ def test_every_deny_also_blocks_mantle_and_web_search():
     for doc in captured:
         actions = doc["Statement"][0]["Action"]
         assert "bedrock-mantle:*" in actions and "bedrock-websearch:*" in actions
+
+
+def test_cap_rows_match_despite_case_legacy_key_or_other_dept():
+    with mock.patch.object(bc, "_GLOBAL_BUDGETS", NO_GLOBAL):
+        # mixed-case budget key
+        assert not bc.mantle_eligible("a@x.com", "eng", {"A@X.com": {"dailyBudget": 5}}, {}, {})
+        # legacy subdomain-keyed row
+        assert not bc.mantle_eligible("a@x.com", "eng", {"alice": {"monthlyBudget": 5}}, {}, {},
+                                      aliases=("alice",))
+        # department recorded on the budget row differs from Cognito's
+        assert not bc.mantle_eligible("a@x.com", "eng", {"a@x.com": {"department": "ops"}},
+                                      {"ops": {"monthlyBudget": 10}}, {})
+        # token limit keyed with different case
+        assert not bc.mantle_eligible("a@x.com", "eng", {}, {}, {("USER", "A@x.com", "daily"): 1})
+
+
+def test_deprovisioned_users_role_loses_its_grant():
+    alice = "cc-on-bedrock-local-user-alice"
+    gone = "cc-on-bedrock-local-user-gone"
+    iam = FakeIam([alice, gone], {(gone, bc.MANTLE_POLICY_NAME): {}})
+    out, _ = _reconcile(iam, {"alice@x.com": ("alice", "eng")})
+    assert (gone, bc.MANTLE_POLICY_NAME) not in iam.policies and out["revoked"] == 1
+    assert (alice, bc.MANTLE_POLICY_NAME) in iam.policies
+
+
+def test_shared_subdomain_is_never_granted():
+    shared = "cc-on-bedrock-local-user-sam"
+    iam = FakeIam([shared])
+    out, _ = _reconcile(iam, {"sam@x.com": ("sam", "eng"), "sam@y.com": ("sam", "eng")})
+    assert out["granted"] == 0 and not iam.puts
+
+
+def test_truncated_scans_fail_safe():
+    tbl = mock.Mock()
+    tbl.scan.return_value = {"Items": [], "LastEvaluatedKey": {"k": 1}}
+    with mock.patch.object(bc, "user_budgets_table", tbl), mock.patch.object(bc, "MAX_SCAN_PAGES", 2), \
+            mock.patch.object(bc, "_budget_read_failed", False):
+        bc.get_user_budgets()
+        assert bc._budget_read_failed is True
+    with mock.patch.object(bc, "limits_table", tbl), mock.patch.object(bc, "MAX_SCAN_PAGES", 2), \
+            mock.patch.object(bc, "_budget_read_failed", False):
+        bc._scan_limits_limits()
+        assert bc._budget_read_failed is True

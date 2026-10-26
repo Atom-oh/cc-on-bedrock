@@ -79,6 +79,12 @@ _usage_scan_truncated = False
 _budget_read_failed = False
 
 
+def _mark_budget_read_failed(what: str):
+    global _budget_read_failed
+    _budget_read_failed = True
+    print(f"[MANTLE] incomplete read: {what}")
+
+
 def period_bounds(now: datetime | None = None) -> dict:
     """UTC period windows as {period: (start_date_str, next_reset_datetime)}.
     Usage rows are keyed `{YYYY-MM-DD}#{model}` by the invocation's UTC date."""
@@ -237,10 +243,11 @@ def get_department_budgets():
             pages += 1
             if not last_key or pages >= MAX_SCAN_PAGES:
                 break
+        if last_key:
+            _mark_budget_read_failed("department budgets scan truncated")
         return budgets
     except Exception as e:
-        global _budget_read_failed
-        _budget_read_failed = True
+        _mark_budget_read_failed("department budgets")
         print(f"[DEPT] Failed to fetch department budgets: {e}")
         return {}
 
@@ -334,10 +341,11 @@ def get_user_budgets():
             pages += 1
             if not last_key or pages >= MAX_SCAN_PAGES:
                 break
+        if last_key:
+            _mark_budget_read_failed("user budgets scan truncated")
         return budgets
     except Exception as e:
-        global _budget_read_failed
-        _budget_read_failed = True
+        _mark_budget_read_failed("user budgets")
         print(f"[USER-BUDGETS] Failed to fetch user budgets: {e}")
         return {}
 
@@ -482,7 +490,10 @@ def _load_valid_user_keys() -> set:
             pages += 1
             if not pagination_token or pages >= MAX_SCAN_PAGES:
                 break
+        if pagination_token:
+            _mark_budget_read_failed("Cognito user scan truncated")
     except Exception as e:
+        _mark_budget_read_failed("Cognito users")
         print(f"[VALID-USERS] Failed to load Cognito users (failing open): {e}")
         return set()
     return keys
@@ -779,8 +790,7 @@ def _scan_limits_limits():
         try:
             r = limits_table.scan(**params)
         except Exception as e:
-            global _budget_read_failed
-            _budget_read_failed = True
+            _mark_budget_read_failed("limits")
             print(f"[LIMITS] scan limits failed: {e}")
             return {}
         for item in r.get("Items", []):
@@ -801,6 +811,8 @@ def _scan_limits_limits():
         pages += 1
         if not last_key or pages >= MAX_SCAN_PAGES:
             break
+    if last_key:
+        _mark_budget_read_failed("limits scan truncated")
     return out
 
 
@@ -892,15 +904,27 @@ def check_token_limits_backup():
 # ADR-014 (amended 2026-10-26): Codex on bedrock-mantle for unlimited users
 # ──────────────────────────────────────────────────────────
 
-def mantle_eligible(user: str, dept: str, user_budgets: dict, dept_budgets: dict, token_limits: dict) -> bool:
+def mantle_eligible(user: str, dept: str, user_budgets: dict, dept_budgets: dict, token_limits: dict,
+                    aliases: tuple = ()) -> bool:
     """Pure: True only when no cap of any kind applies to the user — every effective
     USD cap (user > dept per-user default > global) is 0, the department has no total
-    budget, and no token LIMIT# row exists for the user or the department."""
-    if any(v > 0 for v in _effective_user_limits(user_budgets, dept_budgets, user, dept).values()):
-        return False
-    if _dept_total_budget(dept_budgets, dept) > 0:
-        return False
-    return not any((etype == "USER" and key == user) or (etype == "DEPT" and key == dept)
+    budget, and no token LIMIT# row exists for the user or the department.
+
+    Keys are compared lowercased, and `aliases` (e.g. the legacy subdomain key) plus the
+    department recorded on any of the user's budget rows are checked too: a cap row that
+    cannot be matched exactly must still make the user ineligible (never fail open)."""
+    norm = lambda k: (k or "").strip().lower()
+    keys = {norm(user), *(norm(a) for a in aliases if a)}
+    ub = {norm(k): v for k, v in user_budgets.items()}
+    rows = [ub[k] for k in keys if k in ub]
+    depts = {norm(dept) or "default", *(norm(r.get("department")) for r in rows if r.get("department"))}
+    db = {norm(k): v for k, v in dept_budgets.items()}
+    for row in rows or [{}]:
+        for d in depts:
+            limits = _effective_user_limits({"u": row}, db, "u", d)
+            if any(v > 0 for v in limits.values()) or _dept_total_budget(db, d) > 0:
+                return False
+    return not any((etype == "USER" and norm(key) in keys) or (etype == "DEPT" and norm(key) in depts)
                    for etype, key, _period in token_limits)
 
 
@@ -1000,39 +1024,51 @@ def _revoke_mantle(role_name: str) -> bool:
         return False
 
 
-def _revoke_mantle_everywhere() -> int:
-    """Fail-safe path (budget/limits/Cognito read failed): drop every grant."""
-    revoked = 0
+def _local_roles() -> list:
+    names = []
     for page in iam_client.get_paginator("list_roles").paginate(PathPrefix="/"):
-        for role in page.get("Roles", []):
-            if role["RoleName"].startswith(LOCAL_ROLE_PREFIX):
-                try:
-                    revoked += _revoke_mantle(role["RoleName"])
-                except Exception as e:
-                    print(f"[MANTLE] revoke failed for {role['RoleName']}: {e}")
+        names += [r["RoleName"] for r in page.get("Roles", []) if r["RoleName"].startswith(LOCAL_ROLE_PREFIX)]
+    return names
+
+
+def _revoke_mantle_except(keep: set) -> int:
+    """Revoke from every Local role not in `keep` — including roles whose user is gone
+    from Cognito (a deprovisioned user must not keep an unmetered grant)."""
+    revoked = 0
+    for role in _local_roles():
+        if role in keep:
+            continue
+        try:
+            revoked += _revoke_mantle(role)
+        except Exception as e:
+            print(f"[MANTLE] revoke failed for {role}: {e}")
     return revoked
 
 
 def reconcile_mantle(user_budgets: dict, dept_budgets: dict) -> dict:
-    """Grant mantle to unlimited users, revoke it from everyone else (≤ 5 min after a
-    cap appears). Local Mode roles only; EC2 DevEnv is a follow-up."""
+    """Grant mantle to unlimited users, revoke it from every other Local role (≤ 5 min
+    after a cap appears). Local Mode roles only; EC2 DevEnv is a follow-up."""
     if not MANTLE_ENABLED:
         return {"enabled": False}
     token_limits = _scan_limits_limits()
     if _budget_read_failed or limits_table is None or not _email_subdomain_map or not ACCOUNT_ID:
         print("[MANTLE] incomplete budget/limits/Cognito data — revoking all grants (fail safe)")
-        return {"enabled": True, "failsafe": True, "revoked": _revoke_mantle_everywhere()}
+        return {"enabled": True, "failsafe": True, "revoked": _revoke_mantle_except(set())}
 
-    eligible = {e for e in _email_subdomain_map
-                if mantle_eligible(e, _email_dept_map.get(e, "default"), user_budgets, dept_budgets, token_limits)}
+    eligible = {e: sd for e, sd in _email_subdomain_map.items()
+                if mantle_eligible(e, _email_dept_map.get(e, "default"), user_budgets, dept_budgets,
+                                   token_limits, aliases=(sd,))}
+    # A subdomain shared by several Cognito users would share one role: grant only if all are eligible.
+    by_role: dict = {}
+    for e, sd in _email_subdomain_map.items():
+        by_role.setdefault(f"{LOCAL_ROLE_PREFIX}{sd}", []).append(e)
+    grant_roles = {r: es[0] for r, es in by_role.items() if len(es) == 1 and es[0] in eligible}
+    revoked = _revoke_mantle_except(set(grant_roles))
     projects = None
-    granted = revoked = 0
-    for email, subdomain in _email_subdomain_map.items():
-        role = f"{LOCAL_ROLE_PREFIX}{subdomain}"
+    granted = 0
+    for role, email in grant_roles.items():
+        subdomain = eligible[email]
         try:
-            if email not in eligible:
-                revoked += _revoke_mantle(role)
-                continue
             iam_client.list_role_tags(RoleName=role)  # NoSuchEntity → no Local role, no project
             if projects is None:
                 projects = list_mantle_projects()
@@ -1046,7 +1082,7 @@ def reconcile_mantle(user_budgets: dict, dept_budgets: dict) -> dict:
         except Exception as e:
             # No grant on error; an existing grant stays only while the user is still eligible.
             print(f"[MANTLE] reconcile failed for {email}: {e}")
-    return {"enabled": True, "eligible": len(eligible), "granted": granted, "revoked": revoked}
+    return {"enabled": True, "eligible": len(grant_roles), "granted": granted, "revoked": revoked}
 
 
 def set_cognito_budget_flag(user: str, exceeded: bool):
@@ -1114,7 +1150,7 @@ def handler(event, context):
     # ADR-031: reset the per-invocation email→subdomain map (repopulated by the scans).
     global _subdomain_by_user, _valid_user_keys, _budget_read_failed
     _subdomain_by_user = {}
-    _budget_read_failed = False
+    _budget_read_failed = False  # before any reader below can set it
     # Load the authoritative Cognito identity set so the scans below skip stale
     # non-user rows (e.g. raw IAM principals). Empty set = fail-open (no filtering).
     _valid_user_keys = _load_valid_user_keys()
