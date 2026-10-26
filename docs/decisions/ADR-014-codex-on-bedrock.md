@@ -78,7 +78,11 @@ per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is no
    (`extends = ":workspace"`) that denies `~/.config/cc-bedrock` (refresh token, STS
    keys) to sandboxed commands — skipped with a warning when the user already chose a
    `sandbox_mode`/`default_permissions`. Each line is marked `# managed by cc-bedrock-local`.
-   Plain `codex` then signs with the per-user role (verified with codex-cli 0.163). The file is the user's,
+   Plain `codex` then signs with the per-user role (verified with codex-cli 0.163). Claude Code's
+   `awsCredentialExport` runs the same `credential-process` subcommand: it accepts the flat
+   `credential_process` shape (`Version`/`AccessKeyId`/…/`Expiration`) as well as
+   `{"Credentials":…}` (Claude Code settings docs; verified 2026-10-26 with `claude -p` answering
+   from Bedrock), and caches it until 5 min before `Expiration`. The file is the user's,
    so pointing it back at OpenAI only leaves the platform; it cannot spend Bedrock outside
    the role, which stays the enforcement point. `cc-bedrock-local codex` still pins
    provider and region as session overrides (`-c`) for a one-off governed run.
