@@ -952,6 +952,7 @@ def mantle_policy_doc(project_id: str) -> str:
 
 def _mantle_request(method: str, path: str, body: dict | None = None) -> dict:
     """SigV4-signed call to the mantle control plane (no boto3 client exists for it)."""
+    import urllib.error
     import urllib.request
     from botocore.auth import SigV4Auth
     from botocore.awsrequest import AWSRequest
@@ -962,8 +963,11 @@ def _mantle_request(method: str, path: str, body: dict | None = None) -> dict:
     creds = boto3.Session().get_credentials().get_frozen_credentials()
     SigV4Auth(creds, "bedrock-mantle", MANTLE_REGION).add_auth(req)
     r = urllib.request.Request(url, data=data, headers=dict(req.headers), method=method)
-    with urllib.request.urlopen(r, timeout=10) as resp:
-        return json.loads(resp.read() or b"{}")
+    try:
+        with urllib.request.urlopen(r, timeout=10) as resp:
+            return json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"mantle {method} {path.split('?')[0]} → {e.code}: {e.read()[:300]!r}") from e
 
 
 def mantle_project_name(subdomain: str) -> str:
