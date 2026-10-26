@@ -567,11 +567,12 @@ data "aws_iam_policy_document" "budget_check_policy" {
     for_each = var.enable_mantle ? [1] : []
     content {
       sid       = "MantleProjects"
-      actions   = ["bedrock-mantle:CreateProject", "bedrock-mantle:GetProject", "bedrock-mantle:TagResource"]
+      actions   = ["bedrock-mantle:CreateProject", "bedrock-mantle:GetProject", "bedrock-mantle:TagResource", "bedrock-mantle:ListTagsForResource"]
       resources = ["arn:aws:bedrock-mantle:us-east-1:${local.account_id}:project/*"]
     }
   }
-  # ListProjects is not scoped to one project (AccessDenied on project/* — verified live).
+  # ListProjects is not scoped to one project, and its response carries tags
+  # (ListTagsForResource above) — both verified live.
   dynamic "statement" {
     for_each = var.enable_mantle ? [1] : []
     content {
