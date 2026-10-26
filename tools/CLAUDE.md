@@ -14,6 +14,7 @@ End-user CLI helpers. The main artifact is `cc-bedrock-local.sh`, the Local Gove
 curl -fsSL https://<dashboard_subdomain>.<domain>/api/install | bash
 
 cc-bedrock-local setup               # plain claude/codex → Bedrock (~/.claude/settings.json, ~/.codex/config.toml)
+                                     # + ~/.codex/mantle.config.toml (codex -p mantle) while the user has a mantle grant
 cc-bedrock-local unsetup             # remove those managed keys
 cc-bedrock-local login               # Cognito login, caches refresh token
 cc-bedrock-local refresh             # silent refresh from the cached refresh token

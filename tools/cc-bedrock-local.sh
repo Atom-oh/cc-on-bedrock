@@ -337,6 +337,9 @@ issue_sts() {  # issue_sts <access_token>
     local exp
     exp="$(echo "${sts_resp}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["credentials"]["expiration"])')"
     echo "✓ credential_process profile=${AWS_PROFILE_NAME} installed, current creds expire=${exp} (SDK auto-renews in-session)"
+    sync_codex_mantle
+    local note; note="$(mantle_note)"
+    [[ -z "${note}" ]] || echo "! ${note}"
   else
     echo "${sts_resp}" >&2
     die "dashboard refused STS issue"
@@ -408,6 +411,7 @@ do_credential_process() {
     return 1
   fi
   save_state "${sts_resp}"
+  sync_codex_mantle >&2
   emit_credentials_json "${STATE_FILE}"
 }
 
@@ -636,19 +640,32 @@ configure_codex() {  # configure_codex add|remove
   [[ "$1" == add || -f "${CODEX_CONFIG_FILE}" ]] || return 0
   mkdir -p "$(dirname "${CODEX_CONFIG_FILE}")"
   backup_once "${CODEX_CONFIG_FILE}"
-  python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" "${CFG_DIR}" <<'PY'
-import os, re, sys
-path, mode, mark, model, profile, region, cfg_dir = sys.argv[1:8]
+  python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" "${CFG_DIR}" "${STATE_FILE}" "${CC_BEDROCK_QUIET:-}" <<'PY'
+import json, os, re, sys
+path, mode, mark, model, profile, region, cfg_dir, state_file, quiet = sys.argv[1:10]
 lines = open(path).read().splitlines() if os.path.exists(path) else []
 TABLE = "[model_providers.amazon-bedrock-runtime.aws]"
 PERMS = "[permissions.cc-bedrock]"
 PERMS_FS = "[permissions.cc-bedrock.filesystem]"
+# ADR-014: bedrock-mantle profile (`codex -p mantle`), written only while the
+# dashboard reports a mantle grant (unlimited-cost users; NOT metered). Codex
+# loads `-p <name>` from <CODEX_HOME>/<name>.config.toml and rejects a
+# [profiles.<name>] table in config.toml, so the profile is its own file.
+M_PROFILE = "[profiles.mantle]"  # stripped only (never written)
+M_AWS = "[model_providers.amazon-bedrock.aws]"
+M_HDR = "[model_providers.amazon-bedrock.http_headers]"
+m_path = os.path.join(os.path.dirname(path), "mantle.config.toml")
+try:
+    mantle = json.load(open(state_file)).get("mantle") or {}
+except Exception:
+    mantle = {}
+m_ours = not os.path.exists(m_path) or mark in open(m_path).read()
 top_key = re.compile(r"^\s*(model_provider|model|web_search)\s*=")
 out, in_top, in_ours = [], True, False
 for line in lines:
     if line.strip().startswith("["):
         in_top = False
-        in_ours = line.split("#", 1)[0].strip() in (TABLE, PERMS, PERMS_FS)
+        in_ours = line.split("#", 1)[0].strip() in (TABLE, PERMS, PERMS_FS, M_PROFILE, M_AWS, M_HDR)
         if in_ours:
             continue
     if in_ours or mark in line or (in_top and top_key.match(line)):
@@ -673,7 +690,7 @@ if mode == "add":
     # chose a sandbox keeps it and gets a warning instead.
     own = [l for l in out if re.match(r"^\s*(default_permissions|sandbox_mode)\s*=", l)
            or l.split("#", 1)[0].strip() == "[sandbox_workspace_write]"]
-    if own:
+    if own and not quiet:
         sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml sets its own sandbox; "
                          f"add a read deny for {cfg_dir} yourself (see Codex permissions docs)\n")
     else:
@@ -681,11 +698,50 @@ if mode == "add":
         tail += ["", f"{PERMS}  {mark}", 'extends = ":workspace"',
                  "", f"{PERMS_FS}  {mark}", f'{q(cfg_dir)} = "deny"']
     out = head + ([""] + out if out else []) + tail
-tmp = path + ".tmp"
+want_mantle = mode == "add" and mantle.get("enabled") and mantle.get("projectId")
+if want_mantle and m_ours:
+    m = [f"{mark} — bedrock-mantle (web search). NOT counted in usage or budget;",
+         "# granted only while your cost is unlimited. Use: codex -p mantle",
+         'model_provider = "amazon-bedrock"',
+         f"model = {q(mantle.get('model') or 'openai.gpt-6.1-sol')}",
+         'web_search = "live"',
+         "", M_AWS, f"profile = {q(profile)}",
+         f"region = {q(mantle.get('region') or 'us-east-1')}",
+         # IAM allows only the user's own project: without the header the call
+         # lands in project/default and is denied.
+         "", M_HDR, f"OpenAI-Project = {q(mantle['projectId'])}"]
+    m_tmp = f"{m_path}.{os.getpid()}.tmp"
+    with open(m_tmp, "w") as f:
+        f.write("\n".join(m) + "\n")
+    os.replace(m_tmp, m_path)
+elif want_mantle and not quiet:
+    sys.stderr.write(f"cc-bedrock-local: {m_path} is your own file — not adding the mantle profile\n")
+elif m_ours and os.path.exists(m_path):
+    os.remove(m_path)
+# Unique tmp: credential-process (claude + codex) may refresh concurrently.
+tmp = f"{path}.{os.getpid()}.tmp"
 with open(tmp, "w") as f:
     f.write("\n".join(out) + ("\n" if out else ""))
 os.replace(tmp, path)
 PY
+}
+
+mantle_note() {  # one line describing the mantle grant in state.json (empty when none)
+  [[ -f "${STATE_FILE}" ]] || return 0
+  python3 - "${STATE_FILE}" <<'PY' 2>/dev/null || true
+import json, sys
+m = json.load(open(sys.argv[1])).get("mantle") or {}
+if m.get("enabled"):
+    print(f"mantle (codex -p mantle, {m.get('model')}, {m.get('region')}): enabled — web search; "
+          "NOT counted in usage or budget; available while your cost is unlimited")
+PY
+}
+
+# After new credentials: keep the Codex mantle profile in step with the grant
+# (it appears/disappears as an admin removes/sets cost caps). Files + stderr only.
+sync_codex_mantle() {
+  clients_configured || return 0
+  CC_BEDROCK_QUIET=1 configure_codex add || say "could not update ${CODEX_CONFIG_FILE}"
 }
 
 clients_configured() {
@@ -709,6 +765,8 @@ do_setup() {
   configure_codex add
   echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport)"
   echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: amazon-bedrock-runtime, profile=${AWS_PROFILE_NAME}, model=${CODEX_MODEL})"
+  local note; note="$(mantle_note)"
+  [[ -z "${note}" ]] || echo "! ${note}"
   # A Bedrock API key outranks the profile in both tools and would bypass the
   # per-user role (metering, budget deny).
   [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ]] ||
@@ -821,6 +879,12 @@ try:
 except Exception:
     pass
 print(f"deny active   : {limit.get('denyActive', False)}")
+mantle = state.get("mantle") or {}
+if mantle.get("enabled"):
+    print(f"mantle        : enabled (codex -p mantle, {mantle.get('model')}, {mantle.get('region')}, "
+          f"project {mantle.get('projectId')}) — NOT counted in usage or budget")
+else:
+    print("mantle        : off (available only while your cost is unlimited)")
 if limit.get("denyActive"):
     print(f"  reason      : {limit.get('denyReason')}")
     print(f"  reset_at    : {limit.get('resetAt')}")
@@ -865,7 +929,9 @@ Subcommands:
                               emits lightweight OTEL session/git metrics when configured
   codex [args]                ensure session, exec OpenAI codex on Bedrock (ADR-014)
   setup                       configure plain 'claude' + 'codex' for Bedrock
-                              (~/.claude/settings.json, ~/.codex/config.toml)
+                              (~/.claude/settings.json, ~/.codex/config.toml);
+                              unlimited-cost users also get 'codex -p mantle'
+                              (bedrock-mantle, web search — NOT metered)
   unsetup                     remove those settings again
   set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin|codex)
   models                      show current model env + valid keys

@@ -63,8 +63,13 @@ LIMITS_TABLE = os.environ.get("LIMITS_TABLE", "cc-on-bedrock-limits")
 # hook, which the AWS SDK re-invokes before each Expiration (ADR-029).
 SESSION_DURATION_SECONDS = int(os.environ.get("SESSION_DURATION_SECONDS", "3600"))
 INFERENCE_PROFILE_PREFIX = os.environ.get("INFERENCE_PROFILE_PREFIX", "cc-on-bedrock")
+# ADR-014 (amended 2026-10-26): budget-check grants `cc-bedrock-mantle-unmetered` to
+# unlimited users; the grant itself is the source of truth for the CLI's mantle profile.
+MANTLE_POLICY_NAME = "cc-bedrock-mantle-unmetered"
+MANTLE_MODEL_ID = os.environ.get("MANTLE_MODEL_ID", "openai.gpt-6.1-sol")
 
 sts = boto3.client("sts")
+iam = boto3.client("iam")
 ddb = boto3.resource("dynamodb")
 limits_table = ddb.Table(LIMITS_TABLE)
 
@@ -85,6 +90,27 @@ def _get_limit_status(user_key: str) -> dict:
     except Exception as e:
         print(f"limit_status lookup failed: {e}")
         return {"denyActive": False, "denyReason": None, "resetAt": None}
+
+
+def _mantle_status(role_name: str) -> dict:
+    """{enabled, projectId, region, model} from the role's mantle grant. Any read
+    failure reports disabled — the CLI then removes its mantle profile."""
+    off = {"enabled": False}
+    try:
+        doc = iam.get_role_policy(RoleName=role_name, PolicyName=MANTLE_POLICY_NAME)["PolicyDocument"]
+    except Exception:
+        return off
+    if isinstance(doc, str):
+        from urllib.parse import unquote
+        doc = json.loads(unquote(doc))
+    for st in doc.get("Statement", []):
+        res = st.get("Resource")
+        res = res if isinstance(res, str) else ""
+        if res.startswith("arn:aws:bedrock-mantle:") and ":project/" in res:
+            region = res.split(":")[3]
+            return {"enabled": True, "projectId": res.rsplit("/", 1)[1], "region": region,
+                    "model": MANTLE_MODEL_ID, "metered": False}
+    return off
 
 
 def _profile_snippet(creds: dict) -> str:
@@ -214,6 +240,7 @@ def handler(event, context):
         "roleArn": role_arn,
         "inferenceProfileArn": inference_profile_arn,
         "region": REGION,
+        "mantle": _mantle_status(role_arn.rsplit("/", 1)[1]),
     }
     return _http(200, body_out)
 

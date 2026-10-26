@@ -87,6 +87,39 @@ run unsetup
 [[ "$(json '"deny" in d["permissions"]')" == False ]] || fail "unsetup left the claude read deny"
 [[ "$(count 'permissions|deny')" == 0 ]] || fail "unsetup left the codex permission profile"
 
+# Mantle profile (ADR-014): its own file (Codex rejects [profiles.x] in config.toml),
+# written only while state.json reports a grant; runtime stays the default.
+M="${H}/.codex/mantle.config.toml"
+mc() { grep -cE "$1" "${M}" || true; }
+run setup
+[[ ! -e "${M}" ]] || fail "mantle profile without a grant"
+echo '{"credentials":{},"mantle":{"enabled":true,"projectId":"proj_abc","region":"us-east-1","model":"openai.gpt-6.1-sol"}}' \
+  > "${H}/.config/cc-bedrock/state.json"
+run setup
+[[ -f "${M}" ]] || fail "mantle profile missing"
+[[ "$(mc '^model_provider = "amazon-bedrock"$')" == 1 ]] || fail "mantle provider"
+[[ "$(mc '^web_search = "live"$')" == 1 ]] || fail "mantle web search"
+[[ "$(mc '^OpenAI-Project = "proj_abc"$')" == 1 ]] || fail "mantle project header"
+[[ "$(mc '^region = "us-east-1"$')" == 1 ]] || fail "mantle region"
+[[ "$(mc 'NOT counted in usage or budget')" == 1 ]] || fail "mantle file must say it is not metered"
+[[ "$(count 'profiles\.mantle|amazon-bedrock\.|OpenAI-Project')" == 0 ]] || fail "mantle leaked into config.toml"
+[[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "runtime must stay the default"
+snap_m="$(cat "${M}")"
+run setup
+[[ "$(cat "${M}")" == "${snap_m}" ]] || fail "mantle profile not idempotent"
+env -i HOME="${H}" PATH="/usr/bin:/bin" "${CLI}" status 2>/dev/null | grep -q "NOT counted in usage or budget" \
+  || fail "status must say mantle is not metered"
+echo '{"credentials":{},"mantle":{"enabled":false}}' > "${H}/.config/cc-bedrock/state.json"
+run setup
+[[ ! -e "${M}" ]] || fail "revoked mantle profile left behind"
+printf 'model = "mine"\n' > "${M}"
+echo '{"credentials":{},"mantle":{"enabled":true,"projectId":"proj_abc"}}' > "${H}/.config/cc-bedrock/state.json"
+run setup
+[[ "$(cat "${M}")" == 'model = "mine"' ]] || fail "overwrote the user's own mantle.config.toml"
+run unsetup
+[[ "$(cat "${M}")" == 'model = "mine"' ]] || fail "unsetup removed the user's own mantle.config.toml"
+rm -f "${M}" "${H}/.config/cc-bedrock/state.json"
+
 # A user who already picked a Codex sandbox keeps it (profiles and sandbox_mode don't compose).
 printf 'sandbox_mode = "danger-full-access"\n' > "${H}/.codex/config.toml"
 run setup

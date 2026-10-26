@@ -415,7 +415,8 @@ export default function BudgetManagement() {
           {activeSection === "users" && (
             <>
               <div className="flex items-center justify-between mb-4">
-                <p className="text-sm text-gray-500">{users.length === 0 ? "No user budgets configured yet." : "Per-user daily / weekly / monthly USD caps — exceeding any one blocks Bedrock (Claude Code + Codex)."}</p>
+                <p className="text-sm text-gray-500">{users.length === 0 ? "No user budgets configured yet." : "Per-user daily / weekly / monthly USD caps — exceeding any one blocks Bedrock (Claude Code + Codex)."}{" "}
+                  <span className="text-amber-500">Users with no cap at all (user, department and global all unlimited, no token limit) also get Codex on bedrock-mantle (web search), which is NOT metered here.</span></p>
                 <button
                   onClick={() => { setCreateModal({ type: "user" }); setNewBudget(""); setPeriodInputs(EMPTY_PERIODS); setNewLimit("100000"); setCreateId(""); setCreateDept(""); }}
                   className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
