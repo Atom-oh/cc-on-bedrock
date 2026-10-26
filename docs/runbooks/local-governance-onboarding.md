@@ -13,7 +13,7 @@ Local PC에서 Claude Code를 Bedrock에 직접 연결해 쓰는 사용자(Local
 1. 대시보드 **Admin → Users → Create User** 진입
 2. 이메일, 부서, 프로젝트 입력. 모드는 **Local** 선택
 3. 임시 비밀번호로 초대 이메일 발송
-4. 사용자가 첫 로그인 시 비밀번호 재설정
+4. 사용자가 첫 로그인 시 비밀번호 재설정 — the dashboard `/login` page shows a set-new-password form after a temporary-password sign-in. A user who lost the invitation or let it expire (7 days) can use **Forgot password?**, which re-sends the invitation; confirmed users get an emailed reset code.
 
 ### 1.2 한도 설정 (관리자)
 1. **Admin → Limits** 페이지

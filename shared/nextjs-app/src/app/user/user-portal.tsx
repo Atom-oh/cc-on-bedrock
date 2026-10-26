@@ -8,6 +8,7 @@ import StorageTab from "@/components/user/storage-tab";
 import SettingsTab from "@/components/user/settings-tab";
 import WelcomeOnboarding from "@/components/user/welcome-onboarding";
 import LocalSetup from "@/components/user/local-setup";
+import AccountPasswordCard from "@/components/user/account-password-card";
 import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import { PortalStatusError, readContainerStatus } from "@/lib/portal-status";
 
@@ -67,8 +68,11 @@ export default function UserPortal(props: UserPortalProps) {
   const deploymentMode = useDeploymentMode();
   if (deploymentMode !== "devenv") {
     return (
-      <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-        <LocalSetup />
+      <div className="space-y-6">
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+          <LocalSetup />
+        </div>
+        <AccountPasswordCard />
       </div>
     );
   }
