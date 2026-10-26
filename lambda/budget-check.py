@@ -915,14 +915,14 @@ def mantle_eligible(user: str, dept: str, user_budgets: dict, dept_budgets: dict
     cannot be matched exactly must still make the user ineligible (never fail open)."""
     norm = lambda k: (k or "").strip().lower()
     keys = {norm(user), *(norm(a) for a in aliases if a)}
-    ub = {norm(k): v for k, v in user_budgets.items()}
-    rows = [ub[k] for k in keys if k in ub]
+    # Every row under any spelling counts (keys differing only in case must not shadow each other).
+    rows = [v for k, v in user_budgets.items() if norm(k) in keys]
     depts = {norm(dept) or "default", *(norm(r.get("department")) for r in rows if r.get("department"))}
-    db = {norm(k): v for k, v in dept_budgets.items()}
+    dept_rows = [v for k, v in dept_budgets.items() if norm(k) in depts] or [{}]
     for row in rows or [{}]:
-        for d in depts:
-            limits = _effective_user_limits({"u": row}, db, "u", d)
-            if any(v > 0 for v in limits.values()) or _dept_total_budget(db, d) > 0:
+        for d_row in dept_rows:
+            limits = _effective_user_limits({"u": row}, {"d": d_row}, "u", "d")
+            if any(v > 0 for v in limits.values()) or _dept_total_budget({"d": d_row}, "d") > 0:
                 return False
     return not any((etype == "USER" and norm(key) in keys) or (etype == "DEPT" and norm(key) in depts)
                    for etype, key, _period in token_limits)

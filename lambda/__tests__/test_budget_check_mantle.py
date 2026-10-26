@@ -230,3 +230,13 @@ def test_truncated_scans_fail_safe():
             mock.patch.object(bc, "_budget_read_failed", False):
         bc._scan_limits_limits()
         assert bc._budget_read_failed is True
+
+
+def test_case_colliding_rows_are_all_checked():
+    with mock.patch.object(bc, "_GLOBAL_BUDGETS", NO_GLOBAL):
+        users = {"a@x.com": {}, "A@x.com": {"dailyBudget": 5}}
+        assert not bc.mantle_eligible("a@x.com", "eng", users, {}, {})
+        users = {"A@x.com": {"dailyBudget": 5}, "a@x.com": {}}
+        assert not bc.mantle_eligible("a@x.com", "eng", users, {}, {})
+        depts = {"eng": {}, "ENG": {"monthlyBudget": 9}}
+        assert not bc.mantle_eligible("a@x.com", "eng", {}, depts, {})
