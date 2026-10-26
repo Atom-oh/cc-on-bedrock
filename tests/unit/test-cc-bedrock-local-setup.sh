@@ -67,6 +67,20 @@ grep -qxF "\"${H}/.config/cc-bedrock\" = \"deny\"" "${H}/.codex/config.toml" || 
 grep -qxF 'extends = ":workspace"' "${H}/.codex/config.toml" || fail "codex profile must extend :workspace"
 [[ -f "${H}/.claude/settings.json.cc-bedrock.bak" && -f "${H}/.codex/config.toml.cc-bedrock.bak" ]] || fail "backups"
 
+# One subcommand serves both ~/.aws/config credential_process and Claude Code's
+# awsCredentialExport: the flat credential_process JSON, which Claude Code accepts
+# too. Served from a valid cached state (no network).
+exp="$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+echo "{\"credentials\":{\"accessKeyId\":\"AKIDTEST\",\"secretAccessKey\":\"s\",\"sessionToken\":\"t\",\"expiration\":\"${exp}\"}}" \
+  > "${H}/.config/cc-bedrock/state.json"
+cred="$(env -i HOME="${H}" PATH="/usr/bin:/bin" "${CLI}" credential-process 2>/dev/null)"
+python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+assert d['Version'] == 1 and d['AccessKeyId'] == 'AKIDTEST' and d['SessionToken'] == 't' and d['Expiration'], d
+" "${cred}" || fail "credential-process must print the flat credential_process JSON (also read by awsCredentialExport)"
+rm -f "${H}/.config/cc-bedrock/state.json"
+
 snap_c="$(cat "${H}/.codex/config.toml")"; snap_s="$(cat "${H}/.claude/settings.json")"
 run setup
 [[ "$(cat "${H}/.codex/config.toml")" == "${snap_c}" ]] || fail "codex config not idempotent"
