@@ -167,7 +167,8 @@ Verify the selected profile rather than interpreting absent DevEnv resources as
 failures in governance:
 
 - Dashboard URL serves `/api/health`; login/password recovery and admin RBAC work.
-- Local `cc`/`ccx` obtains the user's one-hour renewable STS credentials.
+- Native `claude`/`codex`, configured by `cc-bedrock-local setup` and login,
+  obtain the user's one-hour renewable STS credentials.
 - Real test invocations appear in usage records; Claude and Codex share limits.
 - With `devenv`, verify edge auth, nginx routes, `/home/coder` persistence and
   native telemetry through `otel_rollup_collector_endpoint`.

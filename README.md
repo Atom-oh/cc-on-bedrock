@@ -42,16 +42,19 @@ Install the governed CLI:
 curl -fsSL "$(terraform -chdir=terraform output -raw dashboard_url)/api/install" | bash
 ```
 
-Then run:
+Accept the installer's setup/login prompt, then run the tools directly.
+If setup was skipped or no terminal was available, run
+`cc-bedrock-local setup && cc-bedrock-local login` first. Install Claude Code
+and Codex separately if missing; this installer configures their credentials.
 
 ```bash
-cc
-cc --status
-cc --logout
-ccx
+claude                      # Claude Code on Bedrock
+codex                       # OpenAI Codex on Bedrock
+cc-bedrock-local status     # cached session and last-issued limit state
+cc-bedrock-local unsetup    # remove managed client keys; does not log out
 ```
 
-`cc-bedrock-local` stores Cognito refresh tokens locally and wires AWS SDK `credential_process` into `~/.aws/config`. STS credentials remain one hour because AWS role chaining is capped at one hour, but active Claude Code sessions can refresh through the SDK credential process instead of being interrupted.
+`setup` writes the Bedrock env and `awsCredentialExport` into `~/.claude/settings.json` and the `amazon-bedrock-runtime` provider into `~/.codex/config.toml`. `cc-bedrock-local` stores Cognito refresh tokens locally and wires AWS SDK `credential_process` into `~/.aws/config`. STS credentials remain one hour because AWS role chaining is capped at one hour, but active Claude Code sessions can refresh through the SDK credential process instead of being interrupted.
 
 ## Terraform
 

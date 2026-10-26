@@ -47,7 +47,7 @@ blocked before the handler.
 - `ai` - Bedrock Converse (Tool Use, 최대 5 iteration) · `ai/memory`, `ai/runtime` - AgentCore Memory/Runtime
 - `dept`, `dept/list`, `dept/mcp` · `health` · `auth/[...nextauth]`
 - `auth/password/{new,forgot,reset}` — public (middleware passes `/api/auth/*`): first-login new password (temp password authorizes), forgot (same response whether or not the account exists; a never-signed-in invitee gets the invitation re-sent via `AdminCreateUser RESEND`, at most once per 15 min per account via `UserLastModifiedDate`), reset with emailed code. Logic in `lib/cognito-password.ts`; policy in `lib/password-policy.ts` (must match the pool policy)
-- `install`, `install/cli`, `install/otel` - Local CLI 설치 스크립트 (`cc()` / `ccx()` 셸 함수 포함)
+- `install`, `install/cli`, `install/otel` - Local CLI installer (runs `cc-bedrock-local setup` + `login` so plain `claude` / `codex` use Bedrock; removes legacy `cc()` / `ccx()` functions)
 - `slack/commands`, `slack/events`
 
 ## Components

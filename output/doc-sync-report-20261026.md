@@ -62,7 +62,7 @@ Detected topics can be authored separately with `/project-init:add-reference-doc
 | `governance-lambdas.md` | Root usage, limits, IAM and provisioning handlers |
 | `edge-routing.md` | Edge session validator and nginx routing |
 | `devenv.md` | EC2/EBS lifecycle, AMI builder and Docker images |
-| `local-cli.md` | Local wrapper, installer and credential issuance |
+| `local-cli.md` | Native client configuration, helper and credential issuance |
 | `observability.md` | Native collector, scrubbed S3 signals and rollup |
 | `ai-assistant.md` | AgentCore runtime transport and auxiliary tools |
 | `review-testing.md` | PR review workflow, scripts and local quality gates |
@@ -91,13 +91,15 @@ runbooks or instruction files.
 
 ## Executed verification
 
-- Independent documentation review: no open findings; 39 changed/new Markdown
+- Independent documentation review: no open findings; 40 changed/new Markdown
   files' explicit links resolved, 55 shell blocks parsed and 38 command/test
   source references existed. The quality checker separately resolved 120 local
   pointers in its focused set.
 - `terraform -chdir=terraform fmt -check -recursive`: passed.
 - Focused offline Python tests covering IAM parity, edge packaging, collector
   configuration and local role/limit enforcement: **30 passed**.
+- Native Local setup/unsetup shell test and CLI syntax: passed after integrating
+  the current main implementation.
 - Agent and auxiliary script syntax compilation: passed without imports or AWS
   calls.
 - Generated AGENTS context validation: current root SHA, size and secret checks
@@ -115,3 +117,9 @@ Terraform initialization/semantic validation, deployment, container builds and
 live AWS checks were not run. The focused edge Vitest command was attempted but
 could not run because dashboard Node dependencies are absent in this checkout.
 No full dashboard/integration suite result is claimed.
+
+After initial publication, PR #139 merged into main. Its native `claude`/`codex`
+configuration was retained during conflict resolution, and onboarding, current
+auth guides and architecture labels were updated accordingly. The scoring table
+records the assessment before that integration; the native-client documentation
+delta received a separate source review.

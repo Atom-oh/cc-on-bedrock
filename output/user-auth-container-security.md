@@ -25,15 +25,23 @@ change can remove DevEnv infrastructure and must be reviewed explicitly.
 
 ```mermaid
 flowchart LR
-    CLI[cc / ccx] -->|Cognito password login| Cognito[Cognito public client]
-    CLI -->|Access token| API[Dashboard /api/local/credentials]
+    CLI[Native claude / codex] -->|Credential exporter / SDK profile| Helper[cc-bedrock-local]
+    Helper -->|Cognito password login| Cognito[Cognito public client]
+    Helper -->|Access token| API[Dashboard /api/local/credentials]
     API --> Issuer[STS issuer Lambda]
     Issuer -->|AssumeRole: 1 hour| Role[Per-user Local IAM role]
-    Role -. SDK credential_process .-> CLI
+    Role -. Renewable credentials .-> CLI
     CLI --> Bedrock[Bedrock runtime]
 ```
 
-The CLI caches a refresh token and writes `credential_process` to AWS config.
+`cc-bedrock-local setup` configures Claude's `awsCredentialExport`, Codex's
+`amazon-bedrock-runtime` provider/profile and AWS `credential_process`.
+Login caches a refresh token. The installer offers setup/login but does not
+install the client binaries; a skipped prompt requires manual setup/login.
+An inherited `AWS_BEARER_TOKEN_BEDROCK` can override governed role credentials.
+Claude's cache Read deny and Codex's configured directory deny are limited
+client protections, not universal isolation; custom Codex sandbox settings
+require checking the setup warning and applying the deny manually.
 Issued STS credentials last at most one hour due to role chaining and renew as
 needed. Data records use lowercased email; role/resource names use the user's
 canonical subdomain. Cognito UUIDs are not interchangeable with those keys.

@@ -208,15 +208,16 @@ CODEX_MODEL=global.openai.gpt-6.1-sol`}
 
       <SubTitle>{ko ? "2.3 하루 사용 흐름" : "2.3 Daily workflow"}</SubTitle>
       <CodeBlock>
-{`# 처음 한 번만: 로그인 (비밀번호 입력 → Cognito 인증)
+{`# 처음 한 번만 (설치 스크립트가 대신 실행): claude/codex 설정 + 로그인
+cc-bedrock-local setup
 cc-bedrock-local login
 
-# claude 실행 — 만료 10분 전이면 자동 재발급
-cc-bedrock-local claude
+# claude 그대로 실행 — awsCredentialExport로 STS 키를 받아 만료 전 자동 갱신
+claude
 
-# OpenAI Codex 실행 (ADR-014) — 같은 세션/IAM/사용량/예산 한도 적용
+# OpenAI Codex 그대로 실행 (ADR-014) — 같은 IAM/사용량/예산 한도 적용
 # 사전 설치 (DevEnv와 같은 검증 버전): npm install -g @openai/codex@0.163.0
-cc-bedrock-local codex
+codex
 
 # 현재 잔여 시간 + 한도 상태 확인
 cc-bedrock-local status
@@ -240,9 +241,11 @@ cc-bedrock-local logout`}
               ["refresh", ko ? "캐시된 refresh token으로 silent 재발급 (만료되면 실패)" : "Silent refresh using cached refresh token (fails if expired)"],
               ["logout", ko ? "refresh token + state 캐시 삭제" : "Clear refresh token + state cache"],
               ["status", ko ? "남은 TTL + 활성 Deny / 한도 상태 출력" : "Remaining TTL + Deny / limit state"],
+              ["setup", ko ? "~/.claude/settings.json(Bedrock env + awsCredentialExport)과 ~/.codex/config.toml(amazon-bedrock-runtime, credential_process 프로파일)을 설정 — 이후 claude/codex를 그대로 실행" : "Configure ~/.claude/settings.json (Bedrock env + awsCredentialExport) and ~/.codex/config.toml (amazon-bedrock-runtime on the credential_process profile) so plain claude/codex use Bedrock"],
+              ["unsetup", ko ? "setup이 쓴 키만 제거 (Anthropic/OpenAI 직접 사용으로 복귀)" : "Remove only the keys setup wrote (back to direct Anthropic/OpenAI use)"],
               ["claude [args]", ko ? "세션 확보 + 모델 env 주입 후 claude 실행" : "Ensure session + apply model env, then run claude"],
               ["codex [args]", ko ? "세션 확보 후 OpenAI codex를 Bedrock(bedrock-runtime)으로 실행 — provider/region 강제 고정 (ADR-014)" : "Ensure session, run OpenAI codex on Bedrock (bedrock-runtime) — provider/region pinned (ADR-014)"],
-              ["set-model K=V", ko ? "sonnet/opus/haiku/subagent/pin/codex 별칭으로 모델 ID 교체" : "Update model env (sonnet/opus/haiku/subagent/pin/codex)"],
+              ["set-model K=V", ko ? "sonnet/opus/haiku/subagent/pin/codex 별칭으로 모델 ID 교체 (setup 후엔 claude/codex 설정도 갱신)" : "Update model env (sonnet/opus/haiku/subagent/pin/codex); claude/codex settings follow after setup"],
               ["models", ko ? "현재 모델 매핑 + 사용 가능한 추천 ID 출력" : "Print current model env + suggested IDs"],
               ["run -- <cmd>", ko ? "자격증명만 확보하고 임의 명령 실행" : "Refresh credentials then exec any command"],
               ["config", ko ? "현재 설정 파일 + 경로 출력" : "Print current config + file paths"],
