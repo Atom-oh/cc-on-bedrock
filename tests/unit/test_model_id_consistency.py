@@ -62,3 +62,20 @@ def test_codex_consumers_match_terraform_default():
     assert codex.startswith("global.openai.gpt-"), codex
     missing = [rel for rel in CODEX_CONSUMERS if codex not in (REPO / rel).read_text()]
     assert not missing, f"Codex default {codex!r} drifted from terraform/variables.tf in: {missing}"
+
+
+# ADR-014 (amended 2026-10-26): Codex mantle profile model (us-east-1 bedrock-mantle
+# id, no CRIS prefix). The fallbacks must match the Terraform default.
+MANTLE_CONSUMERS = [
+    "lambda/sts-issuer.py",
+    "tools/cc-bedrock-local.sh",
+    "terraform/modules/local-governance/variables.tf",
+]
+
+
+def test_codex_mantle_consumers_match_terraform_default():
+    mantle = _tf_default("codex_mantle_model_id")
+    assert re.fullmatch(r"openai\.gpt-[A-Za-z0-9.-]+", mantle), mantle
+    missing = [rel for rel in MANTLE_CONSUMERS if f'"{mantle}"' not in (REPO / rel).read_text()
+               and f"'{mantle}'" not in (REPO / rel).read_text()]
+    assert not missing, f"Codex mantle default {mantle!r} drifted from terraform/variables.tf in: {missing}"

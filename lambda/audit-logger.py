@@ -11,7 +11,11 @@ Stores one audit record per Bedrock inference call in DynamoDB (cc-prompt-audit)
 
 ADR-014: Codex on bedrock-runtime emits a `Responses` event (with modelId) plus a
 shadow `InvokeModelWithResponseStream` event whose requestParameters is null.
-The shadow is skipped so each Codex turn is audited once. Error events are always
+The shadow is skipped so each Codex turn is audited once.
+
+ADR-014 (amended 2026-10-26): Codex on bedrock-mantle emits a `CreateInference`
+CloudTrail data event (us-east-1 trail, forwarded to this region's bus). Those rows
+carry provider='mantle' — they are audited but NOT metered. Error events are always
 recorded, and non-platform principals are recorded with mode='other' (account-wide audit).
 """
 import os
@@ -26,7 +30,9 @@ INFERENCE_EVENTS = (
     'InvokeModel', 'InvokeModelWithResponseStream',
     'Converse', 'ConverseStream',
     'Responses',  # OpenAI Responses API on bedrock-runtime (Codex, ADR-014)
+    'CreateInference',  # bedrock-mantle data event (Codex -p mantle, unmetered)
 )
+MANTLE_EVENT_SOURCE = 'bedrock-mantle.amazonaws.com'
 ROLE_PREFIXES = (
     (os.environ.get('TASK_ROLE_PREFIX', 'cc-on-bedrock-task-'), 'ec2'),
     (os.environ.get('LOCAL_ROLE_PREFIX', 'cc-on-bedrock-local-user-'), 'local'),
@@ -85,7 +91,10 @@ def handler(event, context):
         # Non-platform principal (admin, CI, other workloads): still audited, keyed by ARN.
         user_id, mode = (issuer.get('arn') or identity.get('arn') or 'unknown'), 'other'
 
-    model_id = request_params.get('modelId', 'unknown')
+    provider = 'mantle' if detail.get('eventSource') == MANTLE_EVENT_SOURCE else 'runtime'
+    model_id = request_params.get('modelId') or request_params.get('model') or 'unknown'
+    if provider == 'runtime' and event_name == 'CreateInference':
+        return {'statusCode': 200, 'body': 'Skipped: CreateInference outside bedrock-mantle'}
     user_agent = detail.get('userAgent', '') or ''
     event_time = detail.get('eventTime') or datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     event_id = detail.get('eventID', '')
@@ -103,7 +112,14 @@ def handler(event, context):
         'user_agent': user_agent[:256],
         'source_ip': detail.get('sourceIPAddress', ''),
         'aws_region': detail.get('awsRegion', ''),
+        'provider': provider,
     }
+    if provider == 'mantle':
+        audit_record['metered'] = False
+        project = next((r.get('ARN', '') for r in detail.get('resources') or []
+                        if ':project/' in (r.get('ARN') or '')), '')
+        if project:
+            audit_record['mantle_project'] = project.rsplit('/', 1)[1]
     if error_code:
         audit_record['error_code'] = error_code
     inference_region = (detail.get('additionalEventData') or {}).get('inferenceRegion')
@@ -113,7 +129,7 @@ def handler(event, context):
     try:
         table.put_item(Item=audit_record)
         print(f"Audit logged: user={user_id} mode={mode} tool={audit_record['client_tool']} "
-              f"api={event_name} model={model_id}")
+              f"api={event_name} model={model_id} provider={provider}")
     except Exception as e:
         print(f"Error writing audit record: {e}")
         raise

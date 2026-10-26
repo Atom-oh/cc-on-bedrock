@@ -19,6 +19,12 @@
 #   codex [args]  ensure session, then run OpenAI 'codex' against Bedrock
 #                 (ADR-014: amazon-bedrock-runtime provider, same credential_process
 #                 profile → same IAM / metering / budget deny as claude)
+#   setup         point plain 'claude' and 'codex' at Bedrock (no wrapper needed):
+#                 ~/.claude/settings.json gets the Bedrock env + awsCredentialExport
+#                 (Claude Code runs this script for fresh STS keys), and
+#                 ~/.codex/config.toml gets the amazon-bedrock-runtime provider on
+#                 the credential_process profile. Re-run after set-model.
+#   unsetup       remove what 'setup' wrote (restores direct Anthropic/OpenAI use)
 #   set-model K=V (or K V) — update model env in config. Keys (aliases ok):
 #                 sonnet | opus | haiku | subagent | pin | codex
 #                 (full: ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
@@ -41,6 +47,8 @@ STATE_FILE="${CFG_DIR}/state.json"
 TOKEN_CACHE="${CFG_DIR}/cognito-tokens.json"
 AWS_CREDS_FILE="${HOME}/.aws/credentials"
 AWS_CONFIG_FILE="${HOME}/.aws/config"
+CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
+CODEX_CONFIG_FILE="${CODEX_HOME:-${HOME}/.codex}/config.toml"
 
 mkdir -p "${CFG_DIR}"
 
@@ -329,6 +337,9 @@ issue_sts() {  # issue_sts <access_token>
     local exp
     exp="$(echo "${sts_resp}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["credentials"]["expiration"])')"
     echo "✓ credential_process profile=${AWS_PROFILE_NAME} installed, current creds expire=${exp} (SDK auto-renews in-session)"
+    sync_codex_mantle
+    local note; note="$(mantle_note)"
+    [[ -z "${note}" ]] || echo "! ${note}"
   else
     echo "${sts_resp}" >&2
     die "dashboard refused STS issue"
@@ -400,13 +411,14 @@ do_credential_process() {
     return 1
   fi
   save_state "${sts_resp}"
+  sync_codex_mantle >&2
   emit_credentials_json "${STATE_FILE}"
 }
 
 # ─── logout (clear cache + state) ───────────────────────────
 do_logout() {
   rm -f "${TOKEN_CACHE}" "${STATE_FILE}"
-  echo "✓ cached session cleared (next 'cc' will prompt for password)"
+  echo "✓ cached session cleared (run 'cc-bedrock-local login' to sign in again)"
 }
 
 # ─── change-email (re-set + re-login) ───────────────────────
@@ -573,6 +585,227 @@ do_claude() {
   exit "${status}"
 }
 
+# ─── setup / unsetup (native claude + codex, no wrapper) ────
+# Claude Code: the env block makes plain 'claude' use Bedrock with the configured
+# models, and awsCredentialExport makes it run 'credential-process' for keys at
+# session start and whenever they near expiry. Those keys stay inside Claude
+# Code's Bedrock client; the commands Claude runs keep the user's own AWS chain.
+# Codex: amazon-bedrock-runtime provider on the credential_process profile, so
+# plain 'codex' signs with the same per-user role (ADR-014 metering + deny).
+# Every key written here is removed again by 'unsetup'; the first edit of each
+# file keeps a one-time backup next to it (*.cc-bedrock.bak).
+CLAUDE_MANAGED_ENV=(CLAUDE_CODE_USE_BEDROCK AWS_REGION ANTHROPIC_MODEL
+  ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
+  ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_SUBAGENT_MODEL)
+CODEX_MARK="# managed by cc-bedrock-local"
+
+backup_once() {  # backup_once <file>
+  [[ -f "$1" && ! -e "$1.cc-bedrock.bak" ]] && cp -p "$1" "$1.cc-bedrock.bak" || true
+}
+
+configure_claude() {  # configure_claude <credential-export command>
+  mkdir -p "$(dirname "${CLAUDE_SETTINGS_FILE}")"
+  backup_once "${CLAUDE_SETTINGS_FILE}"
+  python3 - "${CLAUDE_SETTINGS_FILE}" "$1" "${CLAUDE_MANAGED_ENV[@]}" <<'PY'
+import json, os, sys
+path, export_cmd, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
+CRED_RULE = "Read(~/.config/cc-bedrock/**)"
+try:
+    settings = json.load(open(path)) if os.path.exists(path) and os.path.getsize(path) else {}
+except ValueError as e:
+    sys.exit(f"cc-bedrock-local: {path} is not valid JSON ({e}); fix it and re-run 'setup'")
+env = settings.setdefault("env", {})
+for k in keys:
+    v = os.environ.get(k, "")
+    if v:
+        env[k] = v
+    else:
+        env.pop(k, None)
+settings["awsCredentialExport"] = export_cmd
+# Claude's Read tool must not open the cached refresh token / STS keys.
+deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+if CRED_RULE not in deny:
+    deny.append(CRED_RULE)
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+# Strip what 'setup' manages (and any unmarked duplicates of those keys, which
+# would make the TOML invalid once ours are added), then optionally add ours.
+configure_codex() {  # configure_codex add|remove
+  [[ "$1" == add || -f "${CODEX_CONFIG_FILE}" ]] || return 0
+  mkdir -p "$(dirname "${CODEX_CONFIG_FILE}")"
+  backup_once "${CODEX_CONFIG_FILE}"
+  python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" "${CFG_DIR}" "${STATE_FILE}" "${CC_BEDROCK_QUIET:-}" <<'PY'
+import json, os, re, sys
+path, mode, mark, model, profile, region, cfg_dir, state_file, quiet = sys.argv[1:10]
+lines = open(path).read().splitlines() if os.path.exists(path) else []
+TABLE = "[model_providers.amazon-bedrock-runtime.aws]"
+PERMS = "[permissions.cc-bedrock]"
+PERMS_FS = "[permissions.cc-bedrock.filesystem]"
+# ADR-014: bedrock-mantle profile (`codex -p mantle`), written only while the
+# dashboard reports a mantle grant (unlimited-cost users; NOT metered). Codex
+# loads `-p <name>` from <CODEX_HOME>/<name>.config.toml and rejects a
+# [profiles.<name>] table in config.toml, so the profile is its own file.
+M_PROFILE = "[profiles.mantle]"  # stripped only (never written)
+M_AWS = "[model_providers.amazon-bedrock.aws]"
+M_HDR = "[model_providers.amazon-bedrock.http_headers]"
+m_path = os.path.join(os.path.dirname(path), "mantle.config.toml")
+try:
+    mantle = json.load(open(state_file)).get("mantle") or {}
+except Exception:
+    mantle = {}
+m_ours = not os.path.exists(m_path) or mark in open(m_path).read()
+top_key = re.compile(r"^\s*(model_provider|model|web_search)\s*=")
+out, in_top, in_ours = [], True, False
+for line in lines:
+    if line.strip().startswith("["):
+        in_top = False
+        in_ours = line.split("#", 1)[0].strip() in (TABLE, PERMS, PERMS_FS, M_PROFILE, M_AWS, M_HDR)
+        if in_ours:
+            continue
+    if in_ours or mark in line or (in_top and top_key.match(line)):
+        continue
+    out.append(line)
+# Drop the blank lines our removals leave behind (edges + doubled gaps).
+out = [l for i, l in enumerate(out) if l.strip() or (i and out[i - 1].strip())]
+while out and not out[0].strip():
+    out.pop(0)
+while out and not out[-1].strip():
+    out.pop()
+if mode == "add":
+    q = lambda v: '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    head = [f'model_provider = "amazon-bedrock-runtime"  {mark}',
+            f"model = {q(model)}  {mark}",
+            f'web_search = "disabled"  {mark}']
+    tail = ["", f"{TABLE}  {mark}", f"profile = {q(profile)}", f"region = {q(region)}"]
+    # Keep commands Codex runs away from the cached refresh token and STS keys:
+    # a permission profile on top of :workspace that denies the CLI's directory
+    # (enforced by the sandbox; Codex's own credential_process call is not
+    # sandboxed). Profiles and sandbox_mode don't compose, so a user who already
+    # chose a sandbox keeps it and gets a warning instead.
+    own = [l for l in out if re.match(r"^\s*(default_permissions|sandbox_mode)\s*=", l)
+           or l.split("#", 1)[0].strip() == "[sandbox_workspace_write]"]
+    if own and not quiet:
+        sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml sets its own sandbox; "
+                         f"add a read deny for {cfg_dir} yourself (see Codex permissions docs)\n")
+    else:
+        head.append(f'default_permissions = "cc-bedrock"  {mark}')
+        tail += ["", f"{PERMS}  {mark}", 'extends = ":workspace"',
+                 "", f"{PERMS_FS}  {mark}", f'{q(cfg_dir)} = "deny"']
+    out = head + ([""] + out if out else []) + tail
+want_mantle = mode == "add" and mantle.get("enabled") and mantle.get("projectId")
+if want_mantle and m_ours:
+    m = [f"{mark} — bedrock-mantle (web search). NOT counted in usage or budget;",
+         "# granted only while your cost is unlimited. Use: codex -p mantle",
+         'model_provider = "amazon-bedrock"',
+         f"model = {q(mantle.get('model') or 'openai.gpt-6.1-sol')}",
+         'web_search = "live"',
+         "", M_AWS, f"profile = {q(profile)}",
+         f"region = {q(mantle.get('region') or 'us-east-1')}",
+         # IAM allows only the user's own project: without the header the call
+         # lands in project/default and is denied.
+         "", M_HDR, f"OpenAI-Project = {q(mantle['projectId'])}"]
+    m_tmp = f"{m_path}.{os.getpid()}.tmp"
+    with open(m_tmp, "w") as f:
+        f.write("\n".join(m) + "\n")
+    os.replace(m_tmp, m_path)
+elif want_mantle and not quiet:
+    sys.stderr.write(f"cc-bedrock-local: {m_path} is your own file — not adding the mantle profile\n")
+elif m_ours and os.path.exists(m_path):
+    os.remove(m_path)
+# Unique tmp: credential-process (claude + codex) may refresh concurrently.
+tmp = f"{path}.{os.getpid()}.tmp"
+with open(tmp, "w") as f:
+    f.write("\n".join(out) + ("\n" if out else ""))
+os.replace(tmp, path)
+PY
+}
+
+mantle_note() {  # one line describing the mantle grant in state.json (empty when none)
+  [[ -f "${STATE_FILE}" ]] || return 0
+  python3 - "${STATE_FILE}" <<'PY' 2>/dev/null || true
+import json, sys
+m = json.load(open(sys.argv[1])).get("mantle") or {}
+if m.get("enabled"):
+    print(f"mantle (codex -p mantle, {m.get('model')}, {m.get('region')}): enabled — web search; "
+          "NOT counted in usage or budget; available while your cost is unlimited")
+PY
+}
+
+# After new credentials: keep the Codex mantle profile in step with the grant
+# (it appears/disappears as an admin removes/sets cost caps). Files + stderr only.
+sync_codex_mantle() {
+  clients_configured || return 0
+  CC_BEDROCK_QUIET=1 configure_codex add || say "could not update ${CODEX_CONFIG_FILE}"
+}
+
+clients_configured() {
+  [[ -f "${CLAUDE_SETTINGS_FILE}" ]] && python3 - "${CLAUDE_SETTINGS_FILE}" <<'PY' 2>/dev/null
+import json, sys
+sys.exit(0 if str(json.load(open(sys.argv[1])).get("awsCredentialExport", "")).endswith(" credential-process") else 1)
+PY
+}
+
+do_setup() {
+  require_config
+  setup_aws_profile
+  local self
+  self="$(script_abspath)"
+  CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION="${AWS_REGION}" ANTHROPIC_MODEL="${ANTHROPIC_MODEL}" \
+    ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL}" \
+    ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL}" \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL}" \
+    CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL}" \
+    configure_claude "$(printf '%q' "${self}") credential-process"
+  configure_codex add
+  echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport)"
+  echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: amazon-bedrock-runtime, profile=${AWS_PROFILE_NAME}, model=${CODEX_MODEL})"
+  local note; note="$(mantle_note)"
+  [[ -z "${note}" ]] || echo "! ${note}"
+  # A Bedrock API key outranks the profile in both tools and would bypass the
+  # per-user role (metering, budget deny).
+  [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ]] ||
+    say "AWS_BEARER_TOKEN_BEDROCK is set — claude/codex would use that key instead of your cc-bedrock role; unset it (shell rc too)"
+  have claude || say "claude not found — install: npm install -g @anthropic-ai/claude-code"
+  have codex  || say "codex not found — install: npm install -g @openai/codex@0.163.0"
+}
+
+do_unsetup() {
+  if [[ -f "${CLAUDE_SETTINGS_FILE}" ]]; then
+    python3 - "${CLAUDE_SETTINGS_FILE}" "${CLAUDE_MANAGED_ENV[@]}" <<'PY'
+import json, os, sys
+path, keys = sys.argv[1], sys.argv[2:]
+settings = json.load(open(path))
+env = settings.get("env", {})
+for k in keys:
+    env.pop(k, None)
+if not env:
+    settings.pop("env", None)
+if str(settings.get("awsCredentialExport", "")).endswith(" credential-process"):
+    settings.pop("awsCredentialExport")
+perms = settings.get("permissions", {})
+if "Read(~/.config/cc-bedrock/**)" in perms.get("deny", []):
+    perms["deny"].remove("Read(~/.config/cc-bedrock/**)")
+    if not perms["deny"]:
+        perms.pop("deny")
+    if not perms:
+        settings.pop("permissions")
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+  fi
+  configure_codex remove
+  echo "✓ removed Bedrock settings from ${CLAUDE_SETTINGS_FILE} and ${CODEX_CONFIG_FILE}"
+}
+
 # ─── set-model (update config) ──────────────────────────────
 do_set_model() {
   [[ -n "${1:-}" ]] || die "usage: set-model <key>=<value>  OR  set-model <key> <value>"
@@ -595,6 +828,11 @@ do_set_model() {
   esac
   config_set "${key}" "${val}"
   echo "✓ ${key}=${val} (saved to ${CFG_FILE})"
+  if clients_configured; then
+    printf -v "${key}" '%s' "${val}"
+    do_setup >/dev/null
+    echo "✓ claude/codex settings updated"
+  fi
 }
 
 # ─── models (display) ───────────────────────────────────────
@@ -622,7 +860,7 @@ EOF
 
 do_status() {
   if [[ ! -f "${STATE_FILE}" ]]; then
-    echo "no session — run 'cc' or 'cc-bedrock-local login'"
+    echo "no session — run 'cc-bedrock-local login'"
     return 1
   fi
   python3 - "${STATE_FILE}" "${TOKEN_CACHE}" "${EMAIL:-}" <<'PY'
@@ -641,6 +879,12 @@ try:
 except Exception:
     pass
 print(f"deny active   : {limit.get('denyActive', False)}")
+mantle = state.get("mantle") or {}
+if mantle.get("enabled"):
+    print(f"mantle        : enabled (codex -p mantle, {mantle.get('model')}, {mantle.get('region')}, "
+          f"project {mantle.get('projectId')}) — NOT counted in usage or budget")
+else:
+    print("mantle        : off (available only while your cost is unlimited)")
 if limit.get("denyActive"):
     print(f"  reason      : {limit.get('denyReason')}")
     print(f"  reset_at    : {limit.get('resetAt')}")
@@ -684,6 +928,11 @@ Subcommands:
   claude [args]               ensure session + apply model env from config, exec claude
                               emits lightweight OTEL session/git metrics when configured
   codex [args]                ensure session, exec OpenAI codex on Bedrock (ADR-014)
+  setup                       configure plain 'claude' + 'codex' for Bedrock
+                              (~/.claude/settings.json, ~/.codex/config.toml);
+                              unlimited-cost users also get 'codex -p mantle'
+                              (bedrock-mantle, web search — NOT metered)
+  unsetup                     remove those settings again
   set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin|codex)
   models                      show current model env + valid keys
   run -- <cmd> [args]         generic: ensure session, exec <cmd> (no claude env)
@@ -704,6 +953,8 @@ case "${sub}" in
   run)          do_run "$@" ;;
   claude)       do_claude "$@" ;;
   codex)        do_codex "$@" ;;
+  setup)        do_setup ;;
+  unsetup)      do_unsetup ;;
   set-model|set_model) do_set_model "$@" ;;
   models)       do_models ;;
   config)       do_config ;;

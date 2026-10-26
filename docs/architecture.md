@@ -50,9 +50,11 @@ graph LR
 ## Canonical decisions (the 9 pillars)
 
 1. **Tools on Bedrock.** Claude Code and the **OpenAI Codex CLI** both run on Bedrock under the same
-   governance (ADR-014). Codex uses only the `amazon-bedrock-runtime` provider (bedrock-runtime
-   Responses API, `global.openai.*` profiles; never bedrock-mantle) with the same per-user role
-   credentials (IMDS on EC2, `credential_process` in Local Mode — `cc-bedrock-local codex` / `ccx`).
+   governance (ADR-014). Codex uses the `amazon-bedrock-runtime` provider (bedrock-runtime
+   Responses API, `global.openai.*` profiles) with the same per-user role
+   credentials (IMDS on EC2, `credential_process` in Local Mode — plain `codex` after `cc-bedrock-local setup`).
+   Local Mode users with no cost cap also get `codex -p mantle` (bedrock-mantle in us-east-1, web search):
+   granted per user by `budget-check`, NOT metered, audited by a us-east-1 CloudTrail data-event trail (ADR-014 §9).
    DevEnv ships governed defaults in `/etc/codex/config.toml` (system layer). Kiro is installed by
    default but uses IAM Identity Center licensing — **not** part of Cognito/Bedrock usage governance.
 2. **Two access paths.** EC2 Mode (CloudFront→NLB→nginx ECS→EC2) + Local Mode (`cc-bedrock-local`
@@ -157,7 +159,7 @@ docs/decisions/     BASELINE.md + active ADRs · archive/ = historical
 - DevEnv data lives on the persistent data EBS, not the OS root (a Terminate must not destroy it).
 - Keep port 8080 reserved for code-server.
 - Keep Kiro out of Cognito and Bedrock token-limit enforcement.
-- Never grant `bedrock-mantle:*`; Codex stays on bedrock-runtime (ADR-014).
+- Grant `bedrock-mantle:*` only through budget-check's per-user unmetered policy (unlimited-cost users, own project); Codex defaults to bedrock-runtime (ADR-014 §9).
 
 ## Where decisions live
 - **Current truth:** this file + `docs/decisions/BASELINE.md`.

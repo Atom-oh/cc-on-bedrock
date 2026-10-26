@@ -45,8 +45,17 @@ def test_dashboard_role_stays_claude_only():
     assert "openai.gpt" not in block
 
 
-def test_no_bedrock_mantle_grant_anywhere():
-    # ADR-014: Codex stays on bedrock-runtime; a bedrock-mantle grant would escape
-    # invocation-log metering, management-event audit and the IAM deny.
-    hits = [rel for rel, _ in COPIES if "bedrock-mantle:" in (REPO / rel).read_text()]
-    assert not hits, f"bedrock-mantle:* must never be granted (found in {hits})"
+def test_bedrock_mantle_only_in_the_gated_boundary_statement():
+    # ADR-014 (amended 2026-10-26): mantle escapes invocation-log metering, so it is
+    # never in a standing allow-list. The only standing reference is the boundary's
+    # enable_mantle-gated ceiling; the actual grant is budget-check's per-user inline
+    # policy for unlimited-cost users.
+    hits = [rel for rel, _ in COPIES[1:] if "bedrock-mantle:" in (REPO / rel).read_text()]
+    assert not hits, f"bedrock-mantle:* must not be in a standing allow-list (found in {hits})"
+    tf = (REPO / "terraform/modules/security/main.tf").read_text()
+    boundary = tf[tf.index('data "aws_iam_policy_document" "task_permission_boundary"'):]
+    shared = tf[tf.index('data "aws_iam_policy_document" "bedrock"'):tf.index('data "aws_iam_policy_document" "task_permission_boundary"')]
+    assert "bedrock-mantle:" not in shared
+    i = boundary.index('sid       = "BedrockMantleUnmetered"')
+    assert "for_each = var.enable_mantle ? [1] : []" in boundary[i - 200:i]
+    assert tf.count("bedrock-mantle:CreateInference") == 1

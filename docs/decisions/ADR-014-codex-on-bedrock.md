@@ -48,8 +48,9 @@ Evidence (samples account, ap-northeast-2, 2026-10-18):
 
 ## Decision
 
-**Codex calls Bedrock only through `amazon-bedrock-runtime` and shares Claude Code's
-per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is not used.**
+**Codex calls Bedrock through `amazon-bedrock-runtime` by default and shares Claude Code's
+per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is used only as
+the opt-in `codex -p mantle` profile for users whose cost is unlimited (§9, amended 2026-10-26).**
 
 1. **IAM (extends ADR-007).** Every per-user Bedrock allow-list and the permission
    boundary add `foundation-model/*openai.gpt-*`, `inference-profile/*openai.gpt-*` and
@@ -58,7 +59,8 @@ per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is no
    (`security/main.tf` shared document + boundary, `ec2-devenv/main.tf`,
    `role_factory.py`, `user-role-provisioner.py`, `ec2-clients.ts`) are pinned by
    `tests/unit/test_bedrock_iam_codex_parity.py`. The dashboard's own role stays
-   Claude-only. No `bedrock-mantle:*` grant, so the mantle path cannot bypass metering.
+   Claude-only. None of these copies grants `bedrock-mantle:*`; the mantle grant is the
+   separate, budget-check-managed policy of §9.
    Existing roles pick up the change on their next inline-policy upsert (Local: STS
    issue; EC2: instance create/restore/start — the restart path now re-upserts too).
 2. **Models and attribution.** The Responses API rejects foundation-model IDs and
@@ -71,10 +73,23 @@ per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is no
    **system layer** `/etc/codex/config.toml` (lowest precedence; users may override keys
    in `~/.codex/config.toml`): provider, region, model, `web_search = "disabled"`
    (bedrock-runtime has no server-side tools), `[analytics] enabled = false`.
-4. **Local Mode.** `cc-bedrock-local codex` (installer function `ccx`) runs Codex on the
-   same `credential_process` profile and pins provider and region as session overrides
-   (`-c`), which outrank a personal `~/.codex/config.toml` pointing at OpenAI (verified).
-   The model override applies only when the user passes no `-m`/`--model`.
+4. **Local Mode.** `cc-bedrock-local setup` (run by the installer) writes the governed
+   defaults into `~/.codex/config.toml`: provider, model, `web_search = "disabled"` and
+   `[model_providers.amazon-bedrock-runtime.aws]` with `profile` = the `credential_process`
+   profile and region, plus `default_permissions` = a `cc-bedrock` profile
+   (`extends = ":workspace"`) that denies `~/.config/cc-bedrock` (refresh token, STS
+   keys) to sandboxed commands — skipped with a warning when the user already chose a
+   `sandbox_mode`/`default_permissions`. Each line is marked `# managed by cc-bedrock-local`.
+   Plain `codex` then signs with the per-user role (verified with codex-cli 0.163). Claude Code's
+   `awsCredentialExport` runs the same `credential-process` subcommand: it accepts the flat
+   `credential_process` shape (`Version`/`AccessKeyId`/…/`Expiration`) as well as
+   `{"Credentials":…}` (Claude Code settings docs; verified 2026-10-26 with `claude -p` answering
+   from Bedrock), and caches it until 5 min before `Expiration`. The file is the user's,
+   so pointing it back at OpenAI only leaves the platform; it cannot spend Bedrock outside
+   the role, which stays the enforcement point. `cc-bedrock-local codex` still pins
+   provider and region as session overrides (`-c`) for a one-off governed run.
+   The provider stays `amazon-bedrock-runtime`, not `amazon-bedrock` (bedrock-mantle, see
+   Context). *Amended 2026-10-26:* the installer no longer adds the `ccx`/`cc` shell functions.
 5. **Cost (extends ADR-005).** `normalize_model` strips `*.openai.` prefixes
    (`gpt-6.1-sol`). `PRICING` carries **explicit cache read/write rates** per model,
    because vendors differ (GPT-6.1 Sol cache read is 0.05× input, Anthropic 0.1×).
@@ -98,6 +113,36 @@ per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is no
    (vendor fallback), and keys rows `{eventTime}#{eventID}` so same-second calls no longer
    overwrite each other. Audit stays account-wide: non-platform principals are recorded with `mode=other`, and error events are kept with `error_code`. The Security
    page tags Bedrock audit rows Claude Code / Codex with the model.
+
+9. **bedrock-mantle for unlimited users (amended 2026-10-26).** Users need mantle-only
+   APIs, above all server-side **web search**, which bedrock-runtime lacks. Mantle traffic
+   never reaches the invocation log, so it cannot be metered per user. Decision (user): mantle
+   is available **only while a user's cost is unlimited** and every surface says it is
+   **not counted** in usage or budget.
+   - *Eligibility* (`budget-check`, every 5 min): every effective USD cap (user → dept
+     per-user default → global) is 0, the department total budget is 0, and no `LIMIT#`
+     token row exists for the user or department. With the shipped global `daily_budget_usd`
+     > 0 nobody is eligible.
+   - *Grant:* inline policy `cc-bedrock-mantle-unmetered` on `cc-on-bedrock-local-user-*`:
+     `bedrock-mantle:CreateInference`/`Get*`/`List*` on the user's **own** us-east-1 project
+     (`cc-<subdomain>`, created by budget-check, never auto-archived) + `bedrock-websearch:
+     InvokeSearch`/`InvokeFetch`. Scoping to the own project makes the `OpenAI-Project`
+     header mandatory (`project/default` is denied). Removed within one run when any cap
+     appears; on a budget/limits/Cognito read failure every grant is removed (fail safe).
+     The permission boundary carries the matching ceiling behind `enable_mantle`; every
+     deny policy also denies `bedrock-mantle:*` and `bedrock-websearch:*`.
+   - *Client:* `/api/local/credentials` (sts-issuer) reports `mantle {enabled, projectId,
+     region, model}` read from the grant; `cc-bedrock-local` writes / removes
+     `~/.codex/mantle.config.toml` (Codex 0.163 loads `-p <name>` from `<name>.config.toml`
+     and rejects `[profiles.<name>]` in config.toml) on login, credential renewal and setup.
+     Plain `codex` stays on bedrock-runtime (Seoul). GPT models exist on mantle only in
+     **us-east-1** (Codex refuses Seoul mantle client-side), so mantle data is processed there.
+   - *Audit:* a us-east-1 trail logs mantle data events (`AWS::BedrockMantle::Project`,
+     ~$0.10 / 100k calls) to its own bucket (90 days); an EventBridge rule forwards
+     `CreateInference` to the home-region bus, where `audit-logger` records it with
+     `provider = mantle`, `metered = false`.
+   - Terraform: `enable_mantle` (default true; false = no ceiling, no trail, no grant) and
+     `codex_mantle_model_id` (default `openai.gpt-6.1-sol`). EC2 DevEnv mantle is a follow-up.
 
 ## Consequences
 
@@ -124,8 +169,11 @@ files:
     must_contain:
       - "foundation-model/*openai.gpt-*"
       - ":project/default"
-    must_not_contain:
-      - "bedrock-mantle:"
+      - "for_each = var.enable_mantle ? [1] : []"
+  - path: lambda/budget-check.py
+    must_contain:
+      - "def mantle_eligible"
+      - "cc-bedrock-mantle-unmetered"
   - path: lambda/bedrock-usage-tracker.py
     must_contain:
       - "global.openai."
@@ -143,7 +191,7 @@ files:
       - "model_provider=\"amazon-bedrock-runtime\""
 
 semantic:
-  - claim: "Codex uses the bedrock-runtime Responses API (amazon-bedrock-runtime provider), never bedrock-mantle, so invocation-log metering, the IAM deny and management-event audit cover it."
+  - claim: "Codex defaults to the bedrock-runtime Responses API (amazon-bedrock-runtime provider), so invocation-log metering, the IAM deny and audit cover it; bedrock-mantle is granted only to unlimited-cost users, scoped to their own project, revoked when any cap appears, and audited via CloudTrail data events."
     context_files:
       - shared/nextjs-app/src/lib/ec2-clients.ts
       - tools/cc-bedrock-local.sh
