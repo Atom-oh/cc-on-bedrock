@@ -11,6 +11,15 @@ consolidates: [ADR-022, ADR-028]
 
 Accepted (2026-06-23)
 
+> **Implementation status (2026-10-26):** the provisioner/shim source exists, but
+> current Terraform wires the Cognito post-confirmation/post-authentication shim,
+> but does not define its downstream `UserRoleProvisioner` Lambda, EventBridge
+> rule or DLQ. The accepted design is not evidence of
+> a deployed pre-provisioning/cleanup path. Current issuance uses the STS issuer's
+> lazy role fallback; DevEnv start upserts its instance role. See `terraform/CLAUDE.md`.
+> Adding the missing wiring is a separate implementation task, not part of this
+> documentation reconciliation.
+
 ## Context
 
 per-user 신원은 세 평면에 걸쳐 존재한다 — Cognito 레코드 + custom attrs(`custom:subdomain`, `custom:dept_manager_sub`), Local Governance IAM 롤, EC2 DevEnv task 롤 + instance profile. 초기에는 각 평면이 서로 다른 시점·행위자(seed 스크립트 / 대시보드 / 콘솔 / SDK / 첫 로그인 / 첫 인스턴스 start)에 의해 lazy하게 채워졌고, 두 부류의 버그가 따라왔다.

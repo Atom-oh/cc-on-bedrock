@@ -17,7 +17,14 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 
 ## API Routes (`src/app/api/`)
 
-모든 route는 세션을 검증한다. Admin route는 Cognito `admin` 그룹을, user route는 본인 데이터만 허용한다.
+Protected routes validate the user session and their required role/scope; user
+routes restrict access to the user's own data. Public installer/health and
+password challenge/recovery endpoints have route-specific validation.
+`local/credentials` accepts a dashboard session or the CLI public client's
+verified Cognito access token. `/api/ai` requires an admin session;
+`/api/ai/runtime` currently requires both the middleware's NextAuth session and
+the handler's configured bearer API key; bearer-only external integrations are
+blocked before the handler.
 
 ### Admin
 - `containers`, `container-metrics` - EC2 인스턴스 관리, CloudWatch 메트릭 + DynamoDB 사용량
