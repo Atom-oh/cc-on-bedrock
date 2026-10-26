@@ -51,7 +51,7 @@
 | **LIVE (default)** | Governance deployment profile | `deployment_mode = "governance"` (default): dashboard + local installer (Cognito → 1h STS, no Bedrock key), no EC2/ECS DevEnv, OTEL collector or EC2 schedules. `deployment_mode = "devenv"` adds EC2 DevEnvs; deprecated `governance_only` overrides when set | ADR-006 (amendment 2026-10-23) |
 | **LIVE(flag)** | EC2 Hibernation | `HIBERNATE_ENABLED=true`. 유휴 stop/hibernate + 만료 회전, 암호화 root (`deployment_mode = "devenv"` 전용) | ADR-002 |
 | **GATED** | 셀프서비스 IAM 권한 확장 | UI 신청 → **admin 승인** 필수 + permission boundary 내. 신청 API(`/api/user/container-request`)는 `deployment_mode = "devenv"` 전용 (ADR-006 amendment 2026-10-23) | ADR-007 |
-| **LIVE** | Codex on Bedrock | Codex CLI preinstalled on EC2 DevEnv + Local `cc-bedrock-local codex` / `ccx`; bedrock-runtime Responses API sharing usage, budget and audit. Codex OTEL productivity rollup is a follow-up | ADR-014 |
+| **LIVE** | Codex on Bedrock | Codex CLI preinstalled on EC2 DevEnv + Local plain `codex` via `cc-bedrock-local setup`; bedrock-runtime Responses API sharing usage, budget and audit. Codex OTEL productivity rollup is a follow-up | ADR-014 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
 | **OUT-OF-SCOPE** | Department MCP Gateway | 현 베이스라인 범위 밖 (구 ADR-007-MCP) | history/brainstorm |
 | **LIVE** | Documentation language | New/substantially rewritten documentation/ADRs/comments use English; existing Korean-only/bilingual content remains until its own maintenance update. Korean conversation/UI remain supported. Review output uses English. | ADR-013 |

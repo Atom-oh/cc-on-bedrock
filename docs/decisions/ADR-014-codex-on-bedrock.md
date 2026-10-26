@@ -71,10 +71,15 @@ per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is no
    **system layer** `/etc/codex/config.toml` (lowest precedence; users may override keys
    in `~/.codex/config.toml`): provider, region, model, `web_search = "disabled"`
    (bedrock-runtime has no server-side tools), `[analytics] enabled = false`.
-4. **Local Mode.** `cc-bedrock-local codex` (installer function `ccx`) runs Codex on the
-   same `credential_process` profile and pins provider and region as session overrides
-   (`-c`), which outrank a personal `~/.codex/config.toml` pointing at OpenAI (verified).
-   The model override applies only when the user passes no `-m`/`--model`.
+4. **Local Mode.** `cc-bedrock-local setup` (run by the installer) writes the governed
+   defaults into `~/.codex/config.toml`: provider, model, `web_search = "disabled"` and
+   `[model_providers.amazon-bedrock-runtime.aws]` with `profile` = the `credential_process`
+   profile and region, each marked `# managed by cc-bedrock-local`. Plain `codex` then
+   signs with the per-user role (verified with codex-cli 0.163). The file is the user's,
+   so pointing it back at OpenAI only leaves the platform; it cannot spend Bedrock outside
+   the role, which stays the enforcement point. `cc-bedrock-local codex` still pins
+   provider and region as session overrides (`-c`) for a one-off governed run.
+   *Amended 2026-10-26:* the installer no longer adds the `ccx`/`cc` shell functions.
 5. **Cost (extends ADR-005).** `normalize_model` strips `*.openai.` prefixes
    (`gpt-6.1-sol`). `PRICING` carries **explicit cache read/write rates** per model,
    because vendors differ (GPT-6.1 Sol cache read is 0.05× input, Anthropic 0.1×).

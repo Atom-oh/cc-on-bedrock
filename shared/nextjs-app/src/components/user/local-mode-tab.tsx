@@ -263,11 +263,11 @@ export default function LocalModeTab() {
         </pre>
         <div className="mt-3 text-xs text-gray-500 space-y-1">
           <div>
-            설치 후 <code className="text-gray-300">cc</code>를 실행하면 Cognito 비밀번호를 묻고 Claude Code를 Bedrock 모드로 실행합니다.
+            설치 중 Cognito 비밀번호로 한 번 로그인하면 <code className="text-gray-300">claude</code>와 <code className="text-gray-300">codex</code>가 Bedrock 모드로 바로 실행됩니다.
           </div>
           <div>
-            상태 확인: <code className="text-gray-300">cc --status</code> · 로그아웃:{" "}
-            <code className="text-gray-300">cc --logout</code>
+            상태 확인: <code className="text-gray-300">cc-bedrock-local status</code> · 로그아웃:{" "}
+            <code className="text-gray-300">cc-bedrock-local logout</code>
           </div>
         </div>
       </section>

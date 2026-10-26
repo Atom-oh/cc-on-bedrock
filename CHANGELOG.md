@@ -4,6 +4,10 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ## [Unreleased]
 
+### Local Mode: plain `claude` / `codex`
+- `curl …/api/install | bash` now configures the tools themselves instead of adding the `cc()` / `ccx()` shell functions (and removes the block older installs added). New `cc-bedrock-local setup` writes `~/.claude/settings.json` (`CLAUDE_CODE_USE_BEDROCK`, region and model env, `awsCredentialExport` = `cc-bedrock-local credential-process`, so Claude Code fetches and renews the per-user STS keys itself) and `~/.codex/config.toml` (`amazon-bedrock-runtime` provider with `aws.profile` = the `credential_process` profile). `set-model` keeps both files in sync; `unsetup` removes only the managed keys. The first edit keeps a `*.cc-bedrock.bak` backup.
+- Not carried over from the `cc` wrapper: `--dangerously-skip-permissions` and the optional `cc-otel-code-metrics` session/git events. Usage metering and budgets come from Bedrock invocation logs and are unchanged. `cc-bedrock-local claude` / `codex` remain for wrapped runs.
+
 ### Review pipeline (ADR-013 amendment, #125)
 - AI PR review simplified to the lens panel → chair `VERDICT` path (`ROLE_REVIEW=0`, 12,000-line cap); chair runs with no tools / no MCP; non-zero panel cells are not credited. ADR Compliance CI (`adr-verify-pr.yml` / `adr-verify-main.yml`) removed; ADR `## Verification` blocks are documentation-only.
 

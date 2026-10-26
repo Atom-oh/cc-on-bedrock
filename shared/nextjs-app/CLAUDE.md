@@ -39,7 +39,7 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 ### Common
 - `ai` - Bedrock Converse (Tool Use, 최대 5 iteration) · `ai/memory`, `ai/runtime` - AgentCore Memory/Runtime
 - `dept`, `dept/list`, `dept/mcp` · `health` · `auth/[...nextauth]`
-- `install`, `install/cli`, `install/otel` - Local CLI 설치 스크립트 (`cc()` / `ccx()` 셸 함수 포함)
+- `install`, `install/cli`, `install/otel` - Local CLI installer (runs `cc-bedrock-local setup` + `login` so plain `claude` / `codex` use Bedrock; removes legacy `cc()` / `ccx()` functions)
 - `slack/commands`, `slack/events`
 
 ## Components

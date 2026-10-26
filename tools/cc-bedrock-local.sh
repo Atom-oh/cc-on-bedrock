@@ -19,6 +19,12 @@
 #   codex [args]  ensure session, then run OpenAI 'codex' against Bedrock
 #                 (ADR-014: amazon-bedrock-runtime provider, same credential_process
 #                 profile → same IAM / metering / budget deny as claude)
+#   setup         point plain 'claude' and 'codex' at Bedrock (no wrapper needed):
+#                 ~/.claude/settings.json gets the Bedrock env + awsCredentialExport
+#                 (Claude Code runs this script for fresh STS keys), and
+#                 ~/.codex/config.toml gets the amazon-bedrock-runtime provider on
+#                 the credential_process profile. Re-run after set-model.
+#   unsetup       remove what 'setup' wrote (restores direct Anthropic/OpenAI use)
 #   set-model K=V (or K V) — update model env in config. Keys (aliases ok):
 #                 sonnet | opus | haiku | subagent | pin | codex
 #                 (full: ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
@@ -41,6 +47,8 @@ STATE_FILE="${CFG_DIR}/state.json"
 TOKEN_CACHE="${CFG_DIR}/cognito-tokens.json"
 AWS_CREDS_FILE="${HOME}/.aws/credentials"
 AWS_CONFIG_FILE="${HOME}/.aws/config"
+CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
+CODEX_CONFIG_FILE="${CODEX_HOME:-${HOME}/.codex}/config.toml"
 
 mkdir -p "${CFG_DIR}"
 
@@ -406,7 +414,7 @@ do_credential_process() {
 # ─── logout (clear cache + state) ───────────────────────────
 do_logout() {
   rm -f "${TOKEN_CACHE}" "${STATE_FILE}"
-  echo "✓ cached session cleared (next 'cc' will prompt for password)"
+  echo "✓ cached session cleared (run 'cc-bedrock-local login' to sign in again)"
 }
 
 # ─── change-email (re-set + re-login) ───────────────────────
@@ -573,6 +581,141 @@ do_claude() {
   exit "${status}"
 }
 
+# ─── setup / unsetup (native claude + codex, no wrapper) ────
+# Claude Code: the env block makes plain 'claude' use Bedrock with the configured
+# models, and awsCredentialExport makes it run 'credential-process' for keys at
+# session start and whenever they near expiry. Those keys stay inside Claude
+# Code's Bedrock client; the commands Claude runs keep the user's own AWS chain.
+# Codex: amazon-bedrock-runtime provider on the credential_process profile, so
+# plain 'codex' signs with the same per-user role (ADR-014 metering + deny).
+# Every key written here is removed again by 'unsetup'; the first edit of each
+# file keeps a one-time backup next to it (*.cc-bedrock.bak).
+CLAUDE_MANAGED_ENV=(CLAUDE_CODE_USE_BEDROCK AWS_REGION ANTHROPIC_MODEL
+  ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
+  ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_SUBAGENT_MODEL)
+CODEX_MARK="# managed by cc-bedrock-local"
+
+backup_once() {  # backup_once <file>
+  [[ -f "$1" && ! -e "$1.cc-bedrock.bak" ]] && cp -p "$1" "$1.cc-bedrock.bak" || true
+}
+
+configure_claude() {  # configure_claude <credential-export command>
+  mkdir -p "$(dirname "${CLAUDE_SETTINGS_FILE}")"
+  backup_once "${CLAUDE_SETTINGS_FILE}"
+  python3 - "${CLAUDE_SETTINGS_FILE}" "$1" "${CLAUDE_MANAGED_ENV[@]}" <<'PY'
+import json, os, sys
+path, export_cmd, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
+try:
+    settings = json.load(open(path)) if os.path.exists(path) and os.path.getsize(path) else {}
+except ValueError as e:
+    sys.exit(f"cc-bedrock-local: {path} is not valid JSON ({e}); fix it and re-run 'setup'")
+env = settings.setdefault("env", {})
+for k in keys:
+    v = os.environ.get(k, "")
+    if v:
+        env[k] = v
+    else:
+        env.pop(k, None)
+settings["awsCredentialExport"] = export_cmd
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+# Strip what 'setup' manages (and any unmarked duplicates of those keys, which
+# would make the TOML invalid once ours are added), then optionally add ours.
+configure_codex() {  # configure_codex add|remove
+  [[ "$1" == add || -f "${CODEX_CONFIG_FILE}" ]] || return 0
+  mkdir -p "$(dirname "${CODEX_CONFIG_FILE}")"
+  backup_once "${CODEX_CONFIG_FILE}"
+  python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" <<'PY'
+import os, re, sys
+path, mode, mark, model, profile, region = sys.argv[1:7]
+lines = open(path).read().splitlines() if os.path.exists(path) else []
+TABLE = "[model_providers.amazon-bedrock-runtime.aws]"
+top_key = re.compile(r"^\s*(model_provider|model|web_search)\s*=")
+out, in_top, in_ours = [], True, False
+for line in lines:
+    if line.strip().startswith("["):
+        in_top = False
+        in_ours = line.split("#", 1)[0].strip() == TABLE
+        if in_ours:
+            continue
+    if in_ours or mark in line or (in_top and top_key.match(line)):
+        continue
+    out.append(line)
+# Drop the blank lines our removals leave behind (edges + doubled gaps).
+out = [l for i, l in enumerate(out) if l.strip() or (i and out[i - 1].strip())]
+while out and not out[0].strip():
+    out.pop(0)
+while out and not out[-1].strip():
+    out.pop()
+if mode == "add":
+    q = lambda v: '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    head = [f'model_provider = "amazon-bedrock-runtime"  {mark}',
+            f"model = {q(model)}  {mark}",
+            f'web_search = "disabled"  {mark}']
+    tail = ["", f"{TABLE}  {mark}", f"profile = {q(profile)}", f"region = {q(region)}"]
+    out = head + ([""] + out if out else []) + tail
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    f.write("\n".join(out) + ("\n" if out else ""))
+os.replace(tmp, path)
+PY
+}
+
+clients_configured() {
+  [[ -f "${CLAUDE_SETTINGS_FILE}" ]] && python3 - "${CLAUDE_SETTINGS_FILE}" <<'PY' 2>/dev/null
+import json, sys
+sys.exit(0 if str(json.load(open(sys.argv[1])).get("awsCredentialExport", "")).endswith(" credential-process") else 1)
+PY
+}
+
+do_setup() {
+  require_config
+  setup_aws_profile
+  local self
+  self="$(script_abspath)"
+  CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION="${AWS_REGION}" ANTHROPIC_MODEL="${ANTHROPIC_MODEL}" \
+    ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL}" \
+    ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL}" \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL}" \
+    CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL}" \
+    configure_claude "$(printf '%q' "${self}") credential-process"
+  configure_codex add
+  echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport)"
+  echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: amazon-bedrock-runtime, profile=${AWS_PROFILE_NAME}, model=${CODEX_MODEL})"
+  have claude || say "claude not found — install: npm install -g @anthropic-ai/claude-code"
+  have codex  || say "codex not found — install: npm install -g @openai/codex@0.163.0"
+}
+
+do_unsetup() {
+  if [[ -f "${CLAUDE_SETTINGS_FILE}" ]]; then
+    python3 - "${CLAUDE_SETTINGS_FILE}" "${CLAUDE_MANAGED_ENV[@]}" <<'PY'
+import json, os, sys
+path, keys = sys.argv[1], sys.argv[2:]
+settings = json.load(open(path))
+env = settings.get("env", {})
+for k in keys:
+    env.pop(k, None)
+if not env:
+    settings.pop("env", None)
+if str(settings.get("awsCredentialExport", "")).endswith(" credential-process"):
+    settings.pop("awsCredentialExport")
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+  fi
+  configure_codex remove
+  echo "✓ removed Bedrock settings from ${CLAUDE_SETTINGS_FILE} and ${CODEX_CONFIG_FILE}"
+}
+
 # ─── set-model (update config) ──────────────────────────────
 do_set_model() {
   [[ -n "${1:-}" ]] || die "usage: set-model <key>=<value>  OR  set-model <key> <value>"
@@ -595,6 +738,11 @@ do_set_model() {
   esac
   config_set "${key}" "${val}"
   echo "✓ ${key}=${val} (saved to ${CFG_FILE})"
+  if clients_configured; then
+    printf -v "${key}" '%s' "${val}"
+    do_setup >/dev/null
+    echo "✓ claude/codex settings updated"
+  fi
 }
 
 # ─── models (display) ───────────────────────────────────────
@@ -622,7 +770,7 @@ EOF
 
 do_status() {
   if [[ ! -f "${STATE_FILE}" ]]; then
-    echo "no session — run 'cc' or 'cc-bedrock-local login'"
+    echo "no session — run 'cc-bedrock-local login'"
     return 1
   fi
   python3 - "${STATE_FILE}" "${TOKEN_CACHE}" "${EMAIL:-}" <<'PY'
@@ -684,6 +832,9 @@ Subcommands:
   claude [args]               ensure session + apply model env from config, exec claude
                               emits lightweight OTEL session/git metrics when configured
   codex [args]                ensure session, exec OpenAI codex on Bedrock (ADR-014)
+  setup                       configure plain 'claude' + 'codex' for Bedrock
+                              (~/.claude/settings.json, ~/.codex/config.toml)
+  unsetup                     remove those settings again
   set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin|codex)
   models                      show current model env + valid keys
   run -- <cmd> [args]         generic: ensure session, exec <cmd> (no claude env)
@@ -704,6 +855,8 @@ case "${sub}" in
   run)          do_run "$@" ;;
   claude)       do_claude "$@" ;;
   codex)        do_codex "$@" ;;
+  setup)        do_setup ;;
+  unsetup)      do_unsetup ;;
   set-model|set_model) do_set_model "$@" ;;
   models)       do_models ;;
   config)       do_config ;;
