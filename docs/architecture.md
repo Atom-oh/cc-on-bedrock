@@ -52,7 +52,7 @@ graph LR
 1. **Tools on Bedrock.** Claude Code and the **OpenAI Codex CLI** both run on Bedrock under the same
    governance (ADR-014). Codex uses only the `amazon-bedrock-runtime` provider (bedrock-runtime
    Responses API, `global.openai.*` profiles; never bedrock-mantle) with the same per-user role
-   credentials (IMDS on EC2, `credential_process` in Local Mode — `cc-bedrock-local codex` / `ccx`).
+   credentials (IMDS on EC2, `credential_process` in Local Mode — plain `codex` after `cc-bedrock-local setup`).
    DevEnv ships governed defaults in `/etc/codex/config.toml` (system layer). Kiro is installed by
    default but uses IAM Identity Center licensing — **not** part of Cognito/Bedrock usage governance.
 2. **Two access paths.** EC2 Mode (CloudFront→NLB→nginx ECS→EC2) + Local Mode (`cc-bedrock-local`
