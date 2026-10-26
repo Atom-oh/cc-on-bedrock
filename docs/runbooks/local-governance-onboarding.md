@@ -1,162 +1,121 @@
-# Runbook: Local Governance Mode Onboarding & Operations
+# Local Governance Onboarding and Operations
 
-> Related: [ADR-006](../decisions/ADR-006-shared-credentials.md), [plans/local-governance-mode.md](../history/plans/local-governance-mode.md)
+Related: [ADR-006](../decisions/ADR-006-shared-credentials.md),
+[ADR-008](../decisions/ADR-008-budget-enforcement.md),
+[CLI instructions](../../tools/CLAUDE.md).
 
-## Scope
-Local PC에서 Claude Code를 Bedrock에 직접 연결해 쓰는 사용자(Local Governance Mode)의 온보딩 및 일상 운영 절차.
+## Invite and install
 
----
+1. In Admin → Users, create an account with email, department and project. Use
+   Local mode when the user does not need an EC2 DevEnv.
+2. The user signs in at dashboard `/login` with the invitation's temporary
+   password and completes the set-new-password form. **Forgot password?**
+   re-sends an invitation for a pending account; confirmed accounts receive an
+   emailed reset code. Invitation validity follows the configured Cognito policy.
+3. Set departmental/user USD budgets and normalized-token limits through the
+   dashboard. Read weights from `lambda/token-limit-enforcer.py` and deployed
+   overrides; do not reuse weights or price claims from a retired model version.
+4. Install from the deployed dashboard:
 
-## 1. 신규 사용자 온보딩
-
-### 1.1 Cognito 계정 발급 (관리자)
-1. 대시보드 **Admin → Users → Create User** 진입
-2. 이메일, 부서, 프로젝트 입력. 모드는 **Local** 선택
-3. 임시 비밀번호로 초대 이메일 발송
-4. 사용자가 첫 로그인 시 비밀번호 재설정 — the dashboard `/login` page shows a set-new-password form after a temporary-password sign-in. A user who lost the invitation or let it expire (7 days) can use **Forgot password?**, which re-sends the invitation; confirmed users get an emailed reset code.
-
-### 1.2 한도 설정 (관리자)
-1. **Admin → Limits** 페이지
-2. 사용자 normalized token 한도 입력
-   - 권장 기본값(개발자 1인 기준): daily 5M / weekly 25M / monthly 80M normalized tokens
-   - normalized 환산: Opus 1.0 / Sonnet 0.2 / Haiku 0.053 (input), output은 ~5배 가중
-3. 부서 한도가 없으면 함께 설정 (부서 한도가 사용자 합보다 작으면 부서 한도가 우선)
-
-### 1.3 사용자 측 셋업
-1. 대시보드 로그인 후 **Local** 메뉴 진입
-2. `tools/cc-bedrock-local.sh` 다운로드 → PATH에 두기 (예: `~/.local/bin/`, `chmod +x`)
-3. 최초 실행:
-   ```bash
-   cc-bedrock-local refresh   # 브라우저 OIDC 로그인 후 ~/.aws/credentials [cc-bedrock] 생성
-   ```
-4. Claude Code 실행:
-   ```bash
-   export CLAUDE_CODE_USE_BEDROCK=1
-   export AWS_PROFILE=cc-bedrock
-   export AWS_REGION=ap-northeast-2
-   claude
-   ```
-   또는 단축 명령:
-   ```bash
-   cc-bedrock-local run -- claude
-   ```
-
-### 1.4 검증
 ```bash
-# 자격증명 만료 시각 확인 (8h 발급)
+DASHBOARD_URL="$(terraform -chdir=terraform output -raw dashboard_url)"
+curl -fsSL "$DASHBOARD_URL/api/install" | bash
+cc
+ccx
+```
+
+The first run prompts for Cognito email/password through the public client's
+password-auth flow. The CLI stores a refresh-token cache locally and configures
+AWS SDK `credential_process` in `~/.aws/config`. It does not depend on browser
+OIDC or an eight-hour static credentials file. `cc` runs governed Claude Code;
+`ccx` runs governed Codex with `amazon-bedrock-runtime`.
+
+## Verify identity and renewal
+
+```bash
+cc --status
 aws sts get-caller-identity --profile cc-bedrock
-# 결과 Arn이 cc-on-bedrock-local-user-{sub}여야 함
-
-# 1회 호출 테스트
-aws bedrock-runtime converse \
-  --profile cc-bedrock --region ap-northeast-2 \
-  --model-id global.anthropic.claude-sonnet-5 \
-  --messages '[{"role":"user","content":[{"text":"hello"}]}]'
 ```
 
-대시보드 **Local** 페이지의 남은 토큰 게이지가 줄어드는 것을 확인 (Invocation Logging 지연으로 1-3분 후 반영).
+Expect the assumed role `cc-on-bedrock-local-user-{subdomain}` for that user.
+The canonical data key is lowercased **email**, while IAM/resource suffixes use
+**subdomain**. Neither is the Cognito UUID. Confirm the actual profile name if
+the CLI configuration was customized.
 
----
+STS role chaining caps the issued credentials at one hour. The SDK credential
+process renews them as needed; CLI `refresh` silently uses a cached Cognito
+refresh token, while `login` is the interactive recovery path. `cc --logout`
+clears the local session. Never paste refresh tokens or issued credentials into
+an issue or log.
 
-## 2. 한도 초과 차단 처리
+A real invocation should later appear in Dashboard → usage/local views. Metering
+is asynchronous; inspect the invocation-log tracker when records remain absent.
+Codex Responses records are attributed by role, because application inference
+profiles are not supported by that API.
 
-### 2.1 증상
-- 사용자가 `AccessDeniedException`을 받았다고 보고
-- 메시지에 `BedrockLocalLimitExceeded` 또는 reset 시각 포함
+## Diagnose a limit block
 
-### 2.2 진단
+USD budgets and normalized-token limits are independent. USD daily/weekly/monthly
+windows use UTC; token-limit windows use KST. Any applicable user/department cap
+can block a request. A new credential session does not remove an IAM deny.
+
+Use Admin → Budgets and Admin → Limits first. For a read-only inspection, use the
+verified email/subdomain from the user record and the Terraform table output:
+
 ```bash
-SUB="<cognito-sub>"
-
-# 1) 현재 부착된 Deny policy 확인
-aws iam list-role-policies \
-  --role-name cc-on-bedrock-local-user-$SUB \
-  --region ap-northeast-2
-
-# 2) DENY#active 아이템 확인 (reason, reset_at)
-aws dynamodb get-item \
-  --table-name cc-on-bedrock-limits \
-  --key '{"PK":{"S":"USER#'$SUB'"},"SK":{"S":"DENY#active"}}'
-
-# 3) 현재 사용량 카운터
-aws dynamodb query \
-  --table-name cc-on-bedrock-limits \
+export AWS_REGION="<deployment-region>"
+EMAIL="<canonical-lowercase-email>"
+SUBDOMAIN="<verified-user-subdomain>"
+LIMITS_TABLE="$(terraform -chdir=terraform output -raw local_governance_limits_table_name)"
+ROLE_NAME="cc-on-bedrock-local-user-${SUBDOMAIN}"
+aws iam list-role-policies --role-name "$ROLE_NAME"
+KEY_JSON="$(jq -nc --arg pk "USER#$EMAIL" '{PK:{S:$pk},SK:{S:"DENY#active"}}')"
+aws dynamodb get-item --region "$AWS_REGION" \
+  --table-name "$LIMITS_TABLE" --key "$KEY_JSON"
+VALUES_JSON="$(jq -nc --arg pk "USER#$EMAIL" '{":pk":{S:$pk},":sk":{S:"COUNTER#"}}')"
+aws dynamodb query --region "$AWS_REGION" --table-name "$LIMITS_TABLE" \
   --key-condition-expression 'PK = :pk AND begins_with(SK, :sk)' \
-  --expression-attribute-values '{":pk":{"S":"USER#'$SUB'"},":sk":{"S":"COUNTER#"}}'
+  --expression-attribute-values "$VALUES_JSON"
 ```
 
-### 2.3 조치
-- **정상 한도 도달**: 다음 reset 까지 대기 안내 (DENY#active의 `reset_at` 참조)
-- **한도가 너무 낮음**: Admin → Limits 에서 한도 상향 → 강제 reset 버튼으로 즉시 해제
-- **부서 한도 도달이 원인**: 부서 관리자에게 통보, 부서 한도 조정
+The normalized-token policy is `cc-bedrock-local-token-deny`. Dollar-budget denies
+have separate policy names and reset conditions; inspect both. Verify role-owner
+email/subdomain tags before changing a role, especially after subdomain reuse.
 
-### 2.4 수동 강제 해제 (긴급)
-```bash
-SUB="<cognito-sub>"
+For expected exhaustion, explain the recorded reset period. To change a limit,
+update the intended user/department cap in the dashboard and use its supported
+reset action. The reset endpoint preserves `DENY#active` if detachment fails; a
+manual row deletion can hide an attached deny and must not be the default fix.
+A token reset does not override an independently exhausted dollar budget.
 
-# Deny policy 제거
-aws iam delete-role-policy \
-  --role-name cc-on-bedrock-local-user-$SUB \
-  --policy-name cc-bedrock-local-deny-$SUB
+## Credential incident and offboarding
 
-# DENY#active 아이템 삭제
-aws dynamodb delete-item \
-  --table-name cc-on-bedrock-limits \
-  --key '{"PK":{"S":"USER#'$SUB'"},"SK":{"S":"DENY#active"}}'
-```
+Disable the affected Cognito account through supported administration to prevent
+new Cognito login/refresh, then investigate the per-user role, CloudTrail audit
+and invocation records. Existing NextAuth sessions are not automatically revoked:
+the session branch of `/api/local/credentials` does not recheck Cognito's enabled
+state and can still request STS credentials. Account disable alone does not
+contain every issuance path. Apply and retain the incident role-deny/revocation
+response until existing sessions and all issuance paths are contained, rather
+than removing it solely when the first STS session expires. Logout on one client
+does not revoke every dashboard or STS session.
 
-> ⚠ 수동 해제는 audit 추적이 어렵습니다. 가능하면 대시보드 강제 reset 버튼 사용.
+For offboarding, use the supported user-management flow and verify downstream
+IAM cleanup. A bare `delete-role` fails while policies or instance-profile
+attachments remain. Preserve usage/audit history according to the retention
+policy. The Cognito shim is wired, but its downstream provisioner, EventBridge
+rule and DLQ are absent from current Terraform; see [ADR-010](../decisions/ADR-010-provisioning.md)
+and [Terraform instructions](../../terraform/CLAUDE.md) rather than assuming
+background cleanup is deployed.
 
----
+## Troubleshooting
 
-## 3. 자격증명 관리
-
-### 3.1 자격증명 갱신
-- TTL 8시간. 만료 1시간 전부터 wrapper가 자동 갱신 시도
-- 수동 갱신: `cc-bedrock-local refresh`
-
-### 3.2 자격증명 유출 의심
-1. **즉시**: user role disable
-   ```bash
-   aws iam put-role-policy \
-     --role-name cc-on-bedrock-local-user-$SUB \
-     --policy-name cc-bedrock-local-emergency-deny \
-     --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
-   ```
-2. **CloudTrail 조사**: principal = role ARN으로 최근 호출 검토
-3. 새 자격증명 발급 후 사용자에게 안내, 위 emergency-deny 제거
-
-### 3.3 사용자 오프보딩
-1. Cognito에서 사용자 disable (`admin-disable-user`)
-2. IAM role 삭제: `aws iam delete-role --role-name cc-on-bedrock-local-user-$SUB`
-3. `cc-on-bedrock-limits`의 사용자 아이템 정리 (또는 TTL 만료 대기)
-4. 사용량 이력(`cc-on-bedrock-usage`)은 audit 목적으로 보존
-
----
-
-## 4. 일상 모니터링 체크리스트
-
-| 빈도 | 항목 | 위치 |
-|---|---|---|
-| 매일 | normalized token 합산(부서별) | Dashboard → Monitoring |
-| 매일 | Deny 부착 사용자 수 | Dashboard → Limits |
-| 매주 | reset cron 정상 실행 (3개) | CloudWatch Logs `/aws/lambda/limit-reset` |
-| 매주 | token-limit-enforcer 실패율 | CloudWatch Metrics, < 0.1% 목표 |
-| 매월 | CUR 2.0 비용 vs DynamoDB 추정 비용 reconcile | Cost Explorer |
-
----
-
-## 5. 트러블슈팅
-
-### "한도를 안 넘었는데 차단됨"
-- normalized 가중치 확인 (`cc-on-bedrock-limits` 사용자 아이템의 `weights` override)
-- 부서 한도 초과 여부 (사용자 한도와 AND)
-
-### "사용량이 대시보드에 안 보임"
-- Invocation Logging 지연(1-3분) 대기
-- `bedrock-usage-tracker` CloudWatch Logs에 에러 확인
-- role tags(`username`, `department`)가 빠지면 attribute 실패 — STS Issuer Lambda가 role 생성 시 태그 부착 검증
-
-### "STS Issuer가 500 반환"
-- Cognito ID 토큰 만료 → 사용자 재로그인
-- Lambda IAM 권한: `sts:AssumeRole` + `iam:CreateRole`/`PutRolePolicy`/`TagRole` 필요 (신규 사용자 첫 발급 시)
+- **Usage absent:** inspect `bedrock-usage-tracker` logs and user role tags;
+  metering uses invocation records, not account-wide CloudWatch token metrics.
+- **Credential endpoint rejected:** check the public client's Cognito access
+  token/session, account enabled state and current CLI configuration.
+- **STS first-use failure:** inspect issuer IAM permission, boundary and role
+  propagation. The issuer uses lazy role creation and retries; never switch to
+  shared admin credentials as a workaround.
+- **Block below the expected user limit:** inspect department caps, per-model
+  normalization overrides, both enforcement axes and the recorded reset window.

@@ -4,6 +4,12 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+- Reconcile deployment profiles, existing-VPC inputs, dashboard EC2 hosting, native telemetry and persistent data-volume recovery across the README, architecture, operational guides and diagrams.
+- Refresh generated Codex/Kiro context from canonical instructions; move the historical CDK account-wipe procedure to history and document Terraform destroy/redeploy separately.
+- Correct local onboarding to one-hour renewable STS credentials and email/subdomain identity mapping; retain dated migration and PR verification reports as historical evidence.
+- Add scoped contracts for eight Terraform modules, DevEnv edge authentication and auxiliary AgentCore tools; distinguish current implementation gaps from intended decisions.
+
 ### Review pipeline (ADR-013 amendment, #125)
 - AI PR review simplified to the lens panel → chair `VERDICT` path (`ROLE_REVIEW=0`, 12,000-line cap); chair runs with no tools / no MCP; non-zero panel cells are not credited. ADR Compliance CI (`adr-verify-pr.yml` / `adr-verify-main.yml`) removed; ADR `## Verification` blocks are documentation-only.
 

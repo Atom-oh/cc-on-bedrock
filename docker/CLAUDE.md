@@ -18,6 +18,19 @@ Docker 이미지 빌드. devenv 이미지(Ubuntu/AL2023)는 AMI 베이킹에 쓰
 - `build.sh` - 빌드/푸시 스크립트: `bash docker/build.sh [build|push|all] [devenv-ubuntu|devenv-al2023|dashboard|otel-collector]`. dashboard 타깃은 immutable `IMAGE_TAG`가 필요하다.
 
 ## Notes
+Local checks from the repository root:
+
+```bash
+for task_script in docker/build.sh docker/devenv/scripts/*.sh docker/nginx/reload.sh; do
+  bash -n "$task_script" || exit
+done
+IMAGE_TAG=local-check bash docker/build.sh build dashboard
+```
+
+The image build requires Docker/Buildx and installed dependencies; container
+integration uses `bash tests/docker/test-devenv.sh`. Syntax checking alone does
+not prove image/runtime behavior.
+
 - 모든 이미지는 ARM64(aarch64) 대상이다 (Graviton).
 - `build.sh`의 `all` 타깃은 아직 삭제된 `litellm/` 이미지를 포함하므로 실패한다. 개별 타깃을 쓰거나 `scripts/05-build-docker-images.sh`를 사용한다.
 - AMI는 `scripts/build-ami.sh`가 임시 EC2에서 setup 스크립트를 실행해 만든다.
