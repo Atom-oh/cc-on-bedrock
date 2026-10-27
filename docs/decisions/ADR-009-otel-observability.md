@@ -5,7 +5,7 @@ date: 2026-06-23
 consolidates: []
 ---
 
-# 009: OTel 코드활동 관측 (경량 session/git 이벤트 · 생산성 모니터링)
+# 009: Native Claude Code OpenTelemetry and Productivity Monitoring
 
 ## Status
 
@@ -24,12 +24,12 @@ Amazon Bedrock exposes none of Anthropic's first-party Analytics/Admin/Complianc
 
 ## Decision
 
-**EC2 DevEnv는 Claude session heartbeat와 git commit/push 같은 저비용 이벤트만 OTEL Collector로 보낸다. Bedrock token/cost는 005의 Invocation Log → DynamoDB 파이프라인을 계속 권위 source로 사용한다.**
-
 **EC2 DevEnv enables native Claude Code OpenTelemetry (metrics + tool events). A collector exports both signals to S3; a rollup Lambda aggregates per-user daily usability KPIs into DynamoDB. Bedrock token/cost stays authoritative in the 005 Invocation Log → DynamoDB pipeline.**
 
 > **P1 rewrite (2026-06-26):** the original custom `cc-otel-code-metrics.sh` shell emitter
-> (claude/git wrappers + heartbeat) is **retired**. It could not see tool/skill/subagent
+> (claude/git wrappers + heartbeat) is **retired for EC2 telemetry**. The optional
+> local installer/helper path still exists; it is not the EC2 rollup contract. The
+> shell emitter could not see tool/skill/subagent
 > usage. We pivoted to **native Claude Code OTEL** (`claude_code.*` metrics + `tool_result`/
 > `tool_decision` log events), which is the only way to measure skill/agent usage on Bedrock
 > (no 1P Analytics API). T0 empirically confirmed the shape on Bedrock.

@@ -19,8 +19,8 @@ export default function LocalSetup() {
 {origin ? `curl -fsSL ${origin}/api/install | bash` : " "}
         </pre>
         <div className="mt-2 text-blue-300/80">
-          설치 후 새 셸에서 <code className="text-gray-200">cc</code> 명령으로 Claude Code, <code className="text-gray-200">ccx</code> 명령으로 Codex를 Bedrock에서 실행.
-          자격증명은 1시간 후 자동 만료되며 재실행 시 cache된 refresh token으로 무인터랙션 갱신됩니다.
+          설치 후 <code className="text-gray-200">claude</code>와 <code className="text-gray-200">codex</code>를 그대로 실행하면 Bedrock을 사용합니다.
+          1시간짜리 자격증명은 cache된 refresh token으로 자동 갱신되며, 30일 동안 쓰지 않았다면 <code className="text-gray-200">cc-bedrock-local login</code>으로 다시 로그인합니다.
         </div>
       </div>
       <CcdashSetupCard />

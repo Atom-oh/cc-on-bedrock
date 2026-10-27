@@ -82,9 +82,13 @@ root `terraform/main.tf`가 `task_permission_boundary_arn`(항상 non-empty)을 
 > CI 게이트가 CDK synth 기준으로 이를 강제했으나, CDK 폐기로 현재는 `--self-test`(coverage 로직)만
 > 돈다 — **TF plan/show 기반 boundary↔allowlist 재검증은 후속 추적**(ADR-034 미완 항목).
 >
-> **`*embed*` deny-floor TF 포팅(미완):** ADR-030의 DenyEscalation 63-action floor가 TF boundary에
-> 완전 포팅되었는지는 ADR-034가 후속으로 추적한다(그동안 boundary는 ADR-026 ceiling + AllowInAccount/
-> 운영 baseline을 강제). The current truth and any porting gap live in `terraform/CLAUDE.md`.
+> **Source reconciliation (2026-10-26):** the Terraform boundary contains 63
+> `DenyEscalation` action patterns and covers all 46 representative entries in
+> `check-policyset-boundary.py`'s `CANONICAL_DENY_FLOOR`. The retired service-ceiling
+> statements are absent. Embedding model permissions (`*embed*`) are operational
+> allows, not escalation-deny entries. This source comparison does not prove
+> complete parity with every historical policy or the deployed boundary.
+> Terraform plan/show validation against the request allowlist remains a follow-up.
 
 ### 4. Wildcard Claude-family Bedrock IAM (from ADR-021)
 
@@ -133,12 +137,15 @@ IAM API의 idempotency에 의존해 drift가 다음 start에 self-heal되고, �
   완화: 검증기 dangerous 거부 + DenyEscalation 하드 플로어 + 컴퓨팅 confused-deputy 잔여위험 문서화.
 - deny-floor는 비-신청가능 서비스의 모든 리소스정책 액션을 망라하지 못함(IAM 표현 벽); out-of-band 수동 부여가 잔여 벡터 — admin 운영 규율로 완화.
 - **CI 불변식 약화(ADR-034):** `check-policyset-boundary.py`가 CDK synth 의존이라 CDK 폐기 후
-  `--self-test`만 동작; **TF 기반 boundary↔allowlist 재검증 + deny-floor TF 포팅은 후속**(`terraform/CLAUDE.md`).
+  `--self-test`만 동작; **TF 기반 boundary↔allowlist 재검증은 후속**(`terraform/CLAUDE.md`).
 - **커플링:** request-time 검증기 변경은 boundary X 없이 단독 배포 금지(allowlist 밖 서비스가 검증 통과 후 silent-deny). 한 묶음으로 머지/배포.
 - DLP 3단계로 못 덮는 중간 요구(예: HTTPS + 특정 IP만) 존재; per-tier DNS 화이트리스트는 별도 ADR 필요.
 
 보안 / Security
-- 최소권한은 boundary ARN 스코프가 아니라 **신청 검증(`Resource:*` 금지) + admin 승인**에서 주로 달성. **as-built 단서:** DenyEscalation 63-action floor의 TF 완전 포팅은 미완(follow-up, ADR-034)이라, 현행 boundary 강제는 **AllowInAccount + ADR-026 ceiling**이다(DenyEscalation 완비 후 강화).
+- Least privilege depends on request validation and administrator approval as well as the
+  boundary. The current Terraform boundary enforces account-scoped allowance, explicit
+  operational allows and `DenyEscalation`; it does not retain the retired ADR-026 service ceiling.
+  The remaining CI gap is validating the Terraform plan against the request allowlist.
 - 0.0.0.0/0 · Principal:"*" · 평문 시크릿 도입 없음. boundary 정책은 Terraform 정본.
 
 ## Consolidates

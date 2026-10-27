@@ -1,46 +1,37 @@
-# Deployment Guide
+# Deployment Entry Point
 
-## Prerequisites
-- AWS CLI v2.15+, Docker 24+, Node.js 20+
-- AWS account with Bedrock model access enabled (Opus 4.6, Sonnet 4.6, Haiku 4.5)
-- Route 53 hosted zone for custom domain
+Follow the canonical [deployment guide](../../docs/deployment-guide.md) and
+[decision baseline](../../docs/decisions/BASELINE.md). Terraform is the only IaC.
 
-## Step 1: ECR Repositories
+Configure `terraform/terraform.tfvars` with your region, existing VPC and subnet
+IDs, shared Route 53 domain, deployment profile and immutable dashboard image
+tag. Initialize the partial S3 backend before running any plan or apply.
+
+1. Select `governance` (default) or `devenv`. Existing DevEnv deployments must
+   explicitly retain `devenv`; an unset mode with existing DevEnv SGs fails planning.
+2. Configure tfvars and initialize the existing S3 backend.
+3. Bootstrap the Terraform-managed dashboard ECR repository, publish the image
+   under a commit tag and use that same `dashboard_image_tag` in tfvars.
+4. For `devenv`, prepare nginx/collector images as described in the canonical
+   guide. Governance needs no DevEnv AMI.
+5. Review and apply the full Terraform plan. For `devenv`, then build the AMI
+   before the first user environment launch; the helper needs the deployed role
+   and open SG and still uses legacy subnet-tag discovery.
+6. Invite the first administrator and verify dashboard login, local credentials,
+   invocation-log usage and limits.
+
+Useful read-only local checks:
+
 ```bash
-bash scripts/create-ecr-repos.sh
+terraform -chdir=terraform fmt -check -recursive
+terraform -chdir=terraform validate
+bash tests/run-all.sh
 ```
 
-## Step 2: Docker Images
-```bash
-cd docker && bash build.sh all all   # Build + push (ARM64)
-```
+`validate` requires initialized providers; the aggregate tests require Python
+pytest and installed dashboard dependencies. Live integration checks require a
+separate deployed environment.
 
-## Step 3: Deploy Infrastructure (choose one)
-```bash
-# CDK
-cd cdk && npm install && npx cdk bootstrap aws://<ACCOUNT_ID>/ap-northeast-2
-npx cdk deploy --all
-
-# Terraform
-cd terraform && cp terraform.tfvars.example terraform.tfvars
-terraform init && terraform apply
-
-# CloudFormation
-cd cloudformation && bash deploy.sh
-```
-
-## Step 4: AgentCore Setup
-```bash
-ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
-```
-
-## Step 5: Verify
-```bash
-bash scripts/verify-deployment.sh your-domain.com
-```
-
-## Step 6: Test Data (optional)
-```bash
-bash scripts/create-test-users-30.sh
-python3 scripts/generate-usage-data.py
-```
+For preservation and teardown constraints, read
+[destroy/redeploy](../../docs/runbooks/full-teardown-redeploy.md). Shared network
+resources, the backend and persistent user data are separate lifecycle concerns.

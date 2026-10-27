@@ -17,7 +17,14 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 
 ## API Routes (`src/app/api/`)
 
-모든 route는 세션을 검증한다. Admin route는 Cognito `admin` 그룹을, user route는 본인 데이터만 허용한다.
+Protected routes validate the user session and their required role/scope; user
+routes restrict access to the user's own data. Public installer/health and
+password challenge/recovery endpoints have route-specific validation.
+`local/credentials` accepts a dashboard session or the CLI public client's
+verified Cognito access token. `/api/ai` requires an admin session;
+`/api/ai/runtime` currently requires both the middleware's NextAuth session and
+the handler's configured bearer API key; bearer-only external integrations are
+blocked before the handler.
 
 ### Admin
 - `containers`, `container-metrics` - EC2 인스턴스 관리, CloudWatch 메트릭 + DynamoDB 사용량
@@ -44,7 +51,7 @@ ADR 번호는 통합 후 번호다. 코드 주석의 옛 번호(ADR-026/027/031 
 - `dept/user-budgets` - PUT `{email, dailyBudget?, weeklyBudget?, monthlyBudget?}` standing member limits (admin or dept-manager; 0–100000 per period, 0 = inherit). A dept-manager may target only plain users of the same real department (403 `self`/`other_department`/`target_is_manager`/`no_department`); with a department total > 0 the personal monthly must be ≤ the total (400 `exceeds_department_total`). The actor's and target's role and department are read fresh from Cognito; row update + `limit_change` audit in one transaction
 - `dept` (단일 부서 조회 시 멤버별 `limits`·`budgetStatus`(기본+grant, 차단 원인), 예산에 `recordedSpend`·`monthGranted`, pending에 `type`/`period`/`requestedAmount`), `dept/list`, `dept/mcp` · `health` · `auth/[...nextauth]`
 - `auth/password/{new,forgot,reset}` — public (middleware passes `/api/auth/*`): first-login new password (temp password authorizes), forgot (same response whether or not the account exists; a never-signed-in invitee gets the invitation re-sent via `AdminCreateUser RESEND`, at most once per 15 min per account via `UserLastModifiedDate`), reset with emailed code. Logic in `lib/cognito-password.ts`; policy in `lib/password-policy.ts` (must match the pool policy)
-- `install`, `install/cli`, `install/otel` - Local CLI 설치 스크립트 (`cc()` / `ccx()` 셸 함수 포함)
+- `install`, `install/cli`, `install/otel` - Local CLI installer (runs `cc-bedrock-local setup` + `login` so plain `claude` / `codex` use Bedrock; removes legacy `cc()` / `ccx()` functions)
 - `slack/commands`, `slack/events`
 
 ## Components

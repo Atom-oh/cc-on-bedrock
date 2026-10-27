@@ -1,37 +1,37 @@
-# Architecture Decision Records (ADR)
+# Architecture Decision Records
 
-이 디렉토리는 본 프로젝트의 아키텍처 결정을 기록한다. 각 ADR은 별도 markdown 파일로 작성하며 자동 검증 파이프라인이 PR마다 ADR 명세와 코드의 일치를 확인한다.
+[BASELINE.md](BASELINE.md) indexes current decisions, invariants and gated items.
+[../architecture.md](../architecture.md) describes current implementation.
+Archived ADRs and documents under `docs/history/` describe past decisions.
 
-## ADR 작성
+## Write or amend a decision
 
-새 ADR을 만들 때는 `/add-adr` 스킬을 사용하거나 `_TEMPLATE.md`를 복사한다. 모든 새 ADR은 다음을 만족해야 한다:
+Create an ADR only for a real architectural decision or trade-off. Follow
+[_TEMPLATE.md](_TEMPLATE.md), or use `project-init:add-adr`. Allocate the next
+number after the current maximum; the next number is **016**. Do not reuse
+retired numbers. Update the baseline in the same change as a new decision or
+status/flag change.
 
-1. **YAML frontmatter** (status, date, verification_required) — `verification_required: true`가 기본.
-2. **`## Verification` 섹션** — Tier 1(`files`)과 Tier 2(`semantic`) 청구 작성. 둘 다 없으면 PR이 막힌다.
-3. **파일 이름**: `ADR-NNN-<slug>.md` (NNN은 3자리 증가하는 번호)
+New or substantially rewritten ADRs use English (ADR-013). Keep context,
+decision, consequences and concrete implementation/verification references.
+A correction of stale implementation evidence does not require a new decision.
 
-## 검증 파이프라인
+## Verification status
 
-> **Removed 2026-10-18 (owner decision; recorded in ADR-013 "Amendment 2026-10-18" and the BASELINE §2 `REMOVED · ADR Compliance CI` row, merged in #125):** the ADR Compliance CI (`adr-verify-pr.yml` / `adr-verify-main.yml`) no longer runs. `## Verification` blocks remain as documentation; check them locally with `.adr-verify/` (`python -m adrverify.tier1_static`). The description below is the historical pipeline.
+ADR Compliance CI was removed on 2026-10-18 (ADR-013 amendment, baseline §2).
+`adr-verify-pr.yml` and `adr-verify-main.yml` are absent. This ADR metadata does
+not create a current merge-blocking check.
 
-(Historical) 각 PR push마다 `.github/workflows/adr-verify-pr.yml`이 실행되어:
+Frontmatter (`status`, `date`, `verification_required`) and `## Verification`
+blocks remain as decision evidence. The local `.adr-verify/` toolkit can check
+supported static claims when its dependencies/configuration are available;
+semantic claims require independent source/runtime verification. Report checks
+actually run. Historical pipeline descriptions live in the release changelog
+and design history, not in current authoring requirements.
 
-- **Tier 1 (Static)**: `files[]` rules 검사. `must_contain` / `must_not_contain` / `must_exist`. FAIL 시 **merge 차단** (required check).
-- **Tier 2 (Semantic)**: Claude on Bedrock이 `semantic[]` claim을 판정. FAIL 시 advisory PR comment (merge 허용).
-- **Coverage**: `Coverage: N/24` sticky comment가 매 push마다 갱신.
+## Consolidation
 
-자세한 설계: `docs/superpowers/specs/2026-05-26-adr-compliance-pipeline-design.md`
-
-## Soft launch 규칙
-
-| frontmatter | `## Verification` 섹션 | 동작 |
-|------------|------------------------|------|
-| 없음 (legacy) | 없음 | skip + warn |
-| 없음 (legacy) | 있음 | 정상 검증 |
-| `verification_required: false` | 없음/있음 | skip + warn |
-| `verification_required: true` | **없음** | **PR check FAIL** |
-| `verification_required: true` | 있음 | 정상 검증 |
-
-## 우선순위 backfill (이미 적용됨 또는 적용 예정)
-
-ADR-021, ADR-014, ADR-011, ADR-022, ADR-023, ADR-024 — 가장 활발히 코드가 진화 중이거나 비용/보안 영향이 큼.
+ADRs 001–011 consolidated the legacy records; 012–015 are subsequent decisions.
+[ADR-MAPPING.md](../history/ADR-MAPPING.md) maps retired numbers. The git tag
+`adr-legacy-2026-06-23` preserves their bodies. Read the baseline before treating
+an old number in a source comment as a current requirement.
