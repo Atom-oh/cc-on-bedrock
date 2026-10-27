@@ -17,6 +17,7 @@ Actions:
 from __future__ import annotations
 import os
 import json
+import hashlib
 import boto3
 from datetime import datetime, timedelta, date
 from decimal import Decimal
@@ -974,33 +975,40 @@ def mantle_project_name(subdomain: str) -> str:
     return f"cc-{subdomain}"[:64]
 
 
-def list_mantle_projects() -> dict:
-    """{name: id} of active projects."""
-    out, after = {}, None
+def list_mantle_projects() -> list:
+    """Active projects as [{id, name, tags}]."""
+    out, after = [], None
     for _ in range(MAX_SCAN_PAGES):
         q = "?limit=100" + (f"&after={after}" if after else "")
         page = _mantle_request("GET", f"/v1/organization/projects{q}")
         for p in page.get("data", []):
             if p.get("status", "active") == "active" and p.get("name"):
-                out[p["name"]] = p["id"]
+                out.append({"id": p["id"], "name": p["name"], "tags": p.get("tags") or {}})
         if not page.get("has_more"):
             break
         after = page.get("last_id")
     return out
 
 
-def ensure_mantle_project(subdomain: str, email: str, projects: dict) -> str:
-    """Reuse the user's project or create it. Projects are never archived here, so
-    history stays attributable across revoke/grant cycles."""
+def ensure_mantle_project(subdomain: str, email: str, projects: list) -> str:
+    """Reuse the user's project or create it. Ownership is checked by tag (never by
+    name alone), so a reassigned subdomain never inherits another user's project.
+    Projects are never archived here, so history stays attributable across
+    revoke/grant cycles."""
     name = mantle_project_name(subdomain)
-    if name not in projects:
-        created = _mantle_request("POST", "/v1/organization/projects", {
-            "name": name,
-            "tags": {"cc-on-bedrock:user": email, "cc-on-bedrock:managed": "true"},
-        })
-        projects[name] = created["id"]
-        print(f"[MANTLE] created project {created['id']} ({name}) for {email}")
-    return projects[name]
+    owned = [p for p in projects
+             if (p.get("tags") or {}).get("cc-on-bedrock:managed") == "true"
+             and str((p.get("tags") or {}).get("cc-on-bedrock:user", "")).lower() == email.lower()]
+    if owned:
+        return next((p for p in owned if p["name"] == name), owned[0])["id"]
+    if any(p["name"] == name for p in projects):
+        # Name taken by another owner: suffix with an email hash.
+        name = f"cc-{subdomain}"[:55] + "-" + hashlib.sha256(email.lower().encode()).hexdigest()[:8]
+    tags = {"cc-on-bedrock:user": email, "cc-on-bedrock:managed": "true"}
+    created = _mantle_request("POST", "/v1/organization/projects", {"name": name, "tags": tags})
+    projects.append({"id": created["id"], "name": name, "tags": tags})
+    print(f"[MANTLE] created project {created['id']} ({name}) for {email}")
+    return created["id"]
 
 
 def _current_inline(role_name: str, policy_name: str):

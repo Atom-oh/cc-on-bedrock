@@ -140,6 +140,23 @@ run setup
 [[ "$(count '^default_permissions')" == 0 ]] || fail "overrode the user's sandbox_mode"
 [[ "$(count '^sandbox_mode = "danger-full-access"')" == 1 ]] || fail "user sandbox_mode lost"
 grep -q "sets its own sandbox" "${TMP}/stderr.log" || fail "no warning about the missing read deny"
+# Quiet re-sync (credential renewal / login) must honour the user's sandbox too.
+quiet() { env -i HOME="${H}" PATH="/usr/bin:/bin" CC_BEDROCK_QUIET=1 "${CLI}" "$@" >/dev/null 2>>"${TMP}/stderr.log"; }
+quiet setup
+[[ "$(count '^default_permissions')" == 0 ]] || fail "quiet re-sync overrode the user's sandbox_mode"
+printf 'default_permissions = "mine"\n' > "${H}/.codex/config.toml"
+quiet setup
+[[ "$(count '^default_permissions')" == 1 ]] || fail "quiet re-sync duplicated default_permissions"
+# tomllib needs Python 3.11; older system pythons skip the parse (the count above still holds).
+python3 -c 'import sys
+try: import tomllib
+except ImportError: sys.exit(0)
+tomllib.load(open(sys.argv[1], "rb"))' "${H}/.codex/config.toml" || fail "quiet re-sync produced invalid TOML"
+
+# The user's own amazon-bedrock provider tables are not ours to strip from config.toml.
+printf '[model_providers.amazon-bedrock.aws]\nprofile = "mine"\n' > "${H}/.codex/config.toml"
+run setup
+[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "stripped the user's own amazon-bedrock table"
 
 # A broken settings.json is reported, never overwritten.
 echo '{broken' > "${H}/.claude/settings.json"

@@ -125,7 +125,7 @@ the opt-in `codex -p mantle` profile for users whose cost is unlimited (§9, ame
      > 0 nobody is eligible.
    - *Grant:* inline policy `cc-bedrock-mantle-unmetered` on `cc-on-bedrock-local-user-*`:
      `bedrock-mantle:CreateInference`/`Get*`/`List*` on the user's **own** us-east-1 project
-     (`cc-<subdomain>`, created by budget-check, never auto-archived) + `bedrock-websearch:
+     (`cc-<subdomain>`, created by budget-check, reused only when its owner tag matches the user's email, never auto-archived) + `bedrock-websearch:
      InvokeSearch`/`InvokeFetch`. Scoping to the own project makes the `OpenAI-Project`
      header mandatory (`project/default` is denied). Removed within one run when any cap
      appears; on a budget/limits/Cognito read failure every grant is removed (fail safe).

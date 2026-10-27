@@ -47,7 +47,7 @@ Fail-safe: on a budget/limits read error, the run revokes mantle (never grants o
 ### 2. Per-user mantle project
 On first eligibility, `budget-check` creates a project in us-east-1 with `POST /v1/organization/projects`, signed with SigV4 by botocore. No boto3 client exists for it.
 - Name: `cc-<subdomain>`. Tags: `cc-on-bedrock:user=<email>`, `cc-on-bedrock:managed=true`.
-- *Implementation call:* no extra storage. budget-check finds the project by name (`ListProjects`, once per run, only when someone is eligible); sts-issuer reads the project id back from the grant policy itself, so the grant is the single source of truth.
+- *Implementation call:* no extra storage. budget-check finds the user's project by its `cc-on-bedrock:user` owner tag (ListProjects returns tags), never by name alone, so a reassigned subdomain gets a new project (`ListProjects`, once per run, only when someone is eligible); sts-issuer reads the project id back from the grant policy itself, so the grant is the single source of truth.
 - The project is reused on later grants and never archived automatically (ids are cheap; history stays attributable). No project is created for a user without a Local role.
 
 Scoping IAM to the user's own project makes the header mandatory: omitting it falls to `project/default` → AccessDenied.
@@ -84,12 +84,12 @@ The `CreateProject` management event records who created it.
 - New Terraform (usage-tracking module):
   - A single-region `aws_cloudtrail` in **us-east-1** (provider alias), with an advanced event selector for `eventCategory=Data`, `resources.type=AWS::BedrockMantle::Project`, and a dedicated S3 bucket (SSE, 90-day lifecycle).
   - An EventBridge rule in us-east-1 on `eventSource=bedrock-mantle.amazonaws.com`, `eventName=CreateInference`, targeting the Seoul default bus (cross-region target + IAM role). There, a rule feeds the existing `audit-logger`.
-- `audit-logger` accepts `CreateInference` from `bedrock-mantle.amazonaws.com`. It records the model from `requestParameters.model`, `client_tool` from the userAgent and `provider = mantle`. The Security page tags these rows "Codex (mantle, unmetered)".
+- `audit-logger` accepts `CreateInference` from `bedrock-mantle.amazonaws.com`. It records the model from `requestParameters.model`, `client_tool` from the userAgent and `provider = mantle`. A Security page tag for these rows is a follow-up.
 - The whole block is behind `enable_mantle` (default `true` per this decision). With `false`, no trail is created, boundary and deny are unchanged, and budget-check never grants.
 
 ### 6. Scope
 - **In:** Local Mode (governance default) end to end; Terraform; Lambdas; dashboard API/UI text; CLI; docs (ADR-014 amendment, BASELINE §1/§3 row, architecture.md, runbook `codex-cost-budget-audit.md`, CHANGELOG, module CLAUDE.md files).
-- **Follow-up (not in this PR):** EC2 DevEnv mantle profile. Instance user data would need the project id at boot plus refresh when entitlement changes; the IAM grant in budget-check would already cover `cc-on-bedrock-task-*` once added.
+- **Follow-up (not in this PR):** EC2 DevEnv mantle profile. Instance user data would need the project id at boot plus refresh when entitlement changes; the IAM grant in budget-check would already cover `cc-on-bedrock-task-*` once added; the Security page "Codex (mantle, unmetered)" tag (rows already carry `provider = mantle`).
 - **Non-goals:**
   - metering mantle per user (CloudWatch Project metrics stay visible to admins only as an aggregate);
   - mantle for Claude Code;

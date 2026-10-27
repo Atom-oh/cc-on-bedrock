@@ -70,7 +70,9 @@ def _patched(iam, users, depts=None, **extra):
         mock.patch.object(bc, "_email_dept_map", {e: d for e, (_, d) in users.items()}),
         mock.patch.object(bc, "_budget_read_failed", extra.pop("read_failed", False)),
         mock.patch.object(bc, "_scan_limits_limits", lambda: extra.pop("token_limits", {})),
-        mock.patch.object(bc, "list_mantle_projects", lambda: {"cc-alice": "proj_alice"}),
+        mock.patch.object(bc, "list_mantle_projects", lambda: [{
+            "id": "proj_alice", "name": "cc-alice",
+            "tags": {"cc-on-bedrock:user": "alice@x.com", "cc-on-bedrock:managed": "true"}}]),
         mock.patch.object(bc, "_mantle_request", mock.Mock(return_value={"id": "proj_new"})),
     ]
 
@@ -128,6 +130,22 @@ def test_new_user_gets_a_tagged_project():
     assert (method, path) == ("POST", "/v1/organization/projects")
     assert body["name"] == "cc-bob" and body["tags"]["cc-on-bedrock:user"] == "bob@x.com"
     assert iam.policies[(bob, bc.MANTLE_POLICY_NAME)]["Statement"][0]["Resource"].endswith("/proj_new")
+
+
+def test_reassigned_subdomain_never_inherits_another_users_project():
+    alice = "cc-on-bedrock-local-user-alice"
+    iam = FakeIam([alice])
+    _, req = _reconcile(iam, {"carol@x.com": ("alice", "eng")})
+    method, path, body = req.call_args.args
+    assert method == "POST"
+    assert body["name"] != "cc-alice" and body["name"].startswith("cc-alice-")
+    assert body["tags"]["cc-on-bedrock:user"] == "carol@x.com"
+    assert iam.policies[(alice, bc.MANTLE_POLICY_NAME)]["Statement"][0]["Resource"].endswith("/proj_new")
+    # The owner tag is compared case-insensitively.
+    iam = FakeIam([alice])
+    _, req = _reconcile(iam, {"Alice@X.com": ("alice", "eng")})
+    req.assert_not_called()
+    assert iam.policies[(alice, bc.MANTLE_POLICY_NAME)]["Statement"][0]["Resource"].endswith("/proj_alice")
 
 
 def test_no_local_role_means_no_project_and_no_grant():

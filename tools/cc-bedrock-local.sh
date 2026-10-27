@@ -665,7 +665,7 @@ out, in_top, in_ours = [], True, False
 for line in lines:
     if line.strip().startswith("["):
         in_top = False
-        in_ours = line.split("#", 1)[0].strip() in (TABLE, PERMS, PERMS_FS, M_PROFILE, M_AWS, M_HDR)
+        in_ours = line.split("#", 1)[0].strip() in (TABLE, PERMS, PERMS_FS, M_PROFILE)
         if in_ours:
             continue
     if in_ours or mark in line or (in_top and top_key.match(line)):
@@ -690,9 +690,10 @@ if mode == "add":
     # chose a sandbox keeps it and gets a warning instead.
     own = [l for l in out if re.match(r"^\s*(default_permissions|sandbox_mode)\s*=", l)
            or l.split("#", 1)[0].strip() == "[sandbox_workspace_write]"]
-    if own and not quiet:
-        sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml sets its own sandbox; "
-                         f"add a read deny for {cfg_dir} yourself (see Codex permissions docs)\n")
+    if own:
+        if not quiet:
+            sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml sets its own sandbox; "
+                             f"add a read deny for {cfg_dir} yourself (see Codex permissions docs)\n")
     else:
         head.append(f'default_permissions = "cc-bedrock"  {mark}')
         tail += ["", f"{PERMS}  {mark}", 'extends = ":workspace"',
