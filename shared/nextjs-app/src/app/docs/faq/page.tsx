@@ -109,6 +109,12 @@ export default function FaqPage() {
             : "Check your code-server password in 'My Environment > Settings' tab. You can also change your password from the same page."}
         />
         <FaqItem
+          q={ko ? "비밀번호를 잊었거나 바꾸고 싶어요" : "I forgot my password or want to change it"}
+          a={ko
+            ? "로그인 화면의 '비밀번호를 잊으셨나요?(Forgot password?)'에서 이메일로 받은 인증 코드로 재설정합니다. 초대 후 한 번도 로그인하지 않았다면 인증 코드 대신 새 임시 비밀번호가 메일로 다시 발송됩니다. 첫 로그인 때는 임시 비밀번호로 로그인하면 새 비밀번호 설정 화면이 나옵니다. 로그인한 상태에서는 '내 환경'의 Account Password(DevEnv는 설정 탭)에서 현재 비밀번호를 확인한 뒤 변경합니다."
+            : "Use 'Forgot password?' on the sign-in page to reset it with a code sent to your email. If you were invited and never signed in, a new temporary password is e-mailed instead. On first sign-in, signing in with the temporary password opens the set-new-password form. When signed in, change it under My Environment → Account Password (DevEnv: Settings tab); the current password is required."}
+        />
+        <FaqItem
           q={ko ? "VS Code Extension을 설치할 수 있나요?" : "Can I install VS Code extensions?"}
           a={ko
             ? "보안 정책에 따라 다릅니다. Open: 자유 설치, Restricted: 사전 승인된 Extension만, Locked: 설치 불가. 현재 보안 정책은 '내 환경'에서 확인할 수 있습니다."
