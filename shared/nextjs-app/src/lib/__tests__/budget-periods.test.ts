@@ -5,13 +5,20 @@ describe("resolvePeriodBudget (mirrors budget-check _effective_user_limits)", ()
   const user = { dailyBudget: 50, weeklyBudget: 0, monthlyBudget: 200 };
   const dept = { perUserWeeklyBudget: 100, perUserDailyBudget: 30 };
   it("resolves each period independently", () => {
-    expect(resolvePeriodBudget("daily", user, dept)).toEqual({ value: 50, source: "user" });
-    expect(resolvePeriodBudget("weekly", user, dept)).toEqual({ value: 100, source: "dept" });
-    expect(resolvePeriodBudget("monthly", user, dept)).toEqual({ value: 200, source: "user" });
+    expect(resolvePeriodBudget("daily", user, dept)).toEqual({ value: 50, source: "user", base: 50, grant: 0 });
+    expect(resolvePeriodBudget("weekly", user, dept)).toEqual({ value: 100, source: "dept", base: 100, grant: 0 });
+    expect(resolvePeriodBudget("monthly", user, dept)).toEqual({ value: 200, source: "user", base: 200, grant: 0 });
   });
   it("falls back to globals, then no cap", () => {
-    expect(resolvePeriodBudget("daily", undefined, undefined, { daily: 50 })).toEqual({ value: 50, source: "global" });
-    expect(resolvePeriodBudget("weekly", undefined, undefined, { daily: 50 })).toEqual({ value: 0, source: "none" });
+    expect(resolvePeriodBudget("daily", undefined, undefined, { daily: 50 })).toEqual({ value: 50, source: "global", base: 50, grant: 0 });
+    expect(resolvePeriodBudget("weekly", undefined, undefined, { daily: 50 })).toEqual({ value: 0, source: "none", base: 0, grant: 0 });
+  });
+});
+
+describe("resolvePeriodBudget grants", () => {
+  it("adds the grant only to a capped period", () => {
+    expect(resolvePeriodBudget("daily", { dailyBudget: 50 }, undefined, {}, 20)).toEqual({ value: 70, source: "user", base: 50, grant: 20 });
+    expect(resolvePeriodBudget("weekly", {}, undefined, {}, 20).value).toBe(0);
   });
 });
 

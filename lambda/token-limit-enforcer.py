@@ -205,6 +205,21 @@ def _get_dept_limit(dept: str, period: str, cache: dict | None = None) -> dict:
         return {}
 
 
+def _user_cap(limit_item: dict, period: str, now: datetime) -> Decimal:
+    """User cap for `period`: `max_normalized` plus an approved one-time grant.
+
+    A budget-increase approval writes `grant_normalized` with its KST month
+    `grant_bucket` onto LIMIT#monthly; it counts only for the monthly period of that
+    same month. A grant never turns an uncapped user (max <= 0) into a capped one.
+    """
+    cap = _decimal(limit_item.get("max_normalized", 0) or 0)
+    if cap <= 0 or period != "monthly":
+        return cap
+    if limit_item.get("grant_bucket") != _bucket_for(now, "monthly"):
+        return cap
+    return cap + _decimal(limit_item.get("grant_normalized", 0) or 0)
+
+
 def _prefetch_limits(records: list) -> dict:
     """ADR-021 follow-up (review #4): one BatchGetItem per invocation instead of
     up to 6 GetItem per stream record (3 periods × USER+DEPT). Returns a dict
@@ -303,8 +318,12 @@ def _role_owner_email(role_name: str):
     return None  # role exists but has no email tag → caller treats as not-owned (skip)
 
 
-def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str):
+def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: str, *, scope: str = "user", dept: str = ""):
     """Attach the Deny policy to the user's Local Governance role.
+
+    `scope` ("user" | "dept") names which cap tripped; it is stored on DENY#active
+    with `period` (and the user's `dept`) so a one-time personal grant releases only a
+    deny it can cure, after re-checking every cap.
 
     ADR-031 (B′): the usage PK is the email; the Local role name is
     `cc-on-bedrock-local-user-{subdomain}` (subdomain from the usage row, NOT the
@@ -341,19 +360,20 @@ def _attach_deny(user_key: str, subdomain, reason: str, period: str, reset_at: s
 
     # Conditional write: only fire SNS once per active period
     try:
-        limits.put_item(
-            Item={
-                "PK": f"USER#{user_key}",
-                "SK": "DENY#active",
-                "policy_name": DENY_POLICY_NAME,
-                "subdomain": subdomain,
-                "reason": reason,
-                "period": period,
-                "reset_at": reset_at,
-                "attached_at": datetime.utcnow().isoformat(),
-            },
-            ConditionExpression="attribute_not_exists(PK)",
-        )
+        item = {
+            "PK": f"USER#{user_key}",
+            "SK": "DENY#active",
+            "policy_name": DENY_POLICY_NAME,
+            "subdomain": subdomain,
+            "scope": scope,
+            "reason": reason,
+            "period": period,
+            "reset_at": reset_at,
+            "attached_at": datetime.utcnow().isoformat(),
+        }
+        if dept:
+            item["dept"] = dept
+        limits.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
         _publish_sns(
             subject=f"[CC-on-Bedrock] Token limit exceeded ({period})",
             message=f"User {user_key} exceeded {period} normalized-token limit.\nReason: {reason}\nReset at: {reset_at}",
@@ -475,7 +495,7 @@ def process_record(rec: dict, limit_cache: dict | None = None):
             dept_total = Decimal("0")
 
         user_limit_item = _get_user_limit(user_key, period, limit_cache)
-        user_max = _decimal(user_limit_item.get("max_normalized", 0))
+        user_max = _user_cap(user_limit_item, period, now)
         dept_limit_item = _get_dept_limit(dept, period, limit_cache)
         dept_max = _decimal(dept_limit_item.get("max_normalized", 0))
 
@@ -486,6 +506,8 @@ def process_record(rec: dict, limit_cache: dict | None = None):
                 f"user {period} normalized token limit reached ({user_total}/{user_max})",
                 period,
                 reset_iso,
+                scope="user",
+                dept=dept,
             )
             return  # stop further period processing for this record once denied
         if dept_max > 0 and dept_total >= dept_max:
@@ -494,6 +516,8 @@ def process_record(rec: dict, limit_cache: dict | None = None):
                 f"dept '{dept}' {period} normalized token limit reached ({dept_total}/{dept_max})",
                 period,
                 reset_iso,
+                scope="dept",
+                dept=dept,
             )
             return
 

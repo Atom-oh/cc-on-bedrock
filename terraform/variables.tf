@@ -152,6 +152,19 @@ variable "governance_only" {
   default     = null
 }
 
+# Optional ccdash integration (separate product). When set, the dashboard shows a sidebar link
+# and collector setup guidance; cc-on-bedrock writes no telemetry settings itself.
+variable "ccdash_url" {
+  description = "Base URL of an existing ccdash deployment (https, no trailing slash); empty disables the ccdash link and guidance"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.ccdash_url == "" || can(regex("^https://[^/]+(/.*[^/])?$", var.ccdash_url))
+    error_message = "ccdash_url must be empty or an https:// URL without a trailing slash."
+  }
+}
+
 # ---- Compute -----------------------------------------------------------------
 variable "ecs_host_instance_type" {
   type    = string

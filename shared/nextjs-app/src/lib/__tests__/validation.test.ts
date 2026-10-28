@@ -9,6 +9,7 @@ describe('createUserSchema', () => {
     containerOs: 'ubuntu' as const,
     resourceTier: 'standard' as const,
     securityPolicy: 'restricted' as const,
+    role: 'user' as const,
   };
 
   it('accepts valid input', () => {
@@ -21,6 +22,18 @@ describe('createUserSchema', () => {
     const result = createUserSchema.safeParse(rest);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.department).toBe('default');
+  });
+
+  it('requires a role', () => {
+    expect(createUserSchema.safeParse({ ...validInput, role: undefined }).success).toBe(false);
+  });
+
+  it('rejects an unknown role', () => {
+    expect(createUserSchema.safeParse({ ...validInput, role: 'superuser' }).success).toBe(false);
+  });
+
+  it('accepts dept-manager role', () => {
+    expect(createUserSchema.safeParse({ ...validInput, role: 'dept-manager' }).success).toBe(true);
   });
 
   it('rejects invalid email', () => {
@@ -80,6 +93,14 @@ describe('createUserSchema', () => {
 });
 
 describe('updateUserSchema', () => {
+  it('accepts a role change', () => {
+    expect(updateUserSchema.safeParse({ username: 'u', role: 'admin' }).success).toBe(true);
+  });
+
+  it('rejects an unknown role', () => {
+    expect(updateUserSchema.safeParse({ username: 'u', role: 'superuser' }).success).toBe(false);
+  });
+
   it('accepts username only', () => {
     const result = updateUserSchema.safeParse({ username: 'user123' });
     expect(result.success).toBe(true);

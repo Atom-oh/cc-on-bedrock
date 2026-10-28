@@ -8,6 +8,7 @@ import {
   DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
+import { requireFreshRole } from "@/lib/role-admin";
 
 // ADR-006(legacy 014)/015: admin CRUD for normalized-token limits in cc-on-bedrock-limits.
 //
@@ -68,6 +69,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin();
   if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const fresh = await requireFreshRole(auth.session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
 
   let body: Partial<LimitItem>;
   try {
@@ -110,6 +113,8 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const auth = await requireAdmin();
   if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const fresh = await requireFreshRole(auth.session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
 
   const { searchParams } = new URL(req.url);
   const entity = searchParams.get("entity");

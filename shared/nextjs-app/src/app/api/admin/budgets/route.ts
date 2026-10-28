@@ -3,25 +3,29 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import {
   DynamoDBClient,
+  GetItemCommand,
   ScanCommand,
-  UpdateItemCommand,
-  DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
-import { listCognitoUsers } from "@/lib/aws-clients";
+import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
+import { requireFreshRole } from "@/lib/role-admin";
+import { syncMonthlyLimitMirror } from "@/lib/limit-mirror";
+import { applyLimitChange, pickNumbers, type LimitChange } from "@/lib/limit-audit";
+import { budgetStatus, readTokenDeniedUsers, type PeriodStatus } from "@/lib/budget-status";
+import type { BlockCause } from "@/lib/budget-display";
+import type { BudgetPeriod } from "@/lib/budget-periods";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const USER_BUDGETS_TABLE = process.env.USER_BUDGETS_TABLE ?? "cc-user-budgets";
-const LIMITS_TABLE = process.env.LIMITS_TABLE ?? "cc-on-bedrock-limits";
 
-// USD → normalized-token conversion for syncing $ budgets into the ADR-006(legacy 014)/015
-// cc-on-bedrock-limits table. Default 66667 = 1_000_000 / $15: token-limit-enforcer
-// weights are exactly list price / $15 for every model (Claude and OpenAI GPT,
-// derived from bedrock-usage-tracker PRICING and test-enforced), so N USD mirrors to
-// the same spend on the token axis. Only change this together with that $15 basis.
-const NORMALIZED_PER_USD = Number(process.env.NORMALIZED_PER_USD ?? "66667");
+// USD → normalized-token conversion for the LIMIT#monthly mirror (lib/limit-mirror,
+// rate from lib/budget-increase NORMALIZED_PER_USD). Default 66667 = 1_000_000 / $15:
+// token-limit-enforcer weights are exactly list price / $15 for every model (Claude
+// and OpenAI GPT, derived from bedrock-usage-tracker PRICING and test-enforced), so
+// N USD mirrors to the same spend on the token axis. Only change this together with
+// that $15 basis. One-time grants convert with the same rate.
 
 const dynamodb = new DynamoDBClient({ region });
 
@@ -56,6 +60,11 @@ export interface UserBudget {
   budgetReleaseAt: string;       // ISO time the USD deny can lift ("" when not blocked)
   periodAware: boolean; // budget-check has written per-period evaluation (budgetExceeded present)
   updatedAt: string;
+  // Caps as "base + current one-time grant" and why the user is blocked (null = not blocked).
+  periods: Record<BudgetPeriod, PeriodStatus>;
+  tokenDenied: boolean;
+  departmentOver: boolean;
+  blockCause: BlockCause;
 }
 
 const PERIOD_FIELDS = ["dailyBudget", "weeklyBudget", "monthlyBudget"] as const;
@@ -63,6 +72,16 @@ const DEPT_PERIOD_FIELDS = ["perUserDailyBudget", "perUserWeeklyBudget", "perUse
 
 function isValidUsd(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1_000_000;
+}
+
+/** Target user's department for the audit record (fresh from Cognito); "" when unknown. */
+async function auditDepartment(email: string): Promise<string> {
+  try {
+    return (await getCognitoUser(email)).department ?? "";
+  } catch (err) {
+    console.warn("[admin/budgets] audit department lookup failed:", err instanceof Error ? err.message : err);
+    return "";
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -80,10 +99,17 @@ export async function GET(req: NextRequest) {
   try {
     const results: { departments?: DepartmentBudget[]; users?: UserBudget[] } = {};
 
+    // Department rows are needed for both views (user caps inherit per-user defaults).
+    const deptResult = await dynamodb.send(new ScanCommand({
+      TableName: DEPT_BUDGETS_TABLE,
+    }));
+    const deptRows = new Map<string, Record<string, unknown>>();
+    for (const item of deptResult.Items ?? []) {
+      const u = unmarshall(item);
+      deptRows.set(String(u.dept_id ?? u.department ?? ""), u);
+    }
+
     if (!type || type === "department") {
-      const deptResult = await dynamodb.send(new ScanCommand({
-        TableName: DEPT_BUDGETS_TABLE,
-      }));
       results.departments = (deptResult.Items ?? []).map((item) => {
         const u = unmarshall(item);
         return {
@@ -99,10 +125,16 @@ export async function GET(req: NextRequest) {
     }
 
     if (!type || type === "user") {
-      const [userResult, cognitoUsers] = await Promise.all([
+      const [userResult, cognitoUsers, tokenDenied] = await Promise.all([
         dynamodb.send(new ScanCommand({ TableName: USER_BUDGETS_TABLE })),
         listCognitoUsers(),
+        // Best-effort: without it the token cause is just not shown.
+        readTokenDeniedUsers().catch((err) => {
+          console.warn("[admin/budgets] token deny scan failed:", err instanceof Error ? err.message : err);
+          return new Set<string>();
+        }),
       ]);
+      const now = new Date();
 
       // Only surface budget rows that map to a real Cognito user. cc-user-budgets
       // rows are written by budget-check.py from cc-on-bedrock-usage PKs, which
@@ -124,8 +156,10 @@ export async function GET(req: NextRequest) {
       results.users = (userResult.Items ?? [])
         .map((item) => {
           const u = unmarshall(item);
+          const userId = String(u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown");
+          const status = budgetStatus(u, deptRows.get(String(u.department ?? "")), now, tokenDenied.has(userId.toLowerCase()));
           return {
-            userId: u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
+            userId,
             department: u.department ?? "default",
             dailyTokenLimit: Number(u.dailyTokenLimit ?? 100000),
             dailyBudget: Number(u.dailyBudget ?? 0),
@@ -142,6 +176,10 @@ export async function GET(req: NextRequest) {
             budgetReleaseAt: String(u.budgetReleaseAt ?? ""),
             periodAware: Array.isArray(u.budgetExceeded),
             updatedAt: u.updatedAt ?? "",
+            periods: status.periods,
+            tokenDenied: status.tokenDenied,
+            departmentOver: status.departmentOver,
+            blockCause: status.blockCause,
           };
         })
         .filter((u) => validUserKeys.has(String(u.userId).toLowerCase()));
@@ -165,6 +203,9 @@ export async function PUT(req: NextRequest) {
   if (!session.user.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
+  // The session's groups can be up to 8h stale: re-check the CURRENT role before writing.
+  const fresh = await requireFreshRole(session, ["admin"]);
+  if (!fresh.ok) return fresh.response;
 
   try {
     const body = await req.json();
@@ -193,6 +234,11 @@ export async function PUT(req: NextRequest) {
     }
 
     const now = new Date().toISOString();
+    const actor: Pick<LimitChange, "actor" | "actorRole" | "appliedAt"> = {
+      actor: session.user.email,
+      actorRole: fresh.role,
+      appliedAt: now,
+    };
 
     if (type === "department") {
       // ADR-023: dept rows carry `monthlyBudget` (total cap) plus per-member default
@@ -217,12 +263,25 @@ export async function PUT(req: NextRequest) {
         updateParts.push("allowedTiers = :tiers");
         exprVals[":tiers"] = { L: allowedTiers.map(t => ({ S: t })) };
       }
-      await dynamodb.send(new UpdateItemCommand({
-        TableName: DEPT_BUDGETS_TABLE,
-        Key: { dept_id: { S: id } },
-        UpdateExpression: `SET ${updateParts.join(", ")}`,
-        ExpressionAttributeValues: exprVals,
-      }));
+      const Key = { dept_id: { S: id } };
+      const current = await dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key }));
+      const changed = [...(monthlyBudget !== undefined ? ["monthlyBudget"] : []), ...deptFields];
+      // Row update + limit_change audit commit together (lib/limit-audit).
+      await applyLimitChange(
+        {
+          TableName: DEPT_BUDGETS_TABLE,
+          Key,
+          UpdateExpression: `SET ${updateParts.join(", ")}`,
+          ExpressionAttributeValues: exprVals,
+        },
+        {
+          ...actor,
+          targetType: "department",
+          department: id,
+          before: pickNumbers(current.Item ? unmarshall(current.Item) : undefined, changed),
+          after: pickNumbers(body as Record<string, unknown>, changed),
+        }
+      );
     } else if (type === "user") {
       // ADR-031 (B′): the per-user canonical key is the lowercased email. Normalize
       // once so BOTH the cc-user-budgets row AND the mirrored LIMIT#monthly land
@@ -250,52 +309,33 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "dailyBudget, weeklyBudget, monthlyBudget or dailyTokenLimit required" }, { status: 400 });
       }
 
-      await dynamodb.send(new UpdateItemCommand({
-        TableName: USER_BUDGETS_TABLE,
-        Key: { user_id: { S: userId } },
-        UpdateExpression: `SET ${updateParts.join(", ")}`,
-        ExpressionAttributeValues: exprValues,
-      }));
-
-      // ADR-006(legacy 014)/015: mirror $ monthlyBudget into cc-on-bedrock-limits LIMIT#monthly so
-      // the Stream-driven token-limit-enforcer (near-real-time) can enforce it on the
-      // Local Governance role. Without this, the only enforcement path is budget-check
-      // (5-min cron) which used to silently skip Local-only users.
-      // monthlyBudget > 0 → upsert LIMIT row; monthlyBudget === 0 → delete row so
-      // dept.perUserMonthlyBudget (ADR-023) takes over.
-      if (monthlyBudget !== undefined) {
-        if (monthlyBudget > 0) {
-          const maxNormalized = Math.floor(monthlyBudget * NORMALIZED_PER_USD);
-          await dynamodb.send(new UpdateItemCommand({
-            TableName: LIMITS_TABLE,
-            Key: {
-              PK: { S: `USER#${userId}` },
-              SK: { S: "LIMIT#monthly" },
-            },
-            UpdateExpression: "SET max_normalized = :mx, source_usd = :usd, normalized_per_usd = :rate, updatedAt = :now",
-            ExpressionAttributeValues: {
-              ":mx": { N: String(maxNormalized) },
-              ":usd": { N: String(monthlyBudget) },
-              ":rate": { N: String(NORMALIZED_PER_USD) },
-              ":now": { S: now },
-            },
-          }));
-        } else {
-          // DynamoDB DeleteItem is a no-op when the item doesn't exist (it does
-          // NOT throw ResourceNotFoundException for missing rows — that exception
-          // is reserved for missing tables). Any other error (throttling,
-          // AccessDenied, network) must propagate to the outer catch so the PUT
-          // returns 500: swallowing here would let cc-user-budgets.monthlyBudget=0
-          // commit while LIMIT#monthly keeps the stale cap, leaving
-          // token-limit-enforcer blocking the user on an old threshold.
-          await dynamodb.send(new DeleteItemCommand({
-            TableName: LIMITS_TABLE,
-            Key: {
-              PK: { S: `USER#${userId}` },
-              SK: { S: "LIMIT#monthly" },
-            },
-          }));
+      const Key = { user_id: { S: userId } };
+      const current = await dynamodb.send(new GetItemCommand({ TableName: USER_BUDGETS_TABLE, Key }));
+      const changed = [
+        ...PERIOD_FIELDS.filter((f) => (body as Record<string, unknown>)[f] !== undefined),
+        ...(dailyTokenLimit !== undefined ? ["dailyTokenLimit"] : []),
+      ];
+      // Row update + limit_change audit commit together (lib/limit-audit).
+      await applyLimitChange(
+        {
+          TableName: USER_BUDGETS_TABLE,
+          Key,
+          UpdateExpression: `SET ${updateParts.join(", ")}`,
+          ExpressionAttributeValues: exprValues,
+        },
+        {
+          ...actor,
+          targetType: "user",
+          email: userId,
+          department: await auditDepartment(userId),
+          before: pickNumbers(current.Item ? unmarshall(current.Item) : undefined, changed),
+          after: pickNumbers(body as Record<string, unknown>, changed),
         }
+      );
+
+      // monthlyBudget > 0 → upsert LIMIT#monthly; 0 → delete it (lib/limit-mirror).
+      if (monthlyBudget !== undefined) {
+        await syncMonthlyLimitMirror(userId, monthlyBudget, now);
       }
     } else {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });

@@ -4,7 +4,7 @@
 > ADRs in `docs/decisions/` are the *decision log* (why); the decision baseline is
 > `docs/decisions/BASELINE.md`. Anything under `docs/decisions/archive/` or `docs/history/`
 > is **historical / superseded — NOT current**.
-> Last reconciled: 2026-10-26 (Terraform-only; governance/devenv profiles; BYO VPC; dashboard on EC2 ASG; native Claude Code OTEL; Codex on Bedrock).
+> Last reconciled: 2026-10-26 (Terraform-only; governance/devenv profiles; BYO VPC; dashboard on EC2 ASG; native Claude Code OTEL; Codex on Bedrock; budget increase approvals + role groups, ADR-008 amendment 2026-10-24).
 
 ## What this is
 멀티유저 Claude Code 개발환경 플랫폼 on AWS Bedrock. 사용자는 per-user EC2 DevEnv(브라우저 IDE)
@@ -106,11 +106,49 @@ graph LR
    caps — daily / weekly / monthly (UTC windows; token limits use KST) — and any one exceeded
    blocks (ADR-008 amendment 2026-10-18). Claude Code and Codex spend count against the
    same budgets (no per-tool budget); the deny covers the Responses API.
+   Blocked users request a **one-time increase**; admin or the department's dept-manager
+   approves it for the current window only (see "Budget increase & roles" below,
+   ADR-008 amendment 2026-10-24).
 9. **Path/port routing.** code-server reached by path (`?folder=`), stays on port **8080** (reserved);
    extra user ports mapped path→port via nginx. Custom ports must not use 8080/well-known.
    The dashboard does **not** directly probe devenv:8080 (the devenv SG admits only the nginx SG, so a
    direct probe always times out); portal `healthStatus` is derived from EC2 lifecycle —
    `running` + non-blank `privateIp` ⇒ HEALTHY, else UNKNOWN (ADR-012, optimistic trade-off).
+
+## Budget increase & roles (ADR-008 amendment 2026-10-24)
+
+Works in both editions. IAM extension, container, tier and DLP approvals are `devenv`-only and handled by admins only.
+
+| | `governance` (default) | `devenv` |
+|---|---|---|
+| Cost overview · department budgets · user caps · blocked list | O | O |
+| Budget increase request · approval | O | O |
+| Dept-manager standing limits for members | O | O |
+| IAM extension / container / tier / DLP approvals | X | O (admin) |
+| ccdash link (`ccdash_url`) | optional | optional |
+
+```text
+User (/local, LocalSetup, devEnv portal)
+  └─ POST /api/user/budget-increase {period, requestedAmount, reason}
+       → approval table REQUEST#{id} (pending) + lock PENDING#{email}#{period}#{UTC key}
+Approver (/admin/approvals — admin, or a dept-manager via middleware APPROVER_PATHS)
+  └─ POST /api/admin/approval-requests {requestId, action, amount?, reason?}
+       → requireFreshRole + fresh Cognito department → decideBudgetAction
+       → TransactWriteItems: request approved · lock deleted
+                             · cc-user-budgets  ADD grant#{period}#{key} (requested period → monthly cascade, uncapped periods skipped)
+                             · cc-department-budgets ADD grant#monthly#{key} (amount once; manager approvals carry an optimistic condition)
+       → releaseTokenAxis: LIMIT#monthly grant_bucket/grant_normalized (KST month); DENY#active released only when every token cap is under
+budget-check (5 min, UTC)
+  └─ cap(period) = standing resolution (user > dept per-user > global) + current-window grant (only when cap > 0)
+       → USD deny released, activeGrant* written → dashboard shows "base + increase"
+```
+
+- **One-time**: a grant is stored under the key of the UTC window at approval time (today / this ISO week / this month), so the next window automatically falls back to the standing cap. Standing caps never change.
+- **Approval authority**: no self-approval (all types). Admins approve anything. A dept-manager approves only `budget_increase` from plain users of their own department, and only within the department monthly total (department spend recorded by budget-check + this month's department grants + amount). Pending requests from a past window are `expired`.
+- **Dept-manager standing limits**: `PUT /api/dept/user-budgets` — daily/weekly/monthly caps for plain users of the same department (0 = inherit, personal monthly ≤ department total). Department totals and per-user defaults are admin-only (`PUT /api/admin/budgets`). Both routes record the row update and a `limit_change` audit in one transaction.
+- **Roles**: exactly one Cognito group of `admin` / `dept-manager` / `user`. When an admin assigns it on the admin users page it is written to Cognito immediately and the target is globally signed out. Privileged writes re-check the current group with `AdminListGroupsForUser` (sessions last 8h).
+- **ccdash**: a separate product. With `ccdash_url` set, the dashboard shows only a sidebar link and collector setup guidance (`{ccdash_url}/collector`, `user.email` = Cognito email). cc writes no telemetry settings.
+- Known limitations are collected in ADR-008 "Known limitations (2026-10-24)".
 
 ## IaC
 - **Terraform is the only IaC.** CDK/CloudFormation removed (ADR-001). Lambda handlers in `lambda/`

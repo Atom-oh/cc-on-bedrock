@@ -1,3 +1,5 @@
+import type { Role } from "./roles";
+
 // ─── Auth & User Types ───
 
 export interface UserSession {
@@ -31,6 +33,8 @@ export interface CognitoUser {
   storageType?: "ebs" | "efs";
   containerId?: string;
   groups: string[];
+  role?: Role;                // highest-privilege role group (set by GET /api/users)
+  roleNeedsCleanup?: boolean; // user holds more than one role group
   customRoutes?: CustomRoute[];
 }
 
@@ -42,10 +46,13 @@ export interface CreateUserInput {
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
   storageType?: "ebs" | "efs";
+  role: Role;
 }
 
 export interface UpdateUserInput {
   username: string;
+  role?: Role;
+  department?: string;
   containerOs?: "ubuntu" | "al2023";
   resourceTier?: "light" | "standard" | "power";
   securityPolicy?: "open" | "restricted" | "locked";
@@ -182,6 +189,27 @@ export interface DeptMember {
   resourceTier: string;
   status: string;
   containerStatus?: string;
+  /** Standing explicit limits (USD; 0 = inherit). Detail view of one department only. */
+  limits?: { dailyBudget: number; weeklyBudget: number; monthlyBudget: number };
+  /** Per-period caps with current grants and the block cause. Detail view only. */
+  budgetStatus?: MemberBudgetStatus;
+  /** Current role group; omitted when the lookup failed. */
+  role?: Role;
+}
+
+export interface MemberPeriodStatus {
+  spend: number;
+  base: number;
+  grant: number;
+  cap: number;
+}
+
+export interface MemberBudgetStatus {
+  periods: Record<"daily" | "weekly" | "monthly", MemberPeriodStatus>;
+  exceeded: Array<"daily" | "weekly" | "monthly">;
+  departmentOver: boolean;
+  tokenDenied: boolean;
+  blockCause: "user_daily" | "user_weekly" | "user_monthly" | "department" | "token" | null;
 }
 
 export interface DeptBudget {
@@ -190,6 +218,10 @@ export interface DeptBudget {
   currentSpend: number;
   monthlyTokenLimit: number;
   currentTokens: number;
+  /** Spend budget-check last recorded on the department row (the cap check's input). */
+  recordedSpend?: number;
+  /** One-time grants approved in this department this month (department-cap accounting). */
+  monthGranted?: number;
 }
 
 export interface PendingRequest {
@@ -201,6 +233,10 @@ export interface PendingRequest {
   requestedAt: string;
   status: "pending" | "approved" | "rejected";
   department: string;
+  type?: string;
+  period?: string;
+  periodKey?: string;
+  requestedAmount?: number;
 }
 
 export interface MonthlyUsage {

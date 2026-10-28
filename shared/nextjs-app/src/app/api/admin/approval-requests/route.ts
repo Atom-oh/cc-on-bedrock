@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { updateCognitoUserAttribute } from "@/lib/aws-clients";
+import { getCognitoUser, updateCognitoUserAttribute } from "@/lib/aws-clients";
 import { emailToSubdomain } from "@/lib/utils";
 import {
   changeTier,
@@ -11,14 +11,40 @@ import {
   IAM_POLICY_SETS,
 } from "@/lib/ec2-clients";
 import type { IamStatement } from "@/lib/iam-request-validation";
-import { canApproveRequest, isApprover, type ApproverUser } from "@/lib/approval-authz";
+import { canApproveRequest, type ApproverUser } from "@/lib/approval-authz";
+import { getRoleGroups, requireFreshRole } from "@/lib/role-admin";
+import { hasRealDepartment, roleFromGroups, type Role } from "@/lib/roles";
+import { BUDGET_PERIODS, type BudgetPeriod } from "@/lib/budget-periods";
+import { grantAttr, periodKey } from "@/lib/budget-grants";
+import {
+  DEPT_BUDGETS_TABLE,
+  RELEASE_ETA_MINUTES,
+  USER_BUDGETS_TABLE,
+  approvedGrants,
+  buildApproveTransaction,
+  buildExpireTransaction,
+  buildRejectTransaction,
+  classifyCancellation,
+  decideBudgetAction,
+  isBudgetPeriod,
+  periodBaseCap,
+  periodIsCapped,
+  releaseTokenAxis,
+  removeStaleGrants,
+  runTransaction,
+  staleGrantAttrs,
+  type BudgetIncreaseRecord,
+  type StoredBudgetRequest,
+} from "@/lib/budget-increase";
 import {
   DynamoDBClient,
   ScanCommand,
   UpdateItemCommand,
   GetItemCommand,
+  type TransactWriteItemsInput,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
+import type { Session } from "next-auth";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const APPROVAL_TABLE = process.env.APPROVAL_TABLE ?? "cc-on-bedrock-approval-requests";
@@ -27,22 +53,62 @@ const dynamodb = new DynamoDBClient({ region });
 
 // ADR-026 T7 — approval authz lives in @/lib/approval-authz (pure, unit-tested).
 
+/** Request types a dept-manager may see (and, for budget_increase, decide). */
+const MANAGER_VISIBLE_TYPES = ["budget_increase", "limit_change"];
+
+/**
+ * The approver built from FRESH Cognito data: the session's groups and department
+ * can be up to 8h stale. A dept-manager without a real department (blank or the
+ * "default" placeholder) gets no department, so department checks fail closed.
+ */
+async function freshApprover(
+  session: Session | null
+): Promise<{ ok: true; approver: ApproverUser } | { ok: false; response: NextResponse }> {
+  const email = session?.user?.email;
+  if (!email) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Approver access required (admin or dept-manager)" }, { status: 403 }),
+    };
+  }
+  const fresh = await requireFreshRole(session, ["admin", "dept-manager"]);
+  if (!fresh.ok) return fresh;
+  let department: string | undefined;
+  if (fresh.role !== "admin") {
+    try {
+      const d = (await getCognitoUser(email)).department ?? "";
+      department = hasRealDepartment(d) ? d : undefined;
+    } catch (err) {
+      console.error("[admin/approval-requests] approver lookup failed:", err instanceof Error ? err.message : err);
+      return { ok: false, response: NextResponse.json({ error: "Role check unavailable" }, { status: 503 }) };
+    }
+  }
+  return {
+    ok: true,
+    approver: { email, isAdmin: fresh.role === "admin", groups: [fresh.role], department },
+  };
+}
+
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user || !isApprover(session.user as unknown as ApproverUser)) {
-    return NextResponse.json({ error: "Approver access required (admin or dept-manager)" }, { status: 403 });
-  }
-  const approver = session.user as unknown as ApproverUser;
+  const auth = await freshApprover(session);
+  if (!auth.ok) return auth.response;
+  const approver = auth.approver;
 
   const { searchParams } = new URL(req.url);
   const statusFilter = searchParams.get("status"); // optional: pending, approved, rejected
 
   try {
-    const scanParams: Record<string, unknown> = { TableName: APPROVAL_TABLE };
+    // Requests only: budget_increase lock items (PENDING#...) share the table.
+    const scanParams: Record<string, unknown> = {
+      TableName: APPROVAL_TABLE,
+      FilterExpression: "begins_with(PK, :req)",
+      ExpressionAttributeValues: { ":req": { S: "REQUEST#" } },
+    };
     if (statusFilter) {
-      scanParams.FilterExpression = "#s = :status";
+      scanParams.FilterExpression = "begins_with(PK, :req) AND #s = :status";
       scanParams.ExpressionAttributeNames = { "#s": "status" };
-      scanParams.ExpressionAttributeValues = { ":status": { S: statusFilter } };
+      scanParams.ExpressionAttributeValues = { ":req": { S: "REQUEST#" }, ":status": { S: statusFilter } };
     }
 
     const result = await dynamodb.send(new ScanCommand(scanParams as never));
@@ -70,6 +136,23 @@ export async function GET(req: NextRequest) {
         statements: u.statements, // ADR-026: JSON string of requested action+resource
         llmNote: u.llmNote, // ADR-026 T3: advisory LLM risk summary
         reason: u.reason,
+        // budget_increase
+        requesterRole: u.requesterRole,
+        period: u.period,
+        periodKey: u.periodKey,
+        requestedAmount: u.requestedAmount !== undefined ? Number(u.requestedAmount) : undefined,
+        approvedAmount: u.approvedAmount !== undefined ? Number(u.approvedAmount) : undefined,
+        snapshotSpend: u.snapshotSpend !== undefined ? Number(u.snapshotSpend) : undefined,
+        snapshotBudget: u.snapshotBudget !== undefined ? Number(u.snapshotBudget) : undefined,
+        rejectReason: u.rejectReason,
+        expiredAt: u.expiredAt,
+        // limit_change (already-applied audit record)
+        actor: u.actor,
+        actorRole: u.actorRole,
+        targetType: u.targetType,
+        before: u.before,
+        after: u.after,
+        appliedAt: u.appliedAt,
         // Legacy fields
         resourceTier: u.resourceTier,
         containerOs: u.containerOs,
@@ -78,12 +161,15 @@ export async function GET(req: NextRequest) {
 
     requests.sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
 
-    // dept-manager (non-admin) sees only their own department's requests.
-    // fail-closed: a dept-manager with no department sees nothing (gate round-1 Codex MAJOR).
+    // dept-manager (non-admin) sees only their own department's budget requests
+    // (budget_increase, plus limit_change history). fail-closed: a dept-manager with
+    // no department sees nothing (gate round-1 Codex MAJOR).
     const visible = approver.isAdmin
       ? requests
       : approver.department
-        ? requests.filter((r) => r.department === approver.department)
+        ? requests.filter(
+            (r) => r.department === approver.department && MANAGER_VISIBLE_TYPES.includes(r.type)
+          )
         : [];
 
     return NextResponse.json({
@@ -99,16 +185,17 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user || !isApprover(session.user as unknown as ApproverUser)) {
-    return NextResponse.json({ error: "Approver access required (admin or dept-manager)" }, { status: 403 });
-  }
-  const approver = session.user as unknown as ApproverUser;
+  const auth = await freshApprover(session);
+  if (!auth.ok) return auth.response;
+  const approver = auth.approver;
 
   try {
     const body = await req.json();
     const { requestId, action } = body as {
       requestId: string;
       action: "approve" | "reject";
+      amount?: unknown; // budget_increase: approver-adjusted amount
+      reason?: unknown; // budget_increase: rejection reason
     };
 
     if (!requestId) {
@@ -131,10 +218,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Request not found" }, { status: 404 });
     }
     const request = unmarshall(getResult.Item);
+    if (request.type === "budget_increase") {
+      return await decideBudgetIncrease(request, approver, action, body);
+    }
+    // Dept-managers decide only budget_increase; every other request type is admin-only.
+    if (!approver.isAdmin) {
+      return NextResponse.json({ error: "admin_only_request_type" }, { status: 403 });
+    }
     // Pass the STORED department verbatim (empty string when missing) — do NOT
     // coerce to "default", else a default-dept manager could approve dept-less
     // requests. Missing department → dept-manager denied; admin still allowed.
-    if (!canApproveRequest(approver, (request.department as string) ?? "")) {
+    if (!canApproveRequest(approver, (request.department as string) ?? "", (request.email as string) ?? "")) {
       return NextResponse.json({ error: "Not authorized for this request's department" }, { status: 403 });
     }
 
@@ -156,7 +250,7 @@ export async function POST(req: NextRequest) {
           ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: {
             ":status": { S: "rejected" },
-            ":admin": { S: session.user.email },
+            ":admin": { S: approver.email },
             ":now": { S: now },
           },
         })
@@ -220,7 +314,7 @@ export async function POST(req: NextRequest) {
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
           ":status": { S: "approved" },
-          ":admin": { S: session.user.email },
+          ":admin": { S: approver.email },
           ":now": { S: now },
           ":result": { S: JSON.stringify(applyResult) },
         },
@@ -236,4 +330,180 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : "Internal server error";
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
+}
+
+/**
+ * Map a failed transaction to a response: a failed request condition means another
+ * approver decided first; a failed department condition means the department's month
+ * grants moved since the cap check; anything else (conflict, throttling) is a retry.
+ * Non-cancellation errors are rethrown.
+ */
+function txFailure(err: unknown, tx: TransactWriteItemsInput): NextResponse {
+  const c = classifyCancellation(err, tx);
+  if (c === null) throw err;
+  if (c !== "retry" && c.failed.includes("request")) {
+    return NextResponse.json({ error: "already_decided" }, { status: 409 });
+  }
+  if (c !== "retry" && c.failed.includes("department")) {
+    return NextResponse.json({ error: "department_changed_retry" }, { status: 409 });
+  }
+  return NextResponse.json({ error: "retry" }, { status: 503 });
+}
+
+/**
+ * budget_increase approve/reject. The decision is the pure `decideBudgetAction` on
+ * fresh reads; every write is one transaction conditional on `status = pending`
+ * (plus, for a dept-manager approval, on the department's month grant total).
+ */
+async function decideBudgetIncrease(
+  request: Record<string, unknown>,
+  approver: ApproverUser,
+  action: "approve" | "reject",
+  body: { amount?: unknown; reason?: unknown }
+): Promise<NextResponse> {
+  const requestId = String(request.requestId ?? "");
+  const email = String(request.email ?? "").trim().toLowerCase();
+  const department = String(request.department ?? "");
+  const stored: StoredBudgetRequest = {
+    type: "budget_increase",
+    email,
+    department,
+    status: String(request.status ?? "pending"),
+    period: request.period,
+    periodKey: request.periodKey,
+    requestedAmount: request.requestedAmount,
+  };
+  const now = new Date();
+
+  // Requester's CURRENT role, needed only for a dept-manager approver (before the
+  // approve/reject split: a manager's or admin's request is admin-only for both).
+  // Admins skip the lookup, so a deleted requester's request stays decidable.
+  // A requester who moved department since filing is admin-only: the stored
+  // department would otherwise let the old department's manager decide it.
+  let requesterRole: Role = "user";
+  if (!approver.isAdmin) {
+    try {
+      const [groups, requester] = await Promise.all([getRoleGroups(email), getCognitoUser(email)]);
+      requesterRole = roleFromGroups(groups).role;
+      const current = requester.department ?? "";
+      if ((hasRealDepartment(current) ? current : "") !== department) {
+        return NextResponse.json({ error: "requester_department_changed" }, { status: 403 });
+      }
+    } catch (err) {
+      if ((err as { name?: string })?.name === "UserNotFoundException") {
+        return NextResponse.json({ error: "requester_not_found" }, { status: 403 });
+      }
+      console.error("[admin/approval-requests] requester role lookup failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+    }
+  }
+
+  // Cap state is only needed to approve.
+  let deptRow: Record<string, unknown> | undefined;
+  let userRow: Record<string, unknown> | undefined;
+  let seenDeptGrant: string | null = null;
+  const monthGrant = grantAttr("monthly", periodKey("monthly", now));
+  if (action === "approve") {
+    const [deptRes, userRes] = await Promise.all([
+      department
+        ? dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key: { dept_id: { S: department } } }))
+        : Promise.resolve(undefined),
+      dynamodb.send(new GetItemCommand({ TableName: USER_BUDGETS_TABLE, Key: { user_id: { S: email } } })),
+    ]);
+    deptRow = deptRes?.Item ? unmarshall(deptRes.Item) : undefined;
+    userRow = userRes.Item ? unmarshall(userRes.Item) : undefined;
+    seenDeptGrant = deptRes?.Item?.[monthGrant]?.N ?? null;
+  }
+
+  const decision = decideBudgetAction({
+    approver,
+    request: stored,
+    requesterRole,
+    action,
+    amount: body.amount,
+    dept: {
+      monthlyBudget: Number(deptRow?.monthlyBudget ?? 0),
+      monthSpend: Number(deptRow?.currentSpend ?? 0),
+      monthGranted: Number(deptRow?.[monthGrant] ?? 0),
+    },
+    seenDeptGrant,
+    baseCap: isBudgetPeriod(stored.period) ? periodBaseCap(stored.period, userRow, deptRow) : 0,
+    now,
+  });
+
+  if (decision.kind === "deny") {
+    return NextResponse.json({ error: decision.error }, { status: decision.status });
+  }
+  if (decision.kind === "already_processed") {
+    return NextResponse.json({ success: true, data: { requestId, status: decision.status, alreadyProcessed: true } });
+  }
+
+  // decideBudgetAction validated period/periodKey for every remaining kind.
+  const record: BudgetIncreaseRecord = {
+    requestId,
+    email,
+    department,
+    period: stored.period as BudgetPeriod,
+    periodKey: stored.periodKey as string,
+  };
+
+  if (decision.kind === "expire") {
+    const tx = buildExpireTransaction(record, now);
+    try {
+      await runTransaction(tx);
+    } catch (err) {
+      if (classifyCancellation(err, tx) === null) throw err; // decided concurrently — nothing to expire
+    }
+    return NextResponse.json({ error: "expired" }, { status: 409 });
+  }
+
+  if (decision.kind === "reject") {
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 500) : "";
+    const tx = buildRejectTransaction(record, approver.email, reason, now);
+    try {
+      await runTransaction(tx);
+    } catch (err) {
+      return txFailure(err, tx);
+    }
+    return NextResponse.json({ success: true, data: { requestId, status: "rejected" } });
+  }
+
+  // A period with no base cap stays unlimited; a grant there would be meaningless.
+  const skipPeriods = BUDGET_PERIODS.filter((p) => !periodIsCapped(p, userRow, deptRow));
+  const tx = buildApproveTransaction(record, decision.amount, approver.email, now, {
+    skipPeriods,
+    deptCondition: decision.deptCondition,
+  });
+  try {
+    await runTransaction(tx);
+  } catch (err) {
+    return txFailure(err, tx);
+  }
+  if (userRow) await removeStaleGrants(email, staleGrantAttrs(userRow, now));
+
+  // The approval is committed; lifting the token axis is best-effort and never fails it.
+  const tokenRelease = await releaseTokenAxis(email, decision.amount, now, department);
+  try {
+    await dynamodb.send(new UpdateItemCommand({
+      TableName: APPROVAL_TABLE,
+      Key: { PK: { S: `REQUEST#${requestId}` }, SK: { S: "META" } },
+      UpdateExpression: "SET tokenRelease = :tr",
+      ExpressionAttributeValues: { ":tr": { S: JSON.stringify(tokenRelease) } },
+    }));
+  } catch (err) {
+    console.warn("[admin/approval-requests] tokenRelease record failed:", err instanceof Error ? err.message : err);
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      requestId,
+      status: "approved",
+      applied: {
+        grants: approvedGrants(record, decision.amount, now, skipPeriods),
+        releaseEtaMinutes: RELEASE_ETA_MINUTES,
+        tokenRelease,
+      },
+    },
+  });
 }

@@ -52,8 +52,8 @@ EventBridge (5분) → budget-check
 | Deny policy 이름 | 부착 주체 | 사유 | 해제 조건 |
 |---|---|---|---|
 | `cc-bedrock-dept-budget-deny` | `budget-check` | 부서 월간 달러 예산 초과 | 예산 증액 또는 월 reset |
-| `cc-bedrock-user-daily-deny` | `budget-check` | User USD cap exceeded — daily, weekly **or** monthly (amendment 2026-10-18; name kept for compatibility) | Every period back under its cap (period rollover at UTC midnight / Monday 00:00 UTC / 1st 00:00 UTC, or a raised cap) |
-| `cc-bedrock-local-token-deny` | `token-limit-enforcer` | normalized 토큰 한도 초과 | period reset cron (`limit-reset`) |
+| `cc-bedrock-user-daily-deny` | `budget-check` | User USD cap exceeded — daily, weekly **or** monthly (amendment 2026-10-18; name kept for compatibility) | Every period back under its cap (period rollover at UTC midnight / Monday 00:00 UTC / 1st 00:00 UTC, a raised cap, or an approved one-time grant — amendment 2026-10-24) |
+| `cc-bedrock-local-token-deny` | `token-limit-enforcer` | normalized 토큰 한도 초과 | period reset cron (`limit-reset`); also an admin manual reset, or a conditional dashboard release on an approved increase (amendment 2026-10-24) |
 
 - 세 정책은 **공존 가능**하고 IAM은 하나라도 있으면 호출 거부. 해제는 **부착 주체가 자신의 정책만** detach한다.
 - 이 이름들이 canonical이다. 레거시 이름(`BudgetExceededDeny` / `DeptBudgetExceededDeny`)은 발견 시 자동 제거(007 runtime-upsert 패턴, 일회성 마이그레이션 스크립트 없음).
@@ -107,6 +107,68 @@ cap(period) =
 - **EC2 모드** (`cc-on-bedrock-task-*`): 달러 예산 필수 + (옵션) 토큰 한도(`cc-on-bedrock-limits`에 행 있으면 활성).
 - **Local 모드** (`cc-on-bedrock-local-user-*`): 토큰 한도 필수 + 부서 한도 설정 시 달러 예산. 부착/검사 사이트는 Cognito username → 실제 롤명을 IAM 태그로 역조회(`iam_role_lookup`)해 `NoSuchEntity` short-circuit을 방지한다.
 
+### Amendment 2026-10-24 — one-time budget increase approvals, dept-manager delegation, role groups
+
+Owner decision (design: `docs/superpowers/specs/2026-10-24-editions-budget-increase-design.md`). There is no LLM gateway, so cost caps, department budgets, the blocked list and **cap allowances (increases)** are the whole of this product's control surface. A blocked user used to have nothing to do but wait for an admin to raise the budget; this amendment fills that gap with a user request → one-time approval by a dept-manager or admin.
+
+**Editions (`deployment_mode`, ADR-006 amendment 2026-10-23)**
+
+| Capability | `governance` (default) | `devenv` |
+|---|---|---|
+| Cost overview · department budgets · user caps · blocked list | O | O |
+| Budget increase request (`budget_increase`) · approval | O | O |
+| Dept-manager standing limits for members | O | O |
+| IAM extension / container / tier / DLP approvals | X | O (admin only) |
+| ccdash link (optional, `ccdash_url`) | O | O |
+
+In governance mode the approvals page shows only `budget_increase` and the `limit_change` history (`shared/nextjs-app/src/app/admin/approvals/page.tsx`). Instance-permission request types return 403 `admin_only_request_type` to a dept-manager (`lib/budget-increase.ts` `decideBudgetAction`).
+
+**Request** — `POST /api/user/budget-increase` (both modes) `{period: daily|weekly|monthly, requestedAmount, reason}`. The amount is USD **added to** the current effective cap (0 < amount ≤ 10000, `MAX_INCREASE_USD`); the reason is 1–500 characters. The requester's department and role are read from Cognito (client values are not trusted; with no real department it is stored as `""` → only an admin can approve). The request stores the UTC `periodKey` at request time plus `snapshotSpend` / `snapshotBudget`. A lock item `PENDING#{email}#{period}#{key}` allows one pending request per user and period window (duplicate → 409 `pending_exists`). An uncapped period cannot be blocked, so it returns 400 `unlimited_period`.
+
+**One-time grants (UTC period keys)**
+- Period keys use the same UTC windows as budget-check: day `YYYY-MM-DD`, ISO week `YYYY-Www` (ISO year), month `YYYY-MM` (`lambda/budget-check.py` `period_key` = `lib/budget-grants.ts` `periodKey`).
+- An approval DynamoDB-`ADD`s a flat numeric attribute `grant#{period}#{key}` on the `cc-user-budgets` row. Further approvals in the same window accumulate.
+- **Cascade to longer periods**: daily → daily + weekly + monthly, weekly → weekly + monthly, monthly → monthly (`cascade_targets` / `cascadeTargets`). Every key is computed in UTC from the approval time, so a daily increase in a week that spans a month boundary is added to the month that day belongs to. Periods that are uncapped at approval time are skipped.
+- Department grant total: when the request has a department, the approved amount is ADDed **once** to `grant#monthly#{key}` on `cc-department-budgets` (cascaded copies are not summed). It is used only for the department-budget check.
+- The request status change (`pending`→`approved`, condition `status = pending`), lock delete, user grant ADD and department grant ADD are **one `TransactWriteItems`**. After commit, `grant#*` attributes of past windows are removed best-effort.
+- budget-check: `get_user_budgets` computes `active_grants` (only grants whose key matches the current window) with one clock per scan, and `_effective_user_limits` adds them **only to a capped (> 0) period** (uncapped stays uncapped). When the window rolls over the key no longer matches, so the cap falls back to the standing value (no expiry job). Applied grants are written to `cc-user-budgets` as `activeGrantDaily/Weekly/Monthly`, and the dashboard shows "base + increase".
+- The USD deny lifts on the next budget-check run (up to 5 minutes, `RELEASE_ETA_MINUTES`) through the existing release path. The department-total deny (`cc-bedrock-dept-budget-deny`) is not lifted by a personal grant — raising the department total is admin-only.
+
+**Approval authorization** (`lib/approval-authz.ts` `canApproveBudgetIncrease`, `lib/budget-increase.ts` `decideBudgetAction`)
+- **No self-approval**: for every request type, approver email = requester email is refused (case-insensitive; an empty identity on either side fails closed as "self"). An admin's own request is decided by another admin. A sole admin changes their own cap directly in Admin → Budgets instead of requesting an increase; that change is also audited as `limit_change`.
+- admin: any request.
+- dept-manager: only `budget_increase` of their own department (Cognito `custom:department`, which must be a real department), only when the requester is a plain user (`requester_is_manager` — manager/admin requests are admin-only), and only within the department budget. Over-budget means: department `monthlyBudget > 0` and `department month spend (currentSpend) + this month's department grant total + amount > monthlyBudget` → 403 `exceeds_department` (shown as "admin approval required"). Concurrent approvals are guarded by an optimistic condition on the department grant ADD (must equal the value read); a conflict returns 409 `department_changed_retry`.
+- Approvers may adjust the amount (same checks apply) and give a reason when rejecting. A pending request whose window has passed is closed as `expired` on approve or reject, returning 409 `expired`.
+- **Fresh role**: session JWT groups and department can be up to 8h stale. Privileged writes (approvals, limit changes, role changes) re-check the current Cognito group with `requireFreshRole` (`lib/role-admin.ts`, `AdminListGroupsForUser`; lookup failure 503 `Role check unavailable`, no permission 403), and read the approver's and target's department fresh with `AdminGetUser`.
+- Routing: middleware keeps `/api/admin*` and `/admin*` admin-only but opens `APPROVER_PATHS` (`/api/admin/approval-requests`, `/admin/approvals`) to dept-managers (`lib/route-access.ts`). The old `api/dept` POST (which changed only the status, without department or pending checks) was removed, and `api/dept` GET reads the department from Cognito instead of the email domain.
+
+**Token axis** (normalized token, `token-limit-enforcer`, KST)
+- Every approval cascades to monthly, so when a `LIMIT#monthly` row exists the dashboard adds `floor(amount × NORMALIZED_PER_USD)` to `grant_normalized` for the KST-month `grant_bucket` (a grant from another month is replaced). The enforcer's `_user_cap` uses `max_normalized + grant_normalized` as the cap only for the monthly period and only when `grant_bucket` is the current KST month. A grant never caps an uncapped user.
+- The enforcer records `scope` (`user` | `dept`), `period` and the user's `dept` on `DENY#active`. The dashboard detaches and deletes the deny only when it is a `scope = user`, `period = monthly` deny, the grant was written, and **every** cap the enforcer applies (user and department × daily/weekly/monthly, current KST buckets) is under. Otherwise the deny stays and a reason is returned: `dept_scope` / `non_monthly` / `legacy_deny` / `no_token_limit` / `still_over_cap` / `other_cap_exceeded` / `role_unresolved`. The result is stored in the approval response `applied.tokenRelease` and on the request record `tokenRelease`, and the UI warns "approved but still token-blocked". A token-axis failure does not roll back the already-committed USD approval.
+
+**Dept-manager standing limits** — `PUT /api/dept/user-budgets` `{email, dailyBudget?, weeklyBudget?, monthlyBudget?}` (0–100000 USD per period, 0 = inherit; `lib/dept-limit-authz.ts`). A dept-manager may target only plain users of the same real department (`self` / `other_department` / `target_is_manager` refused), and when a department total is set the personal monthly cap must not exceed it (`exceeds_department_total`). Admins are unrestricted. Department totals and department per-user defaults still change only through `PUT /api/admin/budgets` (admin-only).
+
+**Audit** — `PUT /api/dept/user-budgets` and `PUT /api/admin/budgets` (user and department rows) commit the row update and a `limit_change` audit record (approval table; actor, actorRole, before, after, appliedAt, status `applied`) **in one transaction** (`lib/limit-audit.ts`). Approvals and rejections keep the approver, amount, time and reason on the request record. A dept-manager sees only their own department's `budget_increase` and `limit_change` items.
+
+**Role = exactly one Cognito group (required)**
+- The only source of a role is the Cognito group `admin` / `dept-manager` / `user`. Roles are not kept in custom attributes or DynamoDB. Every user has **exactly one** group.
+- Only admins assign roles, on the admin users page: the role is required on the create form (`createUserSchema.role`) and changed from the list's role column. On save the server writes straight to Cognito — `AdminAddUserToGroup` for the new group, then `AdminRemoveUserFromGroup` for the other role groups, then `AdminUserGlobalSignOut` (applies from the next sign-in). The CloudTrail events of these APIs let `user-role-provisioner` update the members' `custom:dept_manager_sub`.
+- Guards: an admin cannot demote themselves (`self_demotion`); the last enabled admin cannot be demoted, disabled or deleted (`last_admin`); `dept-manager` requires a real department (blank or `default` means no department → `dept_required`).
+- Existing data: no group = treated as `user`. Several groups = resolved to the highest privilege (`roleFromGroups`) and flagged "needs cleanup" in the list; an admin save normalizes to one group. No automatic bulk change.
+- The dashboard IAM policy (`terraform/modules/security/main.tf` `dashboard_cognito`) adds `AdminRemoveUserFromGroup`, `AdminUserGlobalSignOut` and `ListUsersInGroup`.
+
+**ccdash (optional)** — a separate product with its own deployment; this repository neither deploys nor modifies ccdash. Terraform has only `ccdash_url` (https, no trailing `/`; default `""`). When set, the dashboard shows a sidebar external link and collector setup guidance on `/local` and LocalSetup (a `{ccdash_url}/collector` link plus the Cognito login email to use as `user.email`); when unset, all of it is hidden. cc writes no telemetry settings to user machines (installation is ccdash's own script). Cost control does not depend on ccdash.
+
+#### Known limitations (2026-10-24)
+- For a user budget-check has not evaluated yet, the dashboard cannot see a cap that comes only from the global default (TF `*_budget_usd`), so requests are refused with `unlimited_period` until the first 5-minute run. Blocked users are always already evaluated.
+- Token denies attached before this amendment (`DENY#active` without `scope`) are not lifted by an approval (`legacy_deny`) → an admin manual reset (`POST /api/admin/limits/reset` `{email}`) is needed. Daily/weekly token denies (`non_monthly`) and department token denies (`dept_scope`) also stay until the KST period reset or a manual reset.
+- The `dept` on `DENY#active` is frozen at attach time. If the token grant ADD is retried after a lost response, it can be added once more for that KST month.
+- The department spend in the department-budget check is the `currentSpend` budget-check last wrote (up to 5 minutes stale). A concurrent admin cut of the department total is not blocked atomically (only concurrent department-grant approvals are guarded by the condition).
+- Session department and groups can be stale until the next sign-in. Privileged writes and department reads compensate by reading Cognito fresh, but session-based display can show old values until the next sign-in. The devEnv usage-tracker takes a usage row's department from the EC2 tag first.
+- If a Cognito call fails partway through a role change, the result is 500 `role_change_failed` and the user may remain in two groups (flagged "needs cleanup" in the list; saving again normalizes).
+- For a dept-manager the sidebar approvals badge also counts requests that only an admin can decide because they exceed the department budget. Old `cc-user-budgets` rows still keyed by subdomain can miss the token cause in the blocked list.
+- Pre-existing defects (out of scope): `api/dept/mcp` trusts a client-sent department. The enforcer returns on a daily deny before incrementing the weekly/monthly counters (under-count).
+
 ## Consequences
 
 긍정 / Positive
@@ -115,13 +177,14 @@ cap(period) =
 - 모델 가격 변동이 토큰 한도 정책을 침범하지 않음(환산 금지).
 - 부서 row 하나로 "인당 X, 총합 Y" 표현 + 신규 입사자 자동 상속(write storm 없음).
 - dept-manager가 자기 부서 사용량을 직접 모니터링(admin 부하 분산).
+- Dept-managers also handle their members' standing limits and one-time increases within the department total themselves (amendment 2026-10-24).
 
 부정·위험 / Negative & risk
 - **5분 지연**: EventBridge 주기로 최대 5분간 초과 사용 가능(실시간 아님). 정확히 100%에서 동시 호출 race condition.
 - **DynamoDB Scan 비용**: 매 주기 사용량 집계 — 대규모에서 RCU 부하(GSI 최적화 여지).
 - 사용자당 deny 정책 최대 3개 동시 부착 → `iam:PutRolePolicy` 호출 증가(역할당 정책 10개 quota 내 안전). 대시보드는 세 종류 차단 사유를 모두 표기해야 함.
 - **load-bearing 부재**: `cc-user-budgets` 행 부재 = 부서 기본값 상속(행이 literal $0이어도 상속). 의도된 동작, 문서화됨 — "명시적 $0"은 dept 기본값을 매우 낮게 두거나 legacy 토큰 트랙 사용.
-- dept-manager는 조회만, 예산 변경은 admin 전용(위임 미지원).
+- ~~dept-manager는 조회만, 예산 변경은 admin 전용(위임 미지원).~~ → **Revised by amendment 2026-10-24**: a dept-manager sets standing daily/weekly/monthly limits for plain users (`user` group) of their own department and approves their own department's `budget_increase` requests one-time within the department total. Department totals, department per-user defaults and manager/admin own limits remain admin-only.
 
 보안 / Security
 - 차단/해제 모두 부착 주체만 자기 정책을 다루므로 cross-Lambda 간섭 없음. deny는 per-user 롤 한정, blast radius는 롤 prefix로 제한.
@@ -152,6 +215,22 @@ files:
   - path: shared/nextjs-app/src/app/api/admin/budgets/route.ts
     must_contain:
       - "perUserMonthlyBudget"
+      - "applyLimitChange"
+  - path: lambda/budget-check.py
+    must_contain:
+      - "def active_grants"
+      - "def cascade_targets"
+  - path: lambda/token-limit-enforcer.py
+    must_contain:
+      - "def _user_cap"
+      - "grant_normalized"
+  - path: shared/nextjs-app/src/lib/approval-authz.ts
+    must_contain:
+      - "exceeds_department"
+      - "requester_is_manager"
+  - path: shared/nextjs-app/src/lib/route-access.ts
+    must_contain:
+      - "APPROVER_PATHS"
 
 # Tier 2: Semantic
 semantic:
@@ -164,4 +243,12 @@ semantic:
   - claim: "admin/budgets PUT가 사용자 $ 예산 변경 시 cc-on-bedrock-limits의 max_normalized를 USD→token 미러로 upsert/삭제한다"
     context_files:
       - shared/nextjs-app/src/app/api/admin/budgets/route.ts
+  - claim: "A budget_increase approval ADDs grant#{period}#{key} on cc-user-budgets for the requested period cascading up through monthly (uncapped periods skipped), and budget-check adds only grants whose key matches the current UTC window, and only to capped periods"
+    context_files:
+      - lambda/budget-check.py
+      - shared/nextjs-app/src/lib/budget-increase.ts
+  - claim: "Self-approval is refused; a dept-manager approves only budget_increase from plain users of their own department within the department monthly total (spend + this month's department grants + amount); every other request type is admin-only"
+    context_files:
+      - shared/nextjs-app/src/lib/approval-authz.ts
+      - shared/nextjs-app/src/lib/budget-increase.ts
 ```

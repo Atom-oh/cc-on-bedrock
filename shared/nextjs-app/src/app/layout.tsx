@@ -4,6 +4,7 @@ import "./globals.css";
 import Providers from "./providers";
 import AppShell from "@/components/app-shell";
 import { getDeploymentMode } from "@/lib/deployment-mode";
+import { ccdashLinks } from "@/lib/ccdash";
 
 export const metadata: Metadata = {
   title: "CC-on-Bedrock Dashboard",
@@ -19,12 +20,12 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // DEPLOYMENT_MODE is a runtime env, so the layout must not be prerendered at build time.
+  // DEPLOYMENT_MODE and CCDASH_URL are runtime envs, so the layout must not be prerendered at build time.
   noStore();
   return (
     <html lang="en" className="dark">
       <body className="font-sans bg-[#0a0f1a]">
-        <Providers deploymentMode={getDeploymentMode()}>
+        <Providers deploymentMode={getDeploymentMode()} ccdashLinks={ccdashLinks(process.env.CCDASH_URL)}>
           <AppShell>{children}</AppShell>
         </Providers>
       </body>

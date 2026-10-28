@@ -2,6 +2,8 @@
 
 import { useState, useMemo } from "react";
 import type { CognitoUser } from "@/lib/types";
+import { useI18n } from "@/lib/i18n";
+import { ROLES } from "@/lib/roles";
 import { useDeploymentMode } from "@/components/deployment-mode-provider";
 
 interface UsersTableProps {
@@ -29,15 +31,22 @@ const storageBadge: Record<string, string> = {
   efs: "bg-teal-900/40 text-teal-400",
 };
 
+const roleBadge: Record<string, string> = {
+  admin: "bg-red-900/40 text-red-400",
+  "dept-manager": "bg-blue-900/40 text-blue-400",
+  user: "bg-gray-800 text-gray-400",
+};
+
 const statusBadge: Record<string, string> = {
   CONFIRMED: "bg-green-900/40 text-green-400",
   FORCE_CHANGE_PASSWORD: "bg-yellow-900/40 text-yellow-400",
   DISABLED: "bg-gray-800 text-gray-500",
 };
 
-type SortKey = "email" | "subdomain" | "containerOs" | "resourceTier" | "securityPolicy" | "storageType" | "status";
+type SortKey = "email" | "role" | "subdomain" | "containerOs" | "resourceTier" | "securityPolicy" | "storageType" | "status";
 type SortDir = "asc" | "desc";
 
+const roleOrder: Record<string, number> = { user: 0, "dept-manager": 1, admin: 2 };
 const tierOrder: Record<string, number> = { light: 0, standard: 1, power: 2 };
 const policyOrder: Record<string, number> = { open: 0, restricted: 1, locked: 2 };
 
@@ -60,6 +69,7 @@ export default function UsersTable({
   // OS / tier / DLP policy (EC2 SG) / storage / port routes describe the per-user EC2 DevEnv —
   // hidden in governance mode.
   const devenv = useDeploymentMode() === "devenv";
+  const { t } = useI18n();
   const [editingCell, setEditingCell] = useState<{ username: string; field: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -112,6 +122,7 @@ export default function UsersTable({
     return [...filtered].sort((a, b) => {
       switch (sortKey) {
         case "email": return mul * a.email.localeCompare(b.email);
+        case "role": return mul * ((roleOrder[a.role ?? "user"] ?? 0) - (roleOrder[b.role ?? "user"] ?? 0));
         case "subdomain": return mul * a.subdomain.localeCompare(b.subdomain);
         case "containerOs": return mul * a.containerOs.localeCompare(b.containerOs);
         case "resourceTier": return mul * ((tierOrder[a.resourceTier] ?? 0) - (tierOrder[b.resourceTier] ?? 0));
@@ -190,6 +201,8 @@ export default function UsersTable({
           <thead>
             <tr className="border-b border-gray-800 bg-[#0d1117]">
               <th className={thClass} onClick={() => handleSort("email")}>User<SortIcon active={sortKey === "email"} dir={sortDir} /></th>
+              <th className={thClass} onClick={() => handleSort("role")}>{t("users.role")}<SortIcon active={sortKey === "role"} dir={sortDir} /></th>
+              <th className="px-5 py-3 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">{t("users.department")}</th>
               <th className={thClass} onClick={() => handleSort("subdomain")}>Subdomain<SortIcon active={sortKey === "subdomain"} dir={sortDir} /></th>
               {devenv && <th className={thClass} onClick={() => handleSort("containerOs")}>OS<SortIcon active={sortKey === "containerOs"} dir={sortDir} /></th>}
               {devenv && <th className={thClass} onClick={() => handleSort("resourceTier")}>Tier<SortIcon active={sortKey === "resourceTier"} dir={sortDir} /></th>}
@@ -206,6 +219,51 @@ export default function UsersTable({
                 <td className="px-5 py-3.5 whitespace-nowrap">
                   <p className="text-sm font-medium text-gray-200">{user.email}</p>
                   <p className="text-[10px] text-gray-600">{user.username}</p>
+                </td>
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  {editingCell?.username === user.username && editingCell?.field === "role" ? (
+                    <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.roleNeedsCleanup ? "" : (user.role ?? "user")} disabled={saving}
+                      onChange={(e) => handleInlineChange(user.username, "role", e.target.value)}
+                      onBlur={() => setEditingCell(null)}>
+                      {/* Multi-group users start unselected so re-picking the current role still fires onChange. */}
+                      {user.roleNeedsCleanup && <option value="" disabled>{t("users.role.select")}</option>}
+                      {ROLES.map((r) => (
+                        <option key={r} value={r}>{t(`users.role.${r}` as Parameters<typeof t>[0])}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "role" })}
+                        className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${roleBadge[user.role ?? "user"] ?? roleBadge.user} ${onUpdate ? "hover:ring-1 hover:ring-blue-500 cursor-pointer" : ""}`}>
+                        {t(`users.role.${user.role ?? "user"}` as Parameters<typeof t>[0])}
+                      </button>
+                      {user.roleNeedsCleanup && (
+                        <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-yellow-900/40 text-yellow-400">
+                          {t("users.role.cleanup")}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </td>
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  {editingCell?.username === user.username && editingCell?.field === "department" ? (
+                    <input autoFocus maxLength={50} disabled={saving}
+                      className="w-32 px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.department}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setEditingCell(null);
+                        if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                          void handleInlineChange(user.username, "department", e.currentTarget.value.trim());
+                        }
+                      }}
+                      onBlur={() => setEditingCell(null)} />
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "department" })}
+                      className={`text-sm text-gray-400 ${onUpdate ? "hover:text-blue-400 cursor-pointer" : ""}`}>
+                      {user.department}
+                    </button>
+                  )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-400">{user.subdomain}</td>
                 {devenv && (
@@ -292,6 +350,14 @@ export default function UsersTable({
                 )}
                 <td className="px-5 py-3.5 whitespace-nowrap text-right">
                   <div className="flex items-center justify-end gap-2">
+                    {onUpdate && user.roleNeedsCleanup && (
+                      <button
+                        onClick={() => void onUpdate(user.username, "role", user.role ?? "user")}
+                        className="px-2 py-1 text-xs font-medium text-yellow-400 hover:bg-yellow-900/30 rounded-lg transition-colors"
+                      >
+                        {t("users.role.normalize")}
+                      </button>
+                    )}
                     {onToggle && (
                       <button
                         onClick={() => onToggle(user.username, !user.enabled)}
@@ -326,7 +392,7 @@ export default function UsersTable({
             ))}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={devenv ? 9 : 4} className="px-6 py-12 text-center text-sm text-gray-600">
+                <td colSpan={devenv ? 11 : 6} className="px-6 py-12 text-center text-sm text-gray-600">
                   No users found.
                 </td>
               </tr>

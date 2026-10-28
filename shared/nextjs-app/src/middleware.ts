@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt";
 import { NextRequest, NextResponse } from "next/server";
+import { DEPT_PATHS, isAllowedPath } from "@/lib/route-access";
 
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
@@ -32,18 +33,12 @@ export async function middleware(req: NextRequest) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
     const groups = (token.groups as string[]) ?? [];
-    // Admin-only API routes
-    const adminApiPaths = ["/api/containers", "/api/users", "/api/container-metrics", "/api/security", "/api/admin"];
-    if (adminApiPaths.some(p => path.startsWith(p))) {
-      if (!groups.includes("admin")) {
-        return NextResponse.json({ error: "Admin access required" }, { status: 403 });
-      }
-    }
-    // Dept manager API routes
-    if (path.startsWith("/api/dept")) {
-      if (!groups.includes("dept-manager") && !groups.includes("admin")) {
-        return NextResponse.json({ error: "Dept manager access required" }, { status: 403 });
-      }
+    // Admin-only API routes (APPROVER_PATHS also admit dept-manager) and dept-manager routes
+    if (!isAllowedPath(path, groups)) {
+      const error = DEPT_PATHS.some((p) => path.startsWith(p))
+        ? "Dept manager access required"
+        : "Admin access required";
+      return NextResponse.json({ error }, { status: 403 });
     }
     return NextResponse.next();
   }
@@ -57,18 +52,10 @@ export async function middleware(req: NextRequest) {
 
   const groups = (token.groups as string[]) ?? [];
 
-  // Admin-only routes
-  if (path.startsWith("/admin") || path.startsWith("/monitoring")) {
-    if (!groups.includes("admin")) {
-      return NextResponse.redirect(new URL("/", req.url));
-    }
-  }
-
-  // Dept manager routes - require dept-manager or admin
-  if (path.startsWith("/dept")) {
-    if (!groups.includes("dept-manager") && !groups.includes("admin")) {
-      return NextResponse.redirect(new URL("/user", req.url));
-    }
+  // Admin-only routes (/admin/approvals also admits dept-manager); dept routes need dept-manager or admin
+  if (!isAllowedPath(path, groups)) {
+    const home = DEPT_PATHS.some((p) => path.startsWith(p)) ? "/user" : "/";
+    return NextResponse.redirect(new URL(home, req.url));
   }
 
   // User routes - any authenticated user (already checked above)

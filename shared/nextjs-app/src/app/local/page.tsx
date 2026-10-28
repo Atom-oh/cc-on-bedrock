@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import CcdashSetupCard from "@/components/user/ccdash-setup-card";
+import BudgetIncreaseRequest, { type BudgetLimits } from "@/components/budget/budget-increase-request";
 
 type CredentialsResponse = {
   credentials: {
@@ -23,7 +25,7 @@ type CredentialsResponse = {
   };
 };
 
-type UsageResponse = {
+type UsageResponse = BudgetLimits & {
   sub: string;
   department: string;
   summary: Array<{
@@ -141,6 +143,9 @@ export default function LocalGovernancePage() {
         </div>
       )}
 
+      {/* One-time budget increase: cause of the block, request form and history */}
+      <BudgetIncreaseRequest limits={usage} tone="light" />
+
       {/* Get credentials */}
       <section className="border rounded p-4 bg-white">
         <h2 className="text-lg font-medium mb-2">Get Bedrock credentials</h2>
@@ -256,6 +261,8 @@ export default function LocalGovernancePage() {
           </div>
         )}
       </section>
+
+      <CcdashSetupCard tone="light" />
 
       {/* CLI helper download */}
       <section className="border rounded p-4 bg-white">

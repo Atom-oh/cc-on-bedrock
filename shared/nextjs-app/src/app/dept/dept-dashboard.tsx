@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { formatBudgetCap, formatTokenCap, usagePercent } from "@/lib/budget-display";
+import { BUDGET_PERIODS, type BudgetPeriod } from "@/lib/budget-periods";
+import { MEMBER_LIMIT_ERRORS, errorKey, fill } from "@/lib/budget-ui";
 import type {
   UserSession,
   ContainerInfo,
@@ -45,6 +48,11 @@ interface DeptDashboardProps {
   isAdmin: boolean;
 }
 
+const LIMIT_FIELD: Record<BudgetPeriod, "dailyBudget" | "weeklyBudget" | "monthlyBudget"> = {
+  daily: "dailyBudget", weekly: "weeklyBudget", monthly: "monthlyBudget",
+};
+const usd = (n: number) => `$${n.toFixed(2)}`;
+
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
@@ -70,6 +78,13 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [limitEdit, setLimitEdit] = useState<{
+    email: string;
+    values: Record<BudgetPeriod, string>;
+    initial: Record<BudgetPeriod, string>;
+  } | null>(null);
+  const [limitSaving, setLimitSaving] = useState(false);
+  const [limitError, setLimitError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -151,10 +166,10 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
     setActionLoading(requestId);
     setError(null);
     try {
-      const res = await fetch("/api/dept", {
+      const res = await fetch("/api/admin/approval-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "approve", requestId }),
+        body: JSON.stringify({ requestId, action: "approve" }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -173,10 +188,10 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
     setActionLoading(requestId);
     setError(null);
     try {
-      const res = await fetch("/api/dept", {
+      const res = await fetch("/api/admin/approval-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "reject", requestId }),
+        body: JSON.stringify({ requestId, action: "reject" }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -190,6 +205,59 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
       setActionLoading(null);
     }
   };
+
+  const openLimitEdit = (member: DeptMember) => {
+    const l = member.limits;
+    setLimitError(null);
+    const values = {
+      daily: l?.dailyBudget ? String(l.dailyBudget) : "",
+      weekly: l?.weeklyBudget ? String(l.weeklyBudget) : "",
+      monthly: l?.monthlyBudget ? String(l.monthlyBudget) : "",
+    };
+    setLimitEdit({ email: member.email, values, initial: { ...values } });
+  };
+
+  // Standing per-member limits (0 / empty = inherit the department default).
+  const saveLimits = async () => {
+    if (!limitEdit) return;
+    setLimitSaving(true);
+    setLimitError(null);
+    try {
+      const body: Record<string, unknown> = { email: limitEdit.email };
+      // Send only the periods the manager changed: an untouched "inherit" monthly must not
+      // be written as 0 (that would also clear the member's LIMIT#monthly token cap).
+      for (const p of BUDGET_PERIODS) {
+        if (limitEdit.values[p] !== limitEdit.initial[p]) body[LIMIT_FIELD[p]] = Number(limitEdit.values[p]) || 0;
+      }
+      if (Object.keys(body).length === 1) {
+        setLimitEdit(null);
+        return;
+      }
+      const res = await fetch("/api/dept/user-budgets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setLimitEdit(null);
+        await fetchData();
+      } else {
+        const text = t(errorKey("deptLimits.error", data.error, MEMBER_LIMIT_ERRORS));
+        setLimitError(data.error === "exceeds_department_total" && data.deptMonthlyBudget
+          ? `${text} (${usd(Number(data.deptMonthlyBudget))})`
+          : text);
+      }
+    } catch {
+      setLimitError(t("deptLimits.error.unknown"));
+    } finally {
+      setLimitSaving(false);
+    }
+  };
+
+  const causeLabel = (cause: string | null | undefined) => (cause ? t(`blockCause.${cause}`) : "");
+  const blockedMembers = members.filter((m) => m.budgetStatus?.blockCause);
+  const viewerEmail = (user.email ?? "").toLowerCase();
 
   // Merge container status into members
   const membersWithContainerStatus = members.map((m) => {
@@ -285,6 +353,7 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                   <thead>
                     <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
                       <th className="pb-3 font-medium">Email</th>
+                      <th className="pb-3 font-medium">{t("dept.requestType")}</th>
                       <th className="pb-3 font-medium">Subdomain</th>
                       {devenv && <th className="pb-3 font-medium">OS</th>}
                       {devenv && <th className="pb-3 font-medium">Tier</th>}
@@ -296,6 +365,11 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                     {pendingRequests.map((req) => (
                       <tr key={req.requestId} className="text-sm">
                         <td className="py-3 text-gray-200">{req.email}</td>
+                        <td className="py-3 text-gray-300">
+                          {req.type === "budget_increase"
+                            ? `${t(`budgetIncrease.period.${req.period}`)} +${usd(req.requestedAmount ?? 0)}`
+                            : req.type}
+                        </td>
                         <td className="py-3 text-gray-300">{req.subdomain}</td>
                         {devenv && <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>}
                         {devenv && <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>}
@@ -303,6 +377,12 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                           {new Date(req.requestedAt).toLocaleDateString()}
                         </td>
                         <td className="py-3">
+                          {req.type === "budget_increase" ? (
+                            // Budget increases are decided on the approvals page (amount, cap checks, release status).
+                            <Link href="/admin/approvals" className="text-xs text-blue-400 hover:text-blue-300">
+                              {t("dept.openApprovals")}
+                            </Link>
+                          ) : isAdmin ? (
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => handleApprove(req.requestId)}
@@ -319,6 +399,10 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                               {actionLoading === req.requestId ? "..." : t("dept.reject") || "Reject"}
                             </button>
                           </div>
+                          ) : (
+                            // Instance requests are admin-only (the server rejects a manager's decision).
+                            <span className="text-xs text-gray-500">{t("dept.adminOnlyRequest")}</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -478,6 +562,7 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                   <thead>
                     <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
                       <th className="pb-3 font-medium">Email</th>
+                      <th className="pb-3 font-medium">{t("dept.requestType")}</th>
                       <th className="pb-3 font-medium">Subdomain</th>
                       {devenv && <th className="pb-3 font-medium">OS</th>}
                       {devenv && <th className="pb-3 font-medium">Tier</th>}
@@ -489,6 +574,11 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                     {pendingRequests.map((req) => (
                       <tr key={req.requestId} className="text-sm">
                         <td className="py-3 text-gray-200">{req.email}</td>
+                        <td className="py-3 text-gray-300">
+                          {req.type === "budget_increase"
+                            ? `${t(`budgetIncrease.period.${req.period}`)} +${usd(req.requestedAmount ?? 0)}`
+                            : req.type}
+                        </td>
                         <td className="py-3 text-gray-300">{req.subdomain}</td>
                         {devenv && <td className="py-3 text-gray-300 capitalize">{req.containerOs}</td>}
                         {devenv && <td className="py-3 text-gray-300 capitalize">{req.resourceTier}</td>}
@@ -496,6 +586,12 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                           {new Date(req.requestedAt).toLocaleDateString()}
                         </td>
                         <td className="py-3">
+                          {req.type === "budget_increase" ? (
+                            // Budget increases are decided on the approvals page (amount, cap checks, release status).
+                            <Link href="/admin/approvals" className="text-xs text-blue-400 hover:text-blue-300">
+                              {t("dept.openApprovals")}
+                            </Link>
+                          ) : isAdmin ? (
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => handleApprove(req.requestId)}
@@ -512,12 +608,45 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                               {actionLoading === req.requestId ? "..." : t("dept.reject") || "Reject"}
                             </button>
                           </div>
+                          ) : (
+                            // Instance requests are admin-only (the server rejects a manager's decision).
+                            <span className="text-xs text-gray-500">{t("dept.adminOnlyRequest")}</span>
+                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* Currently blocked members and why (personal period, department total, token) */}
+          {blockedMembers.length > 0 && (
+            <div className="bg-[#161b22] rounded-xl border border-red-900/40 p-6">
+              <h2 className="text-lg font-semibold text-gray-100 mb-4">
+                {t("dept.blockedUsers")}
+                <span className="ml-2 px-2 py-0.5 text-xs bg-red-900/40 text-red-400 rounded-full">{blockedMembers.length}</span>
+              </h2>
+              <ul className="divide-y divide-gray-800 text-sm">
+                {blockedMembers.map((m) => {
+                  const grants = BUDGET_PERIODS.filter((p) => (m.budgetStatus?.periods[p].grant ?? 0) > 0);
+                  return (
+                    <li key={m.email} className="py-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-gray-200">{m.email}</span>
+                      <span className="text-red-400 text-xs font-medium">{causeLabel(m.budgetStatus?.blockCause)}</span>
+                      <span className="text-xs text-gray-400">
+                        {grants.length > 0
+                          ? grants.map((p) => `${t(`budgetIncrease.period.${p}`)} +${usd(m.budgetStatus!.periods[p].grant)}`).join(" · ")
+                          : t("dept.noActiveGrant")}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              {blockedMembers.some((m) => m.budgetStatus?.blockCause === "department") && (
+                <p className="mt-3 text-xs text-amber-300">{t("budgetIncrease.cause.department")}</p>
+              )}
             </div>
           )}
 
@@ -538,8 +667,13 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                     <th className="pb-3 font-medium">Subdomain</th>
                     {devenv && <th className="pb-3 font-medium">OS</th>}
                     {devenv && <th className="pb-3 font-medium">Tier</th>}
+                    {BUDGET_PERIODS.map((p) => (
+                      <th key={p} className="pb-3 font-medium text-right">{t(`budgetIncrease.period.${p}`)}</th>
+                    ))}
+                    <th className="pb-3 font-medium">{t("dept.blockStatus")}</th>
                     <th className="pb-3 font-medium">User Status</th>
                     {devenv && <th className="pb-3 font-medium">Container</th>}
+                    <th className="pb-3 font-medium text-right">{t("dept.limits")}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
@@ -553,6 +687,31 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                         </td>
                       )}
                       {devenv && <td className="py-3 text-gray-300 capitalize">{member.resourceTier}</td>}
+                      {BUDGET_PERIODS.map((p) => {
+                        const ps = member.budgetStatus?.periods[p];
+                        if (!ps) return <td key={p} className="py-3 text-right text-gray-600">-</td>;
+                        const over = ps.cap > 0 && ps.spend >= ps.cap;
+                        return (
+                          <td key={p} className={`py-3 text-right text-xs ${over ? "text-red-400" : "text-gray-300"}`}>
+                            {usd(ps.spend)} <span className="text-gray-600">/</span>{" "}
+                            {ps.cap > 0 ? usd(ps.cap) : <span className="text-gray-600">∞</span>}
+                            {ps.grant > 0 && (
+                              <div className="text-[10px] text-emerald-400">
+                                {fill(t("budgetIncrease.basePlusGrant"), { base: usd(ps.base), grant: usd(ps.grant) })}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td className="py-3 text-xs">
+                        {member.budgetStatus?.blockCause ? (
+                          <span className="text-red-400 font-medium">{causeLabel(member.budgetStatus.blockCause)}</span>
+                        ) : member.budgetStatus ? (
+                          <span className="text-green-400">OK</span>
+                        ) : (
+                          <span className="text-gray-600">-</span>
+                        )}
+                      </td>
                       <td className="py-3">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full ${
@@ -585,11 +744,21 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                           </span>
                         </td>
                       )}
+                      <td className="py-3 text-right">
+                        {member.limits && member.email.toLowerCase() !== viewerEmail && (member.role ?? "user") === "user" && (
+                          <button
+                            onClick={() => openLimitEdit(member)}
+                            className="px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300"
+                          >
+                            {t("dept.editLimits")}
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {members.length === 0 && (
                     <tr>
-                      <td colSpan={devenv ? 6 : 3} className="py-8 text-center text-gray-500">
+                      <td colSpan={devenv ? 11 : 8} className="py-8 text-center text-gray-500">
                         No department members found
                       </td>
                     </tr>
@@ -599,6 +768,51 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
             </div>
           </div>
         </>
+      )}
+      {/* Standing member limit editor (0 / empty = inherit the department default) */}
+      {limitEdit && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#161b22] rounded-xl border border-gray-700 p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-100 mb-1">{t("dept.editLimits")}</h3>
+            <p className="text-sm text-gray-400 mb-4">{limitEdit.email}</p>
+            <div className="grid grid-cols-3 gap-2">
+              {BUDGET_PERIODS.map((p) => (
+                <div key={p}>
+                  <label htmlFor={`ml-${p}`} className="block text-xs font-medium text-gray-400 mb-1">
+                    {t(`budgetIncrease.period.${p}`)} (USD)
+                  </label>
+                  <input
+                    id={`ml-${p}`}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0"
+                    value={limitEdit.values[p]}
+                    onChange={(e) => setLimitEdit({ ...limitEdit, values: { ...limitEdit.values, [p]: e.target.value } })}
+                    className="w-full px-2 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg"
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-gray-500">{t("dept.limitsHint")}</p>
+            {limitError && <p className="mt-2 text-sm text-red-400">{limitError}</p>}
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => setLimitEdit(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-400 bg-gray-800 rounded-lg hover:bg-gray-700"
+              >
+                {t("dept.cancel")}
+              </button>
+              <button
+                onClick={() => void saveLimits()}
+                disabled={limitSaving}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {limitSaving ? "..." : t("dept.save")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

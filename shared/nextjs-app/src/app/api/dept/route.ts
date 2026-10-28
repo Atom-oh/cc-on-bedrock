@@ -5,13 +5,15 @@ import {
   DynamoDBClient,
   GetItemCommand,
   ScanCommand,
-  PutItemCommand,
-  UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
-import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
-import { listCognitoUsers } from "@/lib/aws-clients";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { getCognitoUser, listCognitoUsers } from "@/lib/aws-clients";
+import { listGroupMembers, requireFreshRole } from "@/lib/role-admin";
+import { hasRealDepartment, roleFromGroups, ROLES } from "@/lib/roles";
 import { getUsageRecords } from "@/lib/usage-client";
-import type { DeptBudget, PendingRequest } from "@/lib/types";
+import type { DeptBudget, MemberBudgetStatus, PendingRequest } from "@/lib/types";
+import { budgetStatus, readTokenDeniedUsers, readUserBudgetRows } from "@/lib/budget-status";
+import { grantAttr, periodKey } from "@/lib/budget-grants";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
@@ -25,32 +27,45 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
 
-  // Check if user is dept-manager or admin
-  const groups = session.user.groups ?? [];
-  const isDeptManager = groups.includes("dept-manager") || groups.includes("admin");
-  const isAdmin = groups.includes("admin");
+  // Fresh role (session groups can be up to 8h stale).
+  const fresh = await requireFreshRole(session, ["admin", "dept-manager"]);
+  if (!fresh.ok) return fresh.response;
+  const isAdmin = fresh.role === "admin";
 
-  if (!isDeptManager) {
-    return NextResponse.json({ error: "Department manager access required" }, { status: 403 });
+  // A dept-manager's department is read fresh from Cognito (never the session or
+  // the email domain). Admin can filter by department via query parameter.
+  let department: string;
+  if (isAdmin) {
+    department = req.nextUrl.searchParams.get("department") ?? "all";
+  } else {
+    try {
+      department = (await getCognitoUser(session.user.email)).department ?? "";
+    } catch (err) {
+      if ((err as { name?: string })?.name !== "UserNotFoundException") {
+        console.error("[dept] department lookup failed:", err instanceof Error ? err.message : err);
+        return NextResponse.json({ error: "Role check unavailable" }, { status: 503 });
+      }
+      department = ""; // deleted actor: no department → empty results below
+    }
+    // fail-closed: a manager without a real department sees nothing.
+    if (!hasRealDepartment(department)) {
+      return NextResponse.json({
+        success: true,
+        data: { department: "", members: [], budget: null, pendingRequests: [], monthlyUsage: [] },
+      });
+    }
   }
 
   try {
-    // Get department from user email domain or custom attribute
-    // Admin can filter by department via query parameter
-    const userEmail = session.user.email;
-    const deptFilter = req.nextUrl.searchParams.get("department");
-    const department = isAdmin
-      ? (deptFilter ?? "all")
-      : (userEmail.split("@")[1]?.split(".")[0] ?? "default");
-
     // Fetch department members from Cognito
     const allUsers = await listCognitoUsers();
     const members = department === "all"
       ? allUsers
-      : allUsers.filter((u) => u.department === department || u.department === "default");
+      : allUsers.filter((u) => u.department === department);
 
     // Fetch department budget from DynamoDB
     let budget: DeptBudget | null = null;
+    let deptRow: Record<string, unknown> | undefined;
     try {
       if (department === "all") {
         // For "all" view, aggregate budget across all departments
@@ -74,6 +89,7 @@ export async function GET(req: NextRequest) {
 
         if (budgetResult.Item) {
           const item = unmarshall(budgetResult.Item);
+          deptRow = item;
           budget = {
             department: item.department ?? department,
             // 0 = unlimited (matches budget-check.py: cap <= 0 → no deny). Don't
@@ -82,6 +98,9 @@ export async function GET(req: NextRequest) {
             currentSpend: item.currentSpend ?? 0,
             monthlyTokenLimit: item.monthlyTokenLimit ?? 0,
             currentTokens: item.currentTokens ?? 0,
+            // Inputs of the approval route's department-cap check (pre-check in the UI).
+            recordedSpend: Number(item.currentSpend ?? 0) || 0,
+            monthGranted: Number(item[grantAttr("monthly", periodKey("monthly", new Date()))] ?? 0) || 0,
           };
         } else {
           // No budget row → unlimited (0), consistent with enforcement.
@@ -127,6 +146,10 @@ export async function GET(req: NextRequest) {
         const u = unmarshall(item);
         return {
           requestId: u.requestId ?? u.PK?.replace("REQUEST#", "") ?? "",
+          type: u.type ?? "container_request", // legacy requests don't have type
+          period: u.period,
+          periodKey: u.periodKey,
+          requestedAmount: u.requestedAmount !== undefined ? Number(u.requestedAmount) : undefined,
           email: u.email ?? "",
           subdomain: u.subdomain ?? "",
           containerOs: u.containerOs ?? "ubuntu",
@@ -178,15 +201,64 @@ export async function GET(req: NextRequest) {
       console.warn("[dept] Monthly usage fetch error:", err);
     }
 
+    // One department: each member's standing limits, caps with current grants and
+    // block cause (blocked list). Best-effort: the members list still renders without it.
+    const budgetRows = new Map<string, Record<string, unknown>>();
+    let tokenDenied = new Set<string>();
+    let statusAvailable = false;
+    if (department !== "all" && members.length > 0) {
+      try {
+        const [rows, denied] = await Promise.all([
+          readUserBudgetRows(members.map((m) => m.email)),
+          readTokenDeniedUsers(),
+        ]);
+        rows.forEach((v, k) => budgetRows.set(k, v));
+        tokenDenied = denied;
+        statusAvailable = true;
+      } catch (err) {
+        console.warn("[dept] Member budget status fetch error:", err instanceof Error ? err.message : err);
+      }
+    }
+
+    // Each member's role group (3 group listings). Best-effort: on failure `role` is
+    // omitted and the UI keeps "Edit limits" (the limits route still enforces).
+    let groupsByUser: Map<string, string[]> | null = null;
+    try {
+      const lists = await Promise.all(ROLES.map((r) => listGroupMembers(r)));
+      const map = new Map<string, string[]>();
+      lists.forEach((list, i) => list.forEach((u) => map.set(u.username, [...(map.get(u.username) ?? []), ROLES[i]])));
+      groupsByUser = map;
+    } catch (err) {
+      console.warn("[dept] Member role fetch error:", err instanceof Error ? err.message : err);
+    }
+
     // Format members for response
-    const formattedMembers = members.map((m) => ({
-      username: m.username,
-      email: m.email,
-      subdomain: m.subdomain,
-      containerOs: m.containerOs,
-      resourceTier: m.resourceTier,
-      status: m.status,
-    }));
+    const formattedMembers = members.map((m) => {
+      const key = (m.email ?? "").trim().toLowerCase();
+      const row = budgetRows.get(key);
+      const status: MemberBudgetStatus | undefined = statusAvailable
+        ? budgetStatus(row, deptRow, now, tokenDenied.has(key))
+        : undefined;
+      return {
+        username: m.username,
+        email: m.email,
+        subdomain: m.subdomain,
+        containerOs: m.containerOs,
+        resourceTier: m.resourceTier,
+        status: m.status,
+        ...(groupsByUser ? { role: roleFromGroups(groupsByUser.get(m.username) ?? []).role } : {}),
+        ...(statusAvailable
+          ? {
+              limits: {
+                dailyBudget: Number(row?.dailyBudget ?? 0) || 0,
+                weeklyBudget: Number(row?.weeklyBudget ?? 0) || 0,
+                monthlyBudget: Number(row?.monthlyBudget ?? 0) || 0,
+              },
+              budgetStatus: status,
+            }
+          : {}),
+      };
+    });
 
     return NextResponse.json({
       success: true,
@@ -200,70 +272,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     console.error("[dept] GET", err instanceof Error ? err.message : err);
-    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
-  }
-}
-
-export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-  }
-
-  // Check if user is dept-manager or admin
-  const groups = session.user.groups ?? [];
-  const isDeptManager = groups.includes("dept-manager") || groups.includes("admin");
-
-  if (!isDeptManager) {
-    return NextResponse.json({ error: "Department manager access required" }, { status: 403 });
-  }
-
-  try {
-    const body = await req.json();
-    const { action, requestId } = body;
-
-    if (!action || !requestId) {
-      return NextResponse.json({ error: "action and requestId required" }, { status: 400 });
-    }
-
-    if (action !== "approve" && action !== "reject") {
-      return NextResponse.json({ error: "Invalid action" }, { status: 400 });
-    }
-
-    // Update the approval request status in DynamoDB
-    try {
-      await dynamodb.send(
-        new UpdateItemCommand({
-          TableName: APPROVAL_REQUESTS_TABLE,
-          Key: {
-            PK: { S: `REQUEST#${requestId}` },
-            SK: { S: "META" },
-          },
-          UpdateExpression: "SET #status = :status, updatedAt = :now, updatedBy = :user",
-          ExpressionAttributeNames: {
-            "#status": "status",
-          },
-          ExpressionAttributeValues: {
-            ":status": { S: action === "approve" ? "approved" : "rejected" },
-            ":now": { S: new Date().toISOString() },
-            ":user": { S: session.user.email },
-          },
-        })
-      );
-    } catch (err) {
-      console.error("[dept] Update request error:", err);
-      // If table doesn't exist or item not found, just log and continue
-    }
-
-    // If approved, we could trigger user creation here
-    // For now, just update the status
-
-    return NextResponse.json({
-      success: true,
-      data: { requestId, action },
-    });
-  } catch (err) {
-    console.error("[dept] POST", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }

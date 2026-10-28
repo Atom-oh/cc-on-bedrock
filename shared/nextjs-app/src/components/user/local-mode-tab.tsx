@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import BudgetIncreaseRequest, { type BudgetLimits } from "@/components/budget/budget-increase-request";
 import MantleEstimatePanel from "@/components/mantle-estimate-panel";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode usage panel inside the user portal (/user tab).
@@ -27,7 +28,7 @@ type CredentialsResponse = {
   };
 };
 
-type UsageResponse = {
+type UsageResponse = BudgetLimits & {
   sub: string;
   department: string;
   summary: Array<{
@@ -121,6 +122,9 @@ export default function LocalModeTab() {
           </div>
         </div>
       )}
+
+      {/* One-time budget increase: cause of the block, request form and history */}
+      <BudgetIncreaseRequest limits={usage} />
 
       {/* Get credentials */}
       <section className="border border-gray-800 rounded p-4 bg-gray-900/50">

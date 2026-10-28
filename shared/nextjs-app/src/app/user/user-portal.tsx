@@ -8,6 +8,7 @@ import StorageTab from "@/components/user/storage-tab";
 import SettingsTab from "@/components/user/settings-tab";
 import WelcomeOnboarding from "@/components/user/welcome-onboarding";
 import LocalSetup from "@/components/user/local-setup";
+import BudgetIncreaseRequest from "@/components/budget/budget-increase-request";
 import AccountPasswordCard from "@/components/user/account-password-card";
 import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import { PortalStatusError, readContainerStatus } from "@/lib/portal-status";
@@ -257,6 +258,10 @@ function DevenvPortal({ user, runtimeConfig }: UserPortalProps) {
               devSubdomain={runtimeConfig.devSubdomain}
               statusVerified={!statusError}
             />
+            {/* One-time budget increase request + history (both editions, spec §5.1) */}
+            <div className="mt-6">
+              <BudgetIncreaseRequest />
+            </div>
           </div>
         )}
         {activeTab === "storage" && (

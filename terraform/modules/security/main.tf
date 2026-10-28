@@ -580,11 +580,14 @@ data "aws_iam_policy_document" "dashboard_cognito" {
       "cognito-idp:AdminEnableUser",
       "cognito-idp:AdminGetUser",
       "cognito-idp:AdminListGroupsForUser",
+      "cognito-idp:AdminRemoveUserFromGroup",
       "cognito-idp:AdminSetUserPassword",
       "cognito-idp:AdminUpdateUserAttributes",
+      "cognito-idp:AdminUserGlobalSignOut",
       "cognito-idp:DescribeUserPoolClient",
       "cognito-idp:ListGroups",
       "cognito-idp:ListUsers",
+      "cognito-idp:ListUsersInGroup",
     ]
     resources = [aws_cognito_user_pool.this.arn]
   }

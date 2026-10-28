@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import LocalModeTab from "./local-mode-tab";
+import CcdashSetupCard from "./ccdash-setup-card";
 
 // ADR-006 local setup: one-line installer plus the credentials/usage panel. The CLI
 // authenticates with Cognito and receives 1-hour STS credentials scoped to the user's
@@ -22,6 +23,7 @@ export default function LocalSetup() {
           1시간짜리 자격증명은 cache된 refresh token으로 자동 갱신되며, 30일 동안 쓰지 않았다면 <code className="text-gray-200">cc-bedrock-local login</code>으로 다시 로그인합니다.
         </div>
       </div>
+      <CcdashSetupCard />
       <LocalModeTab />
     </>
   );

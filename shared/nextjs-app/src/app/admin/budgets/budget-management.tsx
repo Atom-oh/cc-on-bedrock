@@ -8,6 +8,8 @@ import HorizontalBarChart from "@/components/charts/horizontal-bar-chart";
 import LimitManagement from "@/app/admin/limits/limit-management";
 import MantleEstimatePanel from "@/components/mantle-estimate-panel";
 import { BUDGET_PERIODS, resolvePeriodBudget, type BudgetPeriod } from "@/lib/budget-periods";
+import type { BlockCause } from "@/lib/budget-display";
+import { fill } from "@/lib/budget-ui";
 
 interface DepartmentBudget {
   department: string;
@@ -37,6 +39,11 @@ interface UserBudget {
   budgetReleaseAt: string;
   periodAware: boolean;
   updatedAt: string;
+  // Caps as "base + current one-time grant" and the block cause (server: lib/budget-status).
+  periods?: Record<BudgetPeriod, { spend: number; base: number; grant: number; cap: number }>;
+  tokenDenied?: boolean;
+  departmentOver?: boolean;
+  blockCause?: BlockCause;
 }
 
 interface EditModal {
@@ -426,6 +433,21 @@ export default function BudgetManagement() {
                 </button>
               </div>
 
+              {users.some((u) => u.blockCause) && (
+                <div className="mb-4 rounded-lg border border-red-900/40 bg-red-900/10 p-3">
+                  <p className="text-sm font-medium text-red-300 mb-1">
+                    {t("budgets.blockedUsers")} ({users.filter((u) => u.blockCause).length})
+                  </p>
+                  <ul className="text-xs text-gray-300 space-y-0.5">
+                    {users.filter((u) => u.blockCause).map((u) => (
+                      <li key={u.userId}>
+                        <span className="text-gray-200">{u.userId}</span>{" "}
+                        <span className="text-red-400">— {t(`blockCause.${u.blockCause}`)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <MantleEstimatePanel scope="admin" />
 
               {users.length > 0 && (
@@ -442,13 +464,14 @@ export default function BudgetManagement() {
                         {BUDGET_PERIODS.map((p) => (
                           <th key={p} className="pb-2 font-medium text-right">{PERIOD_LABEL[p]}</th>
                         ))}
-                        <th className="pb-2 font-medium text-right">Status</th>
+                        <th className="pb-2 font-medium text-right">{t("budgets.statusCause")}</th>
                         <th className="pb-2 font-medium text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {users.map((user) => {
-                        const blocked = user.budgetExceeded.length > 0 || (!user.periodAware && user.monthlyBudget > 0 && user.currentSpend >= user.monthlyBudget);
+                        const legacyBlocked = user.budgetExceeded.length > 0 || (!user.periodAware && user.monthlyBudget > 0 && user.currentSpend >= user.monthlyBudget);
+                        const blocked = user.blockCause !== undefined ? user.blockCause !== null : legacyBlocked;
                         return (
                           <tr key={user.userId} className={`border-b border-gray-800 ${blocked ? "bg-red-900/10" : ""}`}>
                             <td className="py-3"><span className="text-gray-200">{user.userId}</span></td>
@@ -456,20 +479,37 @@ export default function BudgetManagement() {
                             {BUDGET_PERIODS.map((p) => {
                               const eff = getEffectiveUserBudget(user, p);
                               const spend = periodSpend(user, p);
-                              const over = eff.value > 0 && spend >= eff.value;
+                              const ps = user.periods?.[p];
+                              const cap = ps ? ps.cap : eff.value;
+                              const over = cap > 0 && spend >= cap;
                               const srcColor = eff.source === "user" ? "text-blue-400" : eff.source === "dept" ? "text-purple-400" : "text-gray-500";
                               return (
                                 <td key={p} className={`py-3 text-right ${over ? "text-red-400" : "text-gray-300"}`}>
                                   {formatCurrency(spend)}
                                   <span className="text-gray-600"> / </span>
-                                  {eff.value > 0
-                                    ? <span className={srcColor}>{formatCurrency(eff.value)}</span>
+                                  {cap > 0
+                                    ? <span className={srcColor}>{formatCurrency(cap)}</span>
                                     : <span className="text-gray-600">∞</span>}
+                                  {ps && ps.grant > 0 && (
+                                    <div className="text-[10px] text-emerald-400">
+                                      {fill(t("budgetIncrease.basePlusGrant"), { base: formatCurrency(ps.base), grant: formatCurrency(ps.grant) })}
+                                    </div>
+                                  )}
                                 </td>
                               );
                             })}
                             <td className="py-3 text-right text-xs">
-                              {blocked ? (
+                              {blocked && user.blockCause ? (
+                                <span className="text-red-400 font-medium" title={user.budgetReleaseAt}>
+                                  {t(`blockCause.${user.blockCause}`)}
+                                  {user.blockCause.startsWith("user_") && user.budgetReleaseAt && (
+                                    <> · {new Date(user.budgetReleaseAt).toLocaleString()}</>
+                                  )}
+                                  {user.blockCause === "department" && (
+                                    <div className="text-[10px] text-amber-300">{t("budgets.deptOverHint")}</div>
+                                  )}
+                                </span>
+                              ) : blocked ? (
                                 <span className="text-red-400 font-medium" title={user.budgetReleaseAt}>
                                   BLOCKED ({(user.budgetExceeded.length ? user.budgetExceeded : ["monthly"]).join(", ")}) until {user.budgetReleaseAt ? new Date(user.budgetReleaseAt).toLocaleString() : "-"}
                                 </span>
