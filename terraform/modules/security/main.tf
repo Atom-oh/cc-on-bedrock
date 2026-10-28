@@ -399,6 +399,27 @@ data "aws_iam_policy_document" "task_permission_boundary" {
     ]
   }
 
+  # ADR-014 (amended 2026-10-26): ceiling for Codex on bedrock-mantle. Nothing grants it
+  # by default — budget-check puts a per-user inline policy (own project only) on the
+  # Local role of users whose cost is unlimited, and removes it when any cap appears.
+  dynamic "statement" {
+    for_each = var.enable_mantle ? [1] : []
+    content {
+      sid       = "BedrockMantleUnmetered"
+      actions   = ["bedrock-mantle:CreateInference", "bedrock-mantle:Get*", "bedrock-mantle:List*"]
+      resources = ["arn:aws:bedrock-mantle:us-east-1:${data.aws_caller_identity.current.account_id}:project/*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_mantle ? [1] : []
+    content {
+      sid       = "BedrockMantleWebSearch"
+      actions   = ["bedrock-websearch:InvokeSearch", "bedrock-websearch:InvokeFetch"]
+      resources = ["*"]
+    }
+  }
+
   statement {
     sid     = "S3Access"
     actions = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]

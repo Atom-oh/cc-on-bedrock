@@ -196,3 +196,23 @@ variable "existing_vpc_endpoint_security_group_ids" {
   type        = list(string)
   default     = []
 }
+
+# ADR-014 (amended 2026-10-26): Codex on bedrock-mantle (`codex -p mantle`, server-side
+# web search) for users whose cost is unlimited. Mantle traffic is NOT metered; it is
+# audited via a us-east-1 CloudTrail data-event trail. false = no grant, no trail.
+variable "enable_mantle" {
+  description = "Grant Codex bedrock-mantle (web search, unmetered) to users with no cost cap, with CloudTrail data-event audit in us-east-1"
+  type        = bool
+  default     = true
+}
+
+variable "codex_mantle_model_id" {
+  description = "Model for the Codex mantle profile (us-east-1 bedrock-mantle model id, no CRIS prefix)"
+  type        = string
+  default     = "openai.gpt-6.1-sol"
+
+  validation {
+    condition     = can(regex("^openai\\.gpt-[A-Za-z0-9.-]+$", var.codex_mantle_model_id))
+    error_message = "codex_mantle_model_id must be a bedrock-mantle OpenAI model id, e.g. openai.gpt-6.1-sol."
+  }
+}

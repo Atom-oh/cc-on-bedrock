@@ -116,7 +116,7 @@ cc-bedrock-local status     # deny active / reason / reset_at
   (claude-code|codex|other), `event_name`, `model_id`, `user_agent`, `source_ip`,
   `inference_region`. Shadow events are skipped. **Prompt text is never stored**
   (invocation logging is metadata-only too).
-- bedrock-mantle is not granted in IAM (ADR-014), so no mantle data-event path exists.
+- bedrock-mantle (ADR-014 §9, unlimited-cost users only) is audited, not metered: a us-east-1 CloudTrail data-event trail forwards `CreateInference` to audit-logger, which writes `provider = mantle`, `metered = false` and `mantle_project`. Its cost is only *estimated* (tracker `meter_mantle`, every 15 min): `MANTLE#{YYYY-MM}` / `{email}#{date}#{model}` rows in the usage table from `AWS/BedrockMantle` token metrics × the runtime price table, shown on the admin budget page (read with a single-partition Query that flags a truncated result). The estimate may differ from the bill (no in-region rates, no cache split, no discounts, web search excluded) and is never enforced; exact per-user cost needs CUR 2.0 with IAM principal data.
 
 ### 3.2 Queries
 - Dashboard **Security → Audit logs**: last 24 h of CloudTrail (Bedrock/Cognito/EC2);
