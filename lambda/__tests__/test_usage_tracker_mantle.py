@@ -1,6 +1,6 @@
 """ADR-014 §9 stage 1: Codex on bedrock-mantle has no invocation log, so the tracker
 estimates its cost from the AWS/BedrockMantle per-project token metrics × the price
-table and writes MANTLE#{email} rows. Those rows are an estimate only: no budget or
+table and writes MANTLE#{YYYY-MM} rows (SK {email}#{date}#{model}). Those rows are an estimate only: no budget or
 usage reader (USER#/DEPT# prefixes) ever counts them."""
 import os
 import sys
@@ -66,15 +66,16 @@ def test_writes_an_idempotent_estimate_per_user_day_and_model():
     out, t = run([ALICE], cw)
     assert out == {"rows": 2}
     rows = {c.kwargs["Key"]["SK"]: c.kwargs for c in t.update_item.call_args_list}
-    today = rows["2026-10-28#gpt-6.1-sol"]
-    assert today["Key"]["PK"] == "MANTLE#alice@x.com"  # never USER#: budgets don't see it
+    today = rows["alice@x.com#2026-10-28#gpt-6.1-sol"]
+    assert today["Key"]["PK"] == "MANTLE#2026-10"  # never USER#: budgets don't see it
     vals = today["ExpressionAttributeValues"]
+    assert vals[":email"] == "alice@x.com"
     assert vals[":inp"] == 500_000 and vals[":out"] == 100_000
     # gpt-6.1-sol: $2 in / $10 out per 1M → 1.0 + 1.0
     assert float(vals[":cost"]) == 2.0
     assert today["UpdateExpression"].startswith("SET ")  # absolute totals, safe to re-run
     assert "ADD" not in today["UpdateExpression"]
-    assert float(rows["2026-10-27#gpt-6.1-sol"]["ExpressionAttributeValues"][":cost"]) == 2.0
+    assert float(rows["alice@x.com#2026-10-27#gpt-6.1-sol"]["ExpressionAttributeValues"][":cost"]) == 2.0
     start, end = cw.calls[0]
     assert start == datetime(2026, 10, 27, tzinfo=timezone.utc) and end == NOW
 

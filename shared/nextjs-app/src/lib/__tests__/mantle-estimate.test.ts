@@ -8,13 +8,23 @@ const row = (email: string, date: string, model: string, cost: number, updatedAt
 describe("mantle estimate (ADR-014 §9 stage 1)", () => {
   it("parses a MANTLE# usage row", () => {
     const r = toMantleRow(marshall({
-      PK: "MANTLE#demo@atomai.click", SK: "2026-10-26#gpt-6.1-sol",
+      PK: "MANTLE#2026-10", SK: "demo@atomai.click#2026-10-26#gpt-6.1-sol", email: "demo@atomai.click",
       inputTokens: 65665, outputTokens: 334, estimatedCost: 0.13467, updatedAt: "2026-10-26T23:59:00",
     }));
     expect(r).toEqual({
       email: "demo@atomai.click", date: "2026-10-26", model: "gpt-6.1-sol",
       inputTokens: 65665, outputTokens: 334, estimatedCost: 0.13467, updatedAt: "2026-10-26T23:59:00",
     });
+  });
+
+  it("parses the email from SK when the email attribute is missing", () => {
+    const r = toMantleRow(marshall({
+      PK: "MANTLE#2026-10", SK: "demo@atomai.click#2026-10-26#gpt-6.1-sol",
+      inputTokens: 1, outputTokens: 1, estimatedCost: 0.1, updatedAt: "2026-10-26T23:59:00",
+    }));
+    expect(r.email).toBe("demo@atomai.click");
+    expect(r.date).toBe("2026-10-26");
+    expect(r.model).toBe("gpt-6.1-sol");
   });
 
   it("sums the period per user, costliest first, and ignores other months", () => {

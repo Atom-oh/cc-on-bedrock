@@ -17,8 +17,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "month must be YYYY-MM" }, { status: 400 });
   }
   try {
-    const users = summarizeMantle(await getMantleRows({ period }), period);
-    return NextResponse.json({ success: true, data: { period, users, caveat: MANTLE_ESTIMATE_CAVEAT } });
+    const { rows, truncated } = await getMantleRows({ period });
+    return NextResponse.json({
+      success: true,
+      data: { period, users: summarizeMantle(rows, period), truncated, caveat: MANTLE_ESTIMATE_CAVEAT },
+    });
   } catch (err) {
     console.error("[admin/mantle-estimates] GET", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });

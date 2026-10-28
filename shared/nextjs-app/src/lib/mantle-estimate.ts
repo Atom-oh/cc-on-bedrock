@@ -1,11 +1,11 @@
 /**
  * ADR-014 §9 stage 1: ESTIMATED Codex-on-bedrock-mantle cost per user.
  *
- * The usage tracker writes MANTLE#{email} rows (SK `{date}#{model}`) from the
+ * The usage tracker writes MANTLE#{YYYY-MM} rows (SK `{email}#{date}#{model}`) from the
  * AWS/BedrockMantle per-project token metrics × the price table. They are an
  * estimate only: budgets and the usage pages never read this PK prefix.
  */
-import { DynamoDBClient, QueryCommand, ScanCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 
@@ -40,11 +40,13 @@ export interface MantleUserEstimate {
 
 export function toMantleRow(item: Record<string, AttributeValue>): MantleEstimateRow {
   const r = unmarshall(item);
-  const [date, ...model] = String(r.SK ?? "").split("#");
+  const parts = String(r.SK ?? "").split("#");
+  const model = parts.pop() ?? "";
+  const date = parts.pop() ?? "";
   return {
-    email: String(r.PK ?? "").replace(/^MANTLE#/, ""),
+    email: r.email != null ? String(r.email) : parts.join("#"),
     date,
-    model: model.join("#"),
+    model,
     inputTokens: Number(r.inputTokens ?? 0),
     outputTokens: Number(r.outputTokens ?? 0),
     estimatedCost: Number(r.estimatedCost ?? 0),
@@ -70,28 +72,32 @@ export function summarizeMantle(rows: MantleEstimateRow[], period: string): Mant
   return [...byUser.values()].sort((a, b) => b.estimatedCost - a.estimatedCost);
 }
 
-/** MANTLE# rows for one user (Query) or everyone (Scan), dates within `period`. */
-export async function getMantleRows(params: { email?: string; period: string }): Promise<MantleEstimateRow[]> {
+/**
+ * MANTLE#{period} rows via a single-partition Query: everyone, or one user
+ * (SK prefix `{email}#`, then an exact email match). `truncated` is true when
+ * MAX_PAGES stopped the read before the partition was exhausted.
+ */
+export async function getMantleRows(
+  params: { email?: string; period: string },
+): Promise<{ rows: MantleEstimateRow[]; truncated: boolean }> {
   const items: Record<string, AttributeValue>[] = [];
   let lastKey: Record<string, AttributeValue> | undefined;
   let pages = 0;
   do {
-    const result = params.email
-      ? await dynamodb.send(new QueryCommand({
-          TableName: TABLE_NAME,
-          KeyConditionExpression: "PK = :pk AND begins_with(SK, :period)",
-          ExpressionAttributeValues: { ":pk": { S: `MANTLE#${params.email}` }, ":period": { S: params.period } },
-          ExclusiveStartKey: lastKey,
-        }))
-      : await dynamodb.send(new ScanCommand({
-          TableName: TABLE_NAME,
-          FilterExpression: "begins_with(PK, :prefix) AND begins_with(SK, :period)",
-          ExpressionAttributeValues: { ":prefix": { S: "MANTLE#" }, ":period": { S: params.period } },
-          ExclusiveStartKey: lastKey,
-        }));
+    const result = await dynamodb.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      KeyConditionExpression: params.email ? "PK = :pk AND begins_with(SK, :user)" : "PK = :pk",
+      ExpressionAttributeValues: params.email
+        ? { ":pk": { S: `MANTLE#${params.period}` }, ":user": { S: `${params.email}#` } }
+        : { ":pk": { S: `MANTLE#${params.period}` } },
+      ExclusiveStartKey: lastKey,
+    }));
     items.push(...(result.Items ?? []));
     lastKey = result.LastEvaluatedKey;
     pages++;
   } while (lastKey && pages < MAX_PAGES);
-  return items.map(toMantleRow);
+  let rows = items.map(toMantleRow);
+  // An email containing `#` must not match another user's SK prefix.
+  if (params.email) rows = rows.filter((r) => r.email === params.email);
+  return { rows, truncated: Boolean(lastKey) };
 }

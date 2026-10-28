@@ -144,9 +144,10 @@ the opt-in `codex -p mantle` profile for users whose cost is unlimited (§9, ame
    - *Estimate (stage 1, amended 2026-10-28):* every 15 min the usage tracker reads the
      `AWS/BedrockMantle` `InputTokens`/`OutputTokens` metrics (Project + Model) of each
      managed project, maps the project to its owner by the `cc-on-bedrock:user` tag and
-     writes `MANTLE#{email}` / `{date}#{model}` rows with an estimated cost (absolute
+     writes `MANTLE#{YYYY-MM}` / `{email}#{date}#{model}` rows with an estimated cost (absolute
      totals for today and yesterday UTC, so re-runs never double count). The admin budget
-     page and the user's Local Mode tab show month-to-date estimates. The estimate is
+     page and the user's Local Mode tab show month-to-date estimates, read with a
+     single-partition Query that flags a truncated result. The estimate is
      **display only**: no budget, deny or usage page reads `MANTLE#` rows, so mantle stays
      outside enforcement. No billing permission is needed (CloudWatch read only), so it
      also works where CUR 2.0 / Cost Explorer are not available; CUR 2.0 IAM-principal

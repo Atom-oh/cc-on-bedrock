@@ -20,6 +20,7 @@ export default function MantleEstimatePanel({ scope }: { scope: "admin" | "user"
   const [period, setPeriod] = useState("");
   const [users, setUsers] = useState<UserEstimate[] | null>(null);
   const [caveat, setCaveat] = useState("");
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
@@ -30,6 +31,7 @@ export default function MantleEstimatePanel({ scope }: { scope: "admin" | "user"
         if (!j.success) throw new Error(j.error);
         setPeriod(j.data.period);
         setCaveat(j.data.caveat);
+        setTruncated(Boolean(j.data.truncated));
         setUsers(scope === "admin" ? j.data.users : j.data.estimate ? [j.data.estimate] : []);
       })
       .catch(() => setError(true));
@@ -66,6 +68,9 @@ export default function MantleEstimatePanel({ scope }: { scope: "admin" | "user"
             ))}
           </tbody>
         </table>
+      )}
+      {truncated && (
+        <div className="mt-2 text-red-400">일부 행을 읽지 못해 합계가 불완전합니다 (truncated).</div>
       )}
       <div className="mt-2 text-gray-500">
         추정치이며 실제 청구액과 다를 수 있습니다 (단가표 기준, 캐시·할인 미반영, 웹 검색 요금 제외, 최대 약 15분 지연). {caveat}

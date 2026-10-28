@@ -227,7 +227,8 @@ resource "aws_lambda_permission" "mantle_audit" {
 
 # ─── Cost ESTIMATE (ADR-014 §9 stage 1) ─────────────────────────────────────
 # Every 15 min the usage tracker turns the AWS/BedrockMantle per-project token
-# metrics into MANTLE#{email} usage rows (estimate only, never enforced). It reads
+# metrics into MANTLE#{YYYY-MM} / {email}#{date}#{model} usage rows (estimate only,
+# never enforced). It reads
 # project owners from ListProjects tags, so it needs the same mantle read actions
 # as budget-check (ListProjects on "*" + ListTagsForResource on project/*).
 resource "aws_iam_role_policy" "tracker_mantle" {

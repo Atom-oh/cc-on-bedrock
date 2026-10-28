@@ -602,8 +602,9 @@ def process_cloudtrail_event(detail: dict):
 # Mantle writes no invocation log, so its per-user cost is estimated from the
 # AWS/BedrockMantle InputTokens/OutputTokens metrics of each user's own project
 # (budget-check creates one per user, owner in the `cc-on-bedrock:user` tag) × the
-# PRICING table above. Rows live under MANTLE#{email}, which no budget or usage
-# reader scans (they all use USER#/DEPT#), so the estimate is never enforced.
+# PRICING table above. Rows live under MANTLE#{YYYY-MM} (SK {email}#{date}#{model}),
+# a prefix no budget or usage reader touches (they all use USER#/DEPT#), so the
+# estimate is never enforced.
 # Known error sources (documented in ADR-014 §9): runtime Global-CRIS rates, not
 # mantle in-region rates; cached input billed at the full input rate; no
 # EDP/private pricing; web-search query charges not included; metric lag.
@@ -682,11 +683,11 @@ def meter_mantle(now: datetime | None = None) -> dict:
     for (email, day, model), row in totals.items():
         cost = estimate_cost(model, row["InputTokens"], row["OutputTokens"])
         table.update_item(
-            Key={"PK": f"MANTLE#{email}", "SK": f"{day}#{model}"},
-            UpdateExpression=("SET inputTokens = :inp, outputTokens = :out, estimatedCost = :cost, "
+            Key={"PK": f"MANTLE#{day[:7]}", "SK": f"{email}#{day}#{model}"},
+            UpdateExpression=("SET email = :email, inputTokens = :inp, outputTokens = :out, estimatedCost = :cost, "
                               "projectId = :proj, mantleRegion = :region, metered = :f, updatedAt = :now"),
             ExpressionAttributeValues={
-                ":inp": row["InputTokens"], ":out": row["OutputTokens"],
+                ":email": email, ":inp": row["InputTokens"], ":out": row["OutputTokens"],
                 ":cost": Decimal(str(round(cost, 6))), ":proj": row["project"],
                 ":region": MANTLE_REGION, ":f": False, ":now": now.replace(tzinfo=None).isoformat(),
             },
