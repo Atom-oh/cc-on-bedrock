@@ -40,6 +40,8 @@ ecs_client = boto3.client("ecs")
 ec2_client = boto3.client("ec2")
 cognito_client = boto3.client("cognito-idp")
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
+# ADR-014 §9: region of the bedrock-mantle projects; empty = mantle estimate off.
+MANTLE_REGION = os.environ.get("MANTLE_REGION", "")
 
 # Bedrock pricing (USD per 1M tokens, Standard tier, Global cross-Region inference,
 # short context). Sources (verified 2026-10-18): AWS Price List API
@@ -596,8 +598,108 @@ def process_cloudtrail_event(detail: dict):
     upsert_usage(email, subdomain, department, date_str, model, 0, 0, 0)
 
 
+# ─── bedrock-mantle cost ESTIMATE (ADR-014 §9 stage 1) ──────────────────────
+# Mantle writes no invocation log, so its per-user cost is estimated from the
+# AWS/BedrockMantle InputTokens/OutputTokens metrics of each user's own project
+# (budget-check creates one per user, owner in the `cc-on-bedrock:user` tag) × the
+# PRICING table above. Rows live under MANTLE#{YYYY-MM} (SK {email}#{date}#{model}),
+# a prefix no budget or usage reader touches (they all use USER#/DEPT#), so the
+# estimate is never enforced.
+# Known error sources (documented in ADR-014 §9): runtime Global-CRIS rates, not
+# mantle in-region rates; cached input billed at the full input rate; no
+# EDP/private pricing; web-search query charges not included; metric lag.
+
+def _list_mantle_projects() -> list:
+    """Active mantle projects as [{id, name, tags}] (SigV4; no boto3 client exists)."""
+    import urllib.request
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+
+    creds = boto3.Session().get_credentials().get_frozen_credentials()
+    out, after = [], None
+    for _ in range(20):
+        url = (f"https://bedrock-mantle.{MANTLE_REGION}.api.aws/v1/organization/projects?limit=100"
+               + (f"&after={after}" if after else ""))
+        req = AWSRequest(method="GET", url=url)
+        SigV4Auth(creds, "bedrock-mantle", MANTLE_REGION).add_auth(req)
+        with urllib.request.urlopen(urllib.request.Request(url, headers=dict(req.headers)), timeout=10) as r:
+            page = json.loads(r.read() or b"{}")
+        out += [{"id": p["id"], "name": p.get("name", ""), "tags": p.get("tags") or {}}
+                for p in page.get("data", []) if p.get("status", "active") == "active"]
+        if not page.get("has_more"):
+            break
+        after = page.get("last_id")
+    return out
+
+
+def _cw_mantle():
+    return boto3.client("cloudwatch", region_name=MANTLE_REGION)
+
+
+def meter_mantle(now: datetime | None = None) -> dict:
+    """Write today's and yesterday's (UTC) estimated mantle cost per user and model.
+
+    Totals are SET, not ADDed, so every run (and a re-run) converges on the metric
+    values instead of double counting."""
+    if not MANTLE_REGION:
+        return {"skipped": "mantle disabled"}
+    from datetime import timedelta, timezone
+
+    now = now or datetime.now(timezone.utc)
+    owners = {p["id"]: str(p["tags"].get("cc-on-bedrock:user", "")).strip().lower()
+              for p in _list_mantle_projects()
+              if p["tags"].get("cc-on-bedrock:managed") == "true" and p["tags"].get("cc-on-bedrock:user")}
+    cw = _cw_mantle()
+    metrics = []
+    for name in ("InputTokens", "OutputTokens"):
+        for page in cw.get_paginator("list_metrics").paginate(Namespace="AWS/BedrockMantle", MetricName=name):
+            for m in page.get("Metrics", []):
+                dims = {d["Name"]: d["Value"] for d in m.get("Dimensions", [])}
+                if set(dims) == {"Project", "Model"} and dims["Project"] in owners:
+                    metrics.append((name, dims["Project"], dims["Model"]))
+    start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=1)
+    totals: dict = {}  # (email, date, model) -> {"InputTokens": n, "OutputTokens": n, "project": id}
+    for i in range(0, len(metrics), 500):
+        batch = metrics[i:i + 500]
+        queries = [{"Id": f"m{j}", "ReturnData": True, "MetricStat": {
+            "Metric": {"Namespace": "AWS/BedrockMantle", "MetricName": name,
+                       "Dimensions": [{"Name": "Project", "Value": proj}, {"Name": "Model", "Value": model}]},
+            "Period": 86400, "Stat": "Sum"}} for j, (name, proj, model) in enumerate(batch)]
+        token = None
+        while True:
+            kw = {"MetricDataQueries": queries, "StartTime": start, "EndTime": now}
+            if token:
+                kw["NextToken"] = token
+            resp = cw.get_metric_data(**kw)
+            for res in resp.get("MetricDataResults", []):
+                name, proj, model = batch[int(res["Id"][1:])]
+                for ts, value in zip(res.get("Timestamps", []), res.get("Values", [])):
+                    row = totals.setdefault((owners[proj], ts.strftime("%Y-%m-%d"), normalize_model(model)),
+                                            {"InputTokens": 0, "OutputTokens": 0, "project": proj})
+                    row[name] += int(value)
+            token = resp.get("NextToken")
+            if not token:
+                break
+    for (email, day, model), row in totals.items():
+        cost = estimate_cost(model, row["InputTokens"], row["OutputTokens"])
+        table.update_item(
+            Key={"PK": f"MANTLE#{day[:7]}", "SK": f"{email}#{day}#{model}"},
+            UpdateExpression=("SET email = :email, inputTokens = :inp, outputTokens = :out, estimatedCost = :cost, "
+                              "projectId = :proj, mantleRegion = :region, metered = :f, updatedAt = :now"),
+            ExpressionAttributeValues={
+                ":email": email, ":inp": row["InputTokens"], ":out": row["OutputTokens"],
+                ":cost": Decimal(str(round(cost, 6))), ":proj": row["project"],
+                ":region": MANTLE_REGION, ":f": False, ":now": now.replace(tzinfo=None).isoformat(),
+            },
+        )
+    print(f"[MANTLE] estimate rows written: {len(totals)} ({len(owners)} managed projects)")
+    return {"rows": len(totals)}
+
+
 def handler(event, context):
     """Handle events from CloudWatch Logs Subscription or EventBridge."""
+    if event.get("source") == "cc.mantle-meter":  # scheduled (usage-tracking mantle-audit.tf)
+        return meter_mantle()
     processed = 0
 
     # Source 1: CloudWatch Logs Subscription (Bedrock Invocation Logging — primary, has tokens)

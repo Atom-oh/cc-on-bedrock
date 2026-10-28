@@ -128,7 +128,7 @@ data "aws_iam_policy_document" "sts_issuer_policy" {
     sid = "IamPerUserRoleMgmt"
     actions = [
       "iam:CreateRole", "iam:GetRole", "iam:UpdateAssumeRolePolicy",
-      "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+      "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
       "iam:TagRole", "iam:UntagRole", "iam:ListRoleTags",
     ]
     resources = ["arn:aws:iam::${local.account_id}:role/${var.project_prefix}-local-user-*"]
@@ -198,6 +198,7 @@ resource "aws_lambda_function" "sts_issuer" {
       SESSION_DURATION_SECONDS     = "3600"
       MAX_SESSION_DURATION_SECONDS = "3600"
       INFERENCE_PROFILE_PREFIX     = var.project_prefix
+      MANTLE_MODEL_ID              = var.mantle_model_id
     }
   }
 

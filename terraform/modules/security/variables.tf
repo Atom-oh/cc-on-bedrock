@@ -39,3 +39,9 @@ variable "devenv_enabled" {
   type        = bool
   default     = true
 }
+
+variable "enable_mantle" {
+  description = "ADR-014: Codex on bedrock-mantle for unlimited users (unmetered)"
+  type        = bool
+  default     = false
+}

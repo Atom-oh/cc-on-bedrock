@@ -66,6 +66,7 @@ module "security" {
   dashboard_subdomain = var.dashboard_subdomain
   lambda_src_dir      = local.lambda_src_dir
   devenv_enabled      = local.devenv_enabled
+  enable_mantle       = var.enable_mantle
 
   providers = {
     aws           = aws
@@ -96,6 +97,12 @@ module "usage_tracking" {
   vpc_id             = module.network.vpc_id
   vpc_cidr           = module.network.vpc_cidr
   private_subnet_ids = module.network.private_subnet_ids
+  enable_mantle      = var.enable_mantle
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
 }
 
 # ---- 04 ECS Nginx Dev Environment -------------------------------------------
@@ -228,4 +235,5 @@ module "local_governance" {
   task_permission_boundary_arn  = module.security.task_permission_boundary_arn
   task_permission_boundary_name = module.security.task_permission_boundary_name
   lambda_src_dir                = local.lambda_src_dir
+  mantle_model_id               = var.codex_mantle_model_id
 }
