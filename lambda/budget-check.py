@@ -17,6 +17,7 @@ Actions:
 from __future__ import annotations
 import os
 import json
+import hashlib
 import boto3
 from datetime import datetime, timedelta, date
 from decimal import Decimal
@@ -47,6 +48,14 @@ LOCAL_TOKEN_DENY_POLICY_NAME = "cc-bedrock-local-token-deny"
 # Legacy (pre-ADR-015) policy names — delete-only, never attached anymore
 LEGACY_DENY_POLICY_NAME = "BudgetExceededDeny"
 LEGACY_DEPT_DENY_POLICY_NAME = "DeptBudgetExceededDeny"
+# ADR-014 (amended 2026-10-26): Codex on bedrock-mantle (web search) is granted only to
+# users whose cost is unlimited, because mantle traffic never reaches the invocation
+# log and so is NOT metered. Every deny above also blocks mantle + web search.
+MANTLE_DENY_ACTIONS = ("bedrock-mantle:*", "bedrock-websearch:*")
+MANTLE_POLICY_NAME = "cc-bedrock-mantle-unmetered"
+MANTLE_ENABLED = os.environ.get("MANTLE_ENABLED", "false").lower() == "true"
+MANTLE_REGION = os.environ.get("MANTLE_REGION", "us-east-1")
+ACCOUNT_ID = os.environ.get("ACCOUNT_ID", "")
 
 dynamodb = boto3.resource("dynamodb")
 dynamodb_client = boto3.client("dynamodb")
@@ -65,6 +74,16 @@ sns_client = boto3.client("sns")
 # Set by get_user_period_usage when the scan stops at MAX_SCAN_PAGES; the handler then
 # keeps existing denies instead of releasing them on incomplete totals (fail closed).
 _usage_scan_truncated = False
+# Set when a budget / limits read fails (those readers return {} on error, which is
+# indistinguishable from "no caps"). The mantle grant fails safe on it: never grant
+# unmetered access on partial data.
+_budget_read_failed = False
+
+
+def _mark_budget_read_failed(what: str):
+    global _budget_read_failed
+    _budget_read_failed = True
+    print(f"[MANTLE] incomplete read: {what}")
 
 
 def period_bounds(now: datetime | None = None) -> dict:
@@ -225,8 +244,11 @@ def get_department_budgets():
             pages += 1
             if not last_key or pages >= MAX_SCAN_PAGES:
                 break
+        if last_key:
+            _mark_budget_read_failed("department budgets scan truncated")
         return budgets
     except Exception as e:
+        _mark_budget_read_failed("department budgets")
         print(f"[DEPT] Failed to fetch department budgets: {e}")
         return {}
 
@@ -320,8 +342,11 @@ def get_user_budgets():
             pages += 1
             if not last_key or pages >= MAX_SCAN_PAGES:
                 break
+        if last_key:
+            _mark_budget_read_failed("user budgets scan truncated")
         return budgets
     except Exception as e:
+        _mark_budget_read_failed("user budgets")
         print(f"[USER-BUDGETS] Failed to fetch user budgets: {e}")
         return {}
 
@@ -416,6 +441,8 @@ _valid_user_keys: set = set()
 # {email: subdomain} built from the SAME Cognito scan as _valid_user_keys (see below). Used by the
 # release path to resolve idle/denied users' Local role without an N+1 per-user ListUsers.
 _email_subdomain_map: dict = {}
+# {email: custom:department} from the same scan (mantle eligibility needs every user's dept).
+_email_dept_map: dict = {}
 
 
 def _load_valid_user_keys() -> set:
@@ -427,8 +454,9 @@ def _load_valid_user_keys() -> set:
     this period) to detach their Deny; doing it from this one scan avoids a per-user ListUsers
     (N+1 → Cognito throttle at scale → release failures) — PR #68 review.
     """
-    global _email_subdomain_map
+    global _email_subdomain_map, _email_dept_map
     _email_subdomain_map = {}
+    _email_dept_map = {}
     keys: set = set()
     if not USER_POOL_ID:
         return keys
@@ -444,6 +472,7 @@ def _load_valid_user_keys() -> set:
                 if u.get("Username"):
                     keys.add(u["Username"].strip().lower())
                 u_email = u_subdomain = None
+                u_dept = "default"
                 for attr in u.get("Attributes", []):
                     # ADR-031: canonical key is email; lowercase all keys so a
                     # mixed-case email row (USER#{email.lower()}) still matches.
@@ -453,13 +482,19 @@ def _load_valid_user_keys() -> set:
                         u_email = attr["Value"].strip().lower()
                     elif attr["Name"] == "custom:subdomain" and attr.get("Value"):
                         u_subdomain = attr["Value"].strip()
+                    elif attr["Name"] == "custom:department" and attr.get("Value"):
+                        u_dept = attr["Value"].strip()
                 if u_email and u_subdomain:
                     _email_subdomain_map[u_email] = u_subdomain
+                    _email_dept_map[u_email] = u_dept
             pagination_token = result.get("PaginationToken")
             pages += 1
             if not pagination_token or pages >= MAX_SCAN_PAGES:
                 break
+        if pagination_token:
+            _mark_budget_read_failed("Cognito user scan truncated")
     except Exception as e:
+        _mark_budget_read_failed("Cognito users")
         print(f"[VALID-USERS] Failed to load Cognito users (failing open): {e}")
         return set()
     return keys
@@ -510,6 +545,7 @@ def attach_dept_deny_policy(subdomain: str):
                 "bedrock:InvokeModelWithResponseStream",
                 "bedrock:Converse",
                 "bedrock:ConverseStream",
+                *MANTLE_DENY_ACTIONS,
             ],
             "Resource": "*",
         }],
@@ -585,6 +621,7 @@ def attach_deny_policy(subdomain: str):
                 "bedrock:InvokeModelWithResponseStream",
                 "bedrock:Converse",
                 "bedrock:ConverseStream",
+                *MANTLE_DENY_ACTIONS,
             ],
             "Resource": "*",
         }],
@@ -675,6 +712,7 @@ def _attach_local_token_deny(role_name: str, reason: str) -> bool:
                 "bedrock:InvokeModelWithResponseStream",
                 "bedrock:Converse",
                 "bedrock:ConverseStream",
+                *MANTLE_DENY_ACTIONS,
             ],
             "Resource": "*",
         }],
@@ -753,6 +791,7 @@ def _scan_limits_limits():
         try:
             r = limits_table.scan(**params)
         except Exception as e:
+            _mark_budget_read_failed("limits")
             print(f"[LIMITS] scan limits failed: {e}")
             return {}
         for item in r.get("Items", []):
@@ -773,6 +812,8 @@ def _scan_limits_limits():
         pages += 1
         if not last_key or pages >= MAX_SCAN_PAGES:
             break
+    if last_key:
+        _mark_budget_read_failed("limits scan truncated")
     return out
 
 
@@ -860,6 +901,208 @@ def check_token_limits_backup():
     return {"attached": attached, "skipped": skipped, "checked": checked}
 
 
+# ──────────────────────────────────────────────────────────
+# ADR-014 (amended 2026-10-26): Codex on bedrock-mantle for unlimited users
+# ──────────────────────────────────────────────────────────
+
+def mantle_eligible(user: str, dept: str, user_budgets: dict, dept_budgets: dict, token_limits: dict,
+                    aliases: tuple = ()) -> bool:
+    """Pure: True only when no cap of any kind applies to the user — every effective
+    USD cap (user > dept per-user default > global) is 0, the department has no total
+    budget, and no token LIMIT# row exists for the user or the department.
+
+    Keys are compared lowercased, and `aliases` (e.g. the legacy subdomain key) plus the
+    department recorded on any of the user's budget rows are checked too: a cap row that
+    cannot be matched exactly must still make the user ineligible (never fail open)."""
+    norm = lambda k: (k or "").strip().lower()
+    keys = {norm(user), *(norm(a) for a in aliases if a)}
+    # Every row under any spelling counts (keys differing only in case must not shadow each other).
+    rows = [v for k, v in user_budgets.items() if norm(k) in keys]
+    depts = {norm(dept) or "default", *(norm(r.get("department")) for r in rows if r.get("department"))}
+    dept_rows = [v for k, v in dept_budgets.items() if norm(k) in depts] or [{}]
+    for row in rows or [{}]:
+        for d_row in dept_rows:
+            limits = _effective_user_limits({"u": row}, {"d": d_row}, "u", "d")
+            if any(v > 0 for v in limits.values()) or _dept_total_budget({"d": d_row}, "d") > 0:
+                return False
+    return not any((etype == "USER" and norm(key) in keys) or (etype == "DEPT" and norm(key) in depts)
+                   for etype, key, _period in token_limits)
+
+
+def mantle_policy_doc(project_id: str) -> str:
+    """The per-user grant: inference on the user's OWN project only (so the
+    OpenAI-Project header is mandatory — project/default is AccessDenied) + web search."""
+    return json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "MantleOwnProjectUnmetered",
+                "Effect": "Allow",
+                "Action": ["bedrock-mantle:CreateInference", "bedrock-mantle:Get*", "bedrock-mantle:List*"],
+                "Resource": f"arn:aws:bedrock-mantle:{MANTLE_REGION}:{ACCOUNT_ID}:project/{project_id}",
+            },
+            {
+                "Sid": "MantleWebSearch",
+                "Effect": "Allow",
+                "Action": ["bedrock-websearch:InvokeSearch", "bedrock-websearch:InvokeFetch"],
+                "Resource": "*",
+            },
+        ],
+    }, separators=(",", ":"))
+
+
+def _mantle_request(method: str, path: str, body: dict | None = None) -> dict:
+    """SigV4-signed call to the mantle control plane (no boto3 client exists for it)."""
+    import urllib.error
+    import urllib.request
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+
+    url = f"https://bedrock-mantle.{MANTLE_REGION}.api.aws{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = AWSRequest(method=method, url=url, data=data, headers={"Content-Type": "application/json"})
+    creds = boto3.Session().get_credentials().get_frozen_credentials()
+    SigV4Auth(creds, "bedrock-mantle", MANTLE_REGION).add_auth(req)
+    r = urllib.request.Request(url, data=data, headers=dict(req.headers), method=method)
+    try:
+        with urllib.request.urlopen(r, timeout=10) as resp:
+            return json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"mantle {method} {path.split('?')[0]} → {e.code}: {e.read()[:300]!r}") from e
+
+
+def mantle_project_name(subdomain: str) -> str:
+    return f"cc-{subdomain}"[:64]
+
+
+def list_mantle_projects() -> list:
+    """Active projects as [{id, name, tags}]."""
+    out, after = [], None
+    for _ in range(MAX_SCAN_PAGES):
+        q = "?limit=100" + (f"&after={after}" if after else "")
+        page = _mantle_request("GET", f"/v1/organization/projects{q}")
+        for p in page.get("data", []):
+            if p.get("status", "active") == "active" and p.get("name"):
+                out.append({"id": p["id"], "name": p["name"], "tags": p.get("tags") or {}})
+        if not page.get("has_more"):
+            break
+        after = page.get("last_id")
+    return out
+
+
+def ensure_mantle_project(subdomain: str, email: str, projects: list) -> str:
+    """Reuse the user's project or create it. Ownership is checked by tag (never by
+    name alone), so a reassigned subdomain never inherits another user's project.
+    Projects are never archived here, so history stays attributable across
+    revoke/grant cycles."""
+    name = mantle_project_name(subdomain)
+    owned = [p for p in projects
+             if (p.get("tags") or {}).get("cc-on-bedrock:managed") == "true"
+             and str((p.get("tags") or {}).get("cc-on-bedrock:user", "")).lower() == email.lower()]
+    if owned:
+        return next((p for p in owned if p["name"] == name), owned[0])["id"]
+    if any(p["name"] == name for p in projects):
+        # Name taken by another owner: suffix with an email hash.
+        name = f"cc-{subdomain}"[:55] + "-" + hashlib.sha256(email.lower().encode()).hexdigest()[:8]
+    tags = {"cc-on-bedrock:user": email, "cc-on-bedrock:managed": "true"}
+    created = _mantle_request("POST", "/v1/organization/projects", {"name": name, "tags": tags})
+    projects.append({"id": created["id"], "name": name, "tags": tags})
+    print(f"[MANTLE] created project {created['id']} ({name}) for {email}")
+    return created["id"]
+
+
+def _current_inline(role_name: str, policy_name: str):
+    """Policy document (as dict) or None when absent."""
+    try:
+        doc = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)["PolicyDocument"]
+    except iam_client.exceptions.NoSuchEntityException:
+        return None
+    if isinstance(doc, str):
+        from urllib.parse import unquote
+        doc = json.loads(unquote(doc))
+    return doc
+
+
+def _revoke_mantle(role_name: str) -> bool:
+    # Read first: this runs for every ineligible user each cycle and reads are far
+    # cheaper on the IAM rate limit than a blind DeleteRolePolicy.
+    try:
+        if _current_inline(role_name, MANTLE_POLICY_NAME) is None:
+            return False
+        iam_client.delete_role_policy(RoleName=role_name, PolicyName=MANTLE_POLICY_NAME)
+        print(f"[MANTLE] revoked → {role_name}")
+        return True
+    except iam_client.exceptions.NoSuchEntityException:
+        return False
+
+
+def _local_roles() -> list:
+    names = []
+    for page in iam_client.get_paginator("list_roles").paginate(PathPrefix="/"):
+        names += [r["RoleName"] for r in page.get("Roles", []) if r["RoleName"].startswith(LOCAL_ROLE_PREFIX)]
+    return names
+
+
+def _revoke_mantle_except(keep: set) -> int:
+    """Revoke from every Local role not in `keep` — including roles whose user is gone
+    from Cognito (a deprovisioned user must not keep an unmetered grant)."""
+    revoked = 0
+    for role in _local_roles():
+        if role in keep:
+            continue
+        try:
+            revoked += _revoke_mantle(role)
+        except Exception as e:
+            print(f"[MANTLE] revoke failed for {role}: {e}")
+    return revoked
+
+
+def reconcile_mantle(user_budgets: dict, dept_budgets: dict) -> dict:
+    """Grant mantle to unlimited users, revoke it from every other Local role (≤ 5 min
+    after a cap appears). Local Mode roles only; EC2 DevEnv is a follow-up."""
+    if not MANTLE_ENABLED:
+        return {"enabled": False}
+    token_limits = _scan_limits_limits()
+    if _budget_read_failed or limits_table is None or not _email_subdomain_map or not ACCOUNT_ID:
+        print("[MANTLE] incomplete budget/limits/Cognito data — revoking all grants (fail safe)")
+        return {"enabled": True, "failsafe": True, "revoked": _revoke_mantle_except(set())}
+
+    eligible = {e: sd for e, sd in _email_subdomain_map.items()
+                if mantle_eligible(e, _email_dept_map.get(e, "default"), user_budgets, dept_budgets,
+                                   token_limits, aliases=(sd,))}
+    # A subdomain shared by several Cognito users would share one role: grant only if all are eligible.
+    by_role: dict = {}
+    for e, sd in _email_subdomain_map.items():
+        by_role.setdefault(f"{LOCAL_ROLE_PREFIX}{sd}", []).append(e)
+    grant_roles = {r: es[0] for r, es in by_role.items() if len(es) == 1 and es[0] in eligible}
+    revoked = _revoke_mantle_except(set(grant_roles))
+    projects = None
+    granted = 0
+    for role, email in grant_roles.items():
+        subdomain = eligible[email]
+        try:
+            iam_client.list_role_tags(RoleName=role)  # NoSuchEntity → no Local role, no project
+            if projects is None:
+                projects = list_mantle_projects()
+            doc = mantle_policy_doc(ensure_mantle_project(subdomain, email, projects))
+            if _current_inline(role, MANTLE_POLICY_NAME) != json.loads(doc):
+                iam_client.put_role_policy(RoleName=role, PolicyName=MANTLE_POLICY_NAME, PolicyDocument=doc)
+                granted += 1
+                print(f"[MANTLE] granted (unmetered) → {role}")
+        except iam_client.exceptions.NoSuchEntityException:
+            continue  # user has not used Local Mode yet: no role to grant on
+        except Exception as e:
+            # Fail safe: the existing grant may point at a previous owner's project (the
+            # subdomain was reassigned) and ownership could not be verified, so drop it.
+            # The next run re-grants once the mantle API answers.
+            print(f"[MANTLE] reconcile failed for {email}: {e}")
+            try:
+                revoked += _revoke_mantle(role)
+            except Exception as e2:
+                print(f"[MANTLE] revoke failed for {role}: {e2}")
+    return {"enabled": True, "eligible": len(grant_roles), "granted": granted, "revoked": revoked}
+
+
 def set_cognito_budget_flag(user: str, exceeded: bool):
     """Set budget_exceeded flag in Cognito user attributes.
 
@@ -923,8 +1166,9 @@ def check_department_budgets(user_spend):
 def handler(event, context):
     """Check budgets and enforce limits via per-user IAM Deny Policy."""
     # ADR-031: reset the per-invocation email→subdomain map (repopulated by the scans).
-    global _subdomain_by_user, _valid_user_keys
+    global _subdomain_by_user, _valid_user_keys, _budget_read_failed
     _subdomain_by_user = {}
+    _budget_read_failed = False  # before any reader below can set it
     # Load the authoritative Cognito identity set so the scans below skip stale
     # non-user rows (e.g. raw IAM principals). Empty set = fail-open (no filtering).
     _valid_user_keys = _load_valid_user_keys()
@@ -1091,6 +1335,13 @@ def handler(event, context):
             if remove_dept_deny_policy(user):
                 dept_released += 1
 
+    # ─── ADR-014: mantle (unmetered) for unlimited users ───
+    try:
+        mantle = reconcile_mantle(user_budgets, dept_budgets)
+    except Exception as e:
+        print(f"[MANTLE] reconcile failed: {e}")
+        mantle = {"error": str(e)}
+
     # ─── ADR-015: Local Governance token-limit backup check ───
     try:
         token_backup = check_token_limits_backup()
@@ -1112,5 +1363,6 @@ def handler(event, context):
         "dept_denied": dept_denied,
         "dept_released": dept_released,
         "token_backup": token_backup,
+        "mantle": mantle,
         "timestamp": datetime.utcnow().isoformat(),
     }

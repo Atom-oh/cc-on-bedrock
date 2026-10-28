@@ -274,6 +274,9 @@ def _deny_policy_doc() -> str:
                 "bedrock:InvokeModelWithResponseStream",
                 "bedrock:Converse",
                 "bedrock:ConverseStream",
+                # ADR-014: also stop Codex on bedrock-mantle (+ its web search).
+                "bedrock-mantle:*",
+                "bedrock-websearch:*",
             ],
             "Resource": "*",
         }],

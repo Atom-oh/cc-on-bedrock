@@ -428,7 +428,7 @@ resource "aws_lambda_function" "tracker" {
   handler          = "bedrock-usage-tracker.handler"
   filename         = data.archive_file.lambda["tracker"].output_path
   source_code_hash = data.archive_file.lambda["tracker"].output_base64sha256
-  timeout          = 30
+  timeout          = 60 # + scheduled mantle cost estimate (ListProjects + CloudWatch)
   memory_size      = 256
 
   environment {
@@ -436,6 +436,7 @@ resource "aws_lambda_function" "tracker" {
       USAGE_TABLE_NAME     = aws_dynamodb_table.usage.name
       ECS_CLUSTER_NAME     = var.ecs_cluster_name
       COGNITO_USER_POOL_ID = var.user_pool_id
+      MANTLE_REGION        = var.enable_mantle ? "us-east-1" : "" # ADR-014 §9 estimate
     }
   }
 
@@ -562,6 +563,25 @@ data "aws_iam_policy_document" "budget_check_policy" {
     actions   = ["iam:ListRoles", "iam:ListRoleTags"]
     resources = ["*"]
   }
+  # ADR-014: per-user bedrock-mantle projects for unlimited users (us-east-1 only).
+  dynamic "statement" {
+    for_each = var.enable_mantle ? [1] : []
+    content {
+      sid       = "MantleProjects"
+      actions   = ["bedrock-mantle:CreateProject", "bedrock-mantle:GetProject", "bedrock-mantle:TagResource", "bedrock-mantle:ListTagsForResource"]
+      resources = ["arn:aws:bedrock-mantle:us-east-1:${local.account_id}:project/*"]
+    }
+  }
+  # ListProjects is not scoped to one project, and its response carries tags
+  # (ListTagsForResource above) — both verified live.
+  dynamic "statement" {
+    for_each = var.enable_mantle ? [1] : []
+    content {
+      sid       = "MantleListProjects"
+      actions   = ["bedrock-mantle:ListProjects"]
+      resources = ["*"]
+    }
+  }
   statement {
     actions   = ["sns:Publish"]
     resources = [aws_sns_topic.budget_alerts.arn]
@@ -601,7 +621,7 @@ resource "aws_lambda_function" "budget_check" {
   handler          = "budget-check.handler"
   filename         = data.archive_file.lambda["budget_check"].output_path
   source_code_hash = data.archive_file.lambda["budget_check"].output_base64sha256
-  timeout          = 60
+  timeout          = 120 # + mantle reconcile (IAM + mantle API per user)
   memory_size      = 256
 
   environment {
@@ -616,6 +636,9 @@ resource "aws_lambda_function" "budget_check" {
       LIMITS_TABLE         = "${var.project_prefix}-limits"
       SNS_TOPIC_ARN        = aws_sns_topic.budget_alerts.arn
       COGNITO_USER_POOL_ID = var.user_pool_id
+      ACCOUNT_ID           = local.account_id
+      MANTLE_ENABLED       = tostring(var.enable_mantle)
+      MANTLE_REGION        = "us-east-1"
     }
   }
 

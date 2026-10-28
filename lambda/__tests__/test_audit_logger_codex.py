@@ -89,3 +89,22 @@ def test_non_shadow_event_without_params_still_audited():
 
 def test_bare_prefix_role_is_not_platform():
     assert audit.user_from_role("cc-on-bedrock-task-") == (None, None)
+
+
+def test_mantle_create_inference_is_audited_as_unmetered():
+    ev = _event("CreateInference", {"model": "openai.gpt-6.1-sol"}, ua="codex_exec/0.163.0")
+    ev["detail"]["eventSource"] = "bedrock-mantle.amazonaws.com"
+    ev["detail"]["awsRegion"] = "us-east-1"
+    ev["detail"]["resources"] = [{"ARN": "arn:aws:bedrock-mantle:us-east-1:1:project/proj_bob",
+                                  "type": "AWS::BedrockMantle::Project"}]
+    items = _run(ev)
+    assert len(items) == 1
+    it = items[0]
+    assert it["provider"] == "mantle" and it["metered"] is False
+    assert it["model_id"] == "openai.gpt-6.1-sol" and it["mantle_project"] == "proj_bob"
+    assert it["user_id"] == "bob" and it["client_tool"] == "codex"
+
+
+def test_runtime_rows_are_marked_runtime():
+    items = _run(_event("Responses", {"modelId": "global.openai.gpt-6.1-sol"}))
+    assert items[0]["provider"] == "runtime" and "metered" not in items[0]
