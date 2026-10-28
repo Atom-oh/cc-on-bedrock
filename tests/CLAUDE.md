@@ -33,3 +33,6 @@ DASHBOARD_URL=https://<dashboard_subdomain>.<domain> \
 - Local Governance E2E는 실제 Bedrock 호출과 IAM 변경을 일으키므로 격리된 테스트 사용자 email/subdomain으로 실행한다.
 - `POLL_TIMEOUT_SECONDS`로 Deny 부착 대기 시간을 조정한다 (기본 300s). `ADMIN_TOKEN`을 주면 reset 단계까지 검증한다.
 - `tests/docker/test-litellm.sh`는 제거된 LiteLLM 경로의 잔재다.
+- `integration/test-e2e.sh` still invokes the removed LiteLLM build. Its full
+  container phase is not a clean current-platform acceptance gate. Use relevant
+  explicit checks and report this limitation rather than claiming a full E2E pass.

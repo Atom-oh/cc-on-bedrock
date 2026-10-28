@@ -1,545 +1,137 @@
-<mxfile host="65bd71144e">
-    <diagram id="cc-on-bedrock-arch" name="CC-on-Bedrock Enterprise Architecture">
-        <mxGraphModel dx="1517" dy="1111" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="3200" pageHeight="2000" background="#FFFFFF" math="0" shadow="0">
-            <root>
-                <mxCell id="0"/>
-                <mxCell id="1" parent="0"/>
-                <mxCell id="title" value="CC-on-Bedrock Enterprise Architecture" style="text;html=1;fontSize=24;fontStyle=1;fontColor=#232F3E;align=left;verticalAlign=middle;fillColor=none;strokeColor=none;fontFamily=Amazon Ember;" parent="1" vertex="1">
-                    <mxGeometry x="390" y="30" width="600" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="subtitle" value="Multi-User Claude Code Development Platform on AWS Bedrock | EC2-per-User | ap-northeast-2 (Seoul)" style="text;html=1;fontSize=12;fontColor=#545B64;align=left;verticalAlign=middle;fillColor=none;strokeColor=none;fontFamily=Amazon Ember;" parent="1" vertex="1">
-                    <mxGeometry x="390" y="70" width="800" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="ext-zone" value="External / Edge" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#7D8998;strokeWidth=2;fontFamily=Amazon Ember;fontSize=13;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#5A6C86;container=1;collapsible=0;recursiveResize=0;" parent="1" vertex="1">
-                    <mxGeometry x="390" y="100" width="330" height="368" as="geometry"/>
-                </mxCell>
-                <mxCell id="user-admin" value="Admin User" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#D45B07;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.user;fontFamily=Amazon Ember;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="55" y="60" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="user-dev" value="Developer Users" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#D45B07;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.users;fontFamily=Amazon Ember;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="215" y="60" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="browser-label" value="Browser (HTTPS)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=10;fontColor=#545B64;fontStyle=2;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="80" y="200" width="150" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="route53" value="Route 53" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.route_53;fontFamily=Amazon Ember;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="140" y="240" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="route53-desc" value="*.dev.domain.com&lt;br&gt;dashboard.domain.com" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="170" y="122" width="140" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="edge-zone" value="Edge Services (Global)" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#232F3E;strokeWidth=2;fontFamily=Amazon Ember;fontSize=13;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#232F3E;container=1;collapsible=0;recursiveResize=0;" parent="1" vertex="1">
-                    <mxGeometry x="390" y="500" width="330" height="800" as="geometry"/>
-                </mxCell>
-                <mxCell id="waf" value="WAF v2" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.waf;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="145" y="79" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="waf-desc" value="WebACL&lt;br&gt;&amp;nbsp;Rate Limiting" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="120" y="148" width="100" height="25" as="geometry"/>
-                </mxCell>
-                <mxCell id="cf-dashboard" value="CloudFront&lt;br&gt;(Dashboard)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="47.5" y="79" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="cf-dash-desc" value="dashboard.domain.com&lt;br&gt;X-Custom-Secret" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="30" y="261.5" width="110" height="25" as="geometry"/>
-                </mxCell>
-                <mxCell id="lambda-edge" value="Lambda@Edge&lt;br&gt;(Viewer Request)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="235" y="343" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="lambda-edge-desc" value="Cognito OAuth auth&lt;br&gt;Injects X-Auth-User" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="10" y="590" width="130" height="25" as="geometry"/>
-                </mxCell>
-                <mxCell id="9" style="edgeStyle=none;html=1;strokeColor=#C7131F;dashed=1;startArrow=classic;startFill=1;" edge="1" parent="edge-zone" source="cognito" target="cf-dashboard">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="cognito" value="Cognito" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cognito;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="50" y="520" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="cognito-desc" value="User Pool + Hosted UI&lt;br&gt;2 App Clients (Dashboard + DevEnv)&lt;br&gt;Custom Attrs: subdomain,&lt;br&gt;security_policy, resource_tier, dept" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="140" y="420" width="240" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-lambda-cognito" value="" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;" parent="edge-zone" source="lambda-edge" target="cognito" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-waf-cfdash" value="" style="endArrow=none;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;fontSize=8;fontFamily=Amazon Ember;fontColor=#C7131F;startArrow=none;" parent="edge-zone" source="waf" target="cf-dashboard" edge="1">
-                    <mxGeometry x="1" y="138" relative="1" as="geometry">
-                        <mxPoint x="-43" y="36" as="offset"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="cf-devenv" value="CloudFront&lt;br&gt;(DevEnv)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="232.5" y="79" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-cf-devenv-lambda" value="" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=1;strokeColor=#D05C17;dashed=1;" parent="edge-zone" source="cf-devenv" target="lambda-edge" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-waf-cfdev" value="" style="endArrow=none;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;fontSize=8;fontFamily=Amazon Ember;fontColor=#C7131F;startArrow=none;" parent="edge-zone" source="waf" target="cf-devenv" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="cf-devenv-desc" value="*.dev.domain.com" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="205" y="265" width="110" height="18" as="geometry"/>
-                </mxCell>
-                <mxCell id="aws-cloud" value="AWS Cloud (ap-northeast-2)" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=14;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;fontFamily=Amazon Ember;dashed=0;" parent="1" vertex="1">
-                    <mxGeometry x="760" y="100" width="1520" height="1200" as="geometry"/>
-                </mxCell>
-                <mxCell id="vpc" value="VPC (10.x.0.0/16)" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=13;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#879196;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#879196;fontFamily=Amazon Ember;dashed=0;" parent="aws-cloud" vertex="1">
-                    <mxGeometry x="30" y="45" width="1150" height="895" as="geometry"/>
-                </mxCell>
-                <mxCell id="pub-sub-a" value="Public Subnet" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=11;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grStroke=0;strokeColor=#7AA116;fillColor=#F2F6E8;verticalAlign=top;align=left;spacingLeft=30;fontColor=#248814;fontFamily=Amazon Ember;dashed=0;" parent="vpc" vertex="1">
-                    <mxGeometry x="20" y="45" width="1110" height="160" as="geometry"/>
-                </mxCell>
-                <mxCell id="nat-gw-a" value="NAT GW" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.nat_gateway;fontFamily=Amazon Ember;" parent="pub-sub-a" vertex="1">
-                    <mxGeometry x="910" y="50" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="alb" value="ALB&lt;br&gt;(Dashboard)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.application_load_balancer;fontFamily=Amazon Ember;" parent="pub-sub-a" vertex="1">
-                    <mxGeometry x="135" y="50" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="priv-sub" value="Private Subnets" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=11;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grStroke=0;strokeColor=#00A4A6;fillColor=#E6F6F7;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;fontFamily=Amazon Ember;dashed=0;" parent="vpc" vertex="1">
-                    <mxGeometry x="20" y="230" width="1110" height="650" as="geometry"/>
-                </mxCell>
-                <mxCell id="ecs-cluster" value="ECS Cluster: cc-on-bedrock-devenv" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_ecs_cluster;strokeColor=#ED7100;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#ED7100;fontFamily=Amazon Ember;dashed=0;" parent="priv-sub" vertex="1">
-                    <mxGeometry x="20" y="40" width="770" height="260" as="geometry"/>
-                </mxCell>
-                <mxCell id="dash-svc-box" value="Dashboard Service (EC2, 4096 CPU / 15360 MiB, 1 task)" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#248814;strokeWidth=1;fontFamily=Amazon Ember;fontSize=10;fontStyle=1;verticalAlign=top;spacingTop=8;spacingLeft=10;fontColor=#248814;container=1;collapsible=0;recursiveResize=0;" parent="ecs-cluster" vertex="1">
-                    <mxGeometry x="20" y="40" width="350" height="200" as="geometry"/>
-                </mxCell>
-                <mxCell id="dash-ecs-task" value="Next.js&lt;br&gt;Dashboard" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;fontFamily=Amazon Ember;" parent="dash-svc-box" vertex="1">
-                    <mxGeometry x="30" y="45" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="dash-desc" value="ECR: cc-on-bedrock/dashboard&lt;br&gt;Port 3000&lt;br&gt;Capacity Provider: cc-cp-devenv" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="dash-svc-box" vertex="1">
-                    <mxGeometry x="100" y="40" width="200" height="55" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-launch-badge" value="EC2 Launch Type (cc-cp-devenv)" style="rounded=1;fillColor=#FFF9C4;strokeColor=#F57F17;fontFamily=Amazon Ember;fontSize=9;fontColor=#F57F17;fontStyle=1;whiteSpace=wrap;html=1;" parent="dash-svc-box" vertex="1">
-                    <mxGeometry x="30" y="135" width="220" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="nginx-svc-box" value="Nginx Service (Fargate, 256 CPU / 512 MiB, 2 tasks)" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#D05C17;strokeWidth=1;fontFamily=Amazon Ember;fontSize=10;fontStyle=1;verticalAlign=top;spacingTop=8;spacingLeft=10;fontColor=#D05C17;container=1;collapsible=0;recursiveResize=0;" parent="ecs-cluster" vertex="1">
-                    <mxGeometry x="400" y="40" width="340" height="200" as="geometry"/>
-                </mxCell>
-                <mxCell id="nginx-fargate" value="Fargate&lt;br&gt;(Nginx)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;fontFamily=Amazon Ember;" parent="nginx-svc-box" vertex="1">
-                    <mxGeometry x="30" y="45" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="nginx-desc" value="Reverse Proxy&lt;br&gt;X-Auth-User validation&lt;br&gt;Routes to per-user EC2" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="nginx-svc-box" vertex="1">
-                    <mxGeometry x="100" y="45" width="160" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="nginx-task2" value="Task 2" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;fontFamily=Amazon Ember;" parent="nginx-svc-box" vertex="1">
-                    <mxGeometry x="30" y="130" width="45" height="45" as="geometry"/>
-                </mxCell>
-                <mxCell id="fargate-badge" value="Fargate Launch Type" style="rounded=1;fillColor=#E3F2FD;strokeColor=#1976D2;fontFamily=Amazon Ember;fontSize=9;fontColor=#1976D2;fontStyle=1;whiteSpace=wrap;html=1;" parent="nginx-svc-box" vertex="1">
-                    <mxGeometry x="100" y="140" width="160" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="vpce-box" value="VPC Endpoints" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#5A30B5;strokeWidth=1;fontFamily=Amazon Ember;fontSize=10;fontStyle=1;verticalAlign=top;spacingTop=8;spacingLeft=10;fontColor=#5A30B5;container=1;collapsible=0;recursiveResize=0;" parent="priv-sub" vertex="1">
-                    <mxGeometry x="830" y="40" width="260" height="240" as="geometry"/>
-                </mxCell>
-                <mxCell id="vpce-bedrock" value="Bedrock" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
-                    <mxGeometry x="200" y="40" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="vpce-ssm" value="SSM" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
-                    <mxGeometry x="110" y="40" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="vpce-ecr" value="ECR" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
-                    <mxGeometry x="20" y="40" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="vpce-cw" value="CloudWatch" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
-                    <mxGeometry x="20" y="120" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="vpce-s3" value="S3" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
-                    <mxGeometry x="110" y="120" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-zone" value="Per-User EC2 Instances (ARM64 t4g.medium ~ xlarge)" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#ED7100;strokeWidth=2;fontFamily=Amazon Ember;fontSize=11;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#ED7100;container=1;collapsible=0;recursiveResize=0;" parent="priv-sub" vertex="1">
-                    <mxGeometry x="20" y="325" width="1070" height="310" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-inst-box" value="EC2 Instance (user-A)" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D05C17;strokeWidth=1;fontFamily=Amazon Ember;fontSize=10;fontStyle=1;verticalAlign=top;spacingTop=8;spacingLeft=10;fontColor=#D05C17;container=1;collapsible=0;recursiveResize=0;" parent="ec2-zone" vertex="1">
-                    <mxGeometry x="20" y="40" width="420" height="250" as="geometry"/>
-                </mxCell>
-                <mxCell id="code-server" value="code-server" style="shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;imageAspect=0;image=https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQu8Dqyl7oWTmc-np8q_R7neO9HORid4bsN6w&amp;s;fontFamily=Amazon Ember;fontSize=9;fontStyle=1;fontColor=#232F3E;html=1;shadow=1;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="30" y="40" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="code-server-label" value="VS Code in Browser" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="10" y="105" width="100" height="18" as="geometry"/>
-                </mxCell>
-                <mxCell id="claude-code" value="Claude Code" style="shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;image=https://upload.wikimedia.org/wikipedia/commons/b/b0/Claude_AI_symbol.svg;fontFamily=Amazon Ember;fontSize=9;fontStyle=1;fontColor=#232F3E;html=1;shadow=1;aspect=fixed;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="145" y="40" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="claude-code-label" value="Anthropic CLI" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="120" y="105" width="100" height="18" as="geometry"/>
-                </mxCell>
-                <mxCell id="kiro" value="Kiro" style="shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;image=https://kiro.dev/icon.svg?fe599162bb293ea0;fontFamily=Amazon Ember;fontSize=9;fontStyle=1;fontColor=#232F3E;html=1;shadow=1;aspect=fixed;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="255" y="40" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="kiro-label" value="Amazon Kiro Cli" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="230" y="105" width="100" height="18" as="geometry"/>
-                </mxCell>
-                <mxCell id="tools-divider" value="" style="line;html=1;strokeWidth=1;strokeColor=#E0E0E0;fillColor=none;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="15" y="130" width="390" height="10" as="geometry"/>
-                </mxCell>
-                <mxCell id="iam-profile" value="IAM Profile&lt;br&gt;cc-on-bedrock-task-{sub}" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.identity_and_access_management;fontFamily=Amazon Ember;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="25" y="150" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="ebs-vol" value="EBS 30GB gp3&lt;br&gt;(preserved)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elastic_block_store;fontFamily=Amazon Ember;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="150" y="150" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="sg-badge" value="SG: open / restricted / locked (DLP)" style="rounded=1;fillColor=#FFEBEE;strokeColor=#C7131F;fontFamily=Amazon Ember;fontSize=8;fontColor=#C7131F;fontStyle=1;whiteSpace=wrap;html=1;" parent="ec2-inst-box" vertex="1">
-                    <mxGeometry x="240" y="160" width="160" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-inst2" value="EC2 (user-B)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fontFamily=Amazon Ember;" parent="ec2-zone" vertex="1">
-                    <mxGeometry x="500" y="80" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-inst3" value="EC2 (user-C)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fontFamily=Amazon Ember;" parent="ec2-zone" vertex="1">
-                    <mxGeometry x="630" y="80" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-dots" value="..." style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=22;fontColor=#ED7100;fontStyle=1;" parent="ec2-zone" vertex="1">
-                    <mxGeometry x="740" y="85" width="50" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-inst-n" value="EC2 (user-N)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fontFamily=Amazon Ember;" parent="ec2-zone" vertex="1">
-                    <mxGeometry x="850" y="80" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-per-user-desc" value="Each user gets a dedicated EC2 with per-user IAM Instance Profile,&lt;br style=&quot;font-size: 10px;&quot;&gt;EBS volume preserved on stop, configurable DLP security groups (open / restricted / locked)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=10;fontColor=#545B64;" parent="ec2-zone" vertex="1">
-                    <mxGeometry x="500" y="170" width="460" height="35" as="geometry"/>
-                </mxCell>
-                <mxCell id="ec2-tools-legend" value="Each instance runs: code-server + Claude Code + Kiro" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=10;fontColor=#ED7100;fontStyle=2;" parent="ec2-zone" vertex="1">
-                    <mxGeometry x="500" y="210" width="350" height="20" as="geometry"/>
-                </mxCell>
-                <mxCell id="flow-nginx-ec2" value="route to user" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#D05C17;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=12;fontFamily=Amazon Ember;fontColor=#D05C17;" parent="priv-sub" source="nginx-fargate" target="code-server" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="400" y="150"/>
-                            <mxPoint x="400" y="375"/>
-                            <mxPoint x="95" y="375"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-nlb-nginx" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#D05C17;edgeStyle=orthogonalEdgeStyle;rounded=1;startArrow=none;" parent="vpc" source="alb" target="dash-ecs-task" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="180" y="255"/>
-                            <mxPoint x="115" y="255"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-alb-dash" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;startArrow=none;" parent="vpc" source="nlb" target="nginx-fargate" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="595" y="255"/>
-                            <mxPoint x="495" y="255"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="nlb" value="NLB&lt;br&gt;(DevEnv)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.network_load_balancer;fontFamily=Amazon Ember;" parent="vpc" vertex="1">
-                    <mxGeometry x="570" y="95" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="svc-zone" value="AWS Managed Services" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#FF9900;strokeWidth=2;fontFamily=Amazon Ember;fontSize=13;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#FF9900;container=1;collapsible=0;recursiveResize=0;" parent="aws-cloud" vertex="1">
-                    <mxGeometry x="1210" y="45" width="290" height="1135" as="geometry"/>
-                </mxCell>
-                <mxCell id="bedrock" value="Amazon Bedrock" style="shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;imageAspect=0;image=https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/dark/bedrock-color.png;fontFamily=Amazon Ember;fontSize=10;fontStyle=0;fontColor=#232F3E;html=1;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="55" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="bedrock-desc" value="Opus 4.6, Sonnet 4.6&lt;br&gt;via VPC Endpoint" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="60" width="130" height="28" as="geometry"/>
-                </mxCell>
-                <mxCell id="anthropic-badge" value="Anthropic" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D97757;strokeColor=#B8613D;fontFamily=Amazon Ember;fontSize=9;fontStyle=1;fontColor=#FFFFFF;verticalAlign=middle;align=center;arcSize=15;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="95" width="80" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="dynamodb" value="DynamoDB" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="163" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="ddb-tables" value="Tables:&lt;br&gt;- cc-routing-table&lt;br&gt;- cc-user-instances&lt;br&gt;- cc-on-bedrock-usage&lt;br&gt;- cc-department-budgets&lt;br&gt;- cc-approval-requests" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="150" width="180" height="85" as="geometry"/>
-                </mxCell>
-                <mxCell id="secrets-mgr" value="Secrets Manager" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="593" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="secrets-desc" value="CF Secret, NextAuth,&lt;br&gt;Cookie HMAC,&lt;br&gt;Per-user Passwords" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="595.5" width="130" height="45" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms" value="KMS" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.key_management_service;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="701" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms-desc" value="Encryption Key" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="715" width="110" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="cloudwatch" value="CloudWatch" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="270" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="cw-desc" value="Metrics + Logs" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="284" width="110" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="ecr" value="ECR" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="808" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="ecr-desc" value="DevEnv + Dashboard images" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="822" width="170" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="s3" value="S3" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="378" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="s3-desc" value="nginx.conf storage&lt;br&gt;deploy artifacts" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="386.5" width="140" height="28" as="geometry"/>
-                </mxCell>
-                <mxCell id="sns" value="SNS" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.sns;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="916" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="sns-desc" value="Budget Alerts" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="930" width="110" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="iam" value="IAM" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.identity_and_access_management;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="485" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="iam-desc" value="Per-user Deny Policy&lt;br&gt;(budget enforcement)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="496" width="140" height="28" as="geometry"/>
-                </mxCell>
-                <mxCell id="ddb-streams" value="DynamoDB&lt;br&gt;Streams" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="40" y="1023.5" width="50" height="50" as="geometry"/>
-                </mxCell>
-                <mxCell id="pipeline-zone" value="Usage Tracking Pipeline" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF9900;strokeWidth=1;fontFamily=Amazon Ember;fontSize=12;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#FF9900;container=1;collapsible=0;recursiveResize=0;" parent="aws-cloud" vertex="1">
-                    <mxGeometry x="30" y="960" width="1100" height="100" as="geometry"/>
-                </mxCell>
-                <mxCell id="cloudtrail" value="CloudTrail" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudtrail;fontFamily=Amazon Ember;" parent="pipeline-zone" vertex="1">
-                    <mxGeometry x="30" y="30" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="eventbridge" value="EventBridge" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;fontFamily=Amazon Ember;" parent="pipeline-zone" vertex="1">
-                    <mxGeometry x="204" y="30" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="lambda-usage" value="Lambda (usage-tracker)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Amazon Ember;" parent="pipeline-zone" vertex="1">
-                    <mxGeometry x="378" y="30" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="ddb-usage" value="DynamoDB (usage)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Amazon Ember;" parent="pipeline-zone" vertex="1">
-                    <mxGeometry x="552" y="30" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="lambda-budget" value="Lambda (budget-check)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Amazon Ember;" parent="pipeline-zone" vertex="1">
-                    <mxGeometry x="726" y="30" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="iam-deny-icon" value="IAM Deny + SNS" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.identity_and_access_management;fontFamily=Amazon Ember;" parent="pipeline-zone" vertex="1">
-                    <mxGeometry x="900" y="30" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-ct-eb" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#FF9900;" parent="pipeline-zone" source="cloudtrail" target="eventbridge" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-eb-lu" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#FF9900;" parent="pipeline-zone" source="eventbridge" target="lambda-usage" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-lu-ddb" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#FF9900;" parent="pipeline-zone" source="lambda-usage" target="ddb-usage" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-ddb-lb" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#FF9900;" parent="pipeline-zone" source="ddb-usage" target="lambda-budget" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-lb-iam" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#FF9900;" parent="pipeline-zone" source="lambda-budget" target="iam-deny-icon" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="pipeline-desc" value="CloudTrail events -&amp;gt; EventBridge -&amp;gt; Lambda (usage-tracker) -&amp;gt; DynamoDB -&amp;gt; Lambda (budget-check 5min) -&amp;gt; IAM Deny + SNS Alert" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=10;fontColor=#795548;" parent="pipeline-zone" vertex="1">
-                    <mxGeometry x="30" y="85" width="1000" height="15" as="geometry"/>
-                </mxCell>
-                <mxCell id="routing-zone" value="Nginx Routing Pipeline" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#248814;strokeWidth=1;fontFamily=Amazon Ember;fontSize=12;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#248814;container=1;collapsible=0;recursiveResize=0;" parent="aws-cloud" vertex="1">
-                    <mxGeometry x="30" y="1075" width="1100" height="100" as="geometry"/>
-                </mxCell>
-                <mxCell id="dash-route" value="Dashboard (register)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;fontFamily=Amazon Ember;" parent="routing-zone" vertex="1">
-                    <mxGeometry x="30" y="28" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="ddb-routing" value="DynamoDB (routing)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Amazon Ember;" parent="routing-zone" vertex="1">
-                    <mxGeometry x="220" y="28" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="lambda-nginx" value="Lambda (nginx-gen)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Amazon Ember;" parent="routing-zone" vertex="1">
-                    <mxGeometry x="430" y="28" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="s3-nginx" value="S3 (nginx.conf)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fontFamily=Amazon Ember;" parent="routing-zone" vertex="1">
-                    <mxGeometry x="640" y="28" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="nginx-poll" value="Nginx (polls)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;fontFamily=Amazon Ember;" parent="routing-zone" vertex="1">
-                    <mxGeometry x="860" y="28" width="40" height="40" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-dr-ddb" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#248814;" parent="routing-zone" source="dash-route" target="ddb-routing" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-ddb-ln" value="Streams" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#248814;fontSize=10;fontFamily=Amazon Ember;fontColor=#248814;" parent="routing-zone" source="ddb-routing" target="lambda-nginx" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-ln-s3" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#248814;" parent="routing-zone" source="lambda-nginx" target="s3-nginx" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e-s3-ng" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#248814;" parent="routing-zone" source="s3-nginx" target="nginx-poll" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="routing-desc" value="Dashboard registers route -&amp;gt; DynamoDB Streams -&amp;gt; Lambda (nginx-config-gen) -&amp;gt; S3 -&amp;gt; Nginx polls and reloads" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=10;fontColor=#2E7D32;" parent="routing-zone" vertex="1">
-                    <mxGeometry x="30" y="85" width="900" height="15" as="geometry"/>
-                </mxCell>
-                <mxCell id="flow-user-r53" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;" parent="1" source="user-admin" target="route53" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="555" y="185"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-user-dev-r53" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;" parent="1" source="user-dev" target="route53" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="555" y="185"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-r53-cf-dash" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="route53" target="cf-dashboard">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="555" y="440"/>
-                            <mxPoint x="465" y="440"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-r53-cf-dev" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#D05C17;edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="route53" target="cf-devenv">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="555" y="440"/>
-                            <mxPoint x="650" y="440"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-cf-nlb" value="DevEnv traffic" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#D05C17;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=10;fontFamily=Amazon Ember;fontColor=#D05C17;" parent="1" source="cf-devenv" target="nlb" edge="1">
-                    <mxGeometry x="-0.024" relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="770" y="604"/>
-                            <mxPoint x="770" y="340"/>
-                            <mxPoint x="1200" y="340"/>
-                            <mxPoint x="1200" y="265"/>
-                        </Array>
-                        <mxPoint x="990" y="270" as="targetPoint"/>
-                        <mxPoint as="offset"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-cf-alb" value="Dashboard traffic" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=10;fontFamily=Amazon Ember;fontColor=#5A30B5;startArrow=none;" parent="1" source="cf-dashboard" target="alb" edge="1">
-                    <mxGeometry x="0.8162" y="5" relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="463" y="690"/>
-                            <mxPoint x="740" y="690"/>
-                            <mxPoint x="740" y="265"/>
-                        </Array>
-                        <mxPoint as="offset"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-ec2-bedrock" value="Bedrock API (VPC Endpoint)" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#116D5B;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;fontFamily=Amazon Ember;fontColor=#116D5B;dashed=0;" parent="1" source="claude-code" target="bedrock" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="1020" y="870"/>
-                            <mxPoint x="1960" y="870"/>
-                            <mxPoint x="1960" y="225"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="flow-dash-ddb" value="" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=1;strokeColor=#3334B9;edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;" parent="1" source="dash-ecs-task" target="dynamodb" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="905" y="690"/>
-                            <mxPoint x="1950" y="690"/>
-                            <mxPoint x="1950" y="330"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="legend" value="Legend" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#5A6C86;strokeWidth=1;fontFamily=Amazon Ember;fontSize=12;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#5A6C86;container=1;collapsible=0;recursiveResize=0;" parent="1" vertex="1">
-                    <mxGeometry x="2320" y="100" width="290" height="700" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-compute" value="" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fontFamily=Amazon Ember;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="35" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-compute-txt" value="Compute" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="41" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-db" value="" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Amazon Ember;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="74" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-db-txt" value="Database" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="83" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-sec" value="" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.waf;fontFamily=Amazon Ember;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="116" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-sec-txt" value="Security" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="124" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-net" value="" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;fontFamily=Amazon Ember;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="158" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-net-txt" value="Networking" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="166" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-ai" value="" style="shape=image;aspect=fixed;imageAspect=0;image=https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/dark/bedrock-color.png;html=1;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="200" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-ai-txt" value="AI/ML" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="207" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-store" value="" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fontFamily=Amazon Ember;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="241" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-store-txt" value="Storage" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="249" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-mgmt" value="" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;fontFamily=Amazon Ember;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="283" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-mgmt-txt" value="Management" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="290" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-codeserver" value="" style="shape=image;aspect=fixed;imageAspect=0;image=https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQu8Dqyl7oWTmc-np8q_R7neO9HORid4bsN6w&amp;s;html=1;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="325" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-codeserver-txt" value="code-server" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="332" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-claude" value="" style="shape=image;aspect=fixed;imageAspect=0;image=https://upload.wikimedia.org/wikipedia/commons/b/b0/Claude_AI_symbol.svg;html=1;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="367" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-claude-txt" value="Claude Code" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="373" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-kiro" value="" style="shape=image;aspect=fixed;imageAspect=0;image=https://kiro.dev/icon.svg?fe599162bb293ea0;html=1;" parent="legend" vertex="1">
-                    <mxGeometry x="15" y="409" width="30" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-kiro-txt" value="Kiro" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="415" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-arrow" value="" style="endArrow=classic;html=1;rounded=0;strokeWidth=2;strokeColor=#545B64;" parent="legend" edge="1">
-                    <mxGeometry x="15" y="325" width="20" relative="1" as="geometry">
-                        <mxPoint x="15" y="491" as="sourcePoint"/>
-                        <mxPoint x="55" y="491" as="targetPoint"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="leg-arrow-txt" value="Data / Traffic Flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="478" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-vpce-arrow" value="" style="endArrow=classic;html=1;rounded=0;strokeWidth=2;strokeColor=#116D5B;" parent="legend" edge="1">
-                    <mxGeometry x="15" y="353" width="20" relative="1" as="geometry">
-                        <mxPoint x="15" y="533" as="sourcePoint"/>
-                        <mxPoint x="55" y="533" as="targetPoint"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="leg-vpce-txt" value="VPC Endpoint (Bedrock)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="519" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-auth-arrow" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;strokeWidth=1;strokeColor=#C7131F;dashed=1;" parent="legend" edge="1">
-                    <mxGeometry x="15" y="381" width="20" relative="1" as="geometry">
-                        <mxPoint x="15" y="571" as="sourcePoint"/>
-                        <mxPoint x="55" y="571" as="targetPoint"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="leg-auth-txt" value="Auth Flow (Cognito)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="559" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-pipeline-arrow" value="" style="endArrow=classic;html=1;rounded=0;strokeWidth=2;strokeColor=#FF9900;" parent="legend" edge="1">
-                    <mxGeometry x="15" y="409" width="20" relative="1" as="geometry">
-                        <mxPoint x="15" y="614" as="sourcePoint"/>
-                        <mxPoint x="55" y="614" as="targetPoint"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="leg-pipeline-txt" value="Pipeline Flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="600" width="115" height="24" as="geometry"/>
-                </mxCell>
-                <mxCell id="leg-routing-arrow" value="" style="endArrow=classic;html=1;rounded=0;strokeWidth=2;strokeColor=#248814;" parent="legend" edge="1">
-                    <mxGeometry x="15" y="437" width="20" relative="1" as="geometry">
-                        <mxPoint x="15" y="650" as="sourcePoint"/>
-                        <mxPoint x="55" y="650" as="targetPoint"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="leg-routing-txt" value="Routing Pipeline" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
-                    <mxGeometry x="80" y="640" width="115" height="24" as="geometry"/>
-                </mxCell>
-            </root>
-        </mxGraphModel>
-    </diagram>
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net">
+  <diagram id="cc-architecture" name="Deployment Profiles">
+    <mxGraphModel dx="1920" dy="1160" grid="1" gridSize="10" page="1" pageWidth="1920" pageHeight="1240">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="CC-on-Bedrock | Deployment Profiles" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=32;fontColor=#232F3E;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="40" width="1640" height="45" />
+        </mxCell>
+        <mxCell id="subtitle" value="Governance is the default. DevEnv adds private EC2 environments; both paths share usage, budgets and IAM controls." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=20;fontColor=#232F3E;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="90" width="1800" height="40" />
+        </mxCell>
+        <mxCell id="actors" value="Users" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#F7F8FA;strokeColor=#B0B7BF;dashed=0;verticalAlign=top;align=left;spacingLeft=15;spacingTop=12;fontFamily=Helvetica;fontSize=19;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="180" width="200" height="790" />
+        </mxCell>
+        <mxCell id="browser" value="Browser" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.users;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="actors">
+          <mxGeometry as="geometry" x="60" y="90" width="78" height="78" />
+        </mxCell>
+        <mxCell id="local" value="Local PC&lt;br&gt;claude / codex" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.user;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="actors">
+          <mxGeometry as="geometry" x="60" y="640" width="78" height="78" />
+        </mxCell>
+        <mxCell id="edge-title" value="Global edge" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=19;fontColor=#232F3E;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="280" y="190" width="160" height="30" />
+        </mxCell>
+        <mxCell id="cf-dashboard" value="CloudFront&lt;br&gt;Dashboard" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="310" y="270" width="78" height="78" />
+        </mxCell>
+        <mxCell id="cf-devenv" value="CloudFront&lt;br&gt;DevEnv + WAF / auth" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="310" y="530" width="78" height="78" />
+        </mxCell>
+        <mxCell id="region" value="AWS Region (deployment input)" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=19;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;grStroke=1;strokeColor=#00A4A6;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;fontFamily=Amazon Ember;dashed=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="460" y="160" width="1420" height="850" />
+        </mxCell>
+        <mxCell id="vpc" value="Existing VPC | Private workloads (AZ detail omitted)" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=19;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;grStroke=1;strokeColor=#879196;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;fontFamily=Amazon Ember;dashed=0;" vertex="1" parent="region">
+          <mxGeometry as="geometry" x="30" y="60" width="890" height="570" />
+        </mxCell>
+        <mxCell id="dash-lane" value="Dashboard | Both profiles" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#E6F6F7;strokeColor=#00A4A6;dashed=0;verticalAlign=top;align=left;spacingLeft=15;spacingTop=12;fontFamily=Helvetica;fontSize=19;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="vpc">
+          <mxGeometry as="geometry" x="30" y="60" width="830" height="210" />
+        </mxCell>
+        <mxCell id="alb" value="Internal ALB" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.application_load_balancer;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="dash-lane">
+          <mxGeometry as="geometry" x="50" y="50" width="78" height="78" />
+        </mxCell>
+        <mxCell id="dashboard" value="EC2 Auto Scaling&lt;br&gt;Next.js Docker" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="dash-lane">
+          <mxGeometry as="geometry" x="480" y="50" width="78" height="78" />
+        </mxCell>
+        <mxCell id="dev-lane" value="DevEnv | Optional profile only" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#E6F6F7;strokeColor=#00A4A6;dashed=1;verticalAlign=top;align=left;spacingLeft=15;spacingTop=12;fontFamily=Helvetica;fontSize=19;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="vpc">
+          <mxGeometry as="geometry" x="30" y="270" width="830" height="210" />
+        </mxCell>
+        <mxCell id="nlb" value="Internal NLB" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elastic_load_balancing;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="dev-lane">
+          <mxGeometry as="geometry" x="50" y="50" width="78" height="78" />
+        </mxCell>
+        <mxCell id="nginx" value="nginx router&lt;br&gt;ECS Fargate" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=image;imageAspect=1;aspect=fixed;image=data:image/svg+xml,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iNjRweCIgaGVpZ2h0PSI2NHB4IiB2aWV3Qm94PSIwIDAgNjQgNjQiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+SWNvbi1BcmNoaXRlY3R1cmUvNDgvQXJjaF9BbWF6b24tRWxhc3RpYy1Db250YWluZXItU2VydmljZV80ODwvdGl0bGU+CiAgICA8ZyBpZD0iSWNvbi1BcmNoaXRlY3R1cmUvNDgvQXJjaF9BbWF6b24tRWxhc3RpYy1Db250YWluZXItU2VydmljZV80OCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9Ikljb24tQXJjaGl0ZWN0dXJlLUJHLzQ4L0NvbXB1dGUiIGZpbGw9IiNFRDcxMDAiPgogICAgICAgICAgICA8cmVjdCBpZD0iUmVjdGFuZ2xlIiB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiPjwvcmVjdD4KICAgICAgICA8L2c+CiAgICAgICAgPHBhdGggZD0iTTUwLDM2LjM4MjI0NjYgTDQ0LDMzLjM4MjI4ODUgTDQ0LDI1LjAwMDQwNTggQzQ0LDI0LjYzNzQxMDkgNDMuODAzLDI0LjMwMjQxNTYgNDMuNDg1LDI0LjEyNjQxODEgTDM1LDE5LjQxMjQ4NCBMMzUsMTIuNzQ5NTc3MyBMNTAsMjEuNTcyNDUzOCBMNTAsMzYuMzgyMjQ2NiBaIE01MS41MDcsMjAuMTM4NDczOSBMMzQuNTA3LDEwLjEzODYxMzggQzM0LjE5OSw5Ljk1NzYxNjM3IDMzLjgxNSw5Ljk1NDYxNjQxIDMzLjUwNCwxMC4xMzI2MTM5IEMzMy4xOTIsMTAuMzEwNjExNCAzMywxMC42NDE2MDY4IDMzLDExLjAwMDYwMTggTDMzLDIwLjAwMDQ3NTggQzMzLDIwLjM2MzQ3MDcgMzMuMTk3LDIwLjY5ODQ2NjEgMzMuNTE1LDIwLjg3NDQ2MzYgTDQyLDI1LjU4ODM5NzYgTDQyLDM0LjAwMDI3OTkgQzQyLDM0LjM3OTI3NDYgNDIuMjE0LDM0LjcyNTI2OTcgNDIuNTUzLDM0Ljg5NTI2NzQgTDUwLjU1MywzOC44OTUyMTE0IEM1MC42OTQsMzguOTY1MjEwNCA1MC44NDcsMzkuMDAwMjA5OSA1MSwzOS4wMDAyMDk5IEM1MS4xODMsMzkuMDAwMjA5OSA1MS4zNjUsMzguOTUwMjEwNiA1MS41MjUsMzguODUxMjEyIEM1MS44MiwzOC42NjgyMTQ2IDUyLDM4LjM0NzIxOTEgNTIsMzguMDAwMjIzOSBMNTIsMjEuMDAwNDYxOCBDNTIsMjAuNjQ2NDY2OCA1MS44MTIsMjAuMzE4NDcxNCA1MS41MDcsMjAuMTM4NDczOSBMNTEuNTA3LDIwLjEzODQ3MzkgWiBNMzIsNTEuODI4MDMwNCBMMTUsNDEuNDM5MTc1OCBMMTUsMjEuNTU0NDU0MSBMMjksMTIuODA0NTc2NSBMMjksMTkuNDQ2NDgzNiBMMjEuNDcsMjQuMTUyNDE3NyBDMjEuMTc4LDI0LjMzNTQxNTIgMjEsMjQuNjU1NDEwNyAyMSwyNS4wMDA0MDU4IEwyMSwzOC4wMDAyMjM5IEMyMSwzOC4zNTEyMTkgMjEuMTg1LDM4LjY3NzIxNDQgMjEuNDg1LDM4Ljg1NzIxMTkgTDMxLjQ4NSw0NC44NTcxMjggQzMxLjc4OSw0NS4wNDAxMjU0IDMyLjE2Nyw0NS4wNDgxMjUzIDMyLjQ3OSw0NC44NzgxMjc3IEw0Mi45ODgsMzkuMTQ2MjA3OSBMNDguMDM1LDQyLjAyOTE2NzUgTDMyLDUxLjgyODAzMDQgWiBNNTAuNDk2LDQxLjEzMjE4MDEgTDQzLjQ5NiwzNy4xMzIyMzYxIEM0My4xOTQsMzYuOTU5MjM4NSA0Mi44MjUsMzYuOTU2MjM4NSA0Mi41MjEsMzcuMTIyMjM2MiBMMzIuMDIzLDQyLjg0ODE1NjEgTDIzLDM3LjQzNDIzMTggTDIzLDI1LjU1NDM5ODEgTDMwLjUzLDIwLjg0ODQ2NCBDMzAuODIyLDIwLjY2NTQ2NjUgMzEsMjAuMzQ1NDcxIDMxLDIwLjAwMDQ3NTggTDMxLDExLjAwMDYwMTggQzMxLDEwLjYzNjYwNjkgMzAuODAzLDEwLjMwMjYxMTUgMzAuNDg0LDEwLjEyNTYxNCBDMzAuMTY4LDkuOTQ4NjE2NSAyOS43NzgsOS45NTk2MTYzNCAyOS40NywxMC4xNTI2MTM2IEwxMy40NywyMC4xNTI0NzM3IEMxMy4xNzgsMjAuMzM1NDcxMSAxMywyMC42NTU0NjY3IDEzLDIxLjAwMDQ2MTggTDEzLDQyLjAwMDE2NzkgQzEzLDQyLjM0ODE2MzEgMTMuMTgyLDQyLjY3MTE1ODUgMTMuNDc5LDQyLjg1NDE1NiBMMzEuNDc5LDUzLjg1NDAwMiBDMzEuNjM5LDUzLjk1MTAwMDcgMzEuODE5LDU0IDMyLDU0IEMzMi4xODEsNTQgMzIuMzYxLDUzLjk1MTAwMDcgMzIuNTIxLDUzLjg1NDAwMiBMNTAuNTIxLDQyLjg1NDE1NiBDNTAuODIzLDQyLjY2OTE1ODYgNTEuMDA1LDQyLjMzOTE2MzIgNTEuMDAwMTAwNCw0MS45ODUxNjgxIEM1MC45OTUsNDEuNjMyMTczMSA1MC44MDMsNDEuMzA3MTc3NiA1MC40OTYsNDEuMTMyMTgwMSBMNTAuNDk2LDQxLjEzMjE4MDEgWiIgaWQ9IkFtYXpvbi1FbGFzdGljLUNvbnRhaW5lci1TZXJ2aWNlX0ljb25fNDhfU3F1aWQiIGZpbGw9IiNGRkZGRkYiPjwvcGF0aD4KICAgIDwvZz4KPC9zdmc+;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="dev-lane">
+          <mxGeometry as="geometry" x="250" y="50" width="78" height="78" />
+        </mxCell>
+        <mxCell id="devenv" value="Per-user ARM64 EC2&lt;br&gt;Claude Code + Codex" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="dev-lane">
+          <mxGeometry as="geometry" x="450" y="50" width="78" height="78" />
+        </mxCell>
+        <mxCell id="data" value="Persistent EBS&lt;br&gt;/home/coder" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=image;imageAspect=1;aspect=fixed;image=data:image/svg+xml,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iNjRweCIgaGVpZ2h0PSI2NHB4IiB2aWV3Qm94PSIwIDAgNjQgNjQiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+SWNvbi1BcmNoaXRlY3R1cmUvNDgvQXJjaF9BbWF6b24tRWxhc3RpYy1CbG9jay1TdG9yZV80ODwvdGl0bGU+CiAgICA8ZyBpZD0iSWNvbi1BcmNoaXRlY3R1cmUvNDgvQXJjaF9BbWF6b24tRWxhc3RpYy1CbG9jay1TdG9yZV80OCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9Ikljb24tQXJjaGl0ZWN0dXJlLUJHLzQ4L1N0b3JhZ2UiIGZpbGw9IiM3QUExMTYiPgogICAgICAgICAgICA8cmVjdCBpZD0iUmVjdGFuZ2xlIiB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiPjwvcmVjdD4KICAgICAgICA8L2c+CiAgICAgICAgPHBhdGggZD0iTTUyLDQ2IEw1NCw0NiBMNTQsNTQgTDQ2LDU0IEw0Niw1MiBMNTAuNzk2LDUyIEw0NS4yNDcsNDUuNjU5IEw0Ni43NTMsNDQuMzQxIEw1Miw1MC4zMzggTDUyLDQ2IFogTTE5Ljc1Myw0NS42NTkgTDE0LjIwNCw1MiBMMTksNTIgTDE5LDU0IEwxMSw1NCBMMTEsNDYgTDEzLDQ2IEwxMyw1MC4zMzggTDE4LjI0Nyw0NC4zNDEgTDE5Ljc1Myw0NS42NTkgWiBNNTQsMTAgTDU0LDE4IEw1MiwxOCBMNTIsMTMuNjYyIEw0Ni43NTMsMTkuNjU5IEw0NS4yNDcsMTguMzQxIEw1MC43OTYsMTIgTDQ2LDEyIEw0NiwxMCBMNTQsMTAgWiBNMTQuMjA0LDEyIEwxOS43NTMsMTguMzQxIEwxOC4yNDcsMTkuNjU5IEwxMywxMy42NjIgTDEzLDE4IEwxMSwxOCBMMTEsMTAgTDE5LDEwIEwxOSwxMiBMMTQuMjA0LDEyIFogTTMyLjUsMjQgQzI2LjQ5MywyNCAyNCwyMi42OTcgMjQsMjIgQzI0LDIxLjIyNyAyNi4zMDgsMjAgMzIuNSwyMCBDMzguMzYzLDIwIDQxLDIxLjE2OSA0MSwyMiBDNDEsMjIuNjk3IDM4LjUwNywyNCAzMi41LDI0IEwzMi41LDI0IFogTTMyLjU4Niw0MyBDMjYuNjY0LDQzIDI0LDQxLjgzMSAyNCw0MSBMMjQsMjQuNjIyIEMyNi40MDYsMjUuODIgMzAuMzg3LDI2IDMyLjUsMjYgQzM0LjYxMywyNiAzOC41OTQsMjUuODIgNDEsMjQuNjIyIEw0MSw0MSBDNDEsNDEuODMxIDM4LjM5LDQzIDMyLjU4Niw0MyBMMzIuNTg2LDQzIFogTTMyLjUsMTggQzI3LjcxLDE4IDIyLDE4LjY5NCAyMiwyMiBMMjIsNDEgQzIyLDQ0LjMwNiAyNy43NTcsNDUgMzIuNTg2LDQ1IEMzNi40NzYsNDUgNDMsNDQuNDggNDMsNDEgTDQzLDIyIEM0MywxOC41MiAzNi40MjIsMTggMzIuNSwxOCBMMzIuNSwxOCBaIiBpZD0iQW1hem9uLUVsYXN0aWMtQmxvY2stU3RvcmVfSWNvbl80OF9TcXVpZCIgZmlsbD0iI0ZGRkZGRiI+PC9wYXRoPgogICAgPC9nPgo8L3N2Zz4=;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="dev-lane">
+          <mxGeometry as="geometry" x="650" y="50" width="78" height="78" />
+        </mxCell>
+        <mxCell id="dev-note" value="Native Claude Code OTEL → private collector → scrubbed S3 signals → Lambda rollup → DynamoDB (DevEnv only)." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=19;fontColor=#232F3E;fontStyle=0;" vertex="1" parent="vpc">
+          <mxGeometry as="geometry" x="40" y="500" width="800" height="45" />
+        </mxCell>
+        <mxCell id="managed" value="Managed governance services" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#F7F8FA;strokeColor=#B0B7BF;dashed=0;verticalAlign=top;align=left;spacingLeft=15;spacingTop=12;fontFamily=Helvetica;fontSize=19;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="region">
+          <mxGeometry as="geometry" x="960" y="60" width="400" height="650" />
+        </mxCell>
+        <mxCell id="bedrock" value="Amazon Bedrock&lt;br&gt;Claude + Codex" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#6CAE3E;gradientDirection=north;fillColor=#1B660F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="managed">
+          <mxGeometry as="geometry" x="60" y="70" width="78" height="78" />
+        </mxCell>
+        <mxCell id="logs" value="Invocation logs&lt;br&gt;S3 / CloudWatch" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#6CAE3E;gradientDirection=north;fillColor=#1B660F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="managed">
+          <mxGeometry as="geometry" x="60" y="260" width="78" height="78" />
+        </mxCell>
+        <mxCell id="usage" value="Usage tracker&lt;br&gt;Lambda" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="managed">
+          <mxGeometry as="geometry" x="240" y="260" width="78" height="78" />
+        </mxCell>
+        <mxCell id="ddb" value="DynamoDB&lt;br&gt;Usage / limits / audit" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="managed">
+          <mxGeometry as="geometry" x="60" y="460" width="78" height="78" />
+        </mxCell>
+        <mxCell id="iam" value="IAM boundary / denies&lt;br&gt;Budget + token limits" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=image;imageAspect=1;aspect=fixed;image=data:image/svg+xml,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iNjRweCIgaGVpZ2h0PSI2NHB4IiB2aWV3Qm94PSIwIDAgNjQgNjQiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+SWNvbi1BcmNoaXRlY3R1cmUvNDgvQXJjaF9BV1MtSWRlbnRpdHktYW5kLUFjY2Vzcy1NYW5hZ2VtZW50XzQ4PC90aXRsZT4KICAgIDxnIGlkPSJJY29uLUFyY2hpdGVjdHVyZS80OC9BcmNoX0FXUy1JZGVudGl0eS1hbmQtQWNjZXNzLU1hbmFnZW1lbnRfNDgiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxIiBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPgogICAgICAgIDxnIGlkPSJJY29uLUFyY2hpdGVjdHVyZS1CRy80OC9TZWN1cml0eS1JZGVudGl0eS1Db21wbGlhbmNlIiBmaWxsPSIjREQzNDRDIj4KICAgICAgICAgICAgPHJlY3QgaWQ9IlJlY3RhbmdsZSIgeD0iMCIgeT0iMCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij48L3JlY3Q+CiAgICAgICAgPC9nPgogICAgICAgIDxwYXRoIGQ9Ik0xMiw0NyBMNTIsNDcgTDUyLDE4IEwxMiwxOCBMMTIsNDcgWiBNNTQsMTcgTDU0LDQ4IEM1NCw0OC41NTIgNTMuNTUzLDQ5IDUzLDQ5IEwxMSw0OSBDMTAuNDQ3LDQ5IDEwLDQ4LjU1MiAxMCw0OCBMMTAsMTcgQzEwLDE2LjQ0OCAxMC40NDcsMTYgMTEsMTYgTDUzLDE2IEM1My41NTMsMTYgNTQsMTYuNDQ4IDU0LDE3IEw1NCwxNyBaIE0zNSwzOSBMNDcsMzkgTDQ3LDM3IEwzNSwzNyBMMzUsMzkgWiBNNDUsMzUgTDQ5LDM1IEw0OSwzMyBMNDUsMzMgTDQ1LDM1IFogTTM1LDM1IEw0MSwzNSBMNDEsMzMgTDM1LDMzIEwzNSwzNSBaIE0yMi41LDM3LjUgQzIyLjUsMzcuNzc2IDIyLjcyNSwzOCAyMywzOCBDMjMuMjc1LDM4IDIzLjUsMzcuNzc2IDIzLjUsMzcuNSBDMjMuNSwzNy4yMjQgMjMuMjc1LDM3IDIzLDM3IEMyMi43MjUsMzcgMjIuNSwzNy4yMjQgMjIuNSwzNy41IEwyMi41LDM3LjUgWiBNMjUuNSwzNy41IEMyNS41LDM4LjUyMiAyNC44ODIsMzkuNDAxIDI0LDM5Ljc4OCBMMjQsNDIgTDIyLDQyIEwyMiwzOS43ODggQzIxLjExOCwzOS40MDEgMjAuNSwzOC41MjIgMjAuNSwzNy41IEMyMC41LDM2LjEyMiAyMS42MjEsMzUgMjMsMzUgQzI0LjM3OSwzNSAyNS41LDM2LjEyMiAyNS41LDM3LjUgTDI1LjUsMzcuNSBaIE0xNiw0Mi45OTUgTDI5Ljk5NSw0MyBMMjkuOTk2LDQxIEwyNyw0MSBMMjcsMzkgTDI5Ljk5NywzOSBMMjkuOTk4LDM3IEwyNywzNyBMMjcsMzUgTDI5Ljk5OSwzNSBMMzAsMzMuMDA1IEwxNi4wMDUsMzMgTDE2LDQyLjk5NSBaIE0xOCwzMS4wMDEgTDI4LjAwMSwzMS4wMDQgTDI4LjAwMiwyNiBDMjguMDAyLDI0Ljk3NiAyNy4yLDI0LjI3MyAyNi43MjIsMjMuOTQ1IEMyNS44NDcsMjMuMzQ1IDI0LjE3NCwyMyAyMy4wMDIsMjMgTDIzLDIzIEMyMC44NzMsMjMgMTguMDAzLDI0LjIzMiAxOC4wMDIsMjYgTDE4LDMxLjAwMSBaIE0xNC4yOTMsNDQuNzAxIEMxNC4xMDUsNDQuNTEzIDE0LDQ0LjI1OSAxNCw0My45OTQgTDE0LjAwNSwzMiBDMTQuMDA1LDMxLjQ0NyAxNC40NTMsMzEgMTUuMDA1LDMxIEwxNiwzMSBMMTYuMDAyLDI2IEMxNi4wMDMsMjIuOTExIDE5Ljg3NiwyMSAyMywyMSBMMjMuMDAyLDIxIEMyNC41NjcsMjEgMjYuNjUzLDIxLjQ3MyAyNy44NTQsMjIuMjk1IEMyOS4yMzksMjMuMjQ2IDMwLjAwMywyNC41NjIgMzAuMDAyLDI2IEwzMC4wMDEsMzEuMDA1IEwzMSwzMS4wMDYgQzMxLjI2NiwzMS4wMDYgMzEuNTIsMzEuMTExIDMxLjcwNywzMS4yOTkgQzMxLjg5NSwzMS40ODcgMzIsMzEuNzQxIDMyLDMyLjAwNiBMMzEuOTk1LDQ0IEMzMS45OTUsNDQuNTUzIDMxLjU0Nyw0NSAzMC45OTUsNDUgTDE1LDQ0Ljk5NCBDMTQuNzM0LDQ0Ljk5NCAxNC40OCw0NC44ODkgMTQuMjkzLDQ0LjcwMSBMMTQuMjkzLDQ0LjcwMSBaIE00NywzMCBMNDksMzAgTDQ5LDI4IEw0NywyOCBMNDcsMzAgWiBNMzUsMzAgTDQ0LDMwIEw0NCwyOCBMMzUsMjggTDM1LDMwIFoiIGlkPSJBV1MtSWRlbnRpdHktYW5kLUFjY2Vzcy1NYW5hZ2VtZW50X0ljb25fNDhfU3F1aWQiIGZpbGw9IiNGRkZGRkYiPjwvcGF0aD4KICAgIDwvZz4KPC9zdmc+;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="managed">
+          <mxGeometry as="geometry" x="240" y="460" width="78" height="78" />
+        </mxCell>
+        <mxCell id="cognito" value="Cognito&lt;br&gt;Password auth" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=image;imageAspect=1;aspect=fixed;image=data:image/svg+xml,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iNjRweCIgaGVpZ2h0PSI2NHB4IiB2aWV3Qm94PSIwIDAgNjQgNjQiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+SWNvbi1BcmNoaXRlY3R1cmUvNDgvQXJjaF9BbWF6b24tQ29nbml0b180ODwvdGl0bGU+CiAgICA8ZyBpZD0iSWNvbi1BcmNoaXRlY3R1cmUvNDgvQXJjaF9BbWF6b24tQ29nbml0b180OCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9Ikljb24tQXJjaGl0ZWN0dXJlLUJHLzQ4L1NlY3VyaXR5LUlkZW50aXR5LUNvbXBsaWFuY2UiIGZpbGw9IiNERDM0NEMiPgogICAgICAgICAgICA8cmVjdCBpZD0iUmVjdGFuZ2xlIiB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiPjwvcmVjdD4KICAgICAgICA8L2c+CiAgICAgICAgPHBhdGggZD0iTTQ4LjM4NTEzNTcsMjEuMDA2MzcwNCBMNDguMzg1MTM1NywxNS43MDI2MTg5IEM0OC4zODUxMzU3LDE0Ljc4MDk2NyA0Ny43NjY5MzMsMTQuMDAxNDE1NiA0Ny4wMzQ1ODUsMTQuMDAxNDE1NiBMMTMuMzcwODIxLDE0LjAwMTQxNTYgQzEyLjYzODQ3MywxNC4wMDE0MTU2IDEyLjAyMDI3MDMsMTQuNzgwOTY3IDEyLjAyMDI3MDMsMTUuNzAyNjE4OSBMMTIuMDIwMjcwMywyMS4wMDYzNzA0IEwyNy4xNzIyOTc1LDIxLjAwNjM3MDQgTDI3LjE3MjI5NzUsMTcuMDAzNTM5MSBDMjcuMTcyMjk3NSwxNi40NTExNDg0IDI3LjYyMzgyOCwxNi4wMDI4MzEzIDI4LjE4MjQzMjcsMTYuMDAyODMxMyBMNDUuMzU0NzMwMiwxNi4wMDI4MzEzIEM0NS45MTMzMzUsMTYuMDAyODMxMyA0Ni4zNjQ4NjU0LDE2LjQ1MTE0ODQgNDYuMzY0ODY1NCwxNy4wMDM1MzkxIEw0Ni4zNjQ4NjU0LDIxLjAwNjM3MDQgTDQ4LjM4NTEzNTcsMjEuMDA2MzcwNCBaIE00NC4zNDQ1OTUxLDE4LjAwNDI0NjkgTDI5LjE5MjU2NzgsMTguMDA0MjQ2OSBMMjkuMTkyNTY3OCwzMC4zODgwMDYyIEMzMC4xNTMyMDY0LDI4LjU4NzczMjggMzEuNzQ3MTk5NiwyNy4xNTg3MjIgMzMuNzI2MDU0NCwyNi40MDMxODc2IEMzMy4xMTg5NjMyLDI1LjYzMTY0MTkgMzIuNzcyNDg2OCwyNC42NzM5NjQ1IDMyLjc3MjQ4NjgsMjMuNjY2MjUxNyBDMzIuNzcyNDg2OCwyMS4xOTg1MDYzIDM0LjgxMDkzOTUsMTkuMTkyMDg3MSAzNy4zMTgwOTUsMTkuMTkyMDg3MSBDMzkuODI0MjQwMywxOS4xOTIwODcxIDQxLjg2MzcwMzIsMjEuMTk4NTA2MyA0MS44NjM3MDMyLDIzLjY2NjI1MTcgQzQxLjg2MzcwMzIsMjQuNzQwMDExMiA0MS40NjU3MDk5LDI1Ljc1MTcyNjggNDAuNzgzODY4NywyNi41NDUyODgxIEM0Mi4xOTcwNDc4LDI3LjE2MDcyMzQgNDMuNDM2NDgzNiwyOC4xNDU0MTk5IDQ0LjM0NDU5NTEsMjkuMzkxMzAxMiBMNDQuMzQ0NTk1MSwxOC4wMDQyNDY5IFogTTM5Ljg0MzQzMjksMjMuNjY2MjUxNyBDMzkuODQzNDMyOSwyMi4zMDIyODcgMzguNzExMDcxNCwyMS4xOTM1MDI3IDM3LjMxODA5NSwyMS4xOTM1MDI3IEMzNS45MjUxMTg2LDIxLjE5MzUwMjcgMzQuNzkyNzU3MSwyMi4zMDIyODcgMzQuNzkyNzU3MSwyMy42NjYyNTE3IEMzNC43OTI3NTcxLDI0LjU2Mjg4NTkgMzUuMjkwNzUzNywyNS4zODk0NzA2IDM2LjA5MzgxMTIsMjUuODIzNzc3OCBDMzYuODQ1MzUxNywyNi4yMjkwNjQ1IDM3Ljc3MjY1NTgsMjYuMjM2MDY5NCAzOC41MzgzMzgzLDI1LjgyMjc3NzEgQzM5LjM0MzQxNiwyNS4zODk0NzA2IDM5Ljg0MzQzMjksMjQuNTYyODg1OSAzOS44NDM0MzI5LDIzLjY2NjI1MTcgTDM5Ljg0MzQzMjksMjMuNjY2MjUxNyBaIE00OC4zODYxNDU4LDMzLjAxNDg2NDIgTDQ4LjM4NTEzNTcsMjMuMDA3Nzg2IEw0Ni4zNjQ4NjU0LDIzLjAwNzc4NiBMNDYuMzY0ODY1NCwzMC4wMTI3NDA3IEw0NC42NTE2NzYyLDMwLjAxMjc0MDcgTDQzLjAwNjE2NiwzMC45OTg0Mzc5IEM0Mi4xNTk2NzI4LDI5LjYxMzQ1ODMgNDAuODA1MDgxNSwyOC41NzM3MjI5IDM5LjI1MTQ5MzcsMjguMTA0MzkwOSBDMzcuODc2Njk5NywyOC43MTA4MTk4IDM2LjI3MTU5NSwyOC43MDQ4MTU2IDM0LjkxNDk4MzUsMjguMTA0MzkwOSBDMzIuMjUzMjc3NCwyOC45MDU5NTc5IDMwLjQwNDczLDMxLjI2MzYyNTUgMzAuMjM1MDI3MywzNC4wMTU1NzIgTDM2LjI2MzUxMzksMzQuMDE1NTcyIEwzNi4yNjM1MTM5LDM2LjAxNjk4NzYgTDI4LjE4MjQzMjcsMzYuMDE2OTg3NiBDMjcuNjIzODI4LDM2LjAxNjk4NzYgMjcuMTcyMjk3NSwzNS41Njg2NzA1IDI3LjE3MjI5NzUsMzUuMDE2Mjc5OCBMMjcuMTcyMjk3NSwyMy4wMDc3ODYgTDEyLjAyMDI3MDMsMjMuMDA3Nzg2IEwxMi4wMjAyNzAzLDM3LjMxNzkwNzggQzEyLjAyMDI3MDMsMzguMjM5NTU5NyAxMi42Mzg0NzMsMzkuMDE5MTExMSAxMy4zNzA4MjEsMzkuMDE5MTExMSBMMzMuMjMzMTA4NCwzOS4wMTkxMTExIEwzMy4yMzMxMDg0LDQxLjAyMDUyNjcgTDEzLjM3MDgyMSw0MS4wMjA1MjY3IEMxMS41MTIxNzIzLDQxLjAyMDUyNjcgMTAsMzkuMzU5MzUxNyAxMCwzNy4zMTc5MDc4IEwxMCwxNS43MDI2MTg5IEMxMCwxMy42NjExNzUgMTEuNTEyMTcyMywxMiAxMy4zNzA4MjEsMTIgTDQ3LjAzNDU4NSwxMiBDNDguODkzMjMzNywxMiA1MC40MDU0MDYsMTMuNjYxMTc1IDUwLjQwNTQwNiwxNS43MDI2MTg5IEw1MC40MDU0MDYsMzMuMDE0ODY0MiBMNDguMzg2MTQ1OCwzMy4wMTQ4NjQyIFogTTQzLjMwNTE2Niw0Ni45OTM3NTE3IEw0OC45MzE2MTg4LDQxLjQxOTgwOTEgTDQ3LjUwMzI4NzcsNDAuMDA0ODA4MyBMNDIuNTkxMDAwNSw0NC44NzEyNTA0IEw0MC40NzU3Nzc1LDQyLjc3NTc2ODIgTDM5LjA0NzQ0NjQsNDQuMTkwNzY5MSBMNDEuODc2ODM0OSw0Ni45OTM3NTE3IEM0Mi4wNjU3MzAyLDQ3LjE4MTg4NDcgNDIuMzIyMzA0NSw0Ny4yODY5NTkxIDQyLjU5MTAwMDUsNDcuMjg2OTU5MSBDNDIuODU4Njg2Myw0Ny4yODY5NTkxIDQzLjExNTI2MDYsNDcuMTgxODg0NyA0My4zMDUxNjYsNDYuOTkzNzUxNyBMNDMuMzA1MTY2LDQ2Ljk5Mzc1MTcgWiBNNDUuMzE3MzU1MiwzNS45NjI5NDk0IEw0NS4zMTczNTUyLDM1Ljk2Mjk0OTQgQzQ3LjgxNzQzOTcsMzYuMjY2MTYzOSA0OS45OTgzMjE1LDM3Ljc4MjIzNjIgNTEuMTQ5ODc1Niw0MC4wMTk4MTg5IEM1MS44Mzk3OTc5LDQxLjM1OTc2NjcgNTIuMTA3NDgzNyw0Mi44NjI4Mjk4IDUxLjkyMjYyOSw0NC4zNjM4OTE1IEM1MS43NDE4MTQ4LDQ1Ljg0ODk0MTkgNTEuMTMxNjkzMiw0Ny4yMzE5MjAxIDUwLjE1NzkyMjksNDguMzYwNzE4NiBDNDkuNDY1OTgwMyw0OS4xNjQyODY5IDQ4LjU5MjIxMzQsNDkuODI3NzU2MiA0Ny42MzE1NzQ5LDUwLjI3OTA3NTQgQzQ2LjM0NTY3MjgsNTAuODg1NTA0NCA0NC45MTQzMTEzLDUxLjExNjY2NzkgNDMuNDg5MDEwNiw1MC45NDM1NDU0IEM0Mi4xMDUxMjU1LDUwLjc3NjQyNzIgNDAuNzk4MDEwNiw1MC4yMzQwNDM2IDM5LjcwOTA4NDksNDkuMzc3NDM3NyBDMzcuNjE4MTA1MSw0Ny43MzAyNzI2IDM2LjU2MTUwMzgsNDUuMTc0NDY0OSAzNi44ODM3MzY5LDQyLjU0MjYwMzMgQzM3LjE4Nzc4NzYsNDAuMDU0ODQzNyAzOC43MDcwMzA4LDM3Ljg4NTMwOTEgNDAuOTQ3NTEwNiwzNi43Mzc0OTczIEM0Mi4wMTkyNjQsMzYuMTg5MTA5NCA0My4xOTUwNjEzLDM1LjkwNzkxMDUgNDQuMzkzMDgxNiwzNS45MDc5MTA1IEM0NC43MDAxNjI3LDM1LjkwNzkxMDUgNDUuMDA4MjUzOSwzNS45MjU5MjMyIDQ1LjMxNzM1NTIsMzUuOTYyOTQ5NCBMNDUuMzE3MzU1MiwzNS45NjI5NDk0IFogTTQ4LjQ5ODI3MDgsNTIuMDg3MzU0NSBDNDkuNzEzNDYzNCw1MS41MTU5NTAzIDUwLjgxOTU2MTQsNTAuNjc2MzU2NCA1MS42OTQzMzg0LDQ5LjY2MDYzOCBDNTIuOTI2NzAzMyw0OC4yMzA2MjY1IDUzLjY5OTQ1NjcsNDYuNDgyMzkgNTMuOTI4NzU3NCw0NC42MDUwNjIxIEM1NC4xNjEwODg1LDQyLjcwNzcyMDEgNTMuODIyNjkzMiw0MC44MDczNzU5IDUyLjk0OTkzNjQsMzkuMTEwMTc1NSBDNTEuNDkyMzExNCwzNi4yNzkxNzMxIDQ4LjczMDYwMTksMzQuMzU5ODE1NSA0NS41NjE4MDc5LDMzLjk3NjU0NDQgQzQzLjY0OTYyMjEsMzMuNzQyMzc4OCA0MS43MjkzNTUyLDM0LjA4NDYyMDggNDAuMDIwMjA2NSwzNC45NjAyNDAyIEMzNy4xODQ3NTcyLDM2LjQxMTI2NjUgMzUuMjYyNDcsMzkuMTU2MjA4IDM0Ljg3NzYwODUsNDIuMzAxNDMyNyBDMzQuNDcxNTM0MSw0NS42Mjk3ODY5IDM1LjgwNzk0MjksNDguODYwMDcxOCAzOC40NTI0NzY4LDUwLjk0MzU0NTQgQzM5LjgzMjMyMTQsNTIuMDMwMzE0MSA0MS40ODk5NTMyLDUyLjcxNzgwMDQgNDMuMjQ0NTU3OSw1Mi45Mjk5NTA1IEM0My42MzM0NTk5LDUyLjk3Njk4MzcgNDQuMDIzMzcyMSw1MyA0NC40MTAyNTM5LDUzIEM0NS44MjM0MzMsNTMgNDcuMjE3NDE5NSw1Mi42OTA3ODEzIDQ4LjQ5ODI3MDgsNTIuMDg3MzU0NSBMNDguNDk4MjcwOCw1Mi4wODczNTQ1IFogTTIxLjExMTQ4NjYsMzMuMDE0ODY0MiBMMjQuMTQxODkyMSwzMy4wMTQ4NjQyIEwyNC4xNDE4OTIxLDMxLjAxMzQ0ODUgTDIxLjExMTQ4NjYsMzEuMDEzNDQ4NSBMMjEuMTExNDg2NiwzMy4wMTQ4NjQyIFogTTE0LjA0MDU0MDYsMzMuMDE0ODY0MiBMMjAuMTAxMzUxNSwzMy4wMTQ4NjQyIEwyMC4xMDEzNTE1LDMxLjAxMzQ0ODUgTDE0LjA0MDU0MDYsMzEuMDEzNDQ4NSBMMTQuMDQwNTQwNiwzMy4wMTQ4NjQyIFogTTE0LjA0MDU0MDYsMjguMDExMzI1MSBMMjMuMTMxNzU2OSwyOC4wMTEzMjUxIEwyMy4xMzE3NTY5LDI2LjAwOTkwOTQgTDE0LjA0MDU0MDYsMjYuMDA5OTA5NCBMMTQuMDQwNTQwNiwyOC4wMTEzMjUxIFoiIGlkPSJBbWF6b24tQ29nbml0b19JY29uXzQ4X1NxdWlkIiBmaWxsPSIjRkZGRkZGIj48L3BhdGg+CiAgICA8L2c+Cjwvc3ZnPg==;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="region">
+          <mxGeometry as="geometry" x="130" y="660" width="78" height="78" />
+        </mxCell>
+        <mxCell id="issuer" value="STS issuer Lambda&lt;br&gt;Dashboard API" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=19;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;whiteSpace=wrap;labelWidth=180;" vertex="1" parent="region">
+          <mxGeometry as="geometry" x="540" y="660" width="78" height="78" />
+        </mxCell>
+        <mxCell id="renewal" value="1h STS; renewable via SDK credential_process" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=19;fontColor=#232F3E;fontStyle=0;" vertex="1" parent="region">
+          <mxGeometry as="geometry" x="120" y="810" width="710" height="25" />
+        </mxCell>
+        <mxCell id="dashboard-viewer" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="browser" target="cf-dashboard">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="dashboard-origin" value="VPC origin" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="cf-dashboard" target="alb">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="dashboard-container" value="HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="alb" target="dashboard">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="devenv-origin" value="VPC origin" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="cf-devenv" target="nlb">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="devenv-router" value="HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="nlb" target="nginx">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="devenv-user" value="User route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="nginx" target="devenv">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="persistent-data" value="Mount" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="devenv" target="data">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="cli-auth" value="Sign in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="local" target="cognito">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="cli-issue" value="Via /api/local/credentials" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="cognito" target="issuer">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="usage-trigger" value="Records" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;dashPattern=8 8;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=19;fontFamily=Amazon Ember;fontFamily=Helvetica;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="logs" target="usage">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="legend-head" value="Secondary flows and boundaries" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=20;fontColor=#232F3E;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1040" width="1800" height="30" />
+        </mxCell>
+        <mxCell id="legend-a" value="① Browser DevEnv access uses its own CloudFront distribution. Origin SGs restrict internal load-balancer access; DevEnv also checks the origin header." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=19;fontColor=#232F3E;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1080" width="580" height="110" />
+        </mxCell>
+        <mxCell id="legend-b" value="② Local CLI and EC2 invoke Bedrock directly. Claude uses application inference profiles; Codex Responses is attributed by user role." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=19;fontColor=#232F3E;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="670" y="1080" width="580" height="110" />
+        </mxCell>
+        <mxCell id="legend-c" value="③ Usage tracker writes DynamoDB; token streams and scheduled budget checks attach IAM denies. Kiro licensing is outside token governance." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=19;fontColor=#232F3E;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1300" y="1080" width="570" height="110" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

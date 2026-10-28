@@ -36,6 +36,10 @@
 - **자격증명 분리** — EC2와 Local에 동일한 단일 IAM role 금지. 정책 shape·permission boundary·태그·inference-profile 귀속만 공유.
 - **STS 1h 한도** — 체이닝 자격증명을 1시간 너머 연장 금지. `credential_process` 갱신 사용.
 - **EBS 영속성 (2-볼륨)** — DevEnv는 ephemeral OS root(`DeleteOnTermination=true`) + persistent 데이터 EBS(`/home/coder`, `DeleteOnTermination=false`, subdomain 태그로 재연결). Terminate가 사용자 데이터를 파괴하면 안 됨 (ADR-032).
+  **Implementation discrepancy (2026-10-26):** runtime provisioning and the Terraform
+  launch template currently set root `DeleteOnTermination=false` as well. The invariant
+  above remains the intended design; recovery must inventory retained roots. This
+  documentation sync changes neither deletion behavior nor the persistent-data guarantee.
 - **code-server 포트 8080 예약** — custom route 포트는 8080(및 well-known) 사용 금지.
 - **Kiro 거버넌스 제외** — Kiro는 IAM Identity Center 구독 라이선스; Cognito/Bedrock 토큰 한도 집행 대상 아님.
 - **Codex = bedrock-runtime by default; mantle only when unmetered is accepted** — Codex CLI calls Bedrock via the `amazon-bedrock-runtime` provider (Responses API). `bedrock-mantle:*` escapes invocation-log metering, so it is never in a standing allow-list: only `budget-check` grants it (`cc-bedrock-mantle-unmetered`, own us-east-1 project + web search) to users with no cost cap of any kind, removes it within 5 min of any cap appearing or on a read failure, and every surface says it is not counted. Every per-user Bedrock allow-list copy includes the OpenAI GPT and default-project ARNs (`tests/unit/test_bedrock_iam_codex_parity.py`) (ADR-014 §9).
@@ -59,6 +63,7 @@
 | **LIVE** | PR review roster (CI) | `ROLE_REVIEW=0`: panel Codex `global.openai.gpt-6.1-sol` (one cell per lens); chair Claude Opus 5.5 `global.anthropic.claude-opus-5-5` (fallback `global.anthropic.claude-opus-5`). No Kiro | ADR-013 (amendment 2026-10-21) |
 | **INACTIVE(flag)** | Specialist review roster | Codex Astra, Kiro Opus/Sol, Claude Fable; applies only with `ROLE_REVIEW=1` | ADR-013 |
 | **REMOVED** | ADR Compliance CI | `adr-verify-pr.yml` / `adr-verify-main.yml` deleted 2026-10-18 (owner decision); ADR `## Verification` blocks remain as documentation | ADR-013 (amendment) |
+| **IMPLEMENTATION GAP** | Event-driven user pre-provisioning / cleanup | Cognito shim is wired, but its downstream `UserRoleProvisioner` Lambda, EventBridge rule and DLQ are absent from current Terraform. STS issuance retains its lazy role fallback. Source presence is not proof of deployment | ADR-010 (implementation status 2026-10-26) |
 
 ---
 
@@ -77,7 +82,7 @@
 | 004 | 인증 | Cognito public client + NextAuth, JIT 트리거 fallback, 삭제 cleanup | 024·028 · ~~012~~ |
 | 005 | 사용량 집계 | Inference Profile + Invocation Log → DynamoDB, email canonical key, 모델 정규화 | 011·019·031 · ~~025~~ |
 | 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신; amendment 2026-10-23: `deployment_mode` profiles, `governance` default | 014·029 |
-| 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude; 셀프서비스 신청 UI/API는 devenv 프로파일 전용 | 005·020·021·030·034 · ~~026~~ |
+| 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude; devenv-only request API. TF source has the 63-pattern floor; plan/show validation against the request allowlist remains a follow-up | 005·020·021·030·034 · ~~026~~ |
 | 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18) | 006·015·023 |
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |

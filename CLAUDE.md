@@ -45,6 +45,9 @@ These apply to every change. If a task seems to require breaking one, stop and a
 - **Terraform only.** Do not add CDK, CloudFormation or another deployment IaC; ADR-001 retired them. Every resource, IAM role and the permission boundary is created in Terraform, so `destroy` followed by `apply` reproduces the platform. A role created by hand must be imported into or recreated in Terraform.
 - **No hardcoded domain, account ID or region.** Use Terraform variables (`terraform.tfvars`), SSM Parameter Store or `data` sources so the stack stays portable across accounts.
 - **Ingress goes through CloudFront.** Never allow `0.0.0.0/0` or `::/0` ingress on a security group, and never put a public IP or public listener directly on compute. Load balancers are internal, reached only through CloudFront VPC origins, and admit only the CloudFront VPC-origin security group plus the `X-Custom-Secret` header (ADR-015).
+  Current implementation validates the header in DevEnv nginx. Dashboard
+  CloudFront sends it, but its ALB listener has no header-validation rule; preserve
+  the origin SG restriction and report the remaining guard gap.
 - **Cognito self sign-up stays off** (`allow_admin_create_user_only = true`). Accounts are admin-created or invited.
 - **Keep BASELINE in sync.** A new ADR, or any flag/status change, updates `BASELINE.md` §3 (or §2) in the same PR; without that the change is not considered live. Retired ADR numbers are never reused.
 - Secrets live in Secrets Manager or SecureString SSM parameters referenced from Terraform. Cross-module references use module outputs, `data` sources or SSM rather than export/import patterns.
@@ -86,7 +89,7 @@ terraform -chdir=terraform plan
 terraform -chdir=terraform apply        # persistent data EBS volumes survive destroy
 
 # Images and AMIs (ARM64)
-bash scripts/01-create-ecr-repos.sh                                       # non-Terraform repos (devenv, nginx)
+bash scripts/01-create-ecr-repos.sh                                       # legacy repo bootstrap; ownership caveat below
 IMAGE_TAG=$(git rev-parse --short HEAD) bash scripts/05-build-docker-images.sh dashboard
 bash scripts/build-ami.sh ubuntu                                          # or al2023; registers the AMI ID in SSM
 
@@ -97,11 +100,17 @@ cd shared/nextjs-app && npx tsc --noEmit && npx vitest run
 # Integration and post-deploy verification
 bash tests/integration/test-e2e.sh
 bash tests/docker/test-devenv.sh
-bash scripts/verify-deployment.sh <domain>
+bash scripts/verify-deployment.sh "${DEPLOYMENT_DOMAIN:?set deployment domain}"
 
 # PR-review tooling (offline)
 python3 -m unittest discover -s scripts/pr-review -p 'test_*.py'
 ```
+
+The legacy repository helper also creates nginx, which is Terraform-managed.
+Bootstrap/import `module.ecs_devenv[0].aws_ecr_repository.nginx` before using it;
+do not create duplicate repositories. See `docs/deployment-guide.md` for profile-
+specific initialization and image ordering. The current full E2E/Docker `all`
+paths still reference removed LiteLLM; report relevant checks and prerequisites.
 
 Fresh dashboard bootstrap is two-phase; see `terraform/CLAUDE.md`.
 

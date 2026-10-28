@@ -4,7 +4,7 @@
 > ADRs in `docs/decisions/` are the *decision log* (why); the decision baseline is
 > `docs/decisions/BASELINE.md`. Anything under `docs/decisions/archive/` or `docs/history/`
 > is **historical / superseded — NOT current**.
-> Last reconciled: 2026-10-18 (Terraform-only; dashboard real-app deploy on EC2 ASG; lightweight OTEL session/git telemetry; Codex on Bedrock, ADR-014).
+> Last reconciled: 2026-10-26 (Terraform-only; governance/devenv profiles; BYO VPC; dashboard on EC2 ASG; native Claude Code OTEL; Codex on Bedrock).
 
 ## What this is
 멀티유저 Claude Code 개발환경 플랫폼 on AWS Bedrock. 사용자는 per-user EC2 DevEnv(브라우저 IDE)
@@ -34,9 +34,13 @@ graph LR
     STS -. 1h creds .-> L
     L --> BR
   end
-  EC2 -. lightweight session/git OTEL .-> OT[OTEL Collector]
-  BR -. invocation logs .-> AGG[Inference Profile + Invocation Log → DynamoDB]
+  EC2 -. native Claude Code OTEL .-> OT[OTEL Collector]
+  OT -. scrubbed metrics/events .-> S3[S3 → productivity rollup Lambda → DynamoDB]
+  BR -. invocation logs .-> AGG[Usage tracker Lambda → DynamoDB]
+  AGG -. counters/budgets .-> DENY[Token enforcer + scheduled budget checks → IAM deny]
 ```
+
+![Current access paths and governance flows](../img/cconbedrock_arch.png)
 
 > **Deployment profiles:** `deployment_mode = "governance"` (default) deploys only the Dashboard and Local Mode paths. The EC2 Mode path, the OTEL collector and the EC2 idle/hibernate schedules exist only with `deployment_mode = "devenv"`. With the mode unset, `terraform plan` fails if DevEnv security groups already exist, so an older tfvars cannot silently destroy DevEnvs.
 > 2 CloudFront distributions (ADR-003): devenv(→NLB→nginx, devenv profile only) and dashboard(→ALB→EC2 ASG), 분리.
@@ -84,12 +88,19 @@ graph LR
    inference profiles (the Responses API rejects them), so Codex usage is attributed by the
    per-user role identity in the invocation log.
 6. **DevEnv compute & storage.** Per-user EC2; OS = **Ubuntu** or **Amazon Linux 2023**. **2-volume
-   model (ADR-002):** ephemeral OS root EBS (`DeleteOnTermination=true`, replaceable via new AMI) +
+   model (ADR-002):** replaceable OS root EBS +
    **persistent data EBS** for `/home/coder` (GP3, `DeleteOnTermination=false`, subdomain-tagged,
    reattached across rebuild/OS-switch). Idle instances Stop/Hibernate and resume with state intact.
+   **Implementation discrepancy:** ADR-002 specifies `DeleteOnTermination=true` for the OS root,
+   but `ec2-clients.ts` and the Terraform launch template currently set it to `false`.
+   Recovery must inventory both retained volumes; this documentation sync does not change
+   deletion behavior. Persistent user data must remain protected.
 7. **Self-service IAM.** UI requests for extra IAM permissions require **admin approval**, bounded by
-   a permission boundary authored in Terraform (boundary X = AllowInAccount; the DenyEscalation
-   63-action floor's full TF port is a **follow-up** tracked by ADR-007 — not yet complete).
+   a permission boundary authored in Terraform (boundary X = account-scoped allowance,
+   operational baseline and a 63-pattern `DenyEscalation` floor). The source contains all
+   representative canonical floor entries checked by `check-policyset-boundary.py`;
+   Terraform plan/show validation against the request allowlist remains a follow-up
+   (ADR-007). This source check does not prove deployed-policy parity.
 8. **Budget enforcement.** Per-department and per-user budgets/limits ($ + normalized token);
    **EventBridge** drives IAM deny-policy updates. Per-user USD budgets are three independent
    caps — daily / weekly / monthly (UTC windows; token limits use KST) — and any one exceeded
