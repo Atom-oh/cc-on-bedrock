@@ -11,6 +11,9 @@
 locals {
   mantle_trail_bucket = "${var.project_prefix}-mantle-trail-${local.account_id}"
   mantle_trail_name   = "${var.project_prefix}-mantle-audit"
+  # A home region of us-east-1 already sees the events on its own default bus;
+  # forwarding that bus to itself would loop.
+  mantle_forward = var.enable_mantle && local.region != "us-east-1"
 }
 
 resource "aws_s3_bucket" "mantle_trail" {
@@ -155,13 +158,13 @@ data "aws_iam_policy_document" "mantle_events_assume" {
 }
 
 resource "aws_iam_role" "mantle_events_forward" {
-  count              = var.enable_mantle ? 1 : 0
+  count              = local.mantle_forward ? 1 : 0
   name               = "${var.project_prefix}-mantle-audit-forward"
   assume_role_policy = data.aws_iam_policy_document.mantle_events_assume.json
 }
 
 resource "aws_iam_role_policy" "mantle_events_forward" {
-  count = var.enable_mantle ? 1 : 0
+  count = local.mantle_forward ? 1 : 0
   name  = "put-events-home-bus"
   role  = aws_iam_role.mantle_events_forward[0].id
   policy = jsonencode({
@@ -185,7 +188,7 @@ locals {
 }
 
 resource "aws_cloudwatch_event_rule" "mantle_forward" {
-  count         = var.enable_mantle ? 1 : 0
+  count         = local.mantle_forward ? 1 : 0
   provider      = aws.us_east_1
   name          = "${var.project_prefix}-mantle-audit-forward"
   description   = "Forward bedrock-mantle CreateInference data events to the home-region audit-logger"
@@ -193,7 +196,7 @@ resource "aws_cloudwatch_event_rule" "mantle_forward" {
 }
 
 resource "aws_cloudwatch_event_target" "mantle_forward" {
-  count    = var.enable_mantle ? 1 : 0
+  count    = local.mantle_forward ? 1 : 0
   provider = aws.us_east_1
   rule     = aws_cloudwatch_event_rule.mantle_forward[0].name
   arn      = "arn:aws:events:${local.region}:${local.account_id}:event-bus/default"
@@ -220,4 +223,61 @@ resource "aws_lambda_permission" "mantle_audit" {
   function_name = aws_lambda_function.audit_logger.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.mantle_audit[0].arn
+}
+
+# ─── Cost ESTIMATE (ADR-014 §9 stage 1) ─────────────────────────────────────
+# Every 15 min the usage tracker turns the AWS/BedrockMantle per-project token
+# metrics into MANTLE#{email} usage rows (estimate only, never enforced). It reads
+# project owners from ListProjects tags, so it needs the same mantle read actions
+# as budget-check (ListProjects on "*" + ListTagsForResource on project/*).
+resource "aws_iam_role_policy" "tracker_mantle" {
+  count = var.enable_mantle ? 1 : 0
+  name  = "tracker-mantle-estimate"
+  role  = aws_iam_role.tracker.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "MantleMetrics"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:ListMetrics", "cloudwatch:GetMetricData"]
+        Resource = "*"
+      },
+      {
+        Sid      = "MantleListProjects"
+        Effect   = "Allow"
+        Action   = ["bedrock-mantle:ListProjects"]
+        Resource = "*"
+      },
+      {
+        Sid      = "MantleProjectTags"
+        Effect   = "Allow"
+        Action   = ["bedrock-mantle:ListTagsForResource"]
+        Resource = "arn:aws:bedrock-mantle:us-east-1:${local.account_id}:project/*"
+      },
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "mantle_meter" {
+  count               = var.enable_mantle ? 1 : 0
+  name                = "${var.project_prefix}-mantle-meter"
+  description         = "Estimate bedrock-mantle cost per user from CloudWatch metrics (not enforced)"
+  schedule_expression = "rate(15 minutes)"
+}
+
+resource "aws_cloudwatch_event_target" "mantle_meter" {
+  count = var.enable_mantle ? 1 : 0
+  rule  = aws_cloudwatch_event_rule.mantle_meter[0].name
+  arn   = aws_lambda_function.tracker.arn
+  input = jsonencode({ source = "cc.mantle-meter" })
+}
+
+resource "aws_lambda_permission" "mantle_meter" {
+  count         = var.enable_mantle ? 1 : 0
+  statement_id  = "AllowMantleMeter"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.tracker.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.mantle_meter[0].arn
 }

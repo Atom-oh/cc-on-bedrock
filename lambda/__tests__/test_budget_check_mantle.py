@@ -148,6 +148,18 @@ def test_reassigned_subdomain_never_inherits_another_users_project():
     assert iam.policies[(alice, bc.MANTLE_POLICY_NAME)]["Statement"][0]["Resource"].endswith("/proj_alice")
 
 
+def test_failed_reconcile_drops_the_existing_grant():
+    # Subdomain "alice" now belongs to carol, the role still holds alice's project grant,
+    # and the mantle API fails: the stale cross-user grant must not survive the run.
+    alice = "cc-on-bedrock-local-user-alice"
+    stale = json.loads(bc.mantle_policy_doc("proj_alice"))
+    iam = FakeIam([alice], {(alice, bc.MANTLE_POLICY_NAME): stale})
+    with mock.patch.object(bc, "ensure_mantle_project", mock.Mock(side_effect=RuntimeError("mantle 503"))):
+        out, _ = _reconcile(iam, {"carol@x.com": ("alice", "eng")})
+    assert (alice, bc.MANTLE_POLICY_NAME) not in iam.policies
+    assert out["granted"] == 0 and out["revoked"] == 1
+
+
 def test_no_local_role_means_no_project_and_no_grant():
     iam = FakeIam([])
     out, req = _reconcile(iam, {"bob@x.com": ("bob", "eng")})

@@ -1092,8 +1092,14 @@ def reconcile_mantle(user_budgets: dict, dept_budgets: dict) -> dict:
         except iam_client.exceptions.NoSuchEntityException:
             continue  # user has not used Local Mode yet: no role to grant on
         except Exception as e:
-            # No grant on error; an existing grant stays only while the user is still eligible.
+            # Fail safe: the existing grant may point at a previous owner's project (the
+            # subdomain was reassigned) and ownership could not be verified, so drop it.
+            # The next run re-grants once the mantle API answers.
             print(f"[MANTLE] reconcile failed for {email}: {e}")
+            try:
+                revoked += _revoke_mantle(role)
+            except Exception as e2:
+                print(f"[MANTLE] revoke failed for {role}: {e2}")
     return {"enabled": True, "eligible": len(grant_roles), "granted": granted, "revoked": revoked}
 
 
