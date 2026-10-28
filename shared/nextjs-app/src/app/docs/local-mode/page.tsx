@@ -220,7 +220,7 @@ claude
 codex
 
 # 비용 무제한 사용자만: bedrock-mantle(us-east-1, 웹 검색) 프로필
-# ※ mantle 사용량은 사용량·예산에 집계되지 않음 (감사 로그만 기록)
+# ※ mantle 사용량은 예산에 집계되지 않음 (감사 로그 + 추정 비용만 표시, 실제 청구액과 다를 수 있음)
 codex -p mantle
 
 # 현재 잔여 시간 + 한도 상태 확인 (mantle 활성 여부 포함)

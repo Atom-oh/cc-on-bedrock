@@ -54,7 +54,8 @@ graph LR
    Responses API, `global.openai.*` profiles) with the same per-user role
    credentials (IMDS on EC2, `credential_process` in Local Mode — plain `codex` after `cc-bedrock-local setup`).
    Local Mode users with no cost cap also get `codex -p mantle` (bedrock-mantle in us-east-1, web search):
-   granted per user by `budget-check`, NOT metered, audited by a us-east-1 CloudTrail data-event trail (ADR-014 §9).
+   granted per user by `budget-check`, NOT metered, audited by a us-east-1 CloudTrail data-event trail; a
+   display-only cost estimate comes from `AWS/BedrockMantle` metrics (`MANTLE#` rows, may differ from the bill) (ADR-014 §9).
    DevEnv ships governed defaults in `/etc/codex/config.toml` (system layer). Kiro is installed by
    default but uses IAM Identity Center licensing — **not** part of Cognito/Bedrock usage governance.
 2. **Two access paths.** EC2 Mode (CloudFront→NLB→nginx ECS→EC2) + Local Mode (`cc-bedrock-local`

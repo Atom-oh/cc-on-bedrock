@@ -428,7 +428,7 @@ resource "aws_lambda_function" "tracker" {
   handler          = "bedrock-usage-tracker.handler"
   filename         = data.archive_file.lambda["tracker"].output_path
   source_code_hash = data.archive_file.lambda["tracker"].output_base64sha256
-  timeout          = 30
+  timeout          = 60 # + scheduled mantle cost estimate (ListProjects + CloudWatch)
   memory_size      = 256
 
   environment {
@@ -436,6 +436,7 @@ resource "aws_lambda_function" "tracker" {
       USAGE_TABLE_NAME     = aws_dynamodb_table.usage.name
       ECS_CLUSTER_NAME     = var.ecs_cluster_name
       COGNITO_USER_POOL_ID = var.user_pool_id
+      MANTLE_REGION        = var.enable_mantle ? "us-east-1" : "" # ADR-014 §9 estimate
     }
   }
 

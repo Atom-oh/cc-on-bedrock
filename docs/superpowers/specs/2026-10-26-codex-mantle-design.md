@@ -91,7 +91,7 @@ The `CreateProject` management event records who created it.
 - **In:** Local Mode (governance default) end to end; Terraform; Lambdas; dashboard API/UI text; CLI; docs (ADR-014 amendment, BASELINE §1/§3 row, architecture.md, runbook `codex-cost-budget-audit.md`, CHANGELOG, module CLAUDE.md files).
 - **Follow-up (not in this PR):** EC2 DevEnv mantle profile. Instance user data would need the project id at boot plus refresh when entitlement changes; the IAM grant in budget-check would already cover `cc-on-bedrock-task-*` once added; the Security page "Codex (mantle, unmetered)" tag (rows already carry `provider = mantle`).
 - **Non-goals:**
-  - metering mantle per user (CloudWatch Project metrics stay visible to admins only as an aggregate);
+  - enforcing budgets on mantle (stage 2, after a PoC of metric lag and price error). Stage 1 (2026-10-28) adds a display-only per-user estimate from the per-project CloudWatch metrics; see ADR-014 §9 *Estimate*;
   - mantle for Claude Code;
   - mantle in Seoul.
 

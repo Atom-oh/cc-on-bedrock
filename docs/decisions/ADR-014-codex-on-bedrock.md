@@ -141,6 +141,23 @@ the opt-in `codex -p mantle` profile for users whose cost is unlimited (§9, ame
      ~$0.10 / 100k calls) to its own bucket (90 days); an EventBridge rule forwards
      `CreateInference` to the home-region bus, where `audit-logger` records it with
      `provider = mantle`, `metered = false`.
+   - *Estimate (stage 1, amended 2026-10-28):* every 15 min the usage tracker reads the
+     `AWS/BedrockMantle` `InputTokens`/`OutputTokens` metrics (Project + Model) of each
+     managed project, maps the project to its owner by the `cc-on-bedrock:user` tag and
+     writes `MANTLE#{email}` / `{date}#{model}` rows with an estimated cost (absolute
+     totals for today and yesterday UTC, so re-runs never double count). The admin budget
+     page and the user's Local Mode tab show month-to-date estimates. The estimate is
+     **display only**: no budget, deny or usage page reads `MANTLE#` rows, so mantle stays
+     outside enforcement. No billing permission is needed (CloudWatch read only), so it
+     also works where CUR 2.0 / Cost Explorer are not available; CUR 2.0 IAM-principal
+     data, where available, remains the exact source.
+   - *Constraint — the estimated price can be wrong.* It uses the runtime `PRICING` table
+     (Global CRIS rates), not mantle in-region rates; the metrics have no cache split, so
+     cached input is priced at the full input rate (overestimate); EDP/private pricing is
+     not applied; web-search query charges (`bedrock-websearch`) are not included; metrics
+     can lag the call by up to ~15 min plus the schedule interval. Every surface labels it
+     an estimate that may differ from the AWS bill. Enforcing budgets on mantle (stage 2)
+     needs a PoC of lag and error first.
    - Terraform: `enable_mantle` (default true; false = no ceiling, no trail, no grant) and
      `codex_mantle_model_id` (default `openai.gpt-6.1-sol`). EC2 DevEnv mantle is a follow-up.
 
