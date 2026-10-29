@@ -8,7 +8,7 @@ import {
   GetUserCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { createHash } from "crypto";
-import { pinnedSubdomain, requireAnyRoleGroup } from "@/lib/role-admin";
+import { pinnedIdentity, requireAnyRoleGroup } from "@/lib/role-admin";
 import { requiresRoleGroup } from "@/lib/roles";
 import { userPoolId } from "@/lib/aws-clients";
 
@@ -194,7 +194,14 @@ export async function POST(req: NextRequest) {
   // role owned by another email). Fails closed.
   if (requiresRoleGroup()) {
     try {
-      identity.subdomain = await pinnedSubdomain(caller.cognitoUsername as string);
+      const fresh = await pinnedIdentity(caller.cognitoUsername as string);
+      // The session/token copies can be stale (8h JWT, stored CLI token row): the record
+      // looked up must be the caller's own, and ensure_role gets only its fresh values.
+      if (fresh.sub !== identity.sub) {
+        return NextResponse.json({ error: "Identity mismatch" }, { status: 403 });
+      }
+      identity.subdomain = fresh.subdomain;
+      identity.email = fresh.email;
       identity.pool = userPoolId;
     } catch (err) {
       console.error("[local/credentials] subdomain pin failed:", err instanceof Error ? err.message : err);
