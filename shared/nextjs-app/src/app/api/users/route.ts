@@ -13,8 +13,8 @@ import {
 } from "@/lib/aws-clients";
 import { createUserSchema, updateUserSchema } from "@/lib/validation";
 import { batchGetCustomRoutes } from "@/lib/ec2-clients";
-import { ROLES, accessRole, roleFromGroups, validateRoleChange } from "@/lib/roles";
-import { countAdmins, getRoleGroups, listGroupMembers, requireFreshRole, setUserRole } from "@/lib/role-admin";
+import { ROLES, accessRole, requiresRoleGroup, roleFromGroups, validateRoleChange } from "@/lib/roles";
+import { countAdmins, getRoleGroups, listGroupMembers, removeUserAccess, requireFreshRole, setUserRole } from "@/lib/role-admin";
 
 /** Refuse disabling yourself or the last enabled admin (same rules as demotion). */
 async function guardAdminLoss(actorEmail: string, username: string): Promise<NextResponse | null> {
@@ -84,7 +84,8 @@ export async function GET(req: NextRequest) {
         customRoutes: routesBySubdomain.get(u.subdomain) ?? [],
       };
     });
-    return NextResponse.json({ success: true, data: withRoutes });
+    // requiresRoleGroup: shared pool, the UI offers "No access" (role: null) in the role select.
+    return NextResponse.json({ success: true, data: withRoutes, requiresRoleGroup: requiresRoleGroup() });
   } catch (err) {
     console.error("[users] GET", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
@@ -159,6 +160,29 @@ export async function PUT(req: NextRequest) {
         await disableCognitoUser(raw.username);
       }
       return NextResponse.json({ success: true });
+    }
+
+    // Shared pool "No access": role null / "none" removes every cc role group.
+    if (raw.role === null || raw.role === "none") {
+      if (!requiresRoleGroup()) {
+        return NextResponse.json({ success: false, error: "role must be admin, dept-manager or user" }, { status: 400 });
+      }
+      if (!raw.username || typeof raw.username !== "string") {
+        return NextResponse.json({ success: false, error: "username is required" }, { status: 400 });
+      }
+      if (Object.keys(raw).some((k) => k !== "username" && k !== "role")) {
+        return NextResponse.json({ success: false, error: "Removing access cannot be combined with other changes" }, { status: 400 });
+      }
+      // Same guards as disabling: never yourself, never the last enabled admin.
+      const blocked = await guardAdminLoss(session.user.email ?? "", raw.username);
+      if (blocked) return blocked;
+      try {
+        await removeUserAccess(raw.username);
+      } catch (err) {
+        console.error("[users] PUT removeUserAccess", err instanceof Error ? err.message : err);
+        return NextResponse.json({ success: false, error: "role_change_failed" }, { status: 500 });
+      }
+      return NextResponse.json({ success: true, data: { roleChanged: true } });
     }
 
     // Handle attribute update

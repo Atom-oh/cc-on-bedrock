@@ -117,24 +117,44 @@ export async function requireFreshRole(
 }
 
 /**
- * Shared pool gate for paths without a role requirement (e.g. /api/local/credentials):
- * the caller must hold SOME cc role group, read fresh from Cognito. Own pool: no
- * lookup, always ok. Fails closed: lookup error 503, no username or no role group 403.
+ * Gate for paths without a role requirement (e.g. /api/local/credentials). Both pools:
+ * the Cognito user must be enabled (a disabled user keeps its groups and tokens).
+ * Shared pool only: the user must also hold SOME cc role group. Both read fresh from
+ * Cognito and fail closed: lookup error 503, no username / disabled / no role group 403.
  */
 export async function requireAnyRoleGroup(
   username: string | undefined,
   getGroups: (username: string) => Promise<string[]> = getRoleGroups,
+  getEnabled: (username: string) => Promise<boolean> = getUserEnabled,
   prefix?: string
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
-  if (!requiresRoleGroup(prefix)) return { ok: true };
   const denied = { ok: false as const, response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
   if (!username) return denied;
-  let groups: string[];
+  const shared = requiresRoleGroup(prefix);
+  let groups: string[] = [];
+  let enabled: boolean;
   try {
-    groups = await getGroups(username);
+    [groups, enabled] = await Promise.all([shared ? getGroups(username) : Promise.resolve([]), getEnabled(username)]);
   } catch (err) {
-    console.error("[requireAnyRoleGroup] Cognito group lookup failed:", err);
+    console.error("[requireAnyRoleGroup] Cognito lookup failed:", err);
     return { ok: false, response: NextResponse.json({ error: "Role check unavailable" }, { status: 503 }) };
   }
-  return accessRole(groups, prefix) === null ? denied : { ok: true };
+  if (!enabled) return denied;
+  if (shared && accessRole(groups, prefix) === null) return denied;
+  return { ok: true };
+}
+
+/**
+ * Shared pool "No access": remove the user from every cc role group it holds, then
+ * revoke tokens so the stale session groups stop working. Guards live in the caller.
+ */
+export async function removeUserAccess(
+  username: string,
+  send: Send = defaultSend,
+  fetchGroups: (username: string) => Promise<string[]> = getRoleGroups
+): Promise<void> {
+  for (const g of await fetchGroups(username)) {
+    await send(new AdminRemoveUserFromGroupCommand({ UserPoolId: userPoolId, Username: username, GroupName: groupName(g as Role) }));
+  }
+  await send(new AdminUserGlobalSignOutCommand({ UserPoolId: userPoolId, Username: username }));
 }

@@ -138,6 +138,7 @@ export default function BudgetManagement() {
   const [newBudget, setNewBudget] = useState("");
   const [periodInputs, setPeriodInputs] = useState<PeriodInputs>(EMPTY_PERIODS);  // user caps or dept per-user defaults
   const [unlimitedPerUser, setUnlimitedPerUser] = useState(false);  // dept-only flag
+  const [loadedUnlimitedPerUser, setLoadedUnlimitedPerUser] = useState(false);  // value when the edit modal opened
   const [newLimit, setNewLimit] = useState("");
   const [showAdvancedTokenLimit, setShowAdvancedTokenLimit] = useState(false);
   const [activeSection, setActiveSection] = useState<"departments" | "users" | "limits">("departments");
@@ -171,6 +172,7 @@ export default function BudgetManagement() {
   ) => {
     const { periods, unlimitedPerUser: unlimited, ...rest } = extra ?? {};
     setUnlimitedPerUser(unlimited === true);
+    setLoadedUnlimitedPerUser(unlimited === true);
     setEditModal({ type, id, currentBudget, ...rest });
     setNewBudget(String(currentBudget));
     setPeriodInputs({
@@ -196,7 +198,8 @@ export default function BudgetManagement() {
     try {
       const body: Record<string, unknown> = { type: editModal.type, id: editModal.id, ...periodBody(editModal.type) };
       if (editModal.type === "department" && newBudget !== "") body.monthlyBudget = Number(newBudget);
-      if (editModal.type === "department") body.unlimitedPerUser = unlimitedPerUser;
+      // Only a real change is sent, so an unchanged edit does not write/audit the flag.
+      if (editModal.type === "department" && unlimitedPerUser !== loadedUnlimitedPerUser) body.unlimitedPerUser = unlimitedPerUser;
       if (editModal.type === "user" && showAdvancedTokenLimit && newLimit) {
         body.dailyTokenLimit = Number(newLimit);
       }
@@ -243,7 +246,7 @@ export default function BudgetManagement() {
       };
       if (createModal.type === "department") {
         body.monthlyBudget = Number(newBudget) || 0;
-        body.unlimitedPerUser = unlimitedPerUser;
+        if (unlimitedPerUser) body.unlimitedPerUser = true;
       }
       if (createModal.type === "user" && showAdvancedTokenLimit && newLimit) {
         body.dailyTokenLimit = Number(newLimit) || 100000;

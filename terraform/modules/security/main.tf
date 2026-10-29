@@ -81,7 +81,7 @@ resource "aws_ecr_lifecycle_policy" "dashboard" {
 # rollback; removing it is a separate cleanup.
 locals {
   shared_pool  = var.shared_user_pool_name != ""
-  group_prefix = local.shared_pool ? "cc-" : ""
+  group_prefix = local.shared_pool ? "cc-" : "" # == local.cc_pools[local.active_pool].group_prefix
   required_custom_attributes = [
     "subdomain", "container_os", "resource_tier", "security_policy", "container_id",
     "department", "budget_exceeded", "storage_type", "dept_manager_sub",
@@ -117,6 +117,11 @@ data "aws_cognito_user_pool" "shared" {
     postcondition {
       condition     = self.admin_create_user_config[0].allow_admin_create_user_only
       error_message = "The shared user pool must allow admin-created users only (self sign-up off)."
+    }
+    postcondition {
+      # The dashboard and CLI address users by email (AdminGetUser, AdminListGroupsForUser).
+      condition     = contains(coalesce(self.username_attributes, []), "email")
+      error_message = "The shared user pool must use email as the username (username_attributes = [\"email\"])."
     }
   }
 }
@@ -237,10 +242,54 @@ resource "aws_cognito_user_pool" "this" {
   }
 }
 
+# cc's clients and role groups exist once per pool: always on the own pool ("own"),
+# and also on the shared pool ("shared") when shared_user_pool_name is set. Keeping
+# the own-pool objects in place means switching modes never replaces them, so the
+# own pool's group memberships and client IDs survive a switch and its rollback.
+locals {
+  cc_pools = merge(
+    { own = { id = aws_cognito_user_pool.this.id, group_prefix = "" } },
+    local.shared_pool ? { shared = { id = data.aws_cognito_user_pool.shared[0].id, group_prefix = "cc-" } } : {},
+  )
+  active_pool = local.shared_pool ? "shared" : "own"
+  role_groups = {
+    admin        = { name = "admin", description = "Dashboard administrators", precedence = null }
+    user         = { name = "user", description = "Dev environment users", precedence = null }
+    dept_manager = { name = "dept-manager", description = "Department managers", precedence = 5 }
+  }
+}
+
+moved {
+  from = aws_cognito_user_pool_client.this
+  to   = aws_cognito_user_pool_client.this["own"]
+}
+
+moved {
+  from = aws_cognito_user_pool_client.cli_public
+  to   = aws_cognito_user_pool_client.cli_public["own"]
+}
+
+moved {
+  from = aws_cognito_user_group.admin
+  to   = aws_cognito_user_group.role["own/admin"]
+}
+
+moved {
+  from = aws_cognito_user_group.user
+  to   = aws_cognito_user_group.role["own/user"]
+}
+
+moved {
+  from = aws_cognito_user_group.dept_manager
+  to   = aws_cognito_user_group.role["own/dept_manager"]
+}
+
 resource "aws_cognito_user_pool_client" "this" {
+  for_each = local.cc_pools
+
   # A shared pool hosts other apps' clients, so the name says whose client this is.
-  name         = local.shared_pool ? "cc-on-bedrock-dashboard" : "AppClient"
-  user_pool_id = local.user_pool_id
+  name         = each.key == "shared" ? "cc-on-bedrock-dashboard" : "AppClient"
+  user_pool_id = each.value.id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -263,8 +312,10 @@ resource "aws_cognito_user_pool_client" "this" {
 
 # Public app client for cc-bedrock-local USER_PASSWORD_AUTH.
 resource "aws_cognito_user_pool_client" "cli_public" {
+  for_each = local.cc_pools
+
   name         = "cc-on-bedrock-cli-public"
-  user_pool_id = local.user_pool_id
+  user_pool_id = each.value.id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -291,25 +342,18 @@ resource "aws_cognito_user_pool_client" "cli_public" {
   prevent_user_existence_errors = "ENABLED"
 }
 
-# Cognito Groups. In a shared pool they carry the "cc-" prefix and are the access
+# Cognito role groups. In a shared pool they carry the "cc-" prefix and are the access
 # gate: a user in none of them has no cc access (dashboard, CLI credentials).
-resource "aws_cognito_user_group" "admin" {
-  name         = "${local.group_prefix}admin"
-  user_pool_id = local.user_pool_id
-  description  = "Dashboard administrators"
-}
+resource "aws_cognito_user_group" "role" {
+  for_each = {
+    for pair in setproduct(keys(local.cc_pools), keys(local.role_groups)) :
+    "${pair[0]}/${pair[1]}" => { pool = pair[0], role = pair[1] }
+  }
 
-resource "aws_cognito_user_group" "user" {
-  name         = "${local.group_prefix}user"
-  user_pool_id = local.user_pool_id
-  description  = "Dev environment users"
-}
-
-resource "aws_cognito_user_group" "dept_manager" {
-  name         = "${local.group_prefix}dept-manager"
-  user_pool_id = local.user_pool_id
-  description  = "Department managers"
-  precedence   = 5
+  name         = "${local.cc_pools[each.value.pool].group_prefix}${local.role_groups[each.value.role].name}"
+  user_pool_id = local.cc_pools[each.value.pool].id
+  description  = local.role_groups[each.value.role].description
+  precedence   = local.role_groups[each.value.role].precedence
 }
 
 # ---- DynamoDB Table for Department Budgets ----------------------------------

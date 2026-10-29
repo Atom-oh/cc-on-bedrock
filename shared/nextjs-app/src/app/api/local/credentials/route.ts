@@ -19,8 +19,8 @@ import { requireAnyRoleGroup } from "@/lib/role-admin";
 //      cc-on-bedrock-cli-tokens; the row carries the verified user identity.
 //
 // Both paths produce the same identity object that gets handed to the STS Issuer Lambda.
-// In a shared user pool (COGNITO_GROUP_PREFIX set) every path also re-checks, fresh
-// from Cognito, that the caller holds a cc role group before credentials are issued.
+// Every path then re-checks, fresh from Cognito, that the caller is still enabled and,
+// in a shared user pool (COGNITO_GROUP_PREFIX set), holds a cc role group.
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const STS_ISSUER_FUNCTION = process.env.STS_ISSUER_FUNCTION_NAME ?? "cc-on-bedrock-sts-issuer";
@@ -179,7 +179,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
   const { identity } = caller;
-  // Shared pool: no cc role group → 403; lookup failure → 503 (own pool: no-op).
+  // Disabled user, or no cc role group in a shared pool → 403; lookup failure → 503.
   const access = await requireAnyRoleGroup(caller.cognitoUsername);
   if (!access.ok) return access.response;
 

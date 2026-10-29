@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   getRoleGroups: vi.fn(),
   countAdmins: vi.fn(),
   setUserRole: vi.fn(),
+  removeUserAccess: vi.fn(),
   requireFreshRole: vi.fn(),
   listCognitoUsers: vi.fn(),
   listGroupMembers: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('@/lib/role-admin', () => ({
   getRoleGroups: m.getRoleGroups,
   countAdmins: m.countAdmins,
   setUserRole: m.setUserRole,
+  removeUserAccess: m.removeUserAccess,
   requireFreshRole: m.requireFreshRole,
   listGroupMembers: m.listGroupMembers,
 }));
@@ -138,6 +140,44 @@ describe('shared user pool (COGNITO_GROUP_PREFIX set)', () => {
     expect(m.setUserRole).toHaveBeenCalledWith('bob@x.com', 'user');
   });
 
+  it('role null / "none" removes access after the guards', async () => {
+    m.getRoleGroups.mockResolvedValue(['user']);
+    for (const role of [null, 'none']) {
+      m.removeUserAccess.mockClear();
+      const res = await PUT(asReq({ username: 'bob@x.com', role }));
+      expect(res.status).toBe(200);
+      expect(m.removeUserAccess).toHaveBeenCalledWith('bob@x.com');
+    }
+    expect(m.setUserRole).not.toHaveBeenCalled();
+  });
+
+  it('refuses removing your own access or the last enabled admin', async () => {
+    m.getCognitoUser.mockResolvedValue({ ...target, email: 'alice@x.com' });
+    m.getRoleGroups.mockResolvedValue(['admin']);
+    let res = await PUT(asReq({ username: 'alice@x.com', role: null }));
+    expect((await res.json()).error).toBe('self_demotion');
+    m.getCognitoUser.mockResolvedValue(target);
+    m.countAdmins.mockResolvedValue(1);
+    res = await PUT(asReq({ username: 'bob@x.com', role: 'none' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('last_admin');
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 role_change_failed when removal fails', async () => {
+    m.getRoleGroups.mockResolvedValue(['user']);
+    m.removeUserAccess.mockRejectedValueOnce(new Error('boom'));
+    const res = await PUT(asReq({ username: 'bob@x.com', role: null }));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe('role_change_failed');
+  });
+
+  it('refuses combining removal with other fields', async () => {
+    const res = await PUT(asReq({ username: 'bob@x.com', role: null, department: 'eng' }));
+    expect(res.status).toBe(400);
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
+  });
+
   it('GET lists a user without a cc role group as role null (no access)', async () => {
     m.listCognitoUsers.mockResolvedValue([
       { username: 'u1', email: 'a@x.com', subdomain: '' },
@@ -147,6 +187,7 @@ describe('shared user pool (COGNITO_GROUP_PREFIX set)', () => {
     const res = await GET({ url: 'https://x/api/users' } as never);
     const json = await res.json();
     expect(json.data.map((u: { username: string; role: string | null }) => [u.username, u.role])).toEqual([['u1', 'admin'], ['u2', null]]);
+    expect(json.requiresRoleGroup).toBe(true);
   });
 });
 
@@ -155,6 +196,16 @@ describe('own user pool (no prefix)', () => {
     m.listCognitoUsers.mockResolvedValue([{ username: 'u2', email: 'b@x.com', subdomain: '' }]);
     m.listGroupMembers.mockResolvedValue([]);
     const res = await GET({ url: 'https://x/api/users' } as never);
-    expect((await res.json()).data[0].role).toBe('user');
+    const json = await res.json();
+    expect(json.data[0].role).toBe('user');
+    expect(json.requiresRoleGroup).toBe(false);
+  });
+
+  it('PUT rejects role null / "none" with 400', async () => {
+    for (const role of [null, 'none']) {
+      const res = await PUT(asReq({ username: 'bob@x.com', role }));
+      expect(res.status).toBe(400);
+    }
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
   });
 });

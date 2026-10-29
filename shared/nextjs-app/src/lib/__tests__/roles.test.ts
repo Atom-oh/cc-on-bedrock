@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { accessRole, groupName, groupPrefix, requiresRoleGroup, roleFromGroups, rolesFromGroupNames, validateRoleChange } from "../roles";
-import { requireAnyRoleGroup, requireFreshRole, setUserRole } from "../role-admin";
+import { removeUserAccess, requireAnyRoleGroup, requireFreshRole, setUserRole } from "../role-admin";
 import { rolesFromIdToken, signInAllowed } from "../auth";
 
 describe("roleFromGroups", () => {
@@ -173,27 +173,60 @@ describe("requireFreshRole with a group prefix", () => {
 });
 
 describe("requireAnyRoleGroup (local credentials gate)", () => {
-  it("own pool: ok without a lookup", async () => {
+  const on = async () => true;
+  const off = async () => false;
+  it("own pool: checks enabled only, no group lookup", async () => {
     const getGroups = vi.fn();
-    expect(await requireAnyRoleGroup(undefined, getGroups, "")).toEqual({ ok: true });
+    expect(await requireAnyRoleGroup("a@x.com", getGroups, on, "")).toEqual({ ok: true });
     expect(getGroups).not.toHaveBeenCalled();
   });
   it("shared pool: ok with a cc role group", async () => {
-    expect(await requireAnyRoleGroup("a@x.com", async () => ["user"], "cc-")).toEqual({ ok: true });
+    expect(await requireAnyRoleGroup("a@x.com", async () => ["user"], on, "cc-")).toEqual({ ok: true });
   });
-  it("shared pool: 403 without a role group or without a username", async () => {
+  it("403 without a role group (shared), when disabled (both pools), or without a username", async () => {
     for (const r of [
-      await requireAnyRoleGroup("a@x.com", async () => [], "cc-"),
-      await requireAnyRoleGroup(undefined, async () => ["admin"], "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => [], on, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => ["admin"], off, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => [], off, ""),
+      await requireAnyRoleGroup(undefined, async () => ["admin"], on, "cc-"),
+      await requireAnyRoleGroup(undefined, async () => [], on, ""),
     ]) {
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.response.status).toBe(403);
+      if (!r.ok) {
+        expect(r.response.status).toBe(403);
+        expect(await r.response.json()).toEqual({ error: "Access denied" });
+      }
     }
   });
-  it("shared pool: fails closed with 503 when the lookup throws", async () => {
-    const r = await requireAnyRoleGroup("a@x.com", async () => { throw new Error("x"); }, "cc-");
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.response.status).toBe(503);
+  it("fails closed with 503 when a lookup throws", async () => {
+    const boom = async () => { throw new Error("x"); };
+    for (const r of [
+      await requireAnyRoleGroup("a@x.com", boom, on, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => ["user"], boom, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => [], boom, ""),
+    ]) {
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.response.status).toBe(503);
+    }
+  });
+});
+
+describe("removeUserAccess", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("removes every held cc role group (prefixed), then signs out", async () => {
+    vi.stubEnv("COGNITO_GROUP_PREFIX", "cc-");
+    const calls: string[] = [];
+    const send = async (c: unknown) => {
+      const cmd = c as { constructor: { name: string }; input: { GroupName?: string } };
+      calls.push(`${cmd.constructor.name}:${cmd.input.GroupName ?? ""}`);
+      return {};
+    };
+    await removeUserAccess("a@x.com", send, async () => ["admin", "user"]);
+    expect(calls).toEqual([
+      "AdminRemoveUserFromGroupCommand:cc-admin",
+      "AdminRemoveUserFromGroupCommand:cc-user",
+      "AdminUserGlobalSignOutCommand:",
+    ]);
   });
 });
 

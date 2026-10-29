@@ -12,6 +12,8 @@ interface UsersTableProps {
   onPermanentDelete?: (username: string) => void;
   onToggle?: (username: string, enabled: boolean) => void;
   onUpdate?: (username: string, field: string, value: string) => Promise<void>;
+  /** Shared user pool: offer "No access" (removes every cc role group). */
+  allowNoAccess?: boolean;
 }
 
 const tierBadge: Record<string, string> = {
@@ -68,6 +70,7 @@ export default function UsersTable({
   onPermanentDelete,
   onToggle,
   onUpdate,
+  allowNoAccess = false,
 }: UsersTableProps) {
   // OS / tier / DLP policy (EC2 SG) / storage / port routes describe the per-user EC2 DevEnv —
   // hidden in governance mode.
@@ -234,6 +237,7 @@ export default function UsersTable({
                       {ROLES.map((r) => (
                         <option key={r} value={r}>{t(`users.role.${r}` as Parameters<typeof t>[0])}</option>
                       ))}
+                      {allowNoAccess && user.role !== null && <option value="none">{t("users.role.removeAccess")}</option>}
                     </select>
                   ) : (
                     <div className="flex items-center gap-1.5">
