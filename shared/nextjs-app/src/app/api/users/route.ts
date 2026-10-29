@@ -187,6 +187,9 @@ export async function PUT(req: NextRequest) {
       if (Object.keys(raw).some((k) => k !== "username" && k !== "role")) {
         return NextResponse.json({ success: false, error: "Removing access cannot be combined with other changes" }, { status: 400 });
       }
+      // Another app's user has no cc group to remove; never sign them out of that app.
+      const foreign = await guardForeignUser(raw.username);
+      if (foreign) return foreign;
       // Same guards as disabling: never yourself, never the last enabled admin.
       const blocked = await guardAdminLoss(session.user.email ?? "", raw.username);
       if (blocked) return blocked;
@@ -233,11 +236,22 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ success: false, error: check.error }, { status: 400 });
       }
       // Department first: if the role write then fails, the user is never a
-      // dept-manager of the department they were just moved out of.
+      // dept-manager of the department they were just moved out of. Granting access
+      // to another app's user is the exception: the group goes first, so a failed
+      // grant never leaves cc-written attributes on a user cc does not manage.
+      if (noAccess && requestedRole) {
+        try {
+          await setUserRole(attrs.username, requestedRole);
+        } catch (err) {
+          console.error("[users] PUT setUserRole", err instanceof Error ? err.message : err);
+          return NextResponse.json({ success: false, error: "role_change_failed" }, { status: 500 });
+        }
+        roleChanged = true;
+      }
       await updateCognitoUser(attrs);
       attrsWritten = true;
       // Also re-apply when the user holds several role groups, so the change normalizes them.
-      if (requestedRole && (requestedRole !== current.role || current.needsCleanup || noAccess)) {
+      if (!roleChanged && requestedRole && (requestedRole !== current.role || current.needsCleanup)) {
         try {
           await setUserRole(attrs.username, requestedRole);
         } catch (err) {

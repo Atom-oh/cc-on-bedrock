@@ -32,7 +32,7 @@
 
 ## §1 불변식 / 용어 (Invariants) — 결정론적 판정 기준
 
-- **Terraform-only** — 새 CDK/CloudFormation 배포 경로 추가 금지. Exception: with `shared_user_pool_name` set, the Cognito pool belongs to another stack and cc creates only its clients and role groups there (ADR-016). Lambda 소스는 `lambda/`(IaC 디렉토리 밖)에서 Terraform이 직접 패키징. permission boundary 등 정책도 Terraform이 정본(ADR-034).
+- **Terraform-only** — 새 CDK/CloudFormation 배포 경로 추가 금지. Every resource, IAM role and the permission boundary is created in Terraform, so `destroy` + `apply` reproduces the platform (ADR-001). Exception to that reproducibility: with `shared_user_pool_name` set, the identity directory (Cognito pool, schema, users) belongs to another stack, and cc creates only its clients and role groups there (ADR-016). Lambda 소스는 `lambda/`(IaC 디렉토리 밖)에서 Terraform이 직접 패키징. permission boundary 등 정책도 Terraform이 정본(ADR-034).
 - **자격증명 분리** — EC2와 Local에 동일한 단일 IAM role 금지. 정책 shape·permission boundary·태그·inference-profile 귀속만 공유.
 - **STS 1h 한도** — 체이닝 자격증명을 1시간 너머 연장 금지. `credential_process` 갱신 사용.
 - **EBS 영속성 (2-볼륨)** — DevEnv는 ephemeral OS root(`DeleteOnTermination=true`) + persistent 데이터 EBS(`/home/coder`, `DeleteOnTermination=false`, subdomain 태그로 재연결). Terminate가 사용자 데이터를 파괴하면 안 됨 (ADR-032).

@@ -241,6 +241,32 @@ describe('shared pool: other apps\' users are out of reach', () => {
     expect(m.disableCognitoUser).not.toHaveBeenCalled();
   });
 
+  it('refuses "No access" for a user with no cc role group (no sign-out of the other app)', async () => {
+    const res = await PUT(asReq({ username: 'carol@x.com', role: null }));
+    expect(res.status).toBe(403);
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
+  });
+
+  it('grants the group before writing attributes, and writes none if the grant fails', async () => {
+    const order: string[] = [];
+    m.setUserRole.mockImplementation(async () => { order.push('role'); });
+    m.updateCognitoUser.mockImplementation(async () => { order.push('attrs'); });
+    const ok = await PUT(asReq({ username: 'carol@x.com', role: 'user', department: 'eng' }));
+    expect(ok.status).toBe(200);
+    expect(order).toEqual(['role', 'attrs']);
+    expect(m.setUserRole).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    m.getRoleGroups.mockResolvedValue([]);
+    m.countAdmins.mockResolvedValue(3);
+    m.getCognitoUser.mockResolvedValue(target);
+    m.requireFreshRole.mockResolvedValue({ ok: true, role: 'admin' });
+    m.setUserRole.mockRejectedValue(new Error('boom'));
+    const failed = await PUT(asReq({ username: 'carol@x.com', role: 'user', department: 'eng' }));
+    expect(failed.status).toBe(500);
+    expect(m.updateCognitoUser).not.toHaveBeenCalled();
+  });
+
   it('still allows disabling a cc user', async () => {
     m.getRoleGroups.mockResolvedValue(['user']); // getRoleGroups returns prefix-stripped roles
     const res = await PUT(asReq({ action: 'disable', username: 'bob@x.com' }));

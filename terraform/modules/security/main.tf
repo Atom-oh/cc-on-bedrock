@@ -115,7 +115,7 @@ data "aws_cognito_user_pool" "shared" {
       error_message = "The shared user pool is missing cc custom attributes; add them in the owning stack first."
     }
     postcondition {
-      condition     = self.admin_create_user_config[0].allow_admin_create_user_only
+      condition     = try(self.admin_create_user_config[0].allow_admin_create_user_only, false)
       error_message = "The shared user pool must allow admin-created users only (self sign-up off)."
     }
     postcondition {
