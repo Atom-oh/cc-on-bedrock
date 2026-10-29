@@ -13,6 +13,7 @@ locals {
     AWS_REGION            = data.aws_region.current.name
     COGNITO_CLI_CLIENT_ID = var.cognito_cli_public_client_id
     COGNITO_CLIENT_ID     = var.user_pool_client_id
+    COGNITO_GROUP_PREFIX  = var.cognito_group_prefix
     COGNITO_ISSUER        = "https://cognito-idp.${data.aws_region.current.name}.amazonaws.com/${var.user_pool_id}"
     COGNITO_USER_POOL_ID  = var.user_pool_id
     CCDASH_URL            = var.ccdash_url

@@ -175,3 +175,25 @@ def test_stale_block_cleared_for_user_without_usage():
         bc.handler({}, None)
     assert written["z@x.com"]["evaluation"]["exceeded"] == []
     assert written["z@x.com"]["evaluation"]["release_at"] == ""
+
+
+def test_unlimited_dept_skips_dept_and_global_defaults():
+    """ADR-008 amendment 2026-10-29: a dept flagged unlimitedPerUser leaves members
+    uncapped unless their own row sets a cap; other depts keep the global default."""
+    glob = {"daily": 0, "weekly": 0, "monthly": 5}
+    depts = {"vip": {"unlimitedPerUser": True, "perUserDailyBudget": 30}, "eng": {}}
+    with mock.patch.object(bc, "_GLOBAL_BUDGETS", glob):
+        assert bc._effective_user_limits({}, depts, "a@x.com", "vip") == {"daily": 0, "weekly": 0, "monthly": 0}
+        assert bc._effective_user_limits({}, depts, "b@x.com", "eng") == {"daily": 0, "weekly": 0, "monthly": 5}
+        # an explicit user cap still applies inside an unlimited dept, and grants stack on it
+        users = {"a@x.com": {"monthlyBudget": 20, "grants": {"monthly": 10, "daily": 4}}}
+        assert bc._effective_user_limits(users, depts, "a@x.com", "vip") == {"daily": 0, "weekly": 0, "monthly": 30}
+        # only a real boolean counts; a string flag keeps the normal fall-through
+        assert bc._effective_user_limits({}, {"vip": {"unlimitedPerUser": "true"}}, "a@x.com", "vip")["monthly"] == 5
+
+
+def test_department_scan_reads_unlimited_flag_strictly():
+    items = [{"dept_id": "vip", "unlimitedPerUser": True}, {"dept_id": "eng", "unlimitedPerUser": "true"}, {"dept_id": "ops"}]
+    with mock.patch.object(bc.dept_budgets_table, "scan", return_value={"Items": items}):
+        got = bc.get_department_budgets()
+    assert [got[d]["unlimitedPerUser"] for d in ("vip", "eng", "ops")] == [True, False, False]

@@ -169,6 +169,15 @@ In governance mode the approvals page shows only `budget_increase` and the `limi
 - For a dept-manager the sidebar approvals badge also counts requests that only an admin can decide because they exceed the department budget. Old `cc-user-budgets` rows still keyed by subdomain can miss the token cause in the blocked list.
 - Pre-existing defects (out of scope): `api/dept/mcp` trusts a client-sent department. The enforcer returns on a daily deny before incrementing the weekly/monthly counters (under-count).
 
+### Amendment 2026-10-29 — department-level unlimited per-user budget
+
+Owner decision. Every period resolves user value > department per-user default > global default, and `0` means "not set", so a department could not exempt its members once a global default is set (for example a global `monthly_budget_usd = 5` with one customer team uncapped).
+
+- A `cc-department-budgets` row may carry the boolean `unlimitedPerUser`. For that department's members, each period resolves to the user's own `{period}Budget` when it is set, and otherwise to `0` (no cap). The department's `perUser*Budget` defaults and the global `*_budget_usd` are skipped. Only a real DynamoDB BOOL `true` counts.
+- One-time grants still stack only on a capped period, so an uncapped member has nothing to stack on. The department total (`monthlyBudget`) and token `LIMIT#` rows are unaffected and still apply.
+- `budget-check` (`_effective_user_limits`) and the dashboard mirror resolve the same way. Admins set the flag on Admin → Budgets. Dept-managers cannot, the same as with department per-user defaults.
+- Members left with no cap of any kind become eligible for Codex mantle under ADR-014 §9, which is not metered. Flagging a department grants its members mantle unless a user, department-total or token cap remains.
+
 ## Consequences
 
 긍정 / Positive

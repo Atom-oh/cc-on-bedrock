@@ -8,6 +8,7 @@ import {
   GetUserCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { createHash } from "crypto";
+import { requireAnyRoleGroup } from "@/lib/role-admin";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode credentials API.
 //
@@ -18,6 +19,8 @@ import { createHash } from "crypto";
 //      cc-on-bedrock-cli-tokens; the row carries the verified user identity.
 //
 // Both paths produce the same identity object that gets handed to the STS Issuer Lambda.
+// In a shared user pool (COGNITO_GROUP_PREFIX set) every path also re-checks, fresh
+// from Cognito, that the caller holds a cc role group before credentials are issued.
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const STS_ISSUER_FUNCTION = process.env.STS_ISSUER_FUNCTION_NAME ?? "cc-on-bedrock-sts-issuer";
@@ -40,7 +43,13 @@ interface UserIdentity {
   project: string;
 }
 
-async function resolveBearerToken(token: string): Promise<UserIdentity | null> {
+/** Identity for the STS Issuer plus the Cognito username used for the fresh role-group check. */
+interface ResolvedCaller {
+  identity: UserIdentity;
+  cognitoUsername?: string;
+}
+
+async function resolveBearerToken(token: string): Promise<ResolvedCaller | null> {
   const hash = createHash("sha256").update(token).digest("hex");
   try {
     const r = await ddb.send(new GetItemCommand({
@@ -52,11 +61,16 @@ async function resolveBearerToken(token: string): Promise<UserIdentity | null> {
     // Defense in depth: DynamoDB TTL is eventually consistent (can lag ~48h), so re-check.
     const expiresAt = Number(item.expiresAt?.N ?? "0");
     if (expiresAt && expiresAt < Math.floor(Date.now() / 1000)) return null;
+    const sub = item.sub?.S ?? "";
     return {
-      sub: item.sub?.S ?? "",
-      username: item.username?.S ?? "",
-      department: item.department?.S ?? "default",
-      project: item.project?.S ?? "default",
+      identity: {
+        sub,
+        username: item.username?.S ?? "",
+        department: item.department?.S ?? "default",
+        project: item.project?.S ?? "default",
+      },
+      // Cognito admin APIs accept the email alias; fall back to the sub.
+      cognitoUsername: item.email?.S || sub || undefined,
     };
   } catch (e) {
     console.error("[cli-token] lookup failed:", e instanceof Error ? e.message : e);
@@ -81,7 +95,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
-async function resolveCognitoAccessToken(token: string): Promise<UserIdentity | null> {
+async function resolveCognitoAccessToken(token: string): Promise<ResolvedCaller | null> {
   // H2 fix: pre-validate JWT claims before paying for a Cognito API call.
   // Access tokens carry `client_id` (not `aud`, which lives on ID tokens).
   const claims = decodeJwtPayload(token);
@@ -113,11 +127,15 @@ async function resolveCognitoAccessToken(token: string): Promise<UserIdentity | 
     const sub = attrs["sub"] || r.Username || "";
     if (!sub) return null;
     return {
-      sub,
-      username: attrs["custom:subdomain"] || attrs["email"] || r.Username || sub,
-      email: attrs["email"] || undefined,
-      department: attrs["custom:department"] || "default",
-      project: "default",
+      identity: {
+        sub,
+        username: attrs["custom:subdomain"] || attrs["email"] || r.Username || sub,
+        email: attrs["email"] || undefined,
+        department: attrs["custom:department"] || "default",
+        project: "default",
+      },
+      // The token is verified by GetUser; groups are read fresh, never from its claims.
+      cognitoUsername: r.Username || attrs["email"] || undefined,
     };
   } catch (e) {
     console.error("[cognito-token] GetUser failed:", e instanceof Error ? e.message : e);
@@ -125,7 +143,7 @@ async function resolveCognitoAccessToken(token: string): Promise<UserIdentity | 
   }
 }
 
-async function resolveIdentity(req: NextRequest): Promise<UserIdentity | null> {
+async function resolveIdentity(req: NextRequest): Promise<ResolvedCaller | null> {
   const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
   if (authHeader?.toLowerCase().startsWith("bearer ")) {
     const token = authHeader.slice(7).trim();
@@ -144,19 +162,26 @@ async function resolveIdentity(req: NextRequest): Promise<UserIdentity | null> {
   if (!session?.user) return null;
   const u = session.user;
   return {
-    sub: u.id,
-    username: u.subdomain ?? u.email ?? u.id,
-    email: u.email ?? undefined,
-    department: (u as { department?: string }).department ?? "default",
-    project: "default",
+    identity: {
+      sub: u.id,
+      username: u.subdomain ?? u.email ?? u.id,
+      email: u.email ?? undefined,
+      department: (u as { department?: string }).department ?? "default",
+      project: "default",
+    },
+    cognitoUsername: u.email || undefined,
   };
 }
 
 export async function POST(req: NextRequest) {
-  const identity = await resolveIdentity(req);
-  if (!identity) {
+  const caller = await resolveIdentity(req);
+  if (!caller) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
+  const { identity } = caller;
+  // Shared pool: no cc role group → 403; lookup failure → 503 (own pool: no-op).
+  const access = await requireAnyRoleGroup(caller.cognitoUsername);
+  if (!access.ok) return access.response;
 
   try {
     const resp = await lambda.send(new InvokeCommand({

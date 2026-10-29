@@ -68,6 +68,8 @@ module "security" {
   devenv_enabled      = local.devenv_enabled
   enable_mantle       = var.enable_mantle
 
+  shared_user_pool_name = var.shared_user_pool_name
+
   providers = {
     aws           = aws
     aws.us_east_1 = aws.us_east_1
@@ -152,6 +154,7 @@ module "dashboard" {
   cognito_cli_public_client_id        = module.security.cli_public_client_id
   user_pool_id                        = module.security.user_pool_id
   user_pool_client_id                 = module.security.user_pool_client_id
+  cognito_group_prefix                = module.security.cognito_group_prefix
   nextauth_secret_ssm_parameter_arn   = module.security.nextauth_secret_ssm_parameter_arn
   dashboard_ecr_repository_url        = module.security.dashboard_ecr_repository_url
   dashboard_image_tag                 = var.dashboard_image_tag

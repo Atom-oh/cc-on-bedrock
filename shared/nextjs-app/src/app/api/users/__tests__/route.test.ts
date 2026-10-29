@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const m = vi.hoisted(() => ({
   getCognitoUser: vi.fn(),
@@ -8,12 +8,14 @@ const m = vi.hoisted(() => ({
   countAdmins: vi.fn(),
   setUserRole: vi.fn(),
   requireFreshRole: vi.fn(),
+  listCognitoUsers: vi.fn(),
+  listGroupMembers: vi.fn(),
 }));
 vi.mock('next-auth', () => ({ getServerSession: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ authOptions: {} }));
-vi.mock('@/lib/ec2-clients', () => ({ batchGetCustomRoutes: vi.fn() }));
+vi.mock('@/lib/ec2-clients', () => ({ batchGetCustomRoutes: async () => new Map() }));
 vi.mock('@/lib/aws-clients', () => ({
-  listCognitoUsers: vi.fn(),
+  listCognitoUsers: m.listCognitoUsers,
   getCognitoUser: m.getCognitoUser,
   createCognitoUser: vi.fn(),
   updateCognitoUser: m.updateCognitoUser,
@@ -27,12 +29,12 @@ vi.mock('@/lib/role-admin', () => ({
   countAdmins: m.countAdmins,
   setUserRole: m.setUserRole,
   requireFreshRole: m.requireFreshRole,
-  listGroupMembers: vi.fn(),
+  listGroupMembers: m.listGroupMembers,
 }));
 
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { PUT } from '../route';
+import { GET, PUT } from '../route';
 
 const asReq = (body: unknown) => ({ json: async () => body } as unknown as Request as never);
 const target = { email: 'bob@x.com', department: 'eng', enabled: true };
@@ -122,5 +124,37 @@ describe('PUT /api/users disable guards', () => {
     const res = await PUT(asReq({ username: 'bob@x.com', role: 'user' }));
     expect(res.status).toBe(200);
     expect(m.setUserRole).toHaveBeenCalledWith('bob@x.com', 'user');
+  });
+});
+
+describe('shared user pool (COGNITO_GROUP_PREFIX set)', () => {
+  beforeEach(() => vi.stubEnv('COGNITO_GROUP_PREFIX', 'cc-'));
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('grants "user" to a user without any cc role group (setUserRole is called)', async () => {
+    m.getRoleGroups.mockResolvedValue([]);
+    const res = await PUT(asReq({ username: 'bob@x.com', role: 'user' }));
+    expect(res.status).toBe(200);
+    expect(m.setUserRole).toHaveBeenCalledWith('bob@x.com', 'user');
+  });
+
+  it('GET lists a user without a cc role group as role null (no access)', async () => {
+    m.listCognitoUsers.mockResolvedValue([
+      { username: 'u1', email: 'a@x.com', subdomain: '' },
+      { username: 'u2', email: 'b@x.com', subdomain: '' },
+    ]);
+    m.listGroupMembers.mockImplementation(async (r: string) => (r === 'admin' ? [{ username: 'u1', email: 'a@x.com', enabled: true }] : []));
+    const res = await GET({ url: 'https://x/api/users' } as never);
+    const json = await res.json();
+    expect(json.data.map((u: { username: string; role: string | null }) => [u.username, u.role])).toEqual([['u1', 'admin'], ['u2', null]]);
+  });
+});
+
+describe('own user pool (no prefix)', () => {
+  it('GET keeps defaulting a group-less user to "user"', async () => {
+    m.listCognitoUsers.mockResolvedValue([{ username: 'u2', email: 'b@x.com', subdomain: '' }]);
+    m.listGroupMembers.mockResolvedValue([]);
+    const res = await GET({ url: 'https://x/api/users' } as never);
+    expect((await res.json()).data[0].role).toBe('user');
   });
 });

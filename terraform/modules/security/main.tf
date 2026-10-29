@@ -72,6 +72,55 @@ resource "aws_ecr_lifecycle_policy" "dashboard" {
 }
 
 # ---- Cognito User Pool -------------------------------------------------------
+# Shared mode (shared_user_pool_name set): the dashboard, CLI and Lambdas use an
+# existing pool owned by another stack, located by name at plan time so no pool ID
+# lives in this repo. cc creates only its app clients and prefixed role groups
+# there; the pool's schema, triggers and messages belong to the owning stack, which
+# must define the custom attributes listed in local.required_custom_attributes.
+# The own pool below is kept (unused) in shared mode so clearing the variable is the
+# rollback; removing it is a separate cleanup.
+locals {
+  shared_pool  = var.shared_user_pool_name != ""
+  group_prefix = local.shared_pool ? "cc-" : ""
+  required_custom_attributes = [
+    "subdomain", "container_os", "resource_tier", "security_policy", "container_id",
+    "department", "budget_exceeded", "storage_type", "dept_manager_sub",
+  ]
+  user_pool_id  = local.shared_pool ? data.aws_cognito_user_pool.shared[0].id : aws_cognito_user_pool.this.id
+  user_pool_arn = local.shared_pool ? data.aws_cognito_user_pool.shared[0].arn : aws_cognito_user_pool.this.arn
+}
+
+data "aws_cognito_user_pools" "shared" {
+  count = local.shared_pool ? 1 : 0
+  name  = var.shared_user_pool_name
+
+  lifecycle {
+    postcondition {
+      condition     = length(self.ids) == 1
+      error_message = "shared_user_pool_name must match exactly one user pool in this account and region."
+    }
+  }
+}
+
+data "aws_cognito_user_pool" "shared" {
+  count        = local.shared_pool ? 1 : 0
+  user_pool_id = one(data.aws_cognito_user_pools.shared[0].ids)
+
+  lifecycle {
+    postcondition {
+      condition = alltrue([
+        for a in local.required_custom_attributes :
+        contains([for s in self.schema_attributes : s.name], "custom:${a}")
+      ])
+      error_message = "The shared user pool is missing cc custom attributes; add them in the owning stack first."
+    }
+    postcondition {
+      condition     = self.admin_create_user_config[0].allow_admin_create_user_only
+      error_message = "The shared user pool must allow admin-created users only (self sign-up off)."
+    }
+  }
+}
+
 resource "aws_cognito_user_pool" "this" {
   name = "cc-on-bedrock-users"
 
@@ -164,8 +213,9 @@ resource "aws_cognito_user_pool" "this" {
 }
 
 resource "aws_cognito_user_pool_client" "this" {
-  name         = "AppClient"
-  user_pool_id = aws_cognito_user_pool.this.id
+  # A shared pool hosts other apps' clients, so the name says whose client this is.
+  name         = local.shared_pool ? "cc-on-bedrock-dashboard" : "AppClient"
+  user_pool_id = local.user_pool_id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -189,7 +239,7 @@ resource "aws_cognito_user_pool_client" "this" {
 # Public app client for cc-bedrock-local USER_PASSWORD_AUTH.
 resource "aws_cognito_user_pool_client" "cli_public" {
   name         = "cc-on-bedrock-cli-public"
-  user_pool_id = aws_cognito_user_pool.this.id
+  user_pool_id = local.user_pool_id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -216,22 +266,23 @@ resource "aws_cognito_user_pool_client" "cli_public" {
   prevent_user_existence_errors = "ENABLED"
 }
 
-# Cognito Groups
+# Cognito Groups. In a shared pool they carry the "cc-" prefix and are the access
+# gate: a user in none of them has no cc access (dashboard, CLI credentials).
 resource "aws_cognito_user_group" "admin" {
-  name         = "admin"
-  user_pool_id = aws_cognito_user_pool.this.id
+  name         = "${local.group_prefix}admin"
+  user_pool_id = local.user_pool_id
   description  = "Dashboard administrators"
 }
 
 resource "aws_cognito_user_group" "user" {
-  name         = "user"
-  user_pool_id = aws_cognito_user_pool.this.id
+  name         = "${local.group_prefix}user"
+  user_pool_id = local.user_pool_id
   description  = "Dev environment users"
 }
 
 resource "aws_cognito_user_group" "dept_manager" {
-  name         = "dept-manager"
-  user_pool_id = aws_cognito_user_pool.this.id
+  name         = "${local.group_prefix}dept-manager"
+  user_pool_id = local.user_pool_id
   description  = "Department managers"
   precedence   = 5
 }
@@ -589,7 +640,7 @@ data "aws_iam_policy_document" "dashboard_cognito" {
       "cognito-idp:ListUsers",
       "cognito-idp:ListUsersInGroup",
     ]
-    resources = [aws_cognito_user_pool.this.arn]
+    resources = [local.user_pool_arn]
   }
 }
 

@@ -13,7 +13,7 @@ import {
 } from "@/lib/aws-clients";
 import { createUserSchema, updateUserSchema } from "@/lib/validation";
 import { batchGetCustomRoutes } from "@/lib/ec2-clients";
-import { ROLES, roleFromGroups, validateRoleChange } from "@/lib/roles";
+import { ROLES, accessRole, roleFromGroups, validateRoleChange } from "@/lib/roles";
 import { countAdmins, getRoleGroups, listGroupMembers, requireFreshRole, setUserRole } from "@/lib/role-admin";
 
 /** Refuse disabling yourself or the last enabled admin (same rules as demotion). */
@@ -75,10 +75,11 @@ export async function GET(req: NextRequest) {
           ...(groupsByUser.get(u.email.toLowerCase()) ?? []),
         ]),
       ];
-      const { role, needsCleanup } = roleFromGroups(groups);
+      const { needsCleanup } = roleFromGroups(groups);
       return {
         ...u,
-        role,
+        // null = shared pool user without a cc role group (no access until an admin assigns one).
+        role: accessRole(groups),
         roleNeedsCleanup: needsCleanup,
         customRoutes: routesBySubdomain.get(u.subdomain) ?? [],
       };
@@ -169,7 +170,10 @@ export async function PUT(req: NextRequest) {
     let roleChanged = false;
     let attrsWritten = false;
     if (requestedRole || attrs.department) {
-      const current = roleFromGroups(await getRoleGroups(attrs.username));
+      const currentGroups = await getRoleGroups(attrs.username);
+      const current = roleFromGroups(currentGroups);
+      // Shared pool: a user without a cc role group must get the group even when "user" is picked.
+      const noAccess = accessRole(currentGroups) === null;
       const newRole = requestedRole ?? current.role;
       const target = await getCognitoUser(attrs.username);
       const check = validateRoleChange({
@@ -190,7 +194,7 @@ export async function PUT(req: NextRequest) {
       await updateCognitoUser(attrs);
       attrsWritten = true;
       // Also re-apply when the user holds several role groups, so the change normalizes them.
-      if (requestedRole && (requestedRole !== current.role || current.needsCleanup)) {
+      if (requestedRole && (requestedRole !== current.role || current.needsCleanup || noAccess)) {
         try {
           await setUserRole(attrs.username, requestedRole);
         } catch (err) {

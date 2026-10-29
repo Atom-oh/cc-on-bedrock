@@ -36,6 +36,9 @@ export interface DepartmentBudget {
   perUserDailyBudget: number;
   perUserWeeklyBudget: number;
   perUserMonthlyBudget: number;
+  // ADR-008 amendment: members without an explicit cap are uncapped (overrides the
+  // per-user defaults above and the global env default).
+  unlimitedPerUser: boolean;
   currentSpend: number;
   updatedAt: string;
 }
@@ -118,6 +121,7 @@ export async function GET(req: NextRequest) {
           perUserDailyBudget: Number(u.perUserDailyBudget ?? 0),
           perUserWeeklyBudget: Number(u.perUserWeeklyBudget ?? 0),
           perUserMonthlyBudget: Number(u.perUserMonthlyBudget ?? 0),  // ADR-023
+          unlimitedPerUser: u.unlimitedPerUser === true,
           currentSpend: Number(u.currentSpend ?? 0),
           updatedAt: u.updatedAt ?? "",
         };
@@ -218,6 +222,7 @@ export async function PUT(req: NextRequest) {
       perUserDailyBudget?: number;    // dept-only (ADR-008/023 per-member defaults)
       perUserWeeklyBudget?: number;
       perUserMonthlyBudget?: number;
+      unlimitedPerUser?: boolean;     // dept-only (ADR-008 amendment)
       dailyTokenLimit?: number;
       allowedTiers?: string[];
     };
@@ -232,6 +237,10 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: `${f} must be a number between 0 and 1000000` }, { status: 400 });
       }
     }
+    const unlimitedPerUser = (body as Record<string, unknown>).unlimitedPerUser;
+    if (unlimitedPerUser !== undefined && typeof unlimitedPerUser !== "boolean") {
+      return NextResponse.json({ error: "unlimitedPerUser must be a boolean" }, { status: 400 });
+    }
 
     const now = new Date().toISOString();
     const actor: Pick<LimitChange, "actor" | "actorRole" | "appliedAt"> = {
@@ -244,11 +253,11 @@ export async function PUT(req: NextRequest) {
       // ADR-023: dept rows carry `monthlyBudget` (total cap) plus per-member default
       // caps per period (ADR-008: daily / weekly / monthly). At least one must be set.
       const deptFields = DEPT_PERIOD_FIELDS.filter((f) => (body as Record<string, unknown>)[f] !== undefined);
-      if (monthlyBudget === undefined && deptFields.length === 0) {
-        return NextResponse.json({ error: "monthlyBudget or a perUser*Budget field is required" }, { status: 400 });
+      if (monthlyBudget === undefined && deptFields.length === 0 && unlimitedPerUser === undefined) {
+        return NextResponse.json({ error: "monthlyBudget, a perUser*Budget field or unlimitedPerUser is required" }, { status: 400 });
       }
       const updateParts: string[] = ["updatedAt = :now"];
-      const exprVals: Record<string, { N: string } | { S: string } | { L: { S: string }[] }> = {
+      const exprVals: Record<string, { N: string } | { S: string } | { BOOL: boolean } | { L: { S: string }[] }> = {
         ":now": { S: now },
       };
       if (monthlyBudget !== undefined) {
@@ -259,6 +268,10 @@ export async function PUT(req: NextRequest) {
         updateParts.push(`${f} = :${f}`);
         exprVals[`:${f}`] = { N: String((body as Record<string, number>)[f]) };
       }
+      if (unlimitedPerUser !== undefined) {
+        updateParts.push("unlimitedPerUser = :unlimitedPerUser");
+        exprVals[":unlimitedPerUser"] = { BOOL: unlimitedPerUser };
+      }
       if (allowedTiers && Array.isArray(allowedTiers)) {
         updateParts.push("allowedTiers = :tiers");
         exprVals[":tiers"] = { L: allowedTiers.map(t => ({ S: t })) };
@@ -266,6 +279,11 @@ export async function PUT(req: NextRequest) {
       const Key = { dept_id: { S: id } };
       const current = await dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key }));
       const changed = [...(monthlyBudget !== undefined ? ["monthlyBudget"] : []), ...deptFields];
+      // The audit stores numbers: unlimitedPerUser is recorded as 1 (on) / 0 (off).
+      const flagAudit = (row: Record<string, unknown> | undefined): Record<string, number> =>
+        unlimitedPerUser !== undefined && typeof row?.unlimitedPerUser === "boolean"
+          ? { unlimitedPerUser: row.unlimitedPerUser ? 1 : 0 }
+          : {};
       // Row update + limit_change audit commit together (lib/limit-audit).
       await applyLimitChange(
         {
@@ -278,8 +296,11 @@ export async function PUT(req: NextRequest) {
           ...actor,
           targetType: "department",
           department: id,
-          before: pickNumbers(current.Item ? unmarshall(current.Item) : undefined, changed),
-          after: pickNumbers(body as Record<string, unknown>, changed),
+          before: {
+            ...pickNumbers(current.Item ? unmarshall(current.Item) : undefined, changed),
+            ...flagAudit(current.Item ? unmarshall(current.Item) : undefined),
+          },
+          after: { ...pickNumbers(body as Record<string, unknown>, changed), ...flagAudit(body as Record<string, unknown>) },
         }
       );
     } else if (type === "user") {
@@ -287,6 +308,9 @@ export async function PUT(req: NextRequest) {
       // once so BOTH the cc-user-budgets row AND the mirrored LIMIT#monthly land
       // under USER#{email.lower()} — matching the tracker/enforcer key (else the
       // enforcer can't read the mirrored cap → token-limit bypass).
+      if (unlimitedPerUser !== undefined) {
+        return NextResponse.json({ error: "unlimitedPerUser applies to departments only" }, { status: 400 });
+      }
       const userId = id.trim().toLowerCase();
       const updateParts: string[] = ["updatedAt = :now"];
       const exprValues: Record<string, AttributeValue> = {

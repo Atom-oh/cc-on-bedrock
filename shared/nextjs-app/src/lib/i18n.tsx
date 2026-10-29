@@ -284,6 +284,7 @@ const ko: Record<string, string> = {
   "users.role.dept-manager": "부서 관리자",
   "users.role.user": "일반 사용자",
   "users.role.cleanup": "역할 정리 필요",
+  "users.role.none": "접근 권한 없음",
   "users.role.normalize": "역할 정리",
   "users.department": "부서",
   "users.department.required": "부서 관리자는 부서 필수",
@@ -524,6 +525,8 @@ const ko: Record<string, string> = {
   "budgets.statusCause": "상태 / 차단 원인",
   "budgets.blockedUsers": "현재 차단된 사용자",
   "budgets.deptOverHint": "부서 총액을 올려야 해제됩니다",
+  "budgets.unlimitedPerUser": "사용자 한도 없음",
+  "budgets.unlimitedPerUserHint": "켜면 개인 한도를 따로 지정하지 않은 구성원은 기간별 상한이 없습니다(부서 기본값·전역 기본값 무시). 부서 총액은 계속 적용됩니다.",
 };
 
 // ─── English ───
@@ -760,6 +763,7 @@ const en: Record<string, string> = {
   "users.role.dept-manager": "Department manager",
   "users.role.user": "User",
   "users.role.cleanup": "Role cleanup needed",
+  "users.role.none": "No access",
   "users.role.normalize": "Normalize role",
   "users.department": "Department",
   "users.department.required": "Required for department managers",
@@ -1000,4 +1004,6 @@ const en: Record<string, string> = {
   "budgets.statusCause": "Status / cause",
   "budgets.blockedUsers": "Currently blocked users",
   "budgets.deptOverHint": "Raise the department total to release",
+  "budgets.unlimitedPerUser": "Unlimited per-user budget",
+  "budgets.unlimitedPerUserHint": "When on, members without their own cap have no per-period cap (the department and global defaults are ignored). The department total still applies.",
 };

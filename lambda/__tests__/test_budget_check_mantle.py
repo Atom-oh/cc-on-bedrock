@@ -270,3 +270,13 @@ def test_case_colliding_rows_are_all_checked():
         assert not bc.mantle_eligible("a@x.com", "eng", users, {}, {})
         depts = {"eng": {}, "ENG": {"monthlyBudget": 9}}
         assert not bc.mantle_eligible("a@x.com", "eng", {}, depts, {})
+
+
+def test_unlimited_dept_member_is_mantle_eligible_under_a_global_cap():
+    with mock.patch.object(bc, "_GLOBAL_BUDGETS", {"daily": 0, "weekly": 0, "monthly": 5}):
+        depts = {"vip": {"unlimitedPerUser": True}}
+        assert bc.mantle_eligible("a@x.com", "vip", {}, depts, {})
+        assert not bc.mantle_eligible("b@x.com", "eng", {}, depts, {})
+        # a personal cap or a dept total cap still disqualifies
+        assert not bc.mantle_eligible("a@x.com", "vip", {"a@x.com": {"monthlyBudget": 20}}, depts, {})
+        assert not bc.mantle_eligible("a@x.com", "vip", {}, {"vip": {"unlimitedPerUser": True, "monthlyBudget": 100}}, {})
