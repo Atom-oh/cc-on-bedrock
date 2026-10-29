@@ -280,10 +280,10 @@ export async function PUT(req: NextRequest) {
       const current = await dynamodb.send(new GetItemCommand({ TableName: DEPT_BUDGETS_TABLE, Key }));
       const changed = [...(monthlyBudget !== undefined ? ["monthlyBudget"] : []), ...deptFields];
       // The audit stores numbers: unlimitedPerUser is recorded as 1 (on) / 0 (off).
+      // A row without the attribute is "off" (budget-check reads only a real true), so
+      // the first toggle audits 0 → 1 rather than a missing "before".
       const flagAudit = (row: Record<string, unknown> | undefined): Record<string, number> =>
-        unlimitedPerUser !== undefined && typeof row?.unlimitedPerUser === "boolean"
-          ? { unlimitedPerUser: row.unlimitedPerUser ? 1 : 0 }
-          : {};
+        unlimitedPerUser !== undefined ? { unlimitedPerUser: row?.unlimitedPerUser === true ? 1 : 0 } : {};
       // Row update + limit_change audit commit together (lib/limit-audit).
       await applyLimitChange(
         {

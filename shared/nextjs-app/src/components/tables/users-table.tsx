@@ -357,6 +357,7 @@ export default function UsersTable({
                 )}
                 <td className="px-5 py-3.5 whitespace-nowrap text-right">
                   <div className="flex items-center justify-end gap-2">
+                    {/* role === null: another app's user in a shared pool; cc may only grant a role. */}
                     {onUpdate && user.roleNeedsCleanup && (
                       <button
                         onClick={() => void onUpdate(user.username, "role", user.role ?? "user")}
@@ -365,7 +366,7 @@ export default function UsersTable({
                         {t("users.role.normalize")}
                       </button>
                     )}
-                    {onToggle && (
+                    {user.role !== null && onToggle && (
                       <button
                         onClick={() => onToggle(user.username, !user.enabled)}
                         className={`px-2 py-1 text-xs font-medium rounded-lg transition-colors ${
@@ -377,7 +378,7 @@ export default function UsersTable({
                         {user.enabled ? "Disable" : "Enable"}
                       </button>
                     )}
-                    {onResetEnvironment && user.subdomain && (
+                    {user.role !== null && onResetEnvironment && user.subdomain && (
                       <button
                         onClick={() => onResetEnvironment(user.username)}
                         className="px-2 py-1 text-xs font-medium text-orange-400 hover:bg-orange-900/30 rounded-lg transition-colors"
@@ -385,7 +386,7 @@ export default function UsersTable({
                         Reset Env
                       </button>
                     )}
-                    {onPermanentDelete && (
+                    {user.role !== null && onPermanentDelete && (
                       <button
                         onClick={() => onPermanentDelete(user.username)}
                         className="px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"

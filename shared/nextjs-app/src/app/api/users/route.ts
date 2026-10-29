@@ -16,6 +16,18 @@ import { batchGetCustomRoutes } from "@/lib/ec2-clients";
 import { ROLES, accessRole, requiresRoleGroup, roleFromGroups, validateRoleChange } from "@/lib/roles";
 import { countAdmins, getRoleGroups, listGroupMembers, removeUserAccess, requireFreshRole, setUserRole } from "@/lib/role-admin";
 
+/**
+ * Shared pool: the dashboard's Cognito IAM reaches every user in the pool, and IAM
+ * cannot be scoped by group. A user without a cc role group belongs only to the other
+ * app, so cc refuses to disable, enable, edit or delete them; the only allowed action
+ * is granting a cc role (ADR-016). Own pool: no restriction.
+ */
+async function guardForeignUser(username: string): Promise<NextResponse | null> {
+  if (!requiresRoleGroup()) return null;
+  if (accessRole(await getRoleGroups(username)) !== null) return null;
+  return NextResponse.json({ success: false, error: "not_cc_user" }, { status: 403 });
+}
+
 /** Refuse disabling yourself or the last enabled admin (same rules as demotion). */
 async function guardAdminLoss(actorEmail: string, username: string): Promise<NextResponse | null> {
   const target = await getCognitoUser(username);
@@ -153,6 +165,8 @@ export async function PUT(req: NextRequest) {
       if (!raw.username) {
         return NextResponse.json({ success: false, error: "username is required" }, { status: 400 });
       }
+      const foreign = await guardForeignUser(raw.username);
+      if (foreign) return foreign;
       if (raw.action === "enable") await enableCognitoUser(raw.username);
       else {
         const blocked = await guardAdminLoss(session.user.email ?? "", raw.username);
@@ -191,6 +205,11 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
     }
     const { role: requestedRole, ...attrs } = parsed.data;
+    // A no-access shared-pool user may only be granted a role (with optional attributes).
+    if (!requestedRole) {
+      const foreign = await guardForeignUser(attrs.username);
+      if (foreign) return foreign;
+    }
     let roleChanged = false;
     let attrsWritten = false;
     if (requestedRole || attrs.department) {
@@ -255,6 +274,8 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
+    const foreign = await guardForeignUser(username);
+    if (foreign) return foreign;
     switch (action) {
       case "disable": {
         const blocked = await guardAdminLoss(session.user.email ?? "", username);

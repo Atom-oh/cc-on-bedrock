@@ -93,6 +93,13 @@ describe('PUT /api/admin/budgets', () => {
 });
 
 describe('PUT /api/admin/budgets unlimitedPerUser (dept)', () => {
+  it('audits a row without the attribute as 0 on the first toggle', async () => {
+    m.send.mockImplementation(async (c: unknown) => (c instanceof GetItemCommand ? { Item: { dept_id: { S: 'eng' } } } : {}));
+    await PUT(asReq({ type: 'department', id: 'eng', unlimitedPerUser: true }));
+    const [tx] = sentOf(TransactWriteItemsCommand);
+    expect(auditOf(tx)).toMatchObject({ before: { unlimitedPerUser: 0 }, after: { unlimitedPerUser: 1 } });
+  });
+
   it('writes the flag as a DynamoDB BOOL and accepts it as the only field', async () => {
     m.send.mockImplementation(async (c: unknown) =>
       c instanceof GetItemCommand ? { Item: { unlimitedPerUser: { BOOL: false } } } : {}
