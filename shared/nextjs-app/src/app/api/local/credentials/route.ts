@@ -10,6 +10,7 @@ import {
 import { createHash } from "crypto";
 import { pinnedSubdomain, requireAnyRoleGroup } from "@/lib/role-admin";
 import { requiresRoleGroup } from "@/lib/roles";
+import { userPoolId } from "@/lib/aws-clients";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode credentials API.
 //
@@ -44,6 +45,8 @@ interface UserIdentity {
   project: string;
   /** Shared pool only: the pinned `custom:subdomain` that names the Local role. */
   subdomain?: string;
+  /** Shared pool only: scopes the role's `sub` binding (`sub:<pool>` tag). */
+  pool?: string;
 }
 
 /** Identity for the STS Issuer plus the Cognito username used for the fresh role-group check. */
@@ -192,6 +195,7 @@ export async function POST(req: NextRequest) {
   if (requiresRoleGroup()) {
     try {
       identity.subdomain = await pinnedSubdomain(caller.cognitoUsername as string);
+      identity.pool = userPoolId;
     } catch (err) {
       console.error("[local/credentials] subdomain pin failed:", err instanceof Error ? err.message : err);
       return NextResponse.json({ error: "Identity check unavailable" }, { status: 503 });

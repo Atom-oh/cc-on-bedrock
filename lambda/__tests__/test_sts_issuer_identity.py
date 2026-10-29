@@ -24,11 +24,12 @@ def _invoke(payload, ensure):
 
 def test_pinned_subdomain_and_sub_reach_ensure_role():
     ensure = mock.Mock(return_value={"roleArn": "arn:aws:iam::123456789012:role/x", "created": False})
-    _invoke({"sub": "sub-1", "email": "new.address@x.com", "subdomain": "old-name", "department": "eng"}, ensure)
+    _invoke({"sub": "sub-1", "pool": "pool-1", "email": "new.address@x.com", "subdomain": "old-name", "department": "eng"}, ensure)
     args, kwargs = ensure.call_args
     assert args[0] == "old-name"  # pinned value, not derived from the (changed) email
     assert args[1] == "new.address@x.com"
     assert kwargs["sub"] == "sub-1"
+    assert kwargs["pool"] == "pool-1"
 
 
 def test_refused_ensure_role_issues_no_credentials():

@@ -24,7 +24,7 @@ describe("pinnedSubdomain (ADR-016 shared pool)", () => {
   });
 
   it("returns an existing pin without writing", async () => {
-    const send = vi.fn(async (_c: unknown) => user({ email: "new@x.com", "custom:subdomain": "old-name" }));
+    const send = vi.fn(async (_c: unknown) => user({ email: "new@x.com", email_verified: "true", "custom:subdomain": "old-name" }));
     await expect(pinnedSubdomain("u@x.com", send)).resolves.toBe("old-name");
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0]).toBeInstanceOf(AdminGetUserCommand);
@@ -36,6 +36,12 @@ describe("pinnedSubdomain (ADR-016 shared pool)", () => {
     const write = send.mock.calls[1][0] as AdminUpdateUserAttributesCommand;
     expect(write).toBeInstanceOf(AdminUpdateUserAttributesCommand);
     expect(write.input.UserAttributes).toEqual([{ Name: "custom:subdomain", Value: "jane-kim" }]);
+  });
+
+  it("refuses an unverified email even when a pin exists", async () => {
+    const send = vi.fn(async (_c: unknown) => user({ email: "victim@x.com", email_verified: "false", "custom:subdomain": "mallory" }));
+    await expect(pinnedSubdomain("u@x.com", send)).rejects.toThrow(/not verified/);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("refuses to pin from an unverified email", async () => {

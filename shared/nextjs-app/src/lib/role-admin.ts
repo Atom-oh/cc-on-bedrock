@@ -164,8 +164,9 @@ export async function removeUserAccess(
 /**
  * Shared pool (ADR-016): the user's Local role is pinned to `custom:subdomain`, which only
  * Admin* APIs can write. Returns the pinned value, pinning it from the current email on
- * first use. sts-issuer's ensure_role refuses a role whose owner email differs, so a later
- * self-service email change cannot mint a fresh role (and a fresh budget identity).
+ * first use, and requires a verified email every time. sts-issuer's ensure_role refuses a
+ * role whose owner email differs, so a later self-service email change cannot mint a fresh
+ * role (and a fresh budget identity).
  * Read fresh from Cognito, never from the session. Throws on lookup/write failure.
  */
 export async function pinnedSubdomain(username: string, send: Send = defaultSend): Promise<string> {
@@ -173,9 +174,11 @@ export async function pinnedSubdomain(username: string, send: Send = defaultSend
     UserAttributes?: { Name?: string; Value?: string }[];
   };
   const attrs = Object.fromEntries((res.UserAttributes ?? []).map((a) => [a.Name ?? "", a.Value ?? ""]));
+  // Checked on every issuance, not only the first pin: an unverified self-service email
+  // change resets email_verified, so it can never present another user's email to
+  // ensure_role, which binds a role still unbound in this pool to a matching email.
+  if (attrs["email_verified"] !== "true") throw new Error("email not verified; refusing to issue credentials");
   if (attrs["custom:subdomain"]) return attrs["custom:subdomain"];
-  // The first pin names the role after the email, so it must be a verified address.
-  if (attrs["email_verified"] !== "true") throw new Error("email not verified; refusing to pin a subdomain");
   const derived = deriveSubdomain(attrs["email"] ?? "");
   if (!derived) throw new Error("cannot derive a subdomain from the user's email");
   await send(new AdminUpdateUserAttributesCommand({

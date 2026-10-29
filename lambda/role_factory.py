@@ -110,7 +110,10 @@ def inline_policy(department: str) -> dict:
     }
 
 
-def ensure_role(subdomain: str, email: str, department: str, project: str, sub: "str | None" = None) -> dict:
+def ensure_role(
+    subdomain: str, email: str, department: str, project: str,
+    sub: "str | None" = None, pool: "str | None" = None,
+) -> dict:
     """Create or refresh the per-user Local Governance role. Idempotent.
 
     ADR-031 (B′): the role is named by `subdomain` (cc-on-bedrock-local-user-
@@ -118,10 +121,12 @@ def ensure_role(subdomain: str, email: str, department: str, project: str, sub: 
     Collision guard: if a role of this name already exists owned by a DIFFERENT
     email, raise — two users must never share one Local role (subdomain uniqueness
     invariant). The provisioner disambiguates colliding subdomains before calling.
-    `sub` (ADR-016, optional): the caller's immutable Cognito `sub`. A role tagged with
-    a different `sub` is refused even when the email matches, so an email a user can
-    rewrite never transfers a role. A legacy role without the tag gets it on the first
-    call whose email matches its owner.
+    `sub` + `pool` (ADR-016, shared pool only): the caller's immutable Cognito `sub`,
+    tagged per pool as `sub:<pool>` because the same person has a different `sub` in
+    each pool. A role whose tag for this pool holds a different `sub` is refused even
+    when the email matches, so an email a user can rewrite never transfers a role. A
+    role without a tag for this pool gets it on the first call whose email matches its
+    owner (the caller guarantees a verified email). Without both, no binding applies.
 
     Returns {"roleArn": "...", "created": bool}.
     """
@@ -137,8 +142,10 @@ def ensure_role(subdomain: str, email: str, department: str, project: str, sub: 
         {"Key": "managed_by", "Value": "cc-on-bedrock"},
     ]
     sub_v = (sub or "").strip()
-    if sub_v:
-        tags.append({"Key": "sub", "Value": sub_v})
+    pool_v = (pool or "").strip()
+    sub_key = f"sub:{pool_v}" if sub_v and pool_v else ""
+    if sub_key:
+        tags.append({"Key": sub_key, "Value": sub_v})
     created = False
     try:
         iam.get_role(RoleName=name)
@@ -156,8 +163,8 @@ def ensure_role(subdomain: str, email: str, department: str, project: str, sub: 
                 f"but ensure_role invoked for {email_l!r}. Two users derived the same "
                 f"subdomain — provisioner must disambiguate (suffix) before calling."
             )
-        existing_sub = next((t["Value"].strip() for t in existing if t["Key"] == "sub"), "")
-        if existing_sub and sub_v and existing_sub != sub_v:
+        existing_sub = next((t["Value"].strip() for t in existing if sub_key and t["Key"] == sub_key), "")
+        if existing_sub and existing_sub != sub_v:
             raise RuntimeError(
                 f"owner mismatch on {name}: role bound to another Cognito sub; "
                 f"refusing to hand it to a different user (ADR-016)."
