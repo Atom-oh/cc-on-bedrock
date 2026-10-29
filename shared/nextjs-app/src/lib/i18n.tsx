@@ -294,6 +294,8 @@ const ko: Record<string, string> = {
   "users.error.last_admin": "마지막 관리자는 강등할 수 없습니다.",
   "users.error.dept_required": "부서 관리자는 부서가 지정되어야 합니다.",
   "users.error.role_change_failed": "역할 변경에 실패했습니다. 사용자의 현재 역할을 확인한 뒤 다시 시도해 주세요.",
+  "users.error.grant_user_first": "접근 권한이 없는 사용자는 먼저 역할만 부여하세요(관리자 또는 사용자). 부서와 부서 관리자 지정은 그다음에 합니다.",
+  "users.error.not_cc_user": "다른 앱 사용자입니다. 먼저 역할을 부여해야 관리할 수 있습니다.",
 
   // Instances (admin)
   "containers.title": "인스턴스 관리",
@@ -774,6 +776,8 @@ const en: Record<string, string> = {
   "users.error.last_admin": "The last admin cannot be demoted.",
   "users.error.dept_required": "A department manager must have a department.",
   "users.error.role_change_failed": "Role change failed. Check the user's current role and try again.",
+  "users.error.grant_user_first": "For a user without access, grant a role on its own first (admin or user). Set the department or department manager afterwards.",
+  "users.error.not_cc_user": "This user belongs to another app. Grant a role before managing them.",
 
   // Containers
   "containers.title": "Instance Management",

@@ -247,24 +247,17 @@ describe('shared pool: other apps\' users are out of reach', () => {
     expect(m.removeUserAccess).not.toHaveBeenCalled();
   });
 
-  it('grants the group before writing attributes, and writes none if the grant fails', async () => {
-    const order: string[] = [];
-    m.setUserRole.mockImplementation(async () => { order.push('role'); });
-    m.updateCognitoUser.mockImplementation(async () => { order.push('attrs'); });
-    const ok = await PUT(asReq({ username: 'carol@x.com', role: 'user', department: 'eng' }));
-    expect(ok.status).toBe(200);
-    expect(order).toEqual(['role', 'attrs']);
-    expect(m.setUserRole).toHaveBeenCalledTimes(1);
-
-    vi.clearAllMocks();
-    m.getRoleGroups.mockResolvedValue([]);
-    m.countAdmins.mockResolvedValue(3);
-    m.getCognitoUser.mockResolvedValue(target);
-    m.requireFreshRole.mockResolvedValue({ ok: true, role: 'admin' });
-    m.setUserRole.mockRejectedValue(new Error('boom'));
-    const failed = await PUT(asReq({ username: 'carol@x.com', role: 'user', department: 'eng' }));
-    expect(failed.status).toBe(500);
+  it('grants a no-access user a role on its own, and refuses attributes or dept-manager with it', async () => {
+    const combined = await PUT(asReq({ username: 'carol@x.com', role: 'user', department: 'eng' }));
+    expect(combined.status).toBe(400);
+    expect((await combined.json()).error).toBe('grant_user_first');
+    const mgr = await PUT(asReq({ username: 'carol@x.com', role: 'dept-manager' }));
+    expect(mgr.status).toBe(400);
+    expect(m.setUserRole).not.toHaveBeenCalled();
     expect(m.updateCognitoUser).not.toHaveBeenCalled();
+    const ok = await PUT(asReq({ username: 'carol@x.com', role: 'admin' }));
+    expect(ok.status).toBe(200);
+    expect(m.setUserRole).toHaveBeenCalledWith('carol@x.com', 'admin');
   });
 
   it('still allows disabling a cc user', async () => {

@@ -220,6 +220,16 @@ export async function PUT(req: NextRequest) {
       const current = roleFromGroups(currentGroups);
       // Shared pool: a user without a cc role group must get the group even when "user" is picked.
       const noAccess = accessRole(currentGroups) === null;
+      // Granting access to another app's user is a single group write: role only, and
+      // not dept-manager (which needs a cc-set department). Grant "user" first, then
+      // promote with a normal edit, which writes the department before the role. So a
+      // failed grant leaves nothing behind, and no partial dept-manager can exist.
+      if (noAccess && requestedRole) {
+        const extra = Object.entries(attrs).some(([k, v]) => k !== "username" && v !== undefined);
+        if (extra || requestedRole === "dept-manager") {
+          return NextResponse.json({ success: false, error: "grant_user_first" }, { status: 400 });
+        }
+      }
       const newRole = requestedRole ?? current.role;
       const target = await getCognitoUser(attrs.username);
       const check = validateRoleChange({
@@ -236,22 +246,11 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ success: false, error: check.error }, { status: 400 });
       }
       // Department first: if the role write then fails, the user is never a
-      // dept-manager of the department they were just moved out of. Granting access
-      // to another app's user is the exception: the group goes first, so a failed
-      // grant never leaves cc-written attributes on a user cc does not manage.
-      if (noAccess && requestedRole) {
-        try {
-          await setUserRole(attrs.username, requestedRole);
-        } catch (err) {
-          console.error("[users] PUT setUserRole", err instanceof Error ? err.message : err);
-          return NextResponse.json({ success: false, error: "role_change_failed" }, { status: 500 });
-        }
-        roleChanged = true;
-      }
+      // dept-manager of the department they were just moved out of.
       await updateCognitoUser(attrs);
       attrsWritten = true;
       // Also re-apply when the user holds several role groups, so the change normalizes them.
-      if (!roleChanged && requestedRole && (requestedRole !== current.role || current.needsCleanup)) {
+      if (requestedRole && (requestedRole !== current.role || current.needsCleanup || noAccess)) {
         try {
           await setUserRole(attrs.username, requestedRole);
         } catch (err) {

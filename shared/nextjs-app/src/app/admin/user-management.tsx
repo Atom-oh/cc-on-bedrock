@@ -8,7 +8,7 @@ import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import { ROLES, type Role } from "@/lib/roles";
 import type { CognitoUser, CreateUserInput, ApiResponse } from "@/lib/types";
 
-const ROLE_ERRORS = ["self_demotion", "last_admin", "dept_required", "role_change_failed"];
+const ROLE_ERRORS = ["self_demotion", "last_admin", "dept_required", "role_change_failed", "grant_user_first", "not_cc_user"];
 
 export default function UserManagement() {
   const { t } = useI18n();
