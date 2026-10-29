@@ -76,3 +76,49 @@ def test_ensure_role_same_owner_refreshes():
     assert res["created"] is False
     iam.create_role.assert_not_called()
     iam.tag_role.assert_called()
+
+
+def _existing_role(tags):
+    iam = mock.Mock()
+    iam.exceptions.NoSuchEntityException = rf.iam.exceptions.NoSuchEntityException
+    iam.get_role.return_value = {"Role": {}}
+    iam.list_role_tags.return_value = {"Tags": tags}
+    return iam
+
+
+def test_ensure_role_refuses_a_role_bound_to_another_sub():
+    """ADR-016: email is user-writable in a shared pool, so the immutable sub decides."""
+    iam = _existing_role([{"Key": "email", "Value": "alice@example.com"}, {"Key": "sub", "Value": "sub-alice"}])
+    with mock.patch.object(rf, "iam", iam):
+        try:
+            rf.ensure_role("alice", "alice@example.com", "eng", "proj", sub="sub-mallory")
+            assert False, "expected owner-mismatch RuntimeError"
+        except RuntimeError as e:
+            assert "owner mismatch" in str(e)
+    iam.tag_role.assert_not_called()
+    iam.put_role_policy.assert_not_called()
+
+
+def test_ensure_role_binds_sub_on_a_legacy_role_and_tags_new_roles():
+    iam = _existing_role([{"Key": "email", "Value": "alice@example.com"}])
+    with mock.patch.object(rf, "iam", iam):
+        rf.ensure_role("alice", "alice@example.com", "eng", "proj", sub="sub-alice")
+    tags = {t["Key"]: t["Value"] for t in iam.tag_role.call_args.kwargs["Tags"]}
+    assert tags["sub"] == "sub-alice"
+    # same sub again is accepted; a call without sub (provisioner) adds no sub tag
+    iam2 = _existing_role([{"Key": "email", "Value": "alice@example.com"}, {"Key": "sub", "Value": "sub-alice"}])
+    with mock.patch.object(rf, "iam", iam2):
+        rf.ensure_role("alice", "alice@example.com", "eng", "proj", sub="sub-alice")
+        rf.ensure_role("alice", "alice@example.com", "eng", "proj")
+    assert all("sub" not in {t["Key"] for t in c.kwargs["Tags"]} for c in iam2.tag_role.call_args_list[1:])
+
+
+def test_ensure_role_still_refuses_an_email_change_with_the_same_sub():
+    """A pinned role keyed by email for usage/budgets must not follow a changed email."""
+    iam = _existing_role([{"Key": "email", "Value": "alice@example.com"}, {"Key": "sub", "Value": "sub-alice"}])
+    with mock.patch.object(rf, "iam", iam):
+        try:
+            rf.ensure_role("alice", "alice2@example.com", "eng", "proj", sub="sub-alice")
+            assert False, "expected collision RuntimeError"
+        except RuntimeError as e:
+            assert "collision" in str(e).lower()

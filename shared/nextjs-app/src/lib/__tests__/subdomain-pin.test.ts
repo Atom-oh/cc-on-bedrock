@@ -31,15 +31,21 @@ describe("pinnedSubdomain (ADR-016 shared pool)", () => {
   });
 
   it("pins from the current email on first use", async () => {
-    const send = vi.fn(async (c: unknown) => (c instanceof AdminGetUserCommand ? user({ email: "Jane.Kim@x.com" }) : {}));
+    const send = vi.fn(async (c: unknown) => (c instanceof AdminGetUserCommand ? user({ email: "Jane.Kim@x.com", email_verified: "true" }) : {}));
     await expect(pinnedSubdomain("jane.kim@x.com", send)).resolves.toBe("jane-kim");
     const write = send.mock.calls[1][0] as AdminUpdateUserAttributesCommand;
     expect(write).toBeInstanceOf(AdminUpdateUserAttributesCommand);
     expect(write.input.UserAttributes).toEqual([{ Name: "custom:subdomain", Value: "jane-kim" }]);
   });
 
+  it("refuses to pin from an unverified email", async () => {
+    const send = vi.fn(async (_c: unknown) => user({ email: "victim@x.com", email_verified: "false" }));
+    await expect(pinnedSubdomain("u@x.com", send)).rejects.toThrow(/not verified/);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("throws (fail closed) when no valid subdomain can be derived", async () => {
-    const send = vi.fn(async (_c: unknown) => user({ email: "ab@x.com" }));
+    const send = vi.fn(async (_c: unknown) => user({ email: "ab@x.com", email_verified: "true" }));
     await expect(pinnedSubdomain("ab@x.com", send)).rejects.toThrow();
     expect(send).toHaveBeenCalledTimes(1);
   });

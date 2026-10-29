@@ -174,6 +174,8 @@ export async function pinnedSubdomain(username: string, send: Send = defaultSend
   };
   const attrs = Object.fromEntries((res.UserAttributes ?? []).map((a) => [a.Name ?? "", a.Value ?? ""]));
   if (attrs["custom:subdomain"]) return attrs["custom:subdomain"];
+  // The first pin names the role after the email, so it must be a verified address.
+  if (attrs["email_verified"] !== "true") throw new Error("email not verified; refusing to pin a subdomain");
   const derived = deriveSubdomain(attrs["email"] ?? "");
   if (!derived) throw new Error("cannot derive a subdomain from the user's email");
   await send(new AdminUpdateUserAttributesCommand({

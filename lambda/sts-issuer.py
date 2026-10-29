@@ -188,7 +188,8 @@ def handler(event, context):
             return _http(400, {"error": f"cannot derive subdomain from email: {e}"})
 
     try:
-        ensure_result = ensure_role(subdomain, email, department, project)
+        # ADR-016: bind the role to the immutable sub as well as the email.
+        ensure_result = ensure_role(subdomain, email, department, project, sub=sub)
         role_arn = ensure_result["roleArn"]
         if ensure_result["created"]:
             # Pre-provisioner missed this user (rare; usually CloudTrail delay or
