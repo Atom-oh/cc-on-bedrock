@@ -17,6 +17,7 @@ interface DepartmentBudget {
   perUserDailyBudget: number;     // ADR-008/023 per-member defaults
   perUserWeeklyBudget: number;
   perUserMonthlyBudget: number;
+  unlimitedPerUser: boolean;      // ADR-008 amendment: members without an override are uncapped
   currentSpend: number;
   updatedAt: string;
 }
@@ -65,11 +66,13 @@ const DEPT_FIELD: Record<BudgetPeriod, "perUserDailyBudget" | "perUserWeeklyBudg
 };
 
 // ADR-008: three independent USD caps; exceeding ANY one blocks the user.
-function PeriodBudgetInputs({ idPrefix, values, onChange, hint }: {
+function PeriodBudgetInputs({ idPrefix, values, onChange, hint, unlimited = false }: {
   idPrefix: string;
   values: PeriodInputs;
   onChange: (v: PeriodInputs) => void;
   hint: string;
+  /** Dept unlimitedPerUser on: the defaults do not apply, shown disabled as "∞" (values are kept). */
+  unlimited?: boolean;
 }) {
   return (
     <div>
@@ -80,16 +83,41 @@ function PeriodBudgetInputs({ idPrefix, values, onChange, hint }: {
             <input
               id={`${idPrefix}-${p}`}
               type="number"
-              value={values[p]}
+              value={unlimited ? "" : values[p]}
               onChange={(e) => onChange({ ...values, [p]: e.target.value })}
-              className="w-full px-2 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="0"
+              disabled={unlimited}
+              className="w-full px-2 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              placeholder={unlimited ? "∞" : "0"}
               min="0"
               step="0.01"
             />
           </div>
         ))}
       </div>
+      <p className="mt-1 text-xs text-gray-500">{hint}</p>
+    </div>
+  );
+}
+
+function UnlimitedPerUserToggle({ id, checked, onChange, label, hint }: {
+  id: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-gray-300 cursor-pointer">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="h-4 w-4 rounded border-gray-600 bg-[#0d1117] text-blue-600 focus:ring-blue-500"
+        />
+        {label}
+      </label>
       <p className="mt-1 text-xs text-gray-500">{hint}</p>
     </div>
   );
@@ -109,6 +137,8 @@ export default function BudgetManagement() {
   const [createDept, setCreateDept] = useState("");
   const [newBudget, setNewBudget] = useState("");
   const [periodInputs, setPeriodInputs] = useState<PeriodInputs>(EMPTY_PERIODS);  // user caps or dept per-user defaults
+  const [unlimitedPerUser, setUnlimitedPerUser] = useState(false);  // dept-only flag
+  const [loadedUnlimitedPerUser, setLoadedUnlimitedPerUser] = useState(false);  // value when the edit modal opened
   const [newLimit, setNewLimit] = useState("");
   const [showAdvancedTokenLimit, setShowAdvancedTokenLimit] = useState(false);
   const [activeSection, setActiveSection] = useState<"departments" | "users" | "limits">("departments");
@@ -138,9 +168,11 @@ export default function BudgetManagement() {
     type: "department" | "user",
     id: string,
     currentBudget: number,
-    extra?: { periods?: Partial<Record<BudgetPeriod, number>>; currentLimit?: number; currentDept?: string },
+    extra?: { periods?: Partial<Record<BudgetPeriod, number>>; currentLimit?: number; currentDept?: string; unlimitedPerUser?: boolean },
   ) => {
-    const { periods, ...rest } = extra ?? {};
+    const { periods, unlimitedPerUser: unlimited, ...rest } = extra ?? {};
+    setUnlimitedPerUser(unlimited === true);
+    setLoadedUnlimitedPerUser(unlimited === true);
     setEditModal({ type, id, currentBudget, ...rest });
     setNewBudget(String(currentBudget));
     setPeriodInputs({
@@ -166,6 +198,8 @@ export default function BudgetManagement() {
     try {
       const body: Record<string, unknown> = { type: editModal.type, id: editModal.id, ...periodBody(editModal.type) };
       if (editModal.type === "department" && newBudget !== "") body.monthlyBudget = Number(newBudget);
+      // Only a real change is sent, so an unchanged edit does not write/audit the flag.
+      if (editModal.type === "department" && unlimitedPerUser !== loadedUnlimitedPerUser) body.unlimitedPerUser = unlimitedPerUser;
       if (editModal.type === "user" && showAdvancedTokenLimit && newLimit) {
         body.dailyTokenLimit = Number(newLimit);
       }
@@ -210,7 +244,10 @@ export default function BudgetManagement() {
         id: createId.trim(),
         ...periodBody(createModal.type),
       };
-      if (createModal.type === "department") body.monthlyBudget = Number(newBudget) || 0;
+      if (createModal.type === "department") {
+        body.monthlyBudget = Number(newBudget) || 0;
+        if (unlimitedPerUser) body.unlimitedPerUser = true;
+      }
       if (createModal.type === "user" && showAdvancedTokenLimit && newLimit) {
         body.dailyTokenLimit = Number(newLimit) || 100000;
       }
@@ -227,6 +264,7 @@ export default function BudgetManagement() {
         setCreateDept("");
         setNewBudget("");
         setPeriodInputs(EMPTY_PERIODS);
+        setUnlimitedPerUser(false);
         setNewLimit("");
         void fetchData();
       } else {
@@ -355,7 +393,7 @@ export default function BudgetManagement() {
                 <p className="text-sm text-gray-500">{departments.length === 0 ? "No department budgets configured yet." : "Monthly budget limits per department."}</p>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => { setCreateModal({ type: "department" }); setNewBudget(""); setCreateId(""); setPeriodInputs(EMPTY_PERIODS); }}
+                    onClick={() => { setCreateModal({ type: "department" }); setNewBudget(""); setCreateId(""); setPeriodInputs(EMPTY_PERIODS); setUnlimitedPerUser(false); }}
                     className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
                   >
                     + Add Department
@@ -390,6 +428,11 @@ export default function BudgetManagement() {
                             <td className="py-3">
                               <span className="text-gray-200">{dept.department}</span>
                               {isOver && <span className="ml-2 text-xs text-red-400 font-medium">OVER</span>}
+                              {dept.unlimitedPerUser && (
+                                <span className="ml-2 inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-900/40 text-purple-400">
+                                  ∞ {t("budgets.unlimitedPerUser")}
+                                </span>
+                              )}
                             </td>
                             <td className="py-3 text-right text-gray-300">{formatCurrency(dept.monthlyBudget)}</td>
                             <td className="py-3 text-right text-gray-300">{formatCurrency(dept.currentSpend)}</td>
@@ -403,7 +446,7 @@ export default function BudgetManagement() {
                             </td>
                             <td className="py-3 text-right">
                               <button
-                                onClick={() => openEditModal("department", dept.department, dept.monthlyBudget, { periods: { daily: dept.perUserDailyBudget, weekly: dept.perUserWeeklyBudget, monthly: dept.perUserMonthlyBudget } })}
+                                onClick={() => openEditModal("department", dept.department, dept.monthlyBudget, { periods: { daily: dept.perUserDailyBudget, weekly: dept.perUserWeeklyBudget, monthly: dept.perUserMonthlyBudget }, unlimitedPerUser: dept.unlimitedPerUser })}
                                 className="px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
                               >
                                 Edit
@@ -576,10 +619,20 @@ export default function BudgetManagement() {
                   />
                 </div>
               )}
+              {createModal.type === "department" && (
+                <UnlimitedPerUserToggle
+                  id="create-unlimited-per-user"
+                  checked={unlimitedPerUser}
+                  onChange={setUnlimitedPerUser}
+                  label={t("budgets.unlimitedPerUser")}
+                  hint={t("budgets.unlimitedPerUserHint")}
+                />
+              )}
               <PeriodBudgetInputs
                 idPrefix="create-period"
                 values={periodInputs}
                 onChange={setPeriodInputs}
+                unlimited={createModal.type === "department" && unlimitedPerUser}
                 hint={createModal.type === "department"
                   ? "Per-user defaults for every member without an override. Any one exceeded blocks that member."
                   : "Example: monthly $200, weekly $100, daily $50. Any one exceeded blocks the user; 0 / empty inherits the dept default."}
@@ -649,10 +702,20 @@ export default function BudgetManagement() {
                   />
                 </div>
               )}
+              {editModal.type === "department" && (
+                <UnlimitedPerUserToggle
+                  id="edit-unlimited-per-user"
+                  checked={unlimitedPerUser}
+                  onChange={setUnlimitedPerUser}
+                  label={t("budgets.unlimitedPerUser")}
+                  hint={t("budgets.unlimitedPerUserHint")}
+                />
+              )}
               <PeriodBudgetInputs
                 idPrefix="edit-period"
                 values={periodInputs}
                 onChange={setPeriodInputs}
+                unlimited={editModal.type === "department" && unlimitedPerUser}
                 hint={editModal.type === "department"
                   ? "Per-user defaults — e.g. engineering: total $1000/month, each member $200/month, $100/week, $50/day."
                   : "Any one exceeded blocks the user until every period is back under its cap. 0 / empty inherits the dept default."}

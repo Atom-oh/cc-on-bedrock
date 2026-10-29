@@ -8,7 +8,7 @@ import { useDeploymentMode } from "@/components/deployment-mode-provider";
 import { ROLES, type Role } from "@/lib/roles";
 import type { CognitoUser, CreateUserInput, ApiResponse } from "@/lib/types";
 
-const ROLE_ERRORS = ["self_demotion", "last_admin", "dept_required", "role_change_failed"];
+const ROLE_ERRORS = ["self_demotion", "last_admin", "dept_required", "role_change_failed", "grant_user_first", "not_cc_user"];
 
 export default function UserManagement() {
   const { t } = useI18n();
@@ -17,6 +17,8 @@ export default function UserManagement() {
   // contract is unchanged.
   const devenv = useDeploymentMode() === "devenv";
   const [users, setUsers] = useState<CognitoUser[]>([]);
+  // Shared user pool: roles can be removed ("No access"); set by GET /api/users.
+  const [requiresRoleGroup, setRequiresRoleGroup] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -42,9 +44,10 @@ export default function UserManagement() {
   const fetchUsers = useCallback(async () => {
     try {
       const res = await fetch("/api/users");
-      const json = (await res.json()) as ApiResponse<CognitoUser[]>;
+      const json = (await res.json()) as ApiResponse<CognitoUser[]> & { requiresRoleGroup?: boolean };
       if (json.success && json.data) {
         setUsers(json.data);
+        setRequiresRoleGroup(json.requiresRoleGroup === true);
       }
     } catch (err) {
       console.error("Failed to fetch users:", err);
@@ -383,6 +386,7 @@ export default function UserManagement() {
           // ADR-024: permanent delete intentionally not wired — disable-only.
           onToggle={handleToggle}
           onUpdate={handleUpdate}
+          allowNoAccess={requiresRoleGroup}
         />
       )}
     </div>

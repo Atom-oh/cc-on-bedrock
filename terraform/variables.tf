@@ -229,3 +229,12 @@ variable "codex_mantle_model_id" {
     error_message = "codex_mantle_model_id must be a bedrock-mantle OpenAI model id, e.g. openai.gpt-6.1-sol."
   }
 }
+
+# Shared identity: run cc on an existing Cognito user pool owned by another stack
+# (e.g. a sibling app), looked up by name. Keep the name in terraform.tfvars; the
+# repository must not carry pool names or IDs. Empty = cc's own pool.
+variable "shared_user_pool_name" {
+  description = "Name of an existing Cognito user pool to share (empty = cc creates its own pool). The pool must already define cc's custom attributes and admin-only user creation."
+  type        = string
+  default     = ""
+}

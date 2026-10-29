@@ -8,7 +8,7 @@ import {
 } from "@aws-sdk/client-cognito-identity-provider";
 import { NextResponse } from "next/server";
 import { cognitoClient, userPoolId } from "./aws-clients";
-import { ROLES, roleFromGroups, type Role } from "./roles";
+import { accessRole, groupName, requiresRoleGroup, rolesFromGroupNames, type Role } from "./roles";
 
 const MAX_PAGES = 100;
 
@@ -24,8 +24,8 @@ export async function getUserEnabled(username: string): Promise<boolean> {
   return res.Enabled !== false;
 }
 
-/** Role groups (admin / dept-manager / user) the user is currently in. */
-export async function getRoleGroups(username: string): Promise<string[]> {
+/** Roles (admin / dept-manager / user) the user currently holds, prefix stripped; other apps' groups ignored. */
+export async function getRoleGroups(username: string): Promise<Role[]> {
   const names: string[] = [];
   let nextToken: string | undefined;
   let pages = 0;
@@ -37,7 +37,7 @@ export async function getRoleGroups(username: string): Promise<string[]> {
     nextToken = res.NextToken;
     pages++;
   } while (nextToken && pages < MAX_PAGES);
-  return names.filter((n): n is Role => (ROLES as readonly string[]).includes(n));
+  return rolesFromGroupNames(names);
 }
 
 /**
@@ -52,9 +52,9 @@ export async function setUserRole(
   fetchGroups: (username: string) => Promise<string[]> = getRoleGroups
 ): Promise<void> {
   const current = await fetchGroups(username);
-  await send(new AdminAddUserToGroupCommand({ UserPoolId: userPoolId, Username: username, GroupName: role }));
+  await send(new AdminAddUserToGroupCommand({ UserPoolId: userPoolId, Username: username, GroupName: groupName(role) }));
   for (const g of current.filter((g) => g !== role)) {
-    await send(new AdminRemoveUserFromGroupCommand({ UserPoolId: userPoolId, Username: username, GroupName: g }));
+    await send(new AdminRemoveUserFromGroupCommand({ UserPoolId: userPoolId, Username: username, GroupName: groupName(g as Role) }));
   }
   await send(new AdminUserGlobalSignOutCommand({ UserPoolId: userPoolId, Username: username }));
 }
@@ -68,7 +68,7 @@ export async function listGroupMembers(
   let pages = 0;
   do {
     const res = await cognitoClient.send(
-      new ListUsersInGroupCommand({ UserPoolId: userPoolId, GroupName: group, NextToken: nextToken })
+      new ListUsersInGroupCommand({ UserPoolId: userPoolId, GroupName: groupName(group), NextToken: nextToken })
     );
     for (const u of res.Users ?? []) {
       members.push({
@@ -108,9 +108,53 @@ export async function requireFreshRole(
     console.error("[requireFreshRole] Cognito group lookup failed:", err);
     return { ok: false, response: NextResponse.json({ error: "Role check unavailable" }, { status: 503 }) };
   }
-  const { role } = roleFromGroups(groups);
-  if (!enabled || !allowed.includes(role)) {
+  // Shared pool: no cc role group = no access (accessRole null), same 403 as a role change.
+  const role = accessRole(groups);
+  if (!enabled || role === null || !allowed.includes(role)) {
     return { ok: false, response: NextResponse.json({ error: "Role changed — sign in again" }, { status: 403 }) };
   }
   return { ok: true, role };
+}
+
+/**
+ * Gate for paths without a role requirement (e.g. /api/local/credentials). Both pools:
+ * the Cognito user must be enabled (a disabled user keeps its groups and tokens).
+ * Shared pool only: the user must also hold SOME cc role group. Both read fresh from
+ * Cognito and fail closed: lookup error 503, no username / disabled / no role group 403.
+ */
+export async function requireAnyRoleGroup(
+  username: string | undefined,
+  getGroups: (username: string) => Promise<string[]> = getRoleGroups,
+  getEnabled: (username: string) => Promise<boolean> = getUserEnabled,
+  prefix?: string
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const denied = { ok: false as const, response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
+  if (!username) return denied;
+  const shared = requiresRoleGroup(prefix);
+  let groups: string[] = [];
+  let enabled: boolean;
+  try {
+    [groups, enabled] = await Promise.all([shared ? getGroups(username) : Promise.resolve([]), getEnabled(username)]);
+  } catch (err) {
+    console.error("[requireAnyRoleGroup] Cognito lookup failed:", err);
+    return { ok: false, response: NextResponse.json({ error: "Role check unavailable" }, { status: 503 }) };
+  }
+  if (!enabled) return denied;
+  if (shared && accessRole(groups, prefix) === null) return denied;
+  return { ok: true };
+}
+
+/**
+ * Shared pool "No access": remove the user from every cc role group it holds, then
+ * revoke tokens so the stale session groups stop working. Guards live in the caller.
+ */
+export async function removeUserAccess(
+  username: string,
+  send: Send = defaultSend,
+  fetchGroups: (username: string) => Promise<string[]> = getRoleGroups
+): Promise<void> {
+  for (const g of await fetchGroups(username)) {
+    await send(new AdminRemoveUserFromGroupCommand({ UserPoolId: userPoolId, Username: username, GroupName: groupName(g as Role) }));
+  }
+  await send(new AdminUserGlobalSignOutCommand({ UserPoolId: userPoolId, Username: username }));
 }

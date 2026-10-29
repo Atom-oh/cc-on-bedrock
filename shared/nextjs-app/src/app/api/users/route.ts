@@ -13,8 +13,20 @@ import {
 } from "@/lib/aws-clients";
 import { createUserSchema, updateUserSchema } from "@/lib/validation";
 import { batchGetCustomRoutes } from "@/lib/ec2-clients";
-import { ROLES, roleFromGroups, validateRoleChange } from "@/lib/roles";
-import { countAdmins, getRoleGroups, listGroupMembers, requireFreshRole, setUserRole } from "@/lib/role-admin";
+import { ROLES, accessRole, requiresRoleGroup, roleFromGroups, validateRoleChange } from "@/lib/roles";
+import { countAdmins, getRoleGroups, listGroupMembers, removeUserAccess, requireFreshRole, setUserRole } from "@/lib/role-admin";
+
+/**
+ * Shared pool: the dashboard's Cognito IAM reaches every user in the pool, and IAM
+ * cannot be scoped by group. A user without a cc role group belongs only to the other
+ * app, so cc refuses to disable, enable, edit or delete them; the only allowed action
+ * is granting a cc role (ADR-016). Own pool: no restriction.
+ */
+async function guardForeignUser(username: string): Promise<NextResponse | null> {
+  if (!requiresRoleGroup()) return null;
+  if (accessRole(await getRoleGroups(username)) !== null) return null;
+  return NextResponse.json({ success: false, error: "not_cc_user" }, { status: 403 });
+}
 
 /** Refuse disabling yourself or the last enabled admin (same rules as demotion). */
 async function guardAdminLoss(actorEmail: string, username: string): Promise<NextResponse | null> {
@@ -75,15 +87,17 @@ export async function GET(req: NextRequest) {
           ...(groupsByUser.get(u.email.toLowerCase()) ?? []),
         ]),
       ];
-      const { role, needsCleanup } = roleFromGroups(groups);
+      const { needsCleanup } = roleFromGroups(groups);
       return {
         ...u,
-        role,
+        // null = shared pool user without a cc role group (no access until an admin assigns one).
+        role: accessRole(groups),
         roleNeedsCleanup: needsCleanup,
         customRoutes: routesBySubdomain.get(u.subdomain) ?? [],
       };
     });
-    return NextResponse.json({ success: true, data: withRoutes });
+    // requiresRoleGroup: shared pool, the UI offers "No access" (role: null) in the role select.
+    return NextResponse.json({ success: true, data: withRoutes, requiresRoleGroup: requiresRoleGroup() });
   } catch (err) {
     console.error("[users] GET", err instanceof Error ? err.message : err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
@@ -151,6 +165,8 @@ export async function PUT(req: NextRequest) {
       if (!raw.username) {
         return NextResponse.json({ success: false, error: "username is required" }, { status: 400 });
       }
+      const foreign = await guardForeignUser(raw.username);
+      if (foreign) return foreign;
       if (raw.action === "enable") await enableCognitoUser(raw.username);
       else {
         const blocked = await guardAdminLoss(session.user.email ?? "", raw.username);
@@ -160,16 +176,60 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
+    // Shared pool "No access": role null / "none" removes every cc role group.
+    if (raw.role === null || raw.role === "none") {
+      if (!requiresRoleGroup()) {
+        return NextResponse.json({ success: false, error: "role must be admin, dept-manager or user" }, { status: 400 });
+      }
+      if (!raw.username || typeof raw.username !== "string") {
+        return NextResponse.json({ success: false, error: "username is required" }, { status: 400 });
+      }
+      if (Object.keys(raw).some((k) => k !== "username" && k !== "role")) {
+        return NextResponse.json({ success: false, error: "Removing access cannot be combined with other changes" }, { status: 400 });
+      }
+      // Another app's user has no cc group to remove; never sign them out of that app.
+      const foreign = await guardForeignUser(raw.username);
+      if (foreign) return foreign;
+      // Same guards as disabling: never yourself, never the last enabled admin.
+      const blocked = await guardAdminLoss(session.user.email ?? "", raw.username);
+      if (blocked) return blocked;
+      try {
+        await removeUserAccess(raw.username);
+      } catch (err) {
+        console.error("[users] PUT removeUserAccess", err instanceof Error ? err.message : err);
+        return NextResponse.json({ success: false, error: "role_change_failed" }, { status: 500 });
+      }
+      return NextResponse.json({ success: true, data: { roleChanged: true } });
+    }
+
     // Handle attribute update
     const parsed = updateUserSchema.safeParse(raw);
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
     }
     const { role: requestedRole, ...attrs } = parsed.data;
+    // A no-access shared-pool user may only be granted a role (with optional attributes).
+    if (!requestedRole) {
+      const foreign = await guardForeignUser(attrs.username);
+      if (foreign) return foreign;
+    }
     let roleChanged = false;
     let attrsWritten = false;
     if (requestedRole || attrs.department) {
-      const current = roleFromGroups(await getRoleGroups(attrs.username));
+      const currentGroups = await getRoleGroups(attrs.username);
+      const current = roleFromGroups(currentGroups);
+      // Shared pool: a user without a cc role group must get the group even when "user" is picked.
+      const noAccess = accessRole(currentGroups) === null;
+      // Granting access to another app's user is a single group write: role only, and
+      // not dept-manager (which needs a cc-set department). Grant "user" first, then
+      // promote with a normal edit, which writes the department before the role. So a
+      // failed grant leaves nothing behind, and no partial dept-manager can exist.
+      if (noAccess && requestedRole) {
+        const extra = Object.entries(attrs).some(([k, v]) => k !== "username" && v !== undefined);
+        if (extra || requestedRole === "dept-manager") {
+          return NextResponse.json({ success: false, error: "grant_user_first" }, { status: 400 });
+        }
+      }
       const newRole = requestedRole ?? current.role;
       const target = await getCognitoUser(attrs.username);
       const check = validateRoleChange({
@@ -190,7 +250,7 @@ export async function PUT(req: NextRequest) {
       await updateCognitoUser(attrs);
       attrsWritten = true;
       // Also re-apply when the user holds several role groups, so the change normalizes them.
-      if (requestedRole && (requestedRole !== current.role || current.needsCleanup)) {
+      if (requestedRole && (requestedRole !== current.role || current.needsCleanup || noAccess)) {
         try {
           await setUserRole(attrs.username, requestedRole);
         } catch (err) {
@@ -227,6 +287,8 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
+    const foreign = await guardForeignUser(username);
+    if (foreign) return foreign;
     switch (action) {
       case "disable": {
         const blocked = await guardAdminLoss(session.user.email ?? "", username);

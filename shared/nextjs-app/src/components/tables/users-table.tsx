@@ -12,6 +12,8 @@ interface UsersTableProps {
   onPermanentDelete?: (username: string) => void;
   onToggle?: (username: string, enabled: boolean) => void;
   onUpdate?: (username: string, field: string, value: string) => Promise<void>;
+  /** Shared user pool: offer "No access" (removes every cc role group). */
+  allowNoAccess?: boolean;
 }
 
 const tierBadge: Record<string, string> = {
@@ -35,6 +37,7 @@ const roleBadge: Record<string, string> = {
   admin: "bg-red-900/40 text-red-400",
   "dept-manager": "bg-blue-900/40 text-blue-400",
   user: "bg-gray-800 text-gray-400",
+  none: "bg-yellow-900/40 text-yellow-400",
 };
 
 const statusBadge: Record<string, string> = {
@@ -46,7 +49,9 @@ const statusBadge: Record<string, string> = {
 type SortKey = "email" | "role" | "subdomain" | "containerOs" | "resourceTier" | "securityPolicy" | "storageType" | "status";
 type SortDir = "asc" | "desc";
 
-const roleOrder: Record<string, number> = { user: 0, "dept-manager": 1, admin: 2 };
+const roleOrder: Record<string, number> = { none: -1, user: 0, "dept-manager": 1, admin: 2 };
+// role null = shared pool user without a cc role group ("No access"); undefined = legacy "user".
+const roleKey = (role: CognitoUser["role"]) => (role === null ? "none" : role ?? "user");
 const tierOrder: Record<string, number> = { light: 0, standard: 1, power: 2 };
 const policyOrder: Record<string, number> = { open: 0, restricted: 1, locked: 2 };
 
@@ -65,6 +70,7 @@ export default function UsersTable({
   onPermanentDelete,
   onToggle,
   onUpdate,
+  allowNoAccess = false,
 }: UsersTableProps) {
   // OS / tier / DLP policy (EC2 SG) / storage / port routes describe the per-user EC2 DevEnv —
   // hidden in governance mode.
@@ -122,7 +128,7 @@ export default function UsersTable({
     return [...filtered].sort((a, b) => {
       switch (sortKey) {
         case "email": return mul * a.email.localeCompare(b.email);
-        case "role": return mul * ((roleOrder[a.role ?? "user"] ?? 0) - (roleOrder[b.role ?? "user"] ?? 0));
+        case "role": return mul * ((roleOrder[roleKey(a.role)] ?? 0) - (roleOrder[roleKey(b.role)] ?? 0));
         case "subdomain": return mul * a.subdomain.localeCompare(b.subdomain);
         case "containerOs": return mul * a.containerOs.localeCompare(b.containerOs);
         case "resourceTier": return mul * ((tierOrder[a.resourceTier] ?? 0) - (tierOrder[b.resourceTier] ?? 0));
@@ -223,20 +229,21 @@ export default function UsersTable({
                 <td className="px-5 py-3.5 whitespace-nowrap">
                   {editingCell?.username === user.username && editingCell?.field === "role" ? (
                     <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
-                      defaultValue={user.roleNeedsCleanup ? "" : (user.role ?? "user")} disabled={saving}
+                      defaultValue={user.roleNeedsCleanup || user.role === null ? "" : (user.role ?? "user")} disabled={saving}
                       onChange={(e) => handleInlineChange(user.username, "role", e.target.value)}
                       onBlur={() => setEditingCell(null)}>
-                      {/* Multi-group users start unselected so re-picking the current role still fires onChange. */}
-                      {user.roleNeedsCleanup && <option value="" disabled>{t("users.role.select")}</option>}
+                      {/* Multi-group and no-access users start unselected so picking any role fires onChange. */}
+                      {(user.roleNeedsCleanup || user.role === null) && <option value="" disabled>{t("users.role.select")}</option>}
                       {ROLES.map((r) => (
                         <option key={r} value={r}>{t(`users.role.${r}` as Parameters<typeof t>[0])}</option>
                       ))}
+                      {allowNoAccess && user.role !== null && <option value="none">{t("users.role.removeAccess")}</option>}
                     </select>
                   ) : (
                     <div className="flex items-center gap-1.5">
                       <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "role" })}
-                        className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${roleBadge[user.role ?? "user"] ?? roleBadge.user} ${onUpdate ? "hover:ring-1 hover:ring-blue-500 cursor-pointer" : ""}`}>
-                        {t(`users.role.${user.role ?? "user"}` as Parameters<typeof t>[0])}
+                        className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${roleBadge[roleKey(user.role)] ?? roleBadge.user} ${onUpdate ? "hover:ring-1 hover:ring-blue-500 cursor-pointer" : ""}`}>
+                        {t(`users.role.${roleKey(user.role)}` as Parameters<typeof t>[0])}
                       </button>
                       {user.roleNeedsCleanup && (
                         <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-yellow-900/40 text-yellow-400">
@@ -350,6 +357,7 @@ export default function UsersTable({
                 )}
                 <td className="px-5 py-3.5 whitespace-nowrap text-right">
                   <div className="flex items-center justify-end gap-2">
+                    {/* role === null: another app's user in a shared pool; cc may only grant a role. */}
                     {onUpdate && user.roleNeedsCleanup && (
                       <button
                         onClick={() => void onUpdate(user.username, "role", user.role ?? "user")}
@@ -358,7 +366,7 @@ export default function UsersTable({
                         {t("users.role.normalize")}
                       </button>
                     )}
-                    {onToggle && (
+                    {user.role !== null && onToggle && (
                       <button
                         onClick={() => onToggle(user.username, !user.enabled)}
                         className={`px-2 py-1 text-xs font-medium rounded-lg transition-colors ${
@@ -370,7 +378,7 @@ export default function UsersTable({
                         {user.enabled ? "Disable" : "Enable"}
                       </button>
                     )}
-                    {onResetEnvironment && user.subdomain && (
+                    {user.role !== null && onResetEnvironment && user.subdomain && (
                       <button
                         onClick={() => onResetEnvironment(user.username)}
                         className="px-2 py-1 text-xs font-medium text-orange-400 hover:bg-orange-900/30 rounded-lg transition-colors"
@@ -378,7 +386,7 @@ export default function UsersTable({
                         Reset Env
                       </button>
                     )}
-                    {onPermanentDelete && (
+                    {user.role !== null && onPermanentDelete && (
                       <button
                         onClick={() => onPermanentDelete(user.username)}
                         className="px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"

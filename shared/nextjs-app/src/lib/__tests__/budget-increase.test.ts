@@ -220,6 +220,18 @@ describe("periodIsCapped", () => {
   });
 });
 
+describe("dept unlimitedPerUser overrides the last enforced cap", () => {
+  const dept = { unlimitedPerUser: true, perUserDailyBudget: 10 };
+  it("is uncapped even when effective*Budget predates the flag", () => {
+    expect(periodIsCapped("daily", { effectiveDailyBudget: 50 }, dept)).toBe(false);
+    expect(periodBaseCap("daily", { effectiveDailyBudget: 50 }, dept)).toBe(0);
+  });
+  it("a user's explicit cap still applies", () => {
+    expect(periodIsCapped("daily", { dailyBudget: 5 }, dept)).toBe(true);
+    expect(periodBaseCap("daily", { dailyBudget: 5 }, dept)).toBe(5);
+  });
+});
+
 describe("staleGrantAttrs", () => {
   it("returns grant attributes outside the current windows only", () => {
     const row = {

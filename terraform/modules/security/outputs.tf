@@ -1,17 +1,22 @@
 output "user_pool_id" {
-  value = aws_cognito_user_pool.this.id
+  value = local.user_pool_id
 }
 
 output "user_pool_arn" {
-  value = aws_cognito_user_pool.this.arn
+  value = local.user_pool_arn
+}
+
+output "cognito_group_prefix" {
+  description = "Prefix of cc's role group names: \"cc-\" in a shared pool, empty in cc's own pool"
+  value       = local.group_prefix
 }
 
 output "user_pool_client_id" {
-  value = aws_cognito_user_pool_client.this.id
+  value = aws_cognito_user_pool_client.this[local.active_pool].id
 }
 
 output "cli_public_client_id" {
-  value = aws_cognito_user_pool_client.cli_public.id
+  value = aws_cognito_user_pool_client.cli_public[local.active_pool].id
 }
 
 output "devenv_certificate_arn" {

@@ -148,3 +148,9 @@ variable "ccdash_url" {
   type        = string
   default     = ""
 }
+
+variable "cognito_group_prefix" {
+  description = "Role group name prefix (\"cc-\" in a shared user pool, where membership is required for access; empty in cc's own pool)"
+  type        = string
+  default     = ""
+}

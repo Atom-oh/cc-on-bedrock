@@ -45,3 +45,9 @@ variable "enable_mantle" {
   type        = bool
   default     = false
 }
+
+variable "shared_user_pool_name" {
+  description = "Name of an existing Cognito user pool to share with another app (empty = cc's own pool). Keep it in terraform.tfvars, never in code."
+  type        = string
+  default     = ""
+}

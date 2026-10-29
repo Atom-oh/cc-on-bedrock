@@ -9,7 +9,8 @@ Actions:
     80%: SNS warning alert
     100%: Attach IAM Deny Policy to per-user roles + Cognito flag + SNS alert
     Released automatically once every period is back under its cap (period rollover
-    or a raised budget). Each cap resolves user value > dept per-user default > env.
+    or a raised budget). Each cap resolves user value > dept per-user default > env;
+    a dept flagged `unlimitedPerUser` leaves members without an explicit cap uncapped.
   Department monthly budget:
     80%: SNS warning alert to dept managers
     100%: Block all department users via IAM Deny Policy
@@ -276,6 +277,9 @@ def get_department_budgets():
                     "perUserDailyBudget": float(item.get("perUserDailyBudget", 0) or 0),
                     "perUserWeeklyBudget": float(item.get("perUserWeeklyBudget", 0) or 0),
                     "perUserMonthlyBudget": float(item.get("perUserMonthlyBudget", 0) or 0),
+                    # ADR-008 amendment 2026-10-29: members have no per-user cap unless
+                    # their own row sets one (stops the fall-through to the global default).
+                    "unlimitedPerUser": item.get("unlimitedPerUser") is True,
                 }
             last_key = result.get("LastEvaluatedKey")
             pages += 1
@@ -312,6 +316,8 @@ def _effective_user_limits(user_budgets: dict, dept_budgets: dict, user: str, de
                            now: datetime | None = None) -> dict:
     """ADR-008: per-period USD caps {daily, weekly, monthly}; 0 = no cap for that period.
     Each period resolves independently: user explicit > dept per-user default > global env.
+    A dept with `unlimitedPerUser` resolves to 0 after the user value, so neither its
+    per-user defaults nor the global env apply to its members.
     Active one-time grants (u["grants"], computed once per scan by get_user_budgets) are
     added only to a capped period; an uncapped period (0) stays unlimited. `now` is
     accepted for interface symmetry; grant windows are already resolved at scan time."""
@@ -320,11 +326,11 @@ def _effective_user_limits(user_budgets: dict, dept_budgets: dict, user: str, de
     limits = {}
     for period in BUDGET_PERIODS:
         cap = period.capitalize()  # daily → Daily
-        base = (
-            float(u.get(f"{period}Budget", 0) or 0)
-            or float(d.get(f"perUser{cap}Budget", 0) or 0)
-            or float(_GLOBAL_BUDGETS[period])
-        )
+        user_cap = float(u.get(f"{period}Budget", 0) or 0)
+        if user_cap or d.get("unlimitedPerUser") is True:
+            base = user_cap
+        else:
+            base = float(d.get(f"perUser{cap}Budget", 0) or 0) or float(_GLOBAL_BUDGETS[period])
         grant = float((u.get("grants") or {}).get(period, 0) or 0)
         limits[period] = base + grant if base > 0 else 0.0
     return limits

@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { roleFromGroups, validateRoleChange } from "../roles";
-import { requireFreshRole, setUserRole } from "../role-admin";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { accessRole, groupName, groupPrefix, requiresRoleGroup, roleFromGroups, rolesFromGroupNames, validateRoleChange } from "../roles";
+import { removeUserAccess, requireAnyRoleGroup, requireFreshRole, setUserRole } from "../role-admin";
+import { rolesFromIdToken, signInAllowed } from "../auth";
 
 describe("roleFromGroups", () => {
   it("defaults to user with no role groups", () => {
@@ -101,6 +102,148 @@ describe("setUserRole call order", () => {
       "AdminAddUserToGroupCommand:admin",
       "AdminRemoveUserFromGroupCommand:user",
       "AdminRemoveUserFromGroupCommand:dept-manager",
+      "AdminUserGlobalSignOutCommand:",
+    ]);
+  });
+});
+
+describe("group prefix (shared user pool)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("reads COGNITO_GROUP_PREFIX, unset = own pool", () => {
+    vi.stubEnv("COGNITO_GROUP_PREFIX", "cc-");
+    expect(groupPrefix()).toBe("cc-");
+    expect(groupName("dept-manager")).toBe("cc-dept-manager");
+    expect(requiresRoleGroup()).toBe(true);
+    vi.unstubAllEnvs();
+    delete process.env.COGNITO_GROUP_PREFIX;
+    expect(groupPrefix()).toBe("");
+    expect(groupName("admin")).toBe("admin");
+    expect(requiresRoleGroup()).toBe(false);
+  });
+
+  it("strips the prefix and ignores other apps' groups", () => {
+    expect(rolesFromGroupNames(["admins", "ccdash-admin", "cc-user", "admin", "user"], "cc-")).toEqual(["user"]);
+    expect(rolesFromGroupNames(["cc-admin", "cc-dept-manager"], "cc-")).toEqual(["admin", "dept-manager"]);
+    expect(rolesFromGroupNames(["admins", "ccdash-admin"], "cc-")).toEqual([]);
+  });
+
+  it("own pool keeps exact role names", () => {
+    expect(rolesFromGroupNames(["admin", "other", "cc-user"], "")).toEqual(["admin"]);
+  });
+
+  it("accessRole: no role group = null in a shared pool, user in the own pool", () => {
+    expect(accessRole([], "cc-")).toBeNull();
+    expect(accessRole(["dept-manager"], "cc-")).toBe("dept-manager");
+    expect(accessRole([], "")).toBe("user");
+  });
+});
+
+describe("sign-in gate helpers", () => {
+  const jwt = (payload: object) => `h.${Buffer.from(JSON.stringify(payload)).toString("base64")}.s`;
+  it("rolesFromIdToken normalizes cognito:groups", () => {
+    expect(rolesFromIdToken(jwt({ "cognito:groups": ["admins", "cc-admin"] }), "cc-")).toEqual(["admin"]);
+    expect(rolesFromIdToken(jwt({}), "cc-")).toEqual([]);
+    expect(rolesFromIdToken("not-a-jwt", "cc-")).toEqual([]);
+    expect(rolesFromIdToken(undefined, "")).toEqual([]);
+  });
+  it("signInAllowed refuses no-group users only in a shared pool", () => {
+    expect(signInAllowed([], "cc-")).toBe(false);
+    expect(signInAllowed(["user"], "cc-")).toBe(true);
+    expect(signInAllowed([], "")).toBe(true);
+  });
+});
+
+describe("requireFreshRole with a group prefix", () => {
+  const session = { user: { email: "a@x.com" } };
+  afterEach(() => vi.unstubAllEnvs());
+  it("shared pool: no cc role group → 403 (same response as a role change)", async () => {
+    vi.stubEnv("COGNITO_GROUP_PREFIX", "cc-");
+    const r = await requireFreshRole(session, ["user", "dept-manager", "admin"], async () => [], async () => true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.response.status).toBe(403);
+      expect(await r.response.json()).toEqual({ error: "Role changed — sign in again" });
+    }
+  });
+  it("own pool: no role group still resolves to user", async () => {
+    vi.stubEnv("COGNITO_GROUP_PREFIX", "");
+    expect(await requireFreshRole(session, ["user"], async () => [], async () => true)).toEqual({ ok: true, role: "user" });
+  });
+});
+
+describe("requireAnyRoleGroup (local credentials gate)", () => {
+  const on = async () => true;
+  const off = async () => false;
+  it("own pool: checks enabled only, no group lookup", async () => {
+    const getGroups = vi.fn();
+    expect(await requireAnyRoleGroup("a@x.com", getGroups, on, "")).toEqual({ ok: true });
+    expect(getGroups).not.toHaveBeenCalled();
+  });
+  it("shared pool: ok with a cc role group", async () => {
+    expect(await requireAnyRoleGroup("a@x.com", async () => ["user"], on, "cc-")).toEqual({ ok: true });
+  });
+  it("403 without a role group (shared), when disabled (both pools), or without a username", async () => {
+    for (const r of [
+      await requireAnyRoleGroup("a@x.com", async () => [], on, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => ["admin"], off, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => [], off, ""),
+      await requireAnyRoleGroup(undefined, async () => ["admin"], on, "cc-"),
+      await requireAnyRoleGroup(undefined, async () => [], on, ""),
+    ]) {
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.response.status).toBe(403);
+        expect(await r.response.json()).toEqual({ error: "Access denied" });
+      }
+    }
+  });
+  it("fails closed with 503 when a lookup throws", async () => {
+    const boom = async () => { throw new Error("x"); };
+    for (const r of [
+      await requireAnyRoleGroup("a@x.com", boom, on, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => ["user"], boom, "cc-"),
+      await requireAnyRoleGroup("a@x.com", async () => [], boom, ""),
+    ]) {
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.response.status).toBe(503);
+    }
+  });
+});
+
+describe("removeUserAccess", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("removes every held cc role group (prefixed), then signs out", async () => {
+    vi.stubEnv("COGNITO_GROUP_PREFIX", "cc-");
+    const calls: string[] = [];
+    const send = async (c: unknown) => {
+      const cmd = c as { constructor: { name: string }; input: { GroupName?: string } };
+      calls.push(`${cmd.constructor.name}:${cmd.input.GroupName ?? ""}`);
+      return {};
+    };
+    await removeUserAccess("a@x.com", send, async () => ["admin", "user"]);
+    expect(calls).toEqual([
+      "AdminRemoveUserFromGroupCommand:cc-admin",
+      "AdminRemoveUserFromGroupCommand:cc-user",
+      "AdminUserGlobalSignOutCommand:",
+    ]);
+  });
+});
+
+describe("setUserRole with a group prefix", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("uses the prefixed Cognito group names", async () => {
+    vi.stubEnv("COGNITO_GROUP_PREFIX", "cc-");
+    const calls: string[] = [];
+    const send = async (c: unknown) => {
+      const cmd = c as { constructor: { name: string }; input: { GroupName?: string } };
+      calls.push(`${cmd.constructor.name}:${cmd.input.GroupName ?? ""}`);
+      return {};
+    };
+    await setUserRole("a@x.com", "dept-manager", send, async () => ["user"]);
+    expect(calls).toEqual([
+      "AdminAddUserToGroupCommand:cc-dept-manager",
+      "AdminRemoveUserFromGroupCommand:cc-user",
       "AdminUserGlobalSignOutCommand:",
     ]);
   });

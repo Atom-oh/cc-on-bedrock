@@ -6,6 +6,7 @@ import { CognitoIdentityProviderClient, InitiateAuthCommand, GetUserCommand } fr
 import { createHmac } from "crypto";
 import type { UserSession } from "./types";
 import { NEW_PASSWORD_REQUIRED } from "./auth-errors";
+import { requiresRoleGroup, rolesFromGroupNames, type Role } from "./roles";
 
 const cognitoClientSecret = process.env.COGNITO_CLIENT_SECRET;
 
@@ -14,6 +15,23 @@ function getSecretHash(username: string, clientId: string) {
   return createHmac("sha256", cognitoClientSecret)
     .update(username + clientId)
     .digest("base64");
+}
+
+/** cc roles (prefix stripped) from an IdToken's `cognito:groups`; [] when absent or malformed. */
+export function rolesFromIdToken(idToken: string | undefined, prefix?: string): Role[] {
+  if (!idToken) return [];
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split(".")[1], "base64").toString());
+    const raw = payload["cognito:groups"];
+    return rolesFromGroupNames(Array.isArray(raw) ? raw.map(String) : [], prefix);
+  } catch {
+    return [];
+  }
+}
+
+/** Shared pool: sign-in is refused without a cc role group. Own pool: always allowed. */
+export function signInAllowed(roles: Role[], prefix?: string): boolean {
+  return !requiresRoleGroup(prefix) || roles.length > 0;
 }
 
 declare module "next-auth" {
@@ -84,6 +102,10 @@ export const authOptions: NextAuthOptions = {
           }
           const accessToken = authResult.AuthenticationResult?.AccessToken;
           if (!accessToken) return null;
+          const idToken = authResult.AuthenticationResult?.IdToken;
+          // Shared pool: another app's user (no cc role group) gets the same generic
+          // failure as a wrong password, so group membership is not disclosed.
+          if (!signInAllowed(rolesFromIdToken(idToken))) return null;
           // Fetch user attributes
           const userResult = await cognitoClient.send(new GetUserCommand({ AccessToken: accessToken }));
           const attrs: Record<string, string> = {};
@@ -95,7 +117,7 @@ export const authOptions: NextAuthOptions = {
             email: attrs["email"] ?? credentials.email,
             name: attrs["name"] ?? attrs["email"] ?? credentials.email,
             accessToken,
-            idToken: authResult.AuthenticationResult?.IdToken,
+            idToken,
             groups: [], // Will be populated from idToken in jwt callback
             ...attrs,
           };
@@ -112,12 +134,25 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
+    // Second gate for both providers (the OAuth path has no authorize step).
+    async signIn({ account, profile, user }) {
+      if (account?.provider === "cognito") {
+        const raw = (profile as Record<string, unknown> | undefined)?.["cognito:groups"];
+        return signInAllowed(rolesFromGroupNames(Array.isArray(raw) ? raw.map(String) : []));
+      }
+      if (account?.provider === "cognito-credentials") {
+        const idToken = (user as unknown as Record<string, unknown>).idToken as string | undefined;
+        return signInAllowed(rolesFromIdToken(idToken));
+      }
+      return true;
+    },
     async jwt({ token, account, profile, user }): Promise<JWT> {
       // OAuth flow (CognitoProvider)
       if (account?.provider === "cognito" && profile) {
         token.accessToken = account.access_token;
         const cognitoGroups = (profile as Record<string, unknown>)["cognito:groups"];
-        token.groups = Array.isArray(cognitoGroups) ? (cognitoGroups as string[]) : [];
+        // Normalized to cc role names (prefix stripped, other apps' groups dropped).
+        token.groups = rolesFromGroupNames(Array.isArray(cognitoGroups) ? cognitoGroups.map(String) : []);
         const p = profile as Record<string, unknown>;
         token.subdomain = (p["custom:subdomain"] as string) ?? undefined;
         token.department = (p["custom:department"] as string) ?? undefined;
@@ -138,14 +173,9 @@ export const authOptions: NextAuthOptions = {
         token.securityPolicy = (u["custom:security_policy"] as string) ?? undefined;
         token.containerId = (u["custom:container_id"] as string) ?? undefined;
         token.storageType = (u["custom:storage_type"] as string) ?? undefined;
-        // Decode groups from idToken
+        // Decode groups from idToken, normalized to cc role names
         const idToken = u.idToken as string | undefined;
-        if (idToken) {
-          try {
-            const payload = JSON.parse(Buffer.from(idToken.split(".")[1], "base64").toString());
-            token.groups = Array.isArray(payload["cognito:groups"]) ? payload["cognito:groups"] : [];
-          } catch { token.groups = []; }
-        }
+        if (idToken) token.groups = rolesFromIdToken(idToken);
       }
       return token;
     },

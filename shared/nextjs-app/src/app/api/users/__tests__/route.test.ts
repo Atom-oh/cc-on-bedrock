@@ -1,38 +1,43 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const m = vi.hoisted(() => ({
   getCognitoUser: vi.fn(),
   updateCognitoUser: vi.fn(),
   disableCognitoUser: vi.fn(),
+  enableCognitoUser: vi.fn(),
   getRoleGroups: vi.fn(),
   countAdmins: vi.fn(),
   setUserRole: vi.fn(),
+  removeUserAccess: vi.fn(),
   requireFreshRole: vi.fn(),
+  listCognitoUsers: vi.fn(),
+  listGroupMembers: vi.fn(),
 }));
 vi.mock('next-auth', () => ({ getServerSession: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ authOptions: {} }));
-vi.mock('@/lib/ec2-clients', () => ({ batchGetCustomRoutes: vi.fn() }));
+vi.mock('@/lib/ec2-clients', () => ({ batchGetCustomRoutes: async () => new Map() }));
 vi.mock('@/lib/aws-clients', () => ({
-  listCognitoUsers: vi.fn(),
+  listCognitoUsers: m.listCognitoUsers,
   getCognitoUser: m.getCognitoUser,
   createCognitoUser: vi.fn(),
   updateCognitoUser: m.updateCognitoUser,
   deleteCognitoUser: vi.fn(),
   disableCognitoUser: m.disableCognitoUser,
-  enableCognitoUser: vi.fn(),
+  enableCognitoUser: m.enableCognitoUser,
   resetUserEnvironment: vi.fn(),
 }));
 vi.mock('@/lib/role-admin', () => ({
   getRoleGroups: m.getRoleGroups,
   countAdmins: m.countAdmins,
   setUserRole: m.setUserRole,
+  removeUserAccess: m.removeUserAccess,
   requireFreshRole: m.requireFreshRole,
-  listGroupMembers: vi.fn(),
+  listGroupMembers: m.listGroupMembers,
 }));
 
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { PUT } from '../route';
+import { DELETE, GET, PUT } from '../route';
 
 const asReq = (body: unknown) => ({ json: async () => body } as unknown as Request as never);
 const target = { email: 'bob@x.com', department: 'eng', enabled: true };
@@ -122,5 +127,143 @@ describe('PUT /api/users disable guards', () => {
     const res = await PUT(asReq({ username: 'bob@x.com', role: 'user' }));
     expect(res.status).toBe(200);
     expect(m.setUserRole).toHaveBeenCalledWith('bob@x.com', 'user');
+  });
+});
+
+describe('shared user pool (COGNITO_GROUP_PREFIX set)', () => {
+  beforeEach(() => vi.stubEnv('COGNITO_GROUP_PREFIX', 'cc-'));
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('grants "user" to a user without any cc role group (setUserRole is called)', async () => {
+    m.getRoleGroups.mockResolvedValue([]);
+    const res = await PUT(asReq({ username: 'bob@x.com', role: 'user' }));
+    expect(res.status).toBe(200);
+    expect(m.setUserRole).toHaveBeenCalledWith('bob@x.com', 'user');
+  });
+
+  it('role null / "none" removes access after the guards', async () => {
+    m.getRoleGroups.mockResolvedValue(['user']);
+    for (const role of [null, 'none']) {
+      m.removeUserAccess.mockClear();
+      const res = await PUT(asReq({ username: 'bob@x.com', role }));
+      expect(res.status).toBe(200);
+      expect(m.removeUserAccess).toHaveBeenCalledWith('bob@x.com');
+    }
+    expect(m.setUserRole).not.toHaveBeenCalled();
+  });
+
+  it('refuses removing your own access or the last enabled admin', async () => {
+    m.getCognitoUser.mockResolvedValue({ ...target, email: 'alice@x.com' });
+    m.getRoleGroups.mockResolvedValue(['admin']);
+    let res = await PUT(asReq({ username: 'alice@x.com', role: null }));
+    expect((await res.json()).error).toBe('self_demotion');
+    m.getCognitoUser.mockResolvedValue(target);
+    m.countAdmins.mockResolvedValue(1);
+    res = await PUT(asReq({ username: 'bob@x.com', role: 'none' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('last_admin');
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 role_change_failed when removal fails', async () => {
+    m.getRoleGroups.mockResolvedValue(['user']);
+    m.removeUserAccess.mockRejectedValueOnce(new Error('boom'));
+    const res = await PUT(asReq({ username: 'bob@x.com', role: null }));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe('role_change_failed');
+  });
+
+  it('refuses combining removal with other fields', async () => {
+    const res = await PUT(asReq({ username: 'bob@x.com', role: null, department: 'eng' }));
+    expect(res.status).toBe(400);
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
+  });
+
+  it('GET lists a user without a cc role group as role null (no access)', async () => {
+    m.listCognitoUsers.mockResolvedValue([
+      { username: 'u1', email: 'a@x.com', subdomain: '' },
+      { username: 'u2', email: 'b@x.com', subdomain: '' },
+    ]);
+    m.listGroupMembers.mockImplementation(async (r: string) => (r === 'admin' ? [{ username: 'u1', email: 'a@x.com', enabled: true }] : []));
+    const res = await GET({ url: 'https://x/api/users' } as never);
+    const json = await res.json();
+    expect(json.data.map((u: { username: string; role: string | null }) => [u.username, u.role])).toEqual([['u1', 'admin'], ['u2', null]]);
+    expect(json.requiresRoleGroup).toBe(true);
+  });
+});
+
+describe('own user pool (no prefix)', () => {
+  it('GET keeps defaulting a group-less user to "user"', async () => {
+    m.listCognitoUsers.mockResolvedValue([{ username: 'u2', email: 'b@x.com', subdomain: '' }]);
+    m.listGroupMembers.mockResolvedValue([]);
+    const res = await GET({ url: 'https://x/api/users' } as never);
+    const json = await res.json();
+    expect(json.data[0].role).toBe('user');
+    expect(json.requiresRoleGroup).toBe(false);
+  });
+
+  it('PUT rejects role null / "none" with 400', async () => {
+    for (const role of [null, 'none']) {
+      const res = await PUT(asReq({ username: 'bob@x.com', role }));
+      expect(res.status).toBe(400);
+    }
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('shared pool: other apps\' users are out of reach', () => {
+  beforeEach(() => { vi.stubEnv('COGNITO_GROUP_PREFIX', 'cc-'); m.getRoleGroups.mockResolvedValue([]); });
+  afterEach(() => vi.unstubAllEnvs());
+  const delReq = (q: string) => ({ url: `http://x/api/users?${q}` } as unknown as Request as never);
+
+  it('refuses disable / enable of a user with no cc role group', async () => {
+    for (const action of ['disable', 'enable']) {
+      const res = await PUT(asReq({ action, username: 'carol@x.com' }));
+      expect(res.status).toBe(403);
+      expect((await res.json()).error).toBe('not_cc_user');
+    }
+    expect(m.disableCognitoUser).not.toHaveBeenCalled();
+    expect(m.enableCognitoUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses an attribute-only edit but allows granting a role', async () => {
+    const edit = await PUT(asReq({ username: 'carol@x.com', name: 'Carol' }));
+    expect(edit.status).toBe(403);
+    expect(m.updateCognitoUser).not.toHaveBeenCalled();
+    const grant = await PUT(asReq({ username: 'carol@x.com', role: 'user' }));
+    expect(grant.status).toBe(200);
+    expect(m.setUserRole).toHaveBeenCalledWith('carol@x.com', 'user');
+  });
+
+  it('refuses DELETE actions on a user with no cc role group', async () => {
+    const res = await DELETE(delReq('username=carol@x.com&action=disable'));
+    expect(res.status).toBe(403);
+    expect(m.disableCognitoUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses "No access" for a user with no cc role group (no sign-out of the other app)', async () => {
+    const res = await PUT(asReq({ username: 'carol@x.com', role: null }));
+    expect(res.status).toBe(403);
+    expect(m.removeUserAccess).not.toHaveBeenCalled();
+  });
+
+  it('grants a no-access user a role on its own, and refuses attributes or dept-manager with it', async () => {
+    const combined = await PUT(asReq({ username: 'carol@x.com', role: 'user', department: 'eng' }));
+    expect(combined.status).toBe(400);
+    expect((await combined.json()).error).toBe('grant_user_first');
+    const mgr = await PUT(asReq({ username: 'carol@x.com', role: 'dept-manager' }));
+    expect(mgr.status).toBe(400);
+    expect(m.setUserRole).not.toHaveBeenCalled();
+    expect(m.updateCognitoUser).not.toHaveBeenCalled();
+    const ok = await PUT(asReq({ username: 'carol@x.com', role: 'admin' }));
+    expect(ok.status).toBe(200);
+    expect(m.setUserRole).toHaveBeenCalledWith('carol@x.com', 'admin');
+  });
+
+  it('still allows disabling a cc user', async () => {
+    m.getRoleGroups.mockResolvedValue(['user']); // getRoleGroups returns prefix-stripped roles
+    const res = await PUT(asReq({ action: 'disable', username: 'bob@x.com' }));
+    expect(res.status).toBe(200);
+    expect(m.disableCognitoUser).toHaveBeenCalledWith('bob@x.com');
   });
 });

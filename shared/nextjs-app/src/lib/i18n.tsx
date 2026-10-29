@@ -284,6 +284,8 @@ const ko: Record<string, string> = {
   "users.role.dept-manager": "부서 관리자",
   "users.role.user": "일반 사용자",
   "users.role.cleanup": "역할 정리 필요",
+  "users.role.none": "접근 권한 없음",
+  "users.role.removeAccess": "접근 권한 없음 (역할 제거)",
   "users.role.normalize": "역할 정리",
   "users.department": "부서",
   "users.department.required": "부서 관리자는 부서 필수",
@@ -292,6 +294,8 @@ const ko: Record<string, string> = {
   "users.error.last_admin": "마지막 관리자는 강등할 수 없습니다.",
   "users.error.dept_required": "부서 관리자는 부서가 지정되어야 합니다.",
   "users.error.role_change_failed": "역할 변경에 실패했습니다. 사용자의 현재 역할을 확인한 뒤 다시 시도해 주세요.",
+  "users.error.grant_user_first": "접근 권한이 없는 사용자는 먼저 역할만 부여하세요(관리자 또는 사용자). 부서와 부서 관리자 지정은 그다음에 합니다.",
+  "users.error.not_cc_user": "다른 앱 사용자입니다. 먼저 역할을 부여해야 관리할 수 있습니다.",
 
   // Instances (admin)
   "containers.title": "인스턴스 관리",
@@ -524,6 +528,8 @@ const ko: Record<string, string> = {
   "budgets.statusCause": "상태 / 차단 원인",
   "budgets.blockedUsers": "현재 차단된 사용자",
   "budgets.deptOverHint": "부서 총액을 올려야 해제됩니다",
+  "budgets.unlimitedPerUser": "사용자 한도 없음",
+  "budgets.unlimitedPerUserHint": "켜면 개인 한도를 따로 지정하지 않은 구성원은 기간별 상한이 없습니다(부서 기본값·전역 기본값 무시). 부서 총액은 계속 적용됩니다.",
 };
 
 // ─── English ───
@@ -760,6 +766,8 @@ const en: Record<string, string> = {
   "users.role.dept-manager": "Department manager",
   "users.role.user": "User",
   "users.role.cleanup": "Role cleanup needed",
+  "users.role.none": "No access",
+  "users.role.removeAccess": "No access (remove role)",
   "users.role.normalize": "Normalize role",
   "users.department": "Department",
   "users.department.required": "Required for department managers",
@@ -768,6 +776,8 @@ const en: Record<string, string> = {
   "users.error.last_admin": "The last admin cannot be demoted.",
   "users.error.dept_required": "A department manager must have a department.",
   "users.error.role_change_failed": "Role change failed. Check the user's current role and try again.",
+  "users.error.grant_user_first": "For a user without access, grant a role on its own first (admin or user). Set the department or department manager afterwards.",
+  "users.error.not_cc_user": "This user belongs to another app. Grant a role before managing them.",
 
   // Containers
   "containers.title": "Instance Management",
@@ -1000,4 +1010,6 @@ const en: Record<string, string> = {
   "budgets.statusCause": "Status / cause",
   "budgets.blockedUsers": "Currently blocked users",
   "budgets.deptOverHint": "Raise the department total to release",
+  "budgets.unlimitedPerUser": "Unlimited per-user budget",
+  "budgets.unlimitedPerUserHint": "When on, members without their own cap have no per-period cap (the department and global defaults are ignored). The department total still applies.",
 };

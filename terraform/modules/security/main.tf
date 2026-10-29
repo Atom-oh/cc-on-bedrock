@@ -72,6 +72,85 @@ resource "aws_ecr_lifecycle_policy" "dashboard" {
 }
 
 # ---- Cognito User Pool -------------------------------------------------------
+# Shared mode (shared_user_pool_name set): the dashboard, CLI and Lambdas use an
+# existing pool owned by another stack, located by name at plan time so no pool ID
+# lives in this repo. cc creates only its app clients and prefixed role groups
+# there; the pool's schema, triggers and messages belong to the owning stack, which
+# must define the custom attributes listed in local.required_custom_attributes.
+# The own pool below is kept (unused) in shared mode so clearing the variable is the
+# rollback; removing it is a separate cleanup.
+locals {
+  shared_pool  = var.shared_user_pool_name != ""
+  group_prefix = local.shared_pool ? "cc-" : "" # == local.cc_pools[local.active_pool].group_prefix
+  required_custom_attributes = [
+    "subdomain", "container_os", "resource_tier", "security_policy", "container_id",
+    "department", "budget_exceeded", "storage_type", "dept_manager_sub",
+  ]
+  user_pool_id  = local.shared_pool ? data.aws_cognito_user_pool.shared[0].id : aws_cognito_user_pool.this.id
+  user_pool_arn = local.shared_pool ? data.aws_cognito_user_pool.shared[0].arn : aws_cognito_user_pool.this.arn
+}
+
+data "aws_cognito_user_pools" "shared" {
+  count = local.shared_pool ? 1 : 0
+  name  = var.shared_user_pool_name
+
+  lifecycle {
+    postcondition {
+      condition     = length(self.ids) == 1
+      error_message = "shared_user_pool_name must match exactly one user pool in this account and region."
+    }
+  }
+}
+
+data "aws_cognito_user_pool" "shared" {
+  count        = local.shared_pool ? 1 : 0
+  user_pool_id = one(data.aws_cognito_user_pools.shared[0].ids)
+
+  lifecycle {
+    postcondition {
+      condition = alltrue([
+        for a in local.required_custom_attributes :
+        contains([for s in self.schema_attributes : s.name], "custom:${a}")
+      ])
+      error_message = "The shared user pool is missing cc custom attributes; add them in the owning stack first."
+    }
+    postcondition {
+      condition     = try(self.admin_create_user_config[0].allow_admin_create_user_only, false)
+      error_message = "The shared user pool must allow admin-created users only (self sign-up off)."
+    }
+    postcondition {
+      # The dashboard and CLI address users by email (AdminGetUser, AdminListGroupsForUser).
+      condition     = contains(coalesce(self.username_attributes, []), "email")
+      error_message = "The shared user pool must use email as the username (username_attributes = [\"email\"])."
+    }
+  }
+}
+
+# Every client already in the shared pool must restrict WriteAttributes. Unset means
+# a signed-in user can write every mutable attribute, so another app's client would
+# let users set their own custom:department or custom:subdomain. cc's own clients
+# pass too: they allow `name` only.
+data "aws_cognito_user_pool_clients" "shared" {
+  count        = local.shared_pool ? 1 : 0
+  user_pool_id = local.user_pool_id
+}
+
+data "aws_cognito_user_pool_client" "shared" {
+  for_each     = local.shared_pool ? toset(data.aws_cognito_user_pool_clients.shared[0].client_ids) : toset([])
+  user_pool_id = local.user_pool_id
+  client_id    = each.value
+
+  lifecycle {
+    postcondition {
+      condition = (
+        length(self.write_attributes) > 0 &&
+        alltrue([for a in self.write_attributes : !startswith(a, "custom:")])
+      )
+      error_message = "A client in the shared user pool leaves WriteAttributes unset or allows custom:* writes; restrict it in its owning stack first."
+    }
+  }
+}
+
 resource "aws_cognito_user_pool" "this" {
   name = "cc-on-bedrock-users"
 
@@ -163,9 +242,54 @@ resource "aws_cognito_user_pool" "this" {
   }
 }
 
+# cc's clients and role groups exist once per pool: always on the own pool ("own"),
+# and also on the shared pool ("shared") when shared_user_pool_name is set. Keeping
+# the own-pool objects in place means switching modes never replaces them, so the
+# own pool's group memberships and client IDs survive a switch and its rollback.
+locals {
+  cc_pools = merge(
+    { own = { id = aws_cognito_user_pool.this.id, group_prefix = "" } },
+    local.shared_pool ? { shared = { id = data.aws_cognito_user_pool.shared[0].id, group_prefix = "cc-" } } : {},
+  )
+  active_pool = local.shared_pool ? "shared" : "own"
+  role_groups = {
+    admin        = { name = "admin", description = "Dashboard administrators", precedence = null }
+    user         = { name = "user", description = "Dev environment users", precedence = null }
+    dept_manager = { name = "dept-manager", description = "Department managers", precedence = 5 }
+  }
+}
+
+moved {
+  from = aws_cognito_user_pool_client.this
+  to   = aws_cognito_user_pool_client.this["own"]
+}
+
+moved {
+  from = aws_cognito_user_pool_client.cli_public
+  to   = aws_cognito_user_pool_client.cli_public["own"]
+}
+
+moved {
+  from = aws_cognito_user_group.admin
+  to   = aws_cognito_user_group.role["own/admin"]
+}
+
+moved {
+  from = aws_cognito_user_group.user
+  to   = aws_cognito_user_group.role["own/user"]
+}
+
+moved {
+  from = aws_cognito_user_group.dept_manager
+  to   = aws_cognito_user_group.role["own/dept_manager"]
+}
+
 resource "aws_cognito_user_pool_client" "this" {
-  name         = "AppClient"
-  user_pool_id = aws_cognito_user_pool.this.id
+  for_each = local.cc_pools
+
+  # A shared pool hosts other apps' clients, so the name says whose client this is.
+  name         = each.key == "shared" ? "cc-on-bedrock-dashboard" : "AppClient"
+  user_pool_id = each.value.id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -188,8 +312,10 @@ resource "aws_cognito_user_pool_client" "this" {
 
 # Public app client for cc-bedrock-local USER_PASSWORD_AUTH.
 resource "aws_cognito_user_pool_client" "cli_public" {
+  for_each = local.cc_pools
+
   name         = "cc-on-bedrock-cli-public"
-  user_pool_id = aws_cognito_user_pool.this.id
+  user_pool_id = each.value.id
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
@@ -216,24 +342,18 @@ resource "aws_cognito_user_pool_client" "cli_public" {
   prevent_user_existence_errors = "ENABLED"
 }
 
-# Cognito Groups
-resource "aws_cognito_user_group" "admin" {
-  name         = "admin"
-  user_pool_id = aws_cognito_user_pool.this.id
-  description  = "Dashboard administrators"
-}
+# Cognito role groups. In a shared pool they carry the "cc-" prefix and are the access
+# gate: a user in none of them has no cc access (dashboard, CLI credentials).
+resource "aws_cognito_user_group" "role" {
+  for_each = {
+    for pair in setproduct(keys(local.cc_pools), keys(local.role_groups)) :
+    "${pair[0]}/${pair[1]}" => { pool = pair[0], role = pair[1] }
+  }
 
-resource "aws_cognito_user_group" "user" {
-  name         = "user"
-  user_pool_id = aws_cognito_user_pool.this.id
-  description  = "Dev environment users"
-}
-
-resource "aws_cognito_user_group" "dept_manager" {
-  name         = "dept-manager"
-  user_pool_id = aws_cognito_user_pool.this.id
-  description  = "Department managers"
-  precedence   = 5
+  name         = "${local.cc_pools[each.value.pool].group_prefix}${local.role_groups[each.value.role].name}"
+  user_pool_id = local.cc_pools[each.value.pool].id
+  description  = local.role_groups[each.value.role].description
+  precedence   = local.role_groups[each.value.role].precedence
 }
 
 # ---- DynamoDB Table for Department Budgets ----------------------------------
@@ -589,7 +709,7 @@ data "aws_iam_policy_document" "dashboard_cognito" {
       "cognito-idp:ListUsers",
       "cognito-idp:ListUsersInGroup",
     ]
-    resources = [aws_cognito_user_pool.this.arn]
+    resources = [local.user_pool_arn]
   }
 }
 

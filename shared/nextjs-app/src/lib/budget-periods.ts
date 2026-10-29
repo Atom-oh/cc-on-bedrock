@@ -6,7 +6,8 @@
 export const BUDGET_PERIODS = ["daily", "weekly", "monthly"] as const;
 export type BudgetPeriod = (typeof BUDGET_PERIODS)[number];
 export type PeriodValues = Record<BudgetPeriod, number>;
-export type BudgetSource = "user" | "dept" | "global" | "none";
+// "dept-unlimited": the department's unlimitedPerUser flag removed the cap (no global fallback).
+export type BudgetSource = "user" | "dept" | "dept-unlimited" | "global" | "none";
 
 export interface UserPeriodBudgets {
   dailyBudget?: number;
@@ -18,6 +19,8 @@ export interface DeptPeriodDefaults {
   perUserDailyBudget?: number;
   perUserWeeklyBudget?: number;
   perUserMonthlyBudget?: number;
+  /** ADR-008 amendment: members without an explicit cap are uncapped (DynamoDB BOOL). */
+  unlimitedPerUser?: boolean;
 }
 
 const USER_FIELD: Record<BudgetPeriod, keyof UserPeriodBudgets> = {
@@ -27,7 +30,8 @@ const DEPT_FIELD: Record<BudgetPeriod, keyof DeptPeriodDefaults> = {
   daily: "perUserDailyBudget", weekly: "perUserWeeklyBudget", monthly: "perUserMonthlyBudget",
 };
 
-/** user explicit > dept per-user default > global (env); 0 everywhere = no cap.
+/** user explicit > dept unlimitedPerUser (no cap, stops here) > dept per-user default >
+ *  global (env); 0 everywhere = no cap.
  *  An active one-time grant is added only to a capped period (value = base + grant). */
 export function resolvePeriodBudget(
   period: BudgetPeriod,
@@ -40,7 +44,9 @@ export function resolvePeriodBudget(
   const d = Number(dept?.[DEPT_FIELD[period]] ?? 0);
   const g = Number(globals[period] ?? 0);
   const [base, source]: [number, BudgetSource] =
-    u > 0 ? [u, "user"] : d > 0 ? [d, "dept"] : g > 0 ? [g, "global"] : [0, "none"];
+    u > 0 ? [u, "user"]
+    : dept?.unlimitedPerUser === true ? [0, "dept-unlimited"]
+    : d > 0 ? [d, "dept"] : g > 0 ? [g, "global"] : [0, "none"];
   return { value: base > 0 ? base + grant : 0, source, base, grant };
 }
 

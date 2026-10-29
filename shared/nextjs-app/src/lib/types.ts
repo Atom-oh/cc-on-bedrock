@@ -33,7 +33,7 @@ export interface CognitoUser {
   storageType?: "ebs" | "efs";
   containerId?: string;
   groups: string[];
-  role?: Role;                // highest-privilege role group (set by GET /api/users)
+  role?: Role | null;         // highest-privilege role group (set by GET /api/users); null = no cc role group in a shared pool
   roleNeedsCleanup?: boolean; // user holds more than one role group
   customRoutes?: CustomRoute[];
 }

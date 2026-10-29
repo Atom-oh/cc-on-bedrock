@@ -118,7 +118,10 @@ type Row = Record<string, unknown> | undefined;
  * implies base > 0.
  */
 export function periodIsCapped(period: BudgetPeriod, userRow: Row, deptRow: Row): boolean {
-  if (resolvePeriodBudget(period, userRow, deptRow).base > 0) return true;
+  const mirror = resolvePeriodBudget(period, userRow, deptRow);
+  if (mirror.base > 0) return true;
+  // The department's unlimitedPerUser flag is current; effective* may predate it.
+  if (mirror.source === "dept-unlimited") return false;
   return Number(userRow?.[EFFECTIVE_FIELD[period]] ?? 0) > 0;
 }
 
@@ -130,8 +133,10 @@ const ACTIVE_GRANT_FIELD: Record<BudgetPeriod, string> = {
 
 /** The period's base cap (without grants); 0 = uncapped. Same sources as `periodIsCapped`. */
 export function periodBaseCap(period: BudgetPeriod, userRow: Row, deptRow: Row): number {
-  const mirror = resolvePeriodBudget(period, userRow, deptRow).base;
+  const resolved = resolvePeriodBudget(period, userRow, deptRow);
+  const mirror = resolved.base;
   if (mirror > 0) return mirror;
+  if (resolved.source === "dept-unlimited") return 0;
   const enforced = Number(userRow?.[EFFECTIVE_FIELD[period]] ?? 0) || 0;
   if (enforced <= 0) return 0;
   const base = enforced - (Number(userRow?.[ACTIVE_GRANT_FIELD[period]] ?? 0) || 0);
@@ -141,8 +146,9 @@ export function periodBaseCap(period: BudgetPeriod, userRow: Row, deptRow: Row):
 /** Spend and resolved cap at request time, shown to the approver. */
 export function periodSnapshot(period: BudgetPeriod, userRow: Row, deptRow: Row): { spend: number; budget: number } {
   const spend = Number(userRow?.[SPEND_FIELD[period]] ?? 0) || 0;
-  const enforced = Number(userRow?.[EFFECTIVE_FIELD[period]] ?? 0) || 0;
-  const budget = enforced > 0 ? enforced : resolvePeriodBudget(period, userRow, deptRow).value;
+  const resolved = resolvePeriodBudget(period, userRow, deptRow);
+  const enforced = resolved.source === "dept-unlimited" ? 0 : Number(userRow?.[EFFECTIVE_FIELD[period]] ?? 0) || 0;
+  const budget = enforced > 0 ? enforced : resolved.value;
   return { spend, budget };
 }
 

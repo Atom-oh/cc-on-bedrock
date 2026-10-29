@@ -2,6 +2,40 @@
 export const ROLES = ["admin", "dept-manager", "user"] as const;
 export type Role = (typeof ROLES)[number];
 
+// Shared user pool (pool also used by other apps): cc's role groups carry a prefix
+// (e.g. "cc-admin") so they never collide with another app's groups. Empty prefix =
+// cc's own pool, groups named exactly as the roles. App logic only ever sees the
+// stripped Role names; the prefix is applied/removed at the Cognito boundary.
+
+/** COGNITO_GROUP_PREFIX ("" or unset = own pool). Read per call so tests can stub env. */
+export function groupPrefix(): string {
+  return process.env.COGNITO_GROUP_PREFIX ?? "";
+}
+
+/** Cognito GroupName of a role. */
+export function groupName(role: Role, prefix: string = groupPrefix()): string {
+  return prefix + role;
+}
+
+/** cc roles among raw Cognito group names; other apps' groups are ignored. */
+export function rolesFromGroupNames(raw: string[], prefix: string = groupPrefix()): Role[] {
+  return ROLES.filter((r) => raw.includes(prefix + r));
+}
+
+/** Shared pool: a user without a cc role group has no access (no default "user"). */
+export function requiresRoleGroup(prefix: string = groupPrefix()): boolean {
+  return prefix !== "";
+}
+
+/**
+ * Role that grants access, or null for no access. `groups` are stripped Role names.
+ * Own pool: no role group = "user" (roleFromGroups). Shared pool: no role group = null.
+ */
+export function accessRole(groups: string[], prefix: string = groupPrefix()): Role | null {
+  if (requiresRoleGroup(prefix) && !ROLES.some((r) => groups.includes(r))) return null;
+  return roleFromGroups(groups).role;
+}
+
 /** Highest-privilege role among the groups (admin > dept-manager > user). */
 export function roleFromGroups(groups: string[]): { role: Role; needsCleanup: boolean } {
   const held = ROLES.filter((r) => groups.includes(r));

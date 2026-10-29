@@ -15,6 +15,7 @@ import type {
   CreateUserInput,
   UpdateUserInput,
 } from "./types";
+import { groupName } from "./roles";
 import {
   SecretsManagerClient,
   CreateSecretCommand,
@@ -178,7 +179,7 @@ export async function createCognitoUser(
     new AdminAddUserToGroupCommand({
       UserPoolId: userPoolId,
       Username: result.User?.Username ?? input.email,
-      GroupName: input.role,
+      GroupName: groupName(input.role),
     })
   );
 

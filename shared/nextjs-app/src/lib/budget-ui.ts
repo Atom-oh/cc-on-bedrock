@@ -185,6 +185,8 @@ const USD_LIMIT_FIELDS = new Set([
 /** History value: USD fields as dollars, anything else (e.g. dailyTokenLimit) as a plain number. */
 export function formatLimitValue(field: string, value: number | undefined): string {
   if (value === undefined) return "—";
+  // Department flag, audited as 1 / 0 (/api/admin/budgets).
+  if (field === "unlimitedPerUser") return value ? "on" : "off";
   return USD_LIMIT_FIELDS.has(field) ? formatUsd(value) : value.toLocaleString();
 }
 

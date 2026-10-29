@@ -32,7 +32,7 @@
 
 ## §1 불변식 / 용어 (Invariants) — 결정론적 판정 기준
 
-- **Terraform-only** — 새 CDK/CloudFormation 배포 경로 추가 금지. Lambda 소스는 `lambda/`(IaC 디렉토리 밖)에서 Terraform이 직접 패키징. permission boundary 등 정책도 Terraform이 정본(ADR-034).
+- **Terraform-only** — 새 CDK/CloudFormation 배포 경로 추가 금지. Every resource, IAM role and the permission boundary is created in Terraform, so `destroy` + `apply` reproduces the platform (ADR-001). Exception to that reproducibility: with `shared_user_pool_name` set, the identity directory (Cognito pool, schema, users) belongs to another stack, and cc creates only its clients and role groups there (ADR-016). Lambda 소스는 `lambda/`(IaC 디렉토리 밖)에서 Terraform이 직접 패키징. permission boundary 등 정책도 Terraform이 정본(ADR-034).
 - **자격증명 분리** — EC2와 Local에 동일한 단일 IAM role 금지. 정책 shape·permission boundary·태그·inference-profile 귀속만 공유.
 - **STS 1h 한도** — 체이닝 자격증명을 1시간 너머 연장 금지. `credential_process` 갱신 사용.
 - **EBS 영속성 (2-볼륨)** — DevEnv는 ephemeral OS root(`DeleteOnTermination=true`) + persistent 데이터 EBS(`/home/coder`, `DeleteOnTermination=false`, subdomain 태그로 재연결). Terminate가 사용자 데이터를 파괴하면 안 됨 (ADR-032).
@@ -44,7 +44,7 @@
 - **Kiro 거버넌스 제외** — Kiro는 IAM Identity Center 구독 라이선스; Cognito/Bedrock 토큰 한도 집행 대상 아님.
 - **Codex = bedrock-runtime by default; mantle only when unmetered is accepted** — Codex CLI calls Bedrock via the `amazon-bedrock-runtime` provider (Responses API). `bedrock-mantle:*` escapes invocation-log metering, so it is never in a standing allow-list: only `budget-check` grants it (`cc-bedrock-mantle-unmetered`, own us-east-1 project + web search) to users with no cost cap of any kind, removes it within 5 min of any cap appearing or on a read failure, and every surface says it is not counted. Every per-user Bedrock allow-list copy includes the OpenAI GPT and default-project ARNs (`tests/unit/test_bedrock_iam_codex_parity.py`) (ADR-014 §9).
 - **No public ingress, no owned VPC** — Every LB is `internal`, reached only by CloudFront VPC origins, and admits only the CloudFront VPC-origin SG. There are no public IPs on compute. Terraform takes `vpc_id` and subnet IDs and never declares `aws_vpc`. In a shared VPC, SG rules reference SGs instead of the VPC CIDR (interface endpoints excepted) (ADR-015).
-- **Role = one Cognito group** — every user has exactly one of the `admin` / `dept-manager` / `user` groups. Roles are not kept separately in custom attributes or DynamoDB. Only admins assign or change roles, on the admin users page, and saving writes the Cognito group immediately. `dept-manager` requires a real department (not blank or `default`). Privileged writes re-check the current Cognito group rather than the session groups (ADR-008 amendment 2026-10-24).
+- **Role = one Cognito group** — every user has exactly one of the `admin` / `dept-manager` / `user` groups. Roles are not kept separately in custom attributes or DynamoDB. Only admins assign or change roles, on the admin users page, and saving writes the Cognito group immediately. `dept-manager` requires a real department (not blank or `default`). Privileged writes re-check the current Cognito group rather than the session groups (ADR-008 amendment 2026-10-24). In a shared user pool the groups are `cc-admin` / `cc-dept-manager` / `cc-user`, and a user in none of them has no cc access (ADR-016).
 - **anti-drift** — 새 ADR/flag/status 변경은 **같은 PR에서 이 §3(또는 §2)를 갱신**. 갱신 없으면 "not live". 옛 ADR 본문은 트리에서 제거(git tag + `../history/ADR-MAPPING.md` 보존), **번호 재사용 금지** (2026-06-23 BASELINE reset의 일괄 재번호는 일회성 예외; 이후 신규 ADR에 적용).
 
 ---
@@ -57,6 +57,8 @@
 | **LIVE(flag)** | EC2 Hibernation | `HIBERNATE_ENABLED=true`. 유휴 stop/hibernate + 만료 회전, 암호화 root (`deployment_mode = "devenv"` 전용) | ADR-002 |
 | **GATED** | 셀프서비스 IAM 권한 확장 | UI 신청 → **admin 승인** 필수 + permission boundary 내. 신청 API(`/api/user/container-request`)는 `deployment_mode = "devenv"` 전용 (ADR-006 amendment 2026-10-23) | ADR-007 |
 | **LIVE** | Budget increase request & approval (one-time grant) | Both editions. User request → approval by an admin or the dept-manager of the user's department (within the department monthly total, plain-user requests only); no self-approval. An approval applies only to the current UTC period window and cascades to longer periods (daily → weekly → monthly); token denies are released conditionally. Dept-managers also set members' standing limits (department totals and per-user defaults stay admin-only) | ADR-008 (amendment 2026-10-24) |
+| **LIVE(flag)** | Shared Cognito user pool | `shared_user_pool_name` (tfvars only; empty = own pool): use an existing pool by name; access = `cc-*` role group membership; plan fails unless the pool has cc's custom attributes, admin-only sign-up and no client that lets users write `custom:*`; own pool kept for rollback | ADR-016 |
+| **LIVE** | Department unlimited per-user budget | `cc-department-budgets.unlimitedPerUser` (admin-set): members without their own cap skip department and global per-user defaults; may make them mantle-eligible | ADR-008 (amendment 2026-10-29) |
 | **LIVE(flag)** | ccdash integration | When Terraform `ccdash_url` is set, the dashboard shows only a sidebar link + collector setup guidance (unset = hidden). cc writes no telemetry settings and neither deploys nor modifies ccdash | ADR-008 (amendment 2026-10-24) |
 | **LIVE** | Codex on Bedrock | Codex CLI preinstalled on EC2 DevEnv + Local plain `codex` via `cc-bedrock-local setup`; bedrock-runtime Responses API sharing usage, budget and audit. Codex OTEL productivity rollup is a follow-up | ADR-014 |
 | **DEFERRED** | Enterprise SSO Federation | 외부 IdP 수요·credential 확정 시 재개 (구 ADR-008) | history/brainstorm |
@@ -72,10 +74,10 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> Eleven consolidated ADRs replace the legacy 34; ADR-012 through ADR-015 are subsequent records.
+> Eleven consolidated ADRs replace the legacy 34; ADR-012 through ADR-016 are subsequent records.
 > `../history/ADR-MAPPING.md` maps retired decisions; tag `adr-legacy-2026-06-23` retains their bodies.
 > Consolidation is complete. ADR-013's language policy is LIVE; its specialist protocol is retained behind `ROLE_REVIEW=1`.
-> The next ADR number is 016; the earlier reset was a one-time exception.
+> The next ADR number is 017; the earlier reset was a one-time exception.
 
 | ADR | 토픽 | 한 줄 | 흡수 LEGACY |
 |---|---|---|---|
@@ -86,7 +88,7 @@
 | 005 | 사용량 집계 | Inference Profile + Invocation Log → DynamoDB, email canonical key, 모델 정규화 | 011·019·031 · ~~025~~ |
 | 006 | 공유 자격증명 | EC2·Local 동일 inference profile, Local Mode STS issuer, credential_process 1h 갱신; amendment 2026-10-23: `deployment_mode` profiles, `governance` default | 014·029 |
 | 007 | IAM 신청·boundary | 셀프서비스 신청 + admin 승인 + boundary X(AllowInAccount+DenyEscalation, TF 생성), runtime upsert, wildcard Claude; devenv-only request API. TF source has the 63-pattern floor; plan/show validation against the request allowlist remains a follow-up | 005·020·021·030·034 · ~~026~~ |
-| 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18). One-time increase request/approval (UTC-window grants, cascade to longer periods, no self-approval), dept-manager delegation (members' standing limits + increases within the department total), role = one Cognito group (amendment 2026-10-24) | 006·015·023 |
+| 008 | 예산 집행 | 부서/개인 예산($+normalized token), EventBridge → IAM deny. Per-user USD = daily / weekly / monthly caps, any one exceeded blocks (amendment 2026-10-18). One-time increase request/approval (UTC-window grants, cascade to longer periods, no self-approval), dept-manager delegation (members' standing limits + increases within the department total), role = one Cognito group (amendment 2026-10-24); department `unlimitedPerUser` skips dept/global per-user defaults (amendment 2026-10-29) | 006·015·023 |
 | 009 | OTel 관측 | **네이티브 Claude Code OTEL**(metrics `claude_code.*` + `tool_result` 이벤트) → collector(awss3, logs DLP-scrub) → S3 → rollup Lambda → DynamoDB per-user 일일 KPI(PROD#/SKILL#/AGENT#/TOOL#/ACTIVE#). `enduser.id` 스탬프. 비용은 005 권위. 커스텀 emitter 은퇴 (P1 rewrite 2026-06-26) | 005·029 (OTel 파이프라인) |
 | 010 | 프로비저닝 | EventBridge pre-provisioning + Cognito JIT fallback | 022·028 |
 | 011 | 대시보드 배포 | EC2 ASG + Docker, Terraform-managed ECR, tag-driven instance refresh | 017 |
@@ -94,6 +96,7 @@
 | 013 | Specialist PR review and documentation | Active role protocol and incremental English maintenance policy; preserves remaining security/custody rules | New |
 | 014 | Codex on Bedrock | OpenAI Codex CLI → bedrock-runtime Responses API (`global.openai.*`), per-user role attribution; IAM adds OpenAI GPT + default project (mantle only via the §9 budget-check grant); explicit per-model cache rates + corrected Claude prices (Price List API); usage `tool` attribute + per-tool dashboard; audit-logger `Responses` / Local roles / `client_tool`; `/etc/codex/config.toml` system layer; §9 (2026-10-26): `codex -p mantle` (bedrock-mantle, web search, us-east-1) for unlimited-cost users only — NOT metered, CloudTrail data-event audit, `enable_mantle`; 2026-10-28: display-only cost estimate from `AWS/BedrockMantle` metrics (`MANTLE#` rows, may differ from the bill, never enforced) | New |
 | 015 | Existing VPC + internal origins | BYO VPC (`vpc_id` + subnet IDs, no `aws_vpc`), shared public zone as a data source (`removed` for old states), dashboard ALB / DevEnv NLB `internal` behind CloudFront VPC origins, SG-reference rules instead of VPC CIDR; migration = destroy + fresh apply | New |
+| 016 | Shared Cognito user pool | Optional `shared_user_pool_name` (tfvars only): existing pool looked up by name, cc creates only its clients + `cc-` role groups, no-group users have no access, no cc triggers on the shared pool, own pool kept for rollback | New |
 
 > **제외(브레인스토밍/보류) → history/brainstorm:** 구 ADR-007(MCP Gateway), 구 ADR-008(Enterprise SSO).
 
