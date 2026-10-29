@@ -121,6 +121,31 @@ data "aws_cognito_user_pool" "shared" {
   }
 }
 
+# Every client already in the shared pool must restrict WriteAttributes. Unset means
+# a signed-in user can write every mutable attribute, so another app's client would
+# let users set their own custom:department or custom:subdomain. cc's own clients
+# pass too: they allow `name` only.
+data "aws_cognito_user_pool_clients" "shared" {
+  count        = local.shared_pool ? 1 : 0
+  user_pool_id = local.user_pool_id
+}
+
+data "aws_cognito_user_pool_client" "shared" {
+  for_each     = local.shared_pool ? toset(data.aws_cognito_user_pool_clients.shared[0].client_ids) : toset([])
+  user_pool_id = local.user_pool_id
+  client_id    = each.value
+
+  lifecycle {
+    postcondition {
+      condition = (
+        length(self.write_attributes) > 0 &&
+        alltrue([for a in self.write_attributes : !startswith(a, "custom:")])
+      )
+      error_message = "A client in the shared user pool leaves WriteAttributes unset or allows custom:* writes; restrict it in its owning stack first."
+    }
+  }
+}
+
 resource "aws_cognito_user_pool" "this" {
   name = "cc-on-bedrock-users"
 

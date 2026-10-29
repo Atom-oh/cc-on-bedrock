@@ -25,7 +25,7 @@ Pointing cc at a pool it does not own has four consequences:
 
 **An optional root variable, `shared_user_pool_name`, makes cc use an existing pool in the same account and region. In that pool, membership of a `cc-` prefixed role group is the access gate. When the variable is empty, cc's own pool is used exactly as before.**
 
-- **Lookup.** Terraform resolves the pool by name at plan time (`data "aws_cognito_user_pools"` + `data "aws_cognito_user_pool"`). The name lives only in the operator's gitignored `terraform.tfvars`. Postconditions fail the plan when the name does not match exactly one pool, when the pool lacks any of cc's custom attributes, or when it allows self sign-up.
+- **Lookup.** Terraform resolves the pool by name at plan time (`data "aws_cognito_user_pools"` + `data "aws_cognito_user_pool"`). The name lives only in the operator's gitignored `terraform.tfvars`. Postconditions fail the plan when the name does not match exactly one pool, when the pool lacks any of cc's custom attributes, when it allows self sign-up, or when any client in the pool leaves `WriteAttributes` unset or lets users write a `custom:*` attribute. An unset `WriteAttributes` lets every signed-in user write every mutable attribute, so another app's client would let users set their own `custom:department` (budget) or `custom:subdomain` (IAM role name).
 - **What cc owns in the shared pool.** cc creates only its two app clients and its three role groups, `cc-admin`, `cc-dept-manager` and `cc-user`, all in Terraform. The owning stack owns the pool, its schema (including cc's custom attributes), triggers, password policy and messages.
 - **Gate.** The runtime env `COGNITO_GROUP_PREFIX` (`cc-` in shared mode, empty otherwise) maps group names to cc's internal roles and ignores every other group. In shared mode, a user in no cc role group gets no session, no fresh-role pass (`requireFreshRole`) and no `/api/local/credentials` response. The user listing shows such users as having no access, and an admin grants access by assigning a role. In own-pool mode, no group still means `user`.
 - **Triggers.** cc attaches no trigger to the shared pool. ADR-010's JIT shim stays on the own pool only. In shared mode, the per-user Local role is created lazily by `sts-issuer` (`ensure_role`) on the first credential request. This is the existing fallback, and the event-driven provisioner is not deployed anyway (BASELINE §2).
@@ -47,6 +47,7 @@ files:
       - "/group_prefix\\s*=\\s*local.shared_pool \\? \"cc-\" : \"\"/"
       - "required_custom_attributes"
       - "allow_admin_create_user_only"
+      - "aws_cognito_user_pool_client\" \"shared\""
   - path: terraform/modules/dashboard/main.tf
     must_contain:
       - "COGNITO_GROUP_PREFIX"
