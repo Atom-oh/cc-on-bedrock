@@ -8,7 +8,9 @@ import {
   GetUserCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { createHash } from "crypto";
-import { requireAnyRoleGroup } from "@/lib/role-admin";
+import { pinnedIdentity, requireAnyRoleGroup } from "@/lib/role-admin";
+import { requiresRoleGroup } from "@/lib/roles";
+import { userPoolId } from "@/lib/aws-clients";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode credentials API.
 //
@@ -41,6 +43,10 @@ interface UserIdentity {
   email?: string;
   department: string;
   project: string;
+  /** Shared pool only: the pinned `custom:subdomain` that names the Local role. */
+  subdomain?: string;
+  /** Shared pool only: scopes the role's `sub` binding (`sub:<pool>` tag). */
+  pool?: string;
 }
 
 /** Identity for the STS Issuer plus the Cognito username used for the fresh role-group check. */
@@ -182,6 +188,26 @@ export async function POST(req: NextRequest) {
   // Disabled user, or no cc role group in a shared pool → 403; lookup failure → 503.
   const access = await requireAnyRoleGroup(caller.cognitoUsername);
   if (!access.ok) return access.response;
+  // Shared pool (ADR-016): users can change their own email there, and the STS issuer
+  // otherwise derives the role from the email. Pin the role to custom:subdomain so an
+  // email change cannot mint a fresh role and budget identity (ensure_role refuses a
+  // role owned by another email). Fails closed.
+  if (requiresRoleGroup()) {
+    try {
+      const fresh = await pinnedIdentity(caller.cognitoUsername as string);
+      // The session/token copies can be stale (8h JWT, stored CLI token row): the record
+      // looked up must be the caller's own, and ensure_role gets only its fresh values.
+      if (fresh.sub !== identity.sub) {
+        return NextResponse.json({ error: "Identity mismatch" }, { status: 403 });
+      }
+      identity.subdomain = fresh.subdomain;
+      identity.email = fresh.email;
+      identity.pool = userPoolId;
+    } catch (err) {
+      console.error("[local/credentials] subdomain pin failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json({ error: "Identity check unavailable" }, { status: 503 });
+    }
+  }
 
   try {
     const resp = await lambda.send(new InvokeCommand({

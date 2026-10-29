@@ -3,12 +3,14 @@ import {
   AdminGetUserCommand,
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
+  AdminUpdateUserAttributesCommand,
   AdminUserGlobalSignOutCommand,
   ListUsersInGroupCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { NextResponse } from "next/server";
 import { cognitoClient, userPoolId } from "./aws-clients";
 import { accessRole, groupName, requiresRoleGroup, rolesFromGroupNames, type Role } from "./roles";
+import { deriveSubdomain } from "./utils";
 
 const MAX_PAGES = 100;
 
@@ -157,4 +159,39 @@ export async function removeUserAccess(
     await send(new AdminRemoveUserFromGroupCommand({ UserPoolId: userPoolId, Username: username, GroupName: groupName(g as Role) }));
   }
   await send(new AdminUserGlobalSignOutCommand({ UserPoolId: userPoolId, Username: username }));
+}
+
+/**
+ * Shared pool (ADR-016): the user's Local role is pinned to `custom:subdomain`, which only
+ * Admin* APIs can write. Returns the pinned value, pinning it from the current email on
+ * first use, together with the fresh `sub` and email, and requires a verified email every
+ * time. The caller must hand ensure_role these fresh values, never session or token
+ * copies. sts-issuer's ensure_role refuses a role whose owner email differs, so a later
+ * self-service email change cannot mint a fresh role (and a fresh budget identity).
+ * Read fresh from Cognito, never from the session. Throws on lookup/write failure.
+ */
+export async function pinnedIdentity(
+  username: string,
+  send: Send = defaultSend
+): Promise<{ subdomain: string; sub: string; email: string }> {
+  const res = (await send(new AdminGetUserCommand({ UserPoolId: userPoolId, Username: username }))) as {
+    UserAttributes?: { Name?: string; Value?: string }[];
+  };
+  const attrs = Object.fromEntries((res.UserAttributes ?? []).map((a) => [a.Name ?? "", a.Value ?? ""]));
+  // Checked on every issuance, not only the first pin: an unverified self-service email
+  // change resets email_verified, so it can never present another user's email to
+  // ensure_role, which binds a role still unbound in this pool to a matching email.
+  if (attrs["email_verified"] !== "true") throw new Error("email not verified; refusing to issue credentials");
+  const sub = attrs["sub"] ?? "";
+  const email = (attrs["email"] ?? "").toLowerCase();
+  if (!sub || !email) throw new Error("user record lacks sub or email");
+  if (attrs["custom:subdomain"]) return { subdomain: attrs["custom:subdomain"], sub, email };
+  const derived = deriveSubdomain(email);
+  if (!derived) throw new Error("cannot derive a subdomain from the user's email");
+  await send(new AdminUpdateUserAttributesCommand({
+    UserPoolId: userPoolId,
+    Username: username,
+    UserAttributes: [{ Name: "custom:subdomain", Value: derived }],
+  }));
+  return { subdomain: derived, sub, email };
 }

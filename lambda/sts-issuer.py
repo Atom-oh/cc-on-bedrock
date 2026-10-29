@@ -170,6 +170,7 @@ def handler(event, context):
             return _http(400, {"error": "invalid JSON body"})
 
     sub = payload.get("sub")
+    pool = payload.get("pool")  # shared pool only (ADR-016)
     email = (payload.get("email") or "").strip().lower()
     department = payload.get("department", "default")
     project = payload.get("project", "default")
@@ -188,7 +189,8 @@ def handler(event, context):
             return _http(400, {"error": f"cannot derive subdomain from email: {e}"})
 
     try:
-        ensure_result = ensure_role(subdomain, email, department, project)
+        # ADR-016: in a shared pool, bind the role to the immutable sub (per pool) as well as the email.
+        ensure_result = ensure_role(subdomain, email, department, project, sub=sub, pool=pool)
         role_arn = ensure_result["roleArn"]
         if ensure_result["created"]:
             # Pre-provisioner missed this user (rare; usually CloudTrail delay or

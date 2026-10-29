@@ -293,7 +293,9 @@ resource "aws_cognito_user_pool_client" "this" {
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
-  write_attributes = ["name"]
+  # A shared pool may mark email required, and Cognito rejects a client that cannot write a
+  # required attribute, so the shared-pool client also lists email (ADR-016).
+  write_attributes = each.key == "shared" ? ["name", "email"] : ["name"]
 
   explicit_auth_flows = [
     "ALLOW_USER_PASSWORD_AUTH",
@@ -319,7 +321,9 @@ resource "aws_cognito_user_pool_client" "cli_public" {
 
   # Users must not self-write custom:* (subdomain names the issued IAM role; department and
   # budget_exceeded drive budgets). Unset means every attribute is writable; admins use Admin* APIs.
-  write_attributes = ["name"]
+  # A shared pool may mark email required, and Cognito rejects a client that cannot write a
+  # required attribute, so the shared-pool client also lists email (ADR-016).
+  write_attributes = each.key == "shared" ? ["name", "email"] : ["name"]
 
   generate_secret = false
 
