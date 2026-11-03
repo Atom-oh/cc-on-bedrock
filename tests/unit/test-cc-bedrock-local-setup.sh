@@ -101,12 +101,19 @@ run unsetup
 [[ "$(json '"deny" in d["permissions"]')" == False ]] || fail "unsetup left the claude read deny"
 [[ "$(count 'permissions|deny')" == 0 ]] || fail "unsetup left the codex permission profile"
 
-# Mantle profile (ADR-014): its own file (Codex rejects [profiles.x] in config.toml),
-# written only while state.json reports a grant; runtime stays the default.
+# Mantle (ADR-014 §9, amended 2026-11-03): while state.json reports a grant,
+# bedrock-mantle is the config.toml default (plain codex + Codex app get web search),
+# the metered runtime path is runtime.config.toml (`codex -p runtime`), and
+# mantle.config.toml (`codex -p mantle`) stays. Profiles are their own files
+# (Codex rejects [profiles.x] in config.toml). No grant: runtime is the default.
 M="${H}/.codex/mantle.config.toml"
+R="${H}/.codex/runtime.config.toml"
 mc() { grep -cE "$1" "${M}" || true; }
+rc() { grep -cE "$1" "${R}" || true; }
 run setup
 [[ ! -e "${M}" ]] || fail "mantle profile without a grant"
+[[ ! -e "${R}" ]] || fail "runtime profile without a grant"
+[[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "runtime must be the default without a grant"
 echo '{"credentials":{},"mantle":{"enabled":true,"projectId":"proj_abc","region":"us-east-1","model":"openai.gpt-6.1-sol"}}' \
   > "${H}/.config/cc-bedrock/state.json"
 run setup
@@ -116,16 +123,38 @@ run setup
 [[ "$(mc '^OpenAI-Project = "proj_abc"$')" == 1 ]] || fail "mantle project header"
 [[ "$(mc '^region = "us-east-1"$')" == 1 ]] || fail "mantle region"
 [[ "$(mc 'NOT counted in usage or budget')" == 1 ]] || fail "mantle file must say it is not metered"
-[[ "$(count 'profiles\.mantle|amazon-bedrock\.|OpenAI-Project')" == 0 ]] || fail "mantle leaked into config.toml"
-[[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "runtime must stay the default"
-snap_m="$(cat "${M}")"
+[[ "$(count 'profiles\.mantle')" == 0 ]] || fail "[profiles.mantle] in config.toml"
+[[ "$(count '^model_provider = "amazon-bedrock"  # managed by cc-bedrock-local$')" == 1 ]] || fail "mantle must be the default with a grant"
+[[ "$(count '^web_search = "live"  # managed by cc-bedrock-local$')" == 1 ]] || fail "default web search"
+[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]  # managed by cc-bedrock-local$')" == 1 ]] || fail "mantle aws table"
+[[ "$(count '^OpenAI-Project = "proj_abc"$')" == 1 ]] || fail "mantle project header in config.toml"
+[[ "$(count '^\[model_providers\.amazon-bedrock-runtime\.aws\]')" == 1 ]] || fail "runtime provider table must stay"
+[[ -f "${R}" ]] || fail "runtime profile missing"
+[[ "$(rc '^model_provider = "amazon-bedrock-runtime"$')" == 1 ]] || fail "runtime profile provider"
+[[ "$(rc '^web_search = "disabled"$')" == 1 ]] || fail "runtime profile web search"
+snap_m="$(cat "${M}")"; snap_c="$(cat "${H}/.codex/config.toml")"
 run setup
 [[ "$(cat "${M}")" == "${snap_m}" ]] || fail "mantle profile not idempotent"
+[[ "$(cat "${H}/.codex/config.toml")" == "${snap_c}" ]] || fail "mantle-default config.toml not idempotent"
 env -i HOME="${H}" PATH="/usr/bin:/bin" "${CLI}" status 2>/dev/null | grep -q "NOT counted in usage or budget" \
   || fail "status must say mantle is not metered"
 echo '{"credentials":{},"mantle":{"enabled":false}}' > "${H}/.config/cc-bedrock/state.json"
 run setup
 [[ ! -e "${M}" ]] || fail "revoked mantle profile left behind"
+[[ ! -e "${R}" ]] || fail "revoked runtime profile left behind"
+[[ "$(count 'amazon-bedrock\.|OpenAI-Project')" == 0 ]] || fail "revoked mantle left in config.toml"
+[[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "revoke must restore the runtime default"
+# A user's own amazon-bedrock table stays, and keeps runtime the default.
+cp "${H}/.codex/config.toml" "${TMPDIR:-/tmp}/ccbl-own.$$"
+printf '\n[model_providers.amazon-bedrock.aws]\nregion = "mine"\n' >> "${H}/.codex/config.toml"
+echo '{"credentials":{},"mantle":{"enabled":true,"projectId":"proj_abc"}}' > "${H}/.config/cc-bedrock/state.json"
+run setup
+[[ "$(count '^region = "mine"$')" == 1 ]] || fail "dropped the user's own amazon-bedrock table"
+[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "duplicate amazon-bedrock table"
+[[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "own table must keep runtime the default"
+cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"; rm -f "${TMPDIR:-/tmp}/ccbl-own.$$" "${M}"
+echo '{"credentials":{},"mantle":{"enabled":false}}' > "${H}/.config/cc-bedrock/state.json"
+run setup
 printf 'model = "mine"\n' > "${M}"
 echo '{"credentials":{},"mantle":{"enabled":true,"projectId":"proj_abc"}}' > "${H}/.config/cc-bedrock/state.json"
 run setup

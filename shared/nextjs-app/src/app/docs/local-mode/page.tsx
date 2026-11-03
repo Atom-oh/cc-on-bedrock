@@ -219,9 +219,10 @@ claude
 # 사전 설치 (DevEnv와 같은 검증 버전): npm install -g @openai/codex@0.163.0
 codex
 
-# 비용 무제한 사용자만: bedrock-mantle(us-east-1, 웹 검색) 프로필
+# 비용 무제한 사용자: codex와 Codex 앱의 기본값이 bedrock-mantle(us-east-1, 웹 검색)
 # ※ mantle 사용량은 예산에 집계되지 않음 (감사 로그 + 추정 비용만 표시, 실제 청구액과 다를 수 있음)
-codex -p mantle
+# 집계되는 bedrock-runtime으로 실행하려면:
+codex -p runtime
 
 # 현재 잔여 시간 + 한도 상태 확인 (mantle 활성 여부 포함)
 cc-bedrock-local status
@@ -245,7 +246,7 @@ cc-bedrock-local logout`}
               ["refresh", ko ? "캐시된 refresh token으로 silent 재발급 (만료되면 실패)" : "Silent refresh using cached refresh token (fails if expired)"],
               ["logout", ko ? "refresh token + state 캐시 삭제" : "Clear refresh token + state cache"],
               ["status", ko ? "남은 TTL + 활성 Deny / 한도 상태 출력" : "Remaining TTL + Deny / limit state"],
-              ["setup", ko ? "~/.claude/settings.json(Bedrock env + awsCredentialExport)과 ~/.codex/config.toml(amazon-bedrock-runtime, credential_process 프로파일)을 설정 — 이후 claude/codex를 그대로 실행. 비용 무제한 사용자는 ~/.codex/mantle.config.toml(codex -p mantle, us-east-1 웹 검색, 집계 안 됨)도 자동 생성/제거" : "Configure ~/.claude/settings.json (Bedrock env + awsCredentialExport) and ~/.codex/config.toml (amazon-bedrock-runtime on the credential_process profile) so plain claude/codex use Bedrock. Unlimited-cost users also get ~/.codex/mantle.config.toml (codex -p mantle, us-east-1 web search, NOT metered), added/removed automatically"],
+              ["setup", ko ? "~/.claude/settings.json(Bedrock env + awsCredentialExport)과 ~/.codex/config.toml(amazon-bedrock-runtime, credential_process 프로파일)을 설정 — 이후 claude/codex를 그대로 실행. 비용 무제한 사용자는 config.toml 기본값이 bedrock-mantle(us-east-1 웹 검색, 집계 안 됨)이 되고, 집계되는 runtime은 ~/.codex/runtime.config.toml(codex -p runtime)로 자동 생성/제거" : "Configure ~/.claude/settings.json (Bedrock env + awsCredentialExport) and ~/.codex/config.toml (amazon-bedrock-runtime on the credential_process profile) so plain claude/codex use Bedrock. For unlimited-cost users the config.toml default becomes bedrock-mantle (us-east-1 web search, NOT metered) and the metered runtime moves to ~/.codex/runtime.config.toml (codex -p runtime), added/removed automatically"],
               ["unsetup", ko ? "setup이 쓴 키만 제거 (Anthropic/OpenAI 직접 사용으로 복귀)" : "Remove only the keys setup wrote (back to direct Anthropic/OpenAI use)"],
               ["claude [args]", ko ? "세션 확보 + 모델 env 주입 후 claude 실행" : "Ensure session + apply model env, then run claude"],
               ["codex [args]", ko ? "세션 확보 후 OpenAI codex를 Bedrock(bedrock-runtime)으로 실행 — provider/region 강제 고정 (ADR-014)" : "Ensure session, run OpenAI codex on Bedrock (bedrock-runtime) — provider/region pinned (ADR-014)"],

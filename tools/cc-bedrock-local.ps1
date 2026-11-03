@@ -466,10 +466,13 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   $mAws = '[model_providers.amazon-bedrock.aws]'
   $mHdr = '[model_providers.amazon-bedrock.http_headers]'
   $mPath = Join-Path (Split-Path -Parent $CodexConfigFile) 'mantle.config.toml'
+  $rPath = Join-Path (Split-Path -Parent $CodexConfigFile) 'runtime.config.toml'
   $mantle = @{}
   $st = Read-State
   if ($st -and $st.Contains('mantle') -and $st['mantle']) { $mantle = $st['mantle'] }
   $mOurs = (-not (Test-Path -LiteralPath $mPath)) -or (Read-TextFile $mPath).Contains($CodexMark)
+  $rOurs = (-not (Test-Path -LiteralPath $rPath)) -or (Read-TextFile $rPath).Contains($CodexMark)
+  $wantMantle = ($mode -eq 'add') -and $mantle.Contains('enabled') -and $mantle['enabled'] -and $mantle.Contains('projectId') -and $mantle['projectId']
 
   $lines = New-Object Collections.Generic.List[string]
   $text = Read-TextFile $CodexConfigFile
@@ -477,13 +480,26 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
     $lines.AddRange([string[]]($text -split "`r?`n"))
     if ($lines[$lines.Count - 1] -eq '') { $lines.RemoveAt($lines.Count - 1) }
   }
+  # ADR-014 section 9 (amended 2026-11-03): with a mantle grant, bedrock-mantle is the
+  # default provider (plain codex + the Codex app get web search); the metered runtime
+  # path is 'codex -p runtime'. The amazon-bedrock tables are ours only when marked; a
+  # user's own copy stays and keeps runtime the default (a second table is invalid TOML).
+  $ownM = $false
+  foreach ($line in $lines) {
+    if ((@($mAws, $mHdr) -contains $line.Split('#')[0].Trim()) -and -not $line.Contains($CodexMark)) { $ownM = $true }
+  }
+  $defaultMantle = $wantMantle -and -not $ownM
+  if ($wantMantle -and $ownM -and -not $quiet) {
+    Say "$CodexConfigFile has its own [model_providers.amazon-bedrock.*]; codex stays on bedrock-runtime by default (mantle: codex -p mantle)"
+  }
   $topKey = '^\s*(model_provider|model|web_search)\s*='
   $out = New-Object Collections.Generic.List[string]
   $inTop = $true; $inOurs = $false
   foreach ($line in $lines) {
     if ($line.Trim().StartsWith('[')) {
       $inTop = $false
-      $inOurs = @($table, $perms, $permsFs, $mProfile) -contains $line.Split('#')[0].Trim()
+      $h = $line.Split('#')[0].Trim()
+      $inOurs = (@($table, $perms, $permsFs, $mProfile) -contains $h) -or ((@($mAws, $mHdr) -contains $h) -and $line.Contains($CodexMark))
       if ($inOurs) { continue }
     }
     if ($inOurs -or $line.Contains($CodexMark) -or ($inTop -and $line -cmatch $topKey)) { continue }
@@ -498,13 +514,27 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   while ($clean.Count -and -not $clean[$clean.Count - 1].Trim()) { $clean.RemoveAt($clean.Count - 1) }
 
   $q = { param($v) ConvertTo-TomlString $v }
+  $mModel = if ($mantle.Contains('model') -and $mantle['model']) { $mantle['model'] } else { 'openai.gpt-6.1-sol' }
+  $mRegion = if ($mantle.Contains('region') -and $mantle['region']) { $mantle['region'] } else { 'us-east-1' }
+  $mProj = if ($mantle.Contains('projectId') -and $mantle['projectId']) { [string]$mantle['projectId'] } else { '' }
+  # IAM allows only the user's own project: without the header the call lands in
+  # project/default and is denied.
+  $mTables = @('', "$mAws  $CodexMark", "profile = $(& $q $AwsProfileName)", "region = $(& $q $mRegion)",
+    '', "$mHdr  $CodexMark", "OpenAI-Project = $(& $q $mProj)")
   if ($mode -eq 'add') {
     $head = New-Object Collections.Generic.List[string]
-    $head.Add("model_provider = `"amazon-bedrock-runtime`"  $CodexMark")
-    $head.Add("model = $(& $q $Models['CODEX_MODEL'])  $CodexMark")
-    $head.Add("web_search = `"disabled`"  $CodexMark")
+    if ($defaultMantle) {
+      $head.Add("model_provider = `"amazon-bedrock`"  $CodexMark")
+      $head.Add("model = $(& $q $mModel)  $CodexMark")
+      $head.Add("web_search = `"live`"  $CodexMark")
+    } else {
+      $head.Add("model_provider = `"amazon-bedrock-runtime`"  $CodexMark")
+      $head.Add("model = $(& $q $Models['CODEX_MODEL'])  $CodexMark")
+      $head.Add("web_search = `"disabled`"  $CodexMark")
+    }
     $tail = New-Object Collections.Generic.List[string]
     $tail.AddRange([string[]]@('', "$table  $CodexMark", "profile = $(& $q $AwsProfileName)", "region = $(& $q $AwsRegion)"))
+    if ($defaultMantle) { $tail.AddRange([string[]]$mTables) }
     # Keep commands Codex runs away from the cached refresh token and STS keys
     # (permission profile on :workspace denying the CLI dir; enforced by the
     # sandbox). A user who chose their own sandbox keeps it and gets a warning.
@@ -521,22 +551,27 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
     $merged.AddRange($tail)
     $clean = $merged
   }
-  $wantMantle = ($mode -eq 'add') -and $mantle.Contains('enabled') -and $mantle['enabled'] -and $mantle.Contains('projectId') -and $mantle['projectId']
   if ($wantMantle -and $mOurs) {
-    $mModel = if ($mantle.Contains('model') -and $mantle['model']) { $mantle['model'] } else { 'openai.gpt-6.1-sol' }
-    $mRegion = if ($mantle.Contains('region') -and $mantle['region']) { $mantle['region'] } else { 'us-east-1' }
     # The em dash matches the bash CLI byte for byte (kept out of this ASCII file).
     $m = @("$CodexMark $([char]0x2014) bedrock-mantle (web search). NOT counted in usage or budget;",
       '# granted only while your cost is unlimited. Use: codex -p mantle',
-      'model_provider = "amazon-bedrock"', "model = $(& $q $mModel)", 'web_search = "live"',
-      '', $mAws, "profile = $(& $q $AwsProfileName)", "region = $(& $q $mRegion)",
-      # IAM allows only the user's own project: without the header the call is denied.
-      '', $mHdr, "OpenAI-Project = $(& $q $mantle['projectId'])")
+      'model_provider = "amazon-bedrock"', "model = $(& $q $mModel)", 'web_search = "live"')
+    $m += @($mTables | ForEach-Object { $_.Replace("  $CodexMark", '') })
     Write-TextFile $mPath (($m -join "`n") + "`n")
   } elseif ($wantMantle -and -not $quiet) {
     Say "$mPath is your own file - not adding the mantle profile"
   } elseif ($mOurs -and (Test-Path -LiteralPath $mPath)) {
     Remove-Item -LiteralPath $mPath -Force
+  }
+  if ($defaultMantle -and $rOurs) {
+    $r = @("$CodexMark $([char]0x2014) bedrock-runtime (metered: counted in usage and budget, no web search).",
+      '# Use: codex -p runtime',
+      'model_provider = "amazon-bedrock-runtime"', "model = $(& $q $Models['CODEX_MODEL'])", 'web_search = "disabled"')
+    Write-TextFile $rPath (($r -join "`n") + "`n")
+  } elseif ($defaultMantle -and -not $quiet) {
+    Say "$rPath is your own file - not adding the runtime profile"
+  } elseif ($rOurs -and (Test-Path -LiteralPath $rPath)) {
+    Remove-Item -LiteralPath $rPath -Force
   }
   $body = ($clean -join "`n")
   if ($clean.Count) { $body += "`n" }
@@ -547,7 +582,7 @@ function Get-MantleNote {
   $s = Read-State
   if ($s -and $s.Contains('mantle') -and $s['mantle'] -and $s['mantle']['enabled']) {
     $m = $s['mantle']
-    return "mantle (codex -p mantle, $($m['model']), $($m['region'])): enabled - web search; NOT counted in usage or budget; available while your cost is unlimited"
+    return "mantle ($($m['model']), $($m['region'])): DEFAULT for codex + the Codex app - web search; NOT counted in usage or budget; metered runtime: codex -p runtime; available while your cost is unlimited"
   }
   return ''
 }
@@ -707,7 +742,7 @@ function Invoke-Status {
     Out "  reset_at    : $($limit['resetAt'])"
   }
   $note = Get-MantleNote
-  Out "mantle        : $(if ($note) { 'enabled (codex -p mantle) - NOT counted in usage or budget' } else { 'off (available only while your cost is unlimited)' })"
+  Out "mantle        : $(if ($note) { 'enabled, codex default (runtime: codex -p runtime) - NOT counted in usage or budget' } else { 'off (available only while your cost is unlimited)' })"
   if (Test-Path -LiteralPath $TokenCache) {
     $t = ConvertFrom-JsonText (Read-TextFile $TokenCache)
     $age = (Get-EpochNow) - [long]$t['obtainedAt']

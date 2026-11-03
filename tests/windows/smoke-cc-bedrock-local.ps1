@@ -59,6 +59,7 @@ $CfgDir = Join-Path $H '.config\cc-bedrock'
 $SettingsFile = Join-Path $H '.claude\settings.json'
 $CodexFile = Join-Path $H '.codex\config.toml'
 $MantleFile = Join-Path $H '.codex\mantle.config.toml'
+$RuntimeFile = Join-Path $H '.codex\runtime.config.toml'
 $AwsConfig = Join-Path $H '.aws\config'
 
 Put (Join-Path $CfgDir 'config') "DASHBOARD_URL=https://dashboard.example.invalid`nCOGNITO_CLIENT_ID=client`nEMAIL=user@example.com`nCODEX_MODEL=global.openai.gpt-6.1-sol`n"
@@ -108,7 +109,12 @@ try {
   # 3. Codex config.toml + mantle
   $t = Text $CodexFile
   Check 'config.toml has no BOM' (-not (HasBom $CodexFile))
-  Check 'config.toml uses amazon-bedrock-runtime' ($t -cmatch '(?m)^model_provider = "amazon-bedrock-runtime"  # managed by cc-bedrock-local$')
+  # With a mantle grant, mantle is the default (ADR-014 section 9, amended 2026-11-03).
+  Check 'config.toml defaults to amazon-bedrock (mantle)' ($t -cmatch '(?m)^model_provider = "amazon-bedrock"  # managed by cc-bedrock-local$') $t
+  Check 'config.toml web_search live' ($t -cmatch '(?m)^web_search = "live"  # managed by cc-bedrock-local$')
+  Check 'config.toml mantle project header' ($t -cmatch '(?m)^OpenAI-Project = "proj_123"$')
+  $rt = Text $RuntimeFile
+  Check 'runtime.config.toml written (codex -p runtime)' ($rt -cmatch '(?m)^model_provider = "amazon-bedrock-runtime"$') $rt
   Check 'config.toml aws profile/region' ($t -cmatch '(?m)^\[model_providers\.amazon-bedrock-runtime\.aws\]  # managed by cc-bedrock-local\r?\nprofile = "cc-bedrock"\r?\nregion = "ap-northeast-2"') $t
   Check 'config.toml keeps [profiles.work]' ($t -cmatch '(?m)^\[profiles\.work\]\r?\nmodel = "o3"')
   Check 'config.toml has no CRLF (same bytes as bash)' (-not $t.Contains("`r"))
@@ -170,6 +176,7 @@ try {
   $t = Text $CodexFile
   Check 'unsetup removes managed Codex keys' (($t -notmatch 'cc-bedrock') -and ($t -cmatch '(?m)^\[profiles\.work\]')) $t
   Check 'unsetup removes mantle.config.toml' (-not (Test-Path -LiteralPath $MantleFile))
+  Check 'unsetup removes runtime.config.toml' (-not (Test-Path -LiteralPath $RuntimeFile))
 }
 finally {
   foreach ($n in $EnvNames) { [Environment]::SetEnvironmentVariable($n, $Saved[$n], 'Process') }

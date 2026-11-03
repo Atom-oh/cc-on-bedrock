@@ -60,6 +60,7 @@ runp setup >/dev/null 2>"${TMP}/ps.err" || { cat "${TMP}/ps.err" >&2; fail "ps1 
 
 diff <(norm "${HB}/.codex/config.toml") <(norm "${HP}/.codex/config.toml") || fail "codex config.toml differs from bash"
 diff <(norm "${HB}/.codex/mantle.config.toml") <(norm "${HP}/.codex/mantle.config.toml") || fail "mantle.config.toml differs from bash"
+diff <(norm "${HB}/.codex/runtime.config.toml") <(norm "${HP}/.codex/runtime.config.toml") || fail "runtime.config.toml differs from bash"
 cmp -s <(sed -n 's/^credential_process = //p' "${HP}/.aws/config") <(echo "pwsh -NoProfile -NonInteractive -File \"${TMP}/bin/cc-bedrock-local.ps1\" credential-process") \
   || fail "credential_process line: $(grep credential_process "${HP}/.aws/config")"
 
@@ -102,5 +103,6 @@ b, p = (json.load(open(f)) for f in sys.argv[1:3])
 assert b == p == {"permissions": {"allow": ["Bash(ls)"]}, "env": {"FOO": "1"}}, (b, p)
 PY
 [[ ! -e "${HP}/.codex/mantle.config.toml" ]] || fail "unsetup left mantle.config.toml"
+[[ ! -e "${HP}/.codex/runtime.config.toml" ]] || fail "unsetup left runtime.config.toml"
 
 echo "PASS: cc-bedrock-local.ps1 matches cc-bedrock-local.sh"
