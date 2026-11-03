@@ -553,8 +553,13 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
     # Keep commands Codex runs away from the cached refresh token and STS keys
     # (permission profile on :workspace denying the CLI dir; enforced by the
     # sandbox). A user who chose their own sandbox keeps it and gets a warning.
+    # Native Windows: not written. The unelevated Windows sandbox does not support
+    # denied read paths and Codex refuses a profile it cannot enforce, so the profile
+    # broke Codex at start; a copy from an older install is stripped above.
     $own = @($clean | Where-Object { $_ -cmatch '^\s*(default_permissions|sandbox_mode)\s*=' -or $_.Split('#')[0].Trim() -eq '[sandbox_workspace_write]' })
-    if ($own.Count) {
+    if ($OnWindows) {
+      if (-not $quiet) { Say "Windows: no Codex read-deny for $CfgDir (the Windows sandbox cannot enforce it); commands Codex runs can read that folder" }
+    } elseif ($own.Count) {
       if (-not $quiet) { Say "$CodexConfigFile sets its own sandbox; add a read deny for $CfgDir yourself (see Codex permissions docs)" }
     } else {
       $head.Add("default_permissions = `"cc-bedrock`"  $CodexMark")

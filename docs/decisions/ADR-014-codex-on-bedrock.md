@@ -81,6 +81,10 @@ default Codex provider, with runtime kept as `codex -p runtime` (§9, amended 20
    (`extends = ":workspace"`) that denies `~/.config/cc-bedrock` (refresh token, STS
    keys) to sandboxed commands — skipped with a warning when the user already chose a
    `sandbox_mode`/`default_permissions`. Each line is marked `# managed by cc-bedrock-local`.
+   *Amended 2026-11-03:* the Windows CLI (`cc-bedrock-local.ps1`) does not write the
+   profile: the unelevated Windows sandbox does not support denied read paths, Codex
+   refuses such a profile at start, so on native Windows the folder is readable by
+   commands Codex runs (same exposure as Claude Code without the sandbox).
    Plain `codex` then signs with the per-user role (verified with codex-cli 0.163). Claude Code's
    `awsCredentialExport` runs the same `credential-process` subcommand: it accepts the flat
    `credential_process` shape (`Version`/`AccessKeyId`/…/`Expiration`) as well as

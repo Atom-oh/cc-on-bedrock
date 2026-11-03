@@ -81,6 +81,13 @@ describe("Windows CLI (tools/cc-bedrock-local.ps1)", () => {
     expect(windowsInstallerScript(env)).toContain("'# DESKTOP_EGRESS_HOSTS=*   (none = block every fetch)'");
   });
 
+  // The unelevated Windows sandbox cannot enforce a denied read path; Codex refuses the profile.
+  it("writes no Codex permission profile on native Windows", () => {
+    const i = cli.indexOf("if ($OnWindows) {\n      if (-not $quiet) { Say \"Windows: no Codex read-deny");
+    expect(i).toBeGreaterThan(0);
+    expect(cli.indexOf('$head.Add("default_permissions', i)).toBeGreaterThan(cli.indexOf("} elseif ($own.Count) {", i));
+  });
+
   it("keeps the credential-process stdout contract", () => {
     expect(cli).toContain("[Console]::Out.Write($json");
     expect(cli).toContain('function Say([string]$msg) { [Console]::Error.WriteLine');

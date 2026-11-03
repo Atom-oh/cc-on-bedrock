@@ -121,9 +121,9 @@ try {
   Check 'config.toml aws profile/region' ($t -cmatch '(?m)^\[model_providers\.amazon-bedrock-runtime\.aws\]  # managed by cc-bedrock-local\r?\nprofile = "cc-bedrock"\r?\nregion = "ap-northeast-2"') $t
   Check 'config.toml keeps [profiles.work]' ($t -cmatch '(?m)^\[profiles\.work\]\r?\nmodel = "o3"')
   Check 'config.toml has no CRLF (same bytes as bash)' (-not $t.Contains("`r"))
-  # The Windows path holds backslashes; TOML basic strings need them doubled.
-  $deny = ($CfgDir.Replace('\', '\\'))
-  Check 'config.toml denies the cc-bedrock dir (escaped path)' ($t.Contains("`"$deny`" = `"deny`"")) $t
+  # Native Windows: no permission profile (the Windows sandbox cannot enforce a
+  # denied read path, and Codex refuses such a profile at start).
+  Check 'config.toml has no Codex permission profile on Windows' ((-not $t.Contains('default_permissions')) -and (-not $t.Contains('[permissions.cc-bedrock'))) $t
   $m = Text $MantleFile
   Check 'mantle.config.toml written' ($m -cmatch '(?m)^OpenAI-Project = "proj_123"$')
   Check 'mantle header em dash is UTF-8' ((([IO.File]::ReadAllBytes($MantleFile)[30..32]) -join ',') -eq '226,128,148') ([IO.File]::ReadAllLines($MantleFile)[0])
