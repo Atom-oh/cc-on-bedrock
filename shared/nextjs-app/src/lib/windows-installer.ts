@@ -102,7 +102,7 @@ $Cfg = @(
   '',
   '# Claude Desktop (setup-desktop): hosts Chat/Cowork may fetch. Unset = all (*).',
   '# Example: DESKTOP_EGRESS_HOSTS=docs.aws.amazon.com,*.github.com',
-  '# DESKTOP_EGRESS_HOSTS=*'
+  '# DESKTOP_EGRESS_HOSTS=*   (none = block every fetch)'
 )
 [IO.File]::WriteAllText($CfgFile, (($Cfg -join $LF) + $LF), $Utf8NoBom)
 

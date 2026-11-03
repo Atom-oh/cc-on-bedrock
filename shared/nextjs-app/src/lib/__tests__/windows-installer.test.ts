@@ -77,8 +77,8 @@ describe("Windows CLI (tools/cc-bedrock-local.ps1)", () => {
   it("lets Claude Desktop fetch the web (all hosts unless DESKTOP_EGRESS_HOSTS narrows it)", () => {
     expect(cli).toContain("'coworkEgressAllowedHosts')");
     expect(cli).toContain("Cfg 'DESKTOP_EGRESS_HOSTS' '*'");
-    expect(cli).toContain("$v['coworkEgressAllowedHosts'] = (ConvertTo-Json -InputObject $hosts -Compress)");
-    expect(windowsInstallerScript(env)).toContain("'# DESKTOP_EGRESS_HOSTS=*'");
+    expect(cli).toContain("$v['coworkEgressAllowedHosts'] = if ($hosts.Count) { (ConvertTo-Json -InputObject $hosts -Compress) } else { '[]' }");
+    expect(windowsInstallerScript(env)).toContain("'# DESKTOP_EGRESS_HOSTS=*   (none = block every fetch)'");
   });
 
   it("keeps the credential-process stdout contract", () => {

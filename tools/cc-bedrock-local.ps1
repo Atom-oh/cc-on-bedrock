@@ -660,10 +660,12 @@ function Get-DesktopValues {
   # Chat/Cowork refuse every web fetch while coworkEgressAllowedHosts is unset or
   # empty ("your organization's network settings block this website"). Owner
   # decision 2026-11-03: allow all hosts by default; DESKTOP_EGRESS_HOSTS in the
-  # config narrows it (comma-separated: docs.aws.amazon.com,*.github.com).
-  $hosts = @((Cfg 'DESKTOP_EGRESS_HOSTS' '*').Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-  if (-not $hosts.Count) { $hosts = @('*') }
-  $v['coworkEgressAllowedHosts'] = (ConvertTo-Json -InputObject $hosts -Compress)
+  # config narrows it (comma-separated: docs.aws.amazon.com,*.github.com); 'none'
+  # blocks every fetch. An explicit value that yields no host also blocks: a
+  # setting must never widen to '*'.
+  $raw = Cfg 'DESKTOP_EGRESS_HOSTS' '*'
+  $hosts = @($raw.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'none' })
+  $v['coworkEgressAllowedHosts'] = if ($hosts.Count) { (ConvertTo-Json -InputObject $hosts -Compress) } else { '[]' }
   return $v
 }
 
