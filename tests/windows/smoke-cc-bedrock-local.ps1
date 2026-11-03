@@ -105,6 +105,9 @@ try {
   Check 'settings.json denies Read of the cc-bedrock dir' (@($s.permissions.deny) -contains 'Read(~/.config/cc-bedrock/**)')
   $cmd = [string]$s.awsCredentialExport
   Check 'awsCredentialExport calls this CLI' ($cmd -like '*credential-process' -and $cmd.Contains(($CliCopy -replace '\\', '/'))) $cmd
+  # The Rust AWS SDK (Codex) passes credential_process to cmd.exe /C as one escaped
+  # argument; any double quote in it breaks the -File path.
+  Check 'credential command has no double quotes (Codex on Windows)' (-not $cmd.Contains('"')) $cmd
 
   # 3. Codex config.toml + mantle
   $t = Text $CodexFile

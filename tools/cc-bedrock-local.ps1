@@ -259,10 +259,25 @@ function Get-SelfPath {
   if ($OnWindows) { $p = $p -replace '\\', '/' }
   return $p
 }
+# Windows: no double quotes in the command. The Rust AWS SDK (Codex) runs
+# credential_process as one argument to `cmd.exe /C`, which Rust escapes as \"...\";
+# cmd does not undo that, so PowerShell would get -File with literal quotes and fail
+# ("failed to load AWS credentials"). A path without whitespace needs no quotes; one
+# with whitespace goes through -EncodedCommand (base64: no quotes, no spaces).
+# Claude Code (Node shell) and the AWS CLI accept both forms.
 function Get-CredentialCommand {
   $self = Get-SelfPath
-  if ($OnWindows) { return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$self`" credential-process" }
+  $ps = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass'
+  if ($OnWindows) {
+    if ($self -notmatch '\s') { return "$ps -File $self credential-process" }
+    $script = "& '" + $self.Replace("'", "''") + "' credential-process; exit `$LASTEXITCODE"
+    return "$ps -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+  }
   return "pwsh -NoProfile -NonInteractive -File `"$self`" credential-process"
+}
+# Ours: any -File form (older quoted lines included) or this install's encoded form.
+function Test-OurCredentialCommand([string]$v) {
+  return ($v.EndsWith(' credential-process') -or ($v -ceq (Get-CredentialCommand)))
 }
 
 # ADR-029: [profile X] gets credential_process (the SDK re-invokes us before
@@ -432,7 +447,7 @@ function Remove-ClaudeSettings {
     foreach ($k in $ClaudeManagedEnv) { if ($s['env'].Contains($k)) { $s['env'].Remove($k) } }
     if ($s['env'].Count -eq 0) { $s.Remove('env') }
   }
-  if ($s.Contains('awsCredentialExport') -and ([string]$s['awsCredentialExport']).EndsWith(' credential-process')) { $s.Remove('awsCredentialExport') }
+  if ($s.Contains('awsCredentialExport') -and (Test-OurCredentialCommand ([string]$s['awsCredentialExport']))) { $s.Remove('awsCredentialExport') }
   if ($s.Contains('permissions') -and $s['permissions'] -and $s['permissions'].Contains('deny') -and $s['permissions']['deny']) {
     $deny = $s['permissions']['deny']
     while ($deny -contains $ClaudeCredRule) { $deny.Remove($ClaudeCredRule) }
@@ -446,7 +461,7 @@ function Test-ClientsConfigured {
   if (-not (Test-Path -LiteralPath $ClaudeSettingsFile)) { return $false }
   try {
     $s = ConvertFrom-JsonText (Read-TextFile $ClaudeSettingsFile)
-    return [bool]($s -and $s.Contains('awsCredentialExport') -and ([string]$s['awsCredentialExport']).EndsWith(' credential-process'))
+    return [bool]($s -and $s.Contains('awsCredentialExport') -and (Test-OurCredentialCommand ([string]$s['awsCredentialExport'])))
   } catch { return $false }
 }
 
