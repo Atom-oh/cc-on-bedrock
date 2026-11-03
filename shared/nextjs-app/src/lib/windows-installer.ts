@@ -1,4 +1,5 @@
 import type { InstallerEnv } from "@/lib/install-env";
+import { LOCAL_CLAUDE_MODELS as M } from "@/lib/local-models";
 
 // ADR-006 installer for Windows PCs — the PowerShell counterpart of /api/install.
 // Public (no auth), run from PowerShell or cmd:
@@ -69,7 +70,7 @@ $Email = Read-Host -Prompt $Prompt
 if (-not $Email) { $Email = $OldEmail }
 $Cfg = @(
   '# cc-bedrock-local config (owner-only). Edit as needed, or use:',
-  '#   cc-bedrock-local set-model opus global.anthropic.claude-opus-4-8',
+  '#   cc-bedrock-local set-model opus ${M.opus}',
   '#   cc-bedrock-local models',
   '',
   ('DASHBOARD_URL=' + $DashboardUrl),
@@ -83,10 +84,10 @@ $Cfg = @(
   '# Models (Bedrock inference profile IDs). ANTHROPIC_MODEL=opusplan backs /model',
   '# "Default": Opus for planning, Sonnet for execution.',
   'ANTHROPIC_MODEL=opusplan',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5',
-  'ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0',
-  'CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL=${M.sonnet}',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL=${M.opus}',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL=${M.haiku}',
+  'CLAUDE_CODE_SUBAGENT_MODEL=${M.subagent}',
   '',
   '# Codex (ADR-014): OpenAI on Bedrock. Must be a global./us. profile.',
   ('CODEX_MODEL=' + $CodexModel)

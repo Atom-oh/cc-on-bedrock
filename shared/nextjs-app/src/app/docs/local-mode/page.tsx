@@ -197,10 +197,10 @@ AWS_REGION=ap-northeast-2
 # 모델 매핑 (Claude Code의 /model 픽커 슬롯)
 # ANTHROPIC_MODEL=opusplan: Default 슬롯이 계획은 Opus, 실행은 Sonnet 사용
 ANTHROPIC_MODEL=opusplan
-ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
-ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
-CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5
+ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-5-5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-5-5
+CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5-5
 
 # Codex CLI 모델 (ADR-014) — global./us. cross-Region 프로파일만 사용 가능
 CODEX_MODEL=global.openai.gpt-6.1-sol`}

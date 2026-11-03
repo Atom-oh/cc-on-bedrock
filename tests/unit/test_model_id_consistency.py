@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 CONSUMERS = [
     "docker/devenv/scripts/entrypoint.sh",
     "shared/nextjs-app/src/lib/ec2-clients.ts",
-    "shared/nextjs-app/src/app/api/install/route.ts",
+    "shared/nextjs-app/src/lib/local-models.ts",  # both Local CLI installers
     "tools/cc-bedrock-local.sh",
     "terraform/terraform.tfvars.example",
 ]

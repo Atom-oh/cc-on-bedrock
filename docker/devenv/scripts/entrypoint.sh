@@ -253,9 +253,9 @@ cat > /etc/profile.d/claude-env.sh << ENVEOF
 export CLAUDE_CODE_USE_BEDROCK=1
 # opusplan: Opus for planning, Sonnet for execution (uses the two models below).
 export ANTHROPIC_MODEL='opusplan'
-export ANTHROPIC_DEFAULT_SONNET_MODEL='global.anthropic.claude-sonnet-5'
-export ANTHROPIC_DEFAULT_OPUS_MODEL='global.anthropic.claude-opus-4-8'
-export ANTHROPIC_DEFAULT_HAIKU_MODEL='global.anthropic.claude-haiku-4-5-20251001-v1:0'
+export ANTHROPIC_DEFAULT_SONNET_MODEL='global.anthropic.claude-sonnet-5-5'
+export ANTHROPIC_DEFAULT_OPUS_MODEL='global.anthropic.claude-opus-5-5'
+export ANTHROPIC_DEFAULT_HAIKU_MODEL='global.anthropic.claude-haiku-5-5'
 export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32768
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
 export AWS_REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"

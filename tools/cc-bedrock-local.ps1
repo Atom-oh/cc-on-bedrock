@@ -155,10 +155,10 @@ $AwsRegion = Cfg 'AWS_REGION' 'ap-northeast-2'
 # (defaults match the bash CLI; ANTHROPIC_MODEL=opusplan backs /model "Default").
 $Models = [ordered]@{
   ANTHROPIC_MODEL                = Cfg 'ANTHROPIC_MODEL' 'opusplan'
-  ANTHROPIC_DEFAULT_SONNET_MODEL = Cfg 'ANTHROPIC_DEFAULT_SONNET_MODEL' 'global.anthropic.claude-sonnet-5'
-  ANTHROPIC_DEFAULT_OPUS_MODEL   = Cfg 'ANTHROPIC_DEFAULT_OPUS_MODEL' 'global.anthropic.claude-opus-4-8'
-  ANTHROPIC_DEFAULT_HAIKU_MODEL  = Cfg 'ANTHROPIC_DEFAULT_HAIKU_MODEL' (Cfg 'ANTHROPIC_SMALL_FAST_MODEL' 'global.anthropic.claude-haiku-4-5-20251001-v1:0')
-  CLAUDE_CODE_SUBAGENT_MODEL     = Cfg 'CLAUDE_CODE_SUBAGENT_MODEL' 'global.anthropic.claude-sonnet-5'
+  ANTHROPIC_DEFAULT_SONNET_MODEL = Cfg 'ANTHROPIC_DEFAULT_SONNET_MODEL' 'global.anthropic.claude-sonnet-5-5'
+  ANTHROPIC_DEFAULT_OPUS_MODEL   = Cfg 'ANTHROPIC_DEFAULT_OPUS_MODEL' 'global.anthropic.claude-opus-5-5'
+  ANTHROPIC_DEFAULT_HAIKU_MODEL  = Cfg 'ANTHROPIC_DEFAULT_HAIKU_MODEL' (Cfg 'ANTHROPIC_SMALL_FAST_MODEL' 'global.anthropic.claude-haiku-5-5')
+  CLAUDE_CODE_SUBAGENT_MODEL     = Cfg 'CLAUDE_CODE_SUBAGENT_MODEL' 'global.anthropic.claude-sonnet-5-5'
   CODEX_MODEL                    = Cfg 'CODEX_MODEL' 'global.openai.gpt-6.1-sol'
 }
 
@@ -679,8 +679,8 @@ function Invoke-Models {
   Out "  CODEX_MODEL                    = $($Models['CODEX_MODEL'])   # codex (OpenAI on Bedrock)"
   Out ''
   Out 'Examples:'
-  Out "  cc-bedrock-local set-model sonnet global.anthropic.claude-sonnet-5"
-  Out "  cc-bedrock-local set-model opus   global.anthropic.claude-opus-4-8"
+  Out "  cc-bedrock-local set-model sonnet global.anthropic.claude-sonnet-5-5"
+  Out "  cc-bedrock-local set-model opus   global.anthropic.claude-opus-5-5"
   Out "  cc-bedrock-local set-model codex  global.openai.gpt-6-luna"
   Out ''
   Out 'Aliases: sonnet|default | opus | haiku|fast|small | subagent | pin|model | codex|gpt'

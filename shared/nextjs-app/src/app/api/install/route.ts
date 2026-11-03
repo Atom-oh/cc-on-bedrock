@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { installerEnv, type InstallerEnv } from "@/lib/install-env";
+import { LOCAL_CLAUDE_MODELS as M } from "@/lib/local-models";
 
 // Force dynamic — must read process.env at request time, not module init time
 export const dynamic = "force-dynamic";
@@ -59,9 +60,9 @@ fi
 cat > "\${CFG_DIR}/config" <<EOF
 # cc-bedrock-local config (mode 600). Edit as needed.
 # To change models without editing this file directly:
-#   cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5'
-#   cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8'
-#   cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
+#   cc-bedrock-local set-model sonnet '${M.sonnet}'
+#   cc-bedrock-local set-model opus   '${M.opus}'
+#   cc-bedrock-local set-model haiku  ${M.haiku}
 #   cc-bedrock-local models                 # show current values
 
 DASHBOARD_URL=\${DASHBOARD_URL}
@@ -73,12 +74,12 @@ AWS_PROFILE_NAME=cc-bedrock
 AWS_REGION=\${COGNITO_REGION}
 
 # Models (Bedrock inference profile IDs). ANTHROPIC_MODEL=opusplan backs /model
-# "Default": Opus for planning, Sonnet for execution. Haiku 4.5 backs "Haiku" + background.
+# "Default": Opus for planning, Sonnet for execution. Haiku 5.5 backs "Haiku" + background.
 ANTHROPIC_MODEL=opusplan
-ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
-ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-4-5-20251001-v1:0
-CLAUDE_CODE_SUBAGENT_MODEL=global.anthropic.claude-sonnet-5
+ANTHROPIC_DEFAULT_SONNET_MODEL=${M.sonnet}
+ANTHROPIC_DEFAULT_OPUS_MODEL=${M.opus}
+ANTHROPIC_DEFAULT_HAIKU_MODEL=${M.haiku}
+CLAUDE_CODE_SUBAGENT_MODEL=${M.subagent}
 
 # Codex CLI (ADR-014): OpenAI on Bedrock. Must be a global./us. profile.
 CODEX_MODEL=${env.codexModelId}
