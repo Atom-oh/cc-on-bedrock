@@ -42,6 +42,13 @@ Install the governed CLI:
 curl -fsSL "$(terraform -chdir=terraform output -raw dashboard_url)/api/install" | bash
 ```
 
+On Windows (PowerShell or cmd; also configures the Claude Desktop Code tab and
+the Codex app):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://<dashboard>/api/install/windows | iex"
+```
+
 Accept the installer's setup/login prompt, then run the tools directly.
 If setup was skipped or no terminal was available, run
 `cc-bedrock-local setup && cc-bedrock-local login` first. Install Claude Code

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import CcdashSetupCard from "@/components/user/ccdash-setup-card";
 import BudgetIncreaseRequest, { type BudgetLimits } from "@/components/budget/budget-increase-request";
+import { installCommands } from "@/lib/install-commands";
 
 type CredentialsResponse = {
   credentials: {
@@ -272,8 +273,11 @@ export default function LocalGovernancePage() {
           <code>credential_process</code>, then configures plain <code>claude</code> and <code>codex</code> for Bedrock; credentials renew across 1-hour STS rotations.
         </p>
         <pre className="p-3 bg-gray-50 border rounded text-xs overflow-auto">
-{`# one-time setup
-curl -fsSL ${typeof window !== "undefined" ? window.location.origin : "https://dashboard.example.com"}/api/install | bash
+{`# one-time setup (macOS / Linux)
+${installCommands(typeof window !== "undefined" ? window.location.origin : "").unix}
+
+# one-time setup (Windows, PowerShell or cmd; also Claude Desktop Code tab + Codex app)
+${installCommands(typeof window !== "undefined" ? window.location.origin : "").windows}
 
 # use it
 claude

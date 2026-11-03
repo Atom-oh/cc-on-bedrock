@@ -38,6 +38,39 @@ eight-hour static credentials file is required. Old managed `cc`/`ccx` shell
 functions are removed from shell configuration; open a new shell to discard
 functions already loaded.
 
+### Windows PCs (Claude Desktop, Codex app)
+
+From PowerShell or cmd (no admin rights, WSL, bash or Python needed):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://<dashboard>/api/install/windows | iex"
+```
+
+The installer drops `tools/cc-bedrock-local.ps1` and a `cc-bedrock-local.cmd`
+shim into `%USERPROFILE%\.local\bin` (added to the user PATH), restricts
+`%USERPROFILE%\.config\cc-bedrock` to the user's ACL, then runs `setup` and
+`login`. The PowerShell CLI writes the same keys as the bash CLI, so:
+
+- Claude Code CLI and the Claude Desktop **Code** tab read
+  `%USERPROFILE%\.claude\settings.json` (Bedrock env + `awsCredentialExport`).
+- Codex CLI and the **Codex app** read `%USERPROFILE%\.codex\config.toml`
+  (`amazon-bedrock-runtime` on profile `cc-bedrock`). `codex -p mantle` is
+  CLI-only; the app has no profile selection.
+- `~/.aws/config` gets `credential_process = powershell.exe -NoProfile
+  -NonInteractive -ExecutionPolicy Bypass -File "<path>" credential-process`.
+
+Restart Claude Desktop and the Codex app after setup. Claude Desktop
+**Cowork/Chat** stays on claude.ai sign-in unless the user opts in with
+`cc-bedrock-local setup-desktop` (the installer asks, default No). That writes
+the third-party policy `HKCU\SOFTWARE\Policies\Claude` (`inferenceProvider=bedrock`,
+`inferenceBedrockProfile=cc-bedrock`, region, `inferenceModels`). Claude Desktop
+reads the named profile through AWS CLI v2, which must be installed. If the
+policy key is not writable or a machine policy exists under `HKLM`, the CLI
+writes `%USERPROFILE%\.config\cc-bedrock\claude-desktop-bedrock.reg` for an
+elevated `reg import` or IT deployment. `unsetup-desktop` removes the values.
+The `credential_process` path through Claude Desktop's AWS CLI lookup is not
+documented by Anthropic; verify it on a pilot PC before rolling it out.
+
 ## Verify identity and renewal
 
 ```bash

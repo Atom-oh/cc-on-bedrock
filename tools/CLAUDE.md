@@ -5,6 +5,7 @@ End-user CLI helpers. The main artifact is `cc-bedrock-local.sh`, the Local Gove
 
 ## Key Files
 - `cc-bedrock-local.sh` — Local Governance Mode CLI wrapper. It logs into Cognito, fetches 1h STS credentials from the dashboard (`/api/local/credentials`), and runs `claude` with `CLAUDE_CODE_USE_BEDROCK=1` or `codex` through the `amazon-bedrock-runtime` provider (ADR-014). It installs `credential_process = cc-bedrock-local.sh credential-process` into `~/.aws/config [profile cc-bedrock]`; the AWS SDK re-invokes it before each expiration, so sessions of any length survive the 1h role-chaining cap. Re-login is needed only when the 30-day Cognito refresh token expires. Legacy static-key `[cc-bedrock]` sections in `~/.aws/credentials` are removed on login/refresh/launch because they would shadow `credential_process`.
+- `cc-bedrock-local.ps1` — Windows port (Windows PowerShell 5.1 / pwsh 7, no bash/python). Same config, state and managed keys as the bash CLI (parity enforced by `tests/unit/test-cc-bedrock-local-ps1.sh` when `pwsh` is present). Covers Claude Code CLI + the Claude Desktop Code tab (`settings.json`) and Codex CLI + the Codex app (`config.toml`). `credential_process` / `awsCredentialExport` call `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "<path with forward slashes>" credential-process`. Extra opt-in `setup-desktop` / `unsetup-desktop` writes Claude Desktop third-party policy values under `HKCU\SOFTWARE\Policies\Claude` (falls back to a `.reg` file). No `claude`/`codex`/`run` wrappers. Keep the file pure ASCII: Windows PowerShell 5.1 reads BOM-less files in the ANSI code page. Installed by `/api/install/windows`, served by `/api/install/cli-ps1`.
 - `cc-otel-code-metrics.sh` — retired. The custom emitter (session/git wrappers + 5-minute heartbeat) was superseded by native Claude Code OpenTelemetry (`claude_code.*` metrics + `tool_result` events), enabled via env in `ec2-clients.ts` `otelEnvUserData` (ADR-009). Kept for reference; no longer installed on DevEnvs.
 - `prompts/`, `scripts/` — reserved, currently empty.
 
@@ -23,6 +24,10 @@ cc-bedrock-local claude [args]       # ensure session + exec claude
 cc-bedrock-local codex [args]        # ensure session + exec codex on Bedrock
 cc-bedrock-local set-model K=V       # sonnet | opus | haiku | subagent | pin | codex
 cc-bedrock-local config              # print active config
+
+# Windows (PowerShell or cmd)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://<dashboard_subdomain>.<domain>/api/install/windows | iex"
+cc-bedrock-local setup-desktop       # opt-in: Claude Desktop Cowork/Chat on Bedrock (needs AWS CLI v2)
 
 bash -n tools/cc-bedrock-local.sh    # syntax check (also run by tests/run-all.sh)
 ```

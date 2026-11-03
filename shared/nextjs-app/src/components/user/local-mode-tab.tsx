@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import BudgetIncreaseRequest, { type BudgetLimits } from "@/components/budget/budget-increase-request";
 import MantleEstimatePanel from "@/components/mantle-estimate-panel";
+import { installCommands } from "@/lib/install-commands";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode usage panel inside the user portal (/user tab).
 // Mirrors /local page but embedded as a tab — for users who log in via Cognito
@@ -64,7 +65,7 @@ export default function LocalModeTab() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const dashboardOrigin = typeof window !== "undefined" ? window.location.origin : "";
-  const installCommand = `curl -fsSL ${dashboardOrigin || "https://dashboard.example.com"}/api/install | bash`;
+  const { unix: installCommand, windows: windowsInstallCommand } = installCommands(dashboardOrigin);
 
   const refreshUsage = async () => {
     try {
@@ -265,6 +266,20 @@ export default function LocalModeTab() {
         </div>
         <pre className="mt-3 p-3 bg-black/40 border border-gray-800 rounded overflow-auto text-xs text-gray-300">
           {installCommand}
+        </pre>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div className="text-xs text-gray-400">
+            Windows (PowerShell 또는 cmd) — Claude Code·Claude Desktop Code 탭, Codex CLI·Codex 앱을 함께 설정합니다.
+          </div>
+          <button
+            onClick={() => copy(windowsInstallCommand, "install-windows")}
+            className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium whitespace-nowrap"
+          >
+            {copied === "install-windows" ? "Copied" : "Copy Windows"}
+          </button>
+        </div>
+        <pre className="mt-2 p-3 bg-black/40 border border-gray-800 rounded overflow-auto text-xs text-gray-300">
+          {windowsInstallCommand}
         </pre>
         <div className="mt-3 text-xs text-gray-500 space-y-1">
           <div>
