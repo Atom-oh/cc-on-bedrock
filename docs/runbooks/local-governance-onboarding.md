@@ -46,8 +46,11 @@ From PowerShell or cmd (no admin rights, WSL, bash or Python needed):
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://<dashboard>/api/install/windows | iex"
 ```
 
-The installer drops `tools/cc-bedrock-local.ps1` and a `cc-bedrock-local.cmd`
-shim into `%USERPROFILE%\.local\bin` (added to the user PATH), restricts
+The installer drops `tools/cc-bedrock-local.ps1` into
+`%USERPROFILE%\.local\lib\cc-bedrock` and a `cc-bedrock-local.cmd` shim into
+`%USERPROFILE%\.local\bin` (added to the user PATH; only the shim is on PATH, since
+PowerShell would pick a `.ps1` there first and the default execution policy refuses
+it), removes a `.ps1` an older install left in the bin dir, restricts
 `%USERPROFILE%\.config\cc-bedrock` to the user's ACL, then runs `setup` and
 `login`. The PowerShell CLI writes the same keys as the bash CLI, so:
 

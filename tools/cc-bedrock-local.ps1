@@ -660,6 +660,24 @@ function Get-DesktopValues {
   return $v
 }
 
+# HKCU\SOFTWARE\Policies is often admin-only. Fallback: write a .reg file and import it
+# through a UAC prompt (reg.exe elevated with the same account writes the same HKCU),
+# then confirm by reading the values back without elevation. A declined prompt, or an
+# elevation as another account, leaves the .reg file for the user or IT.
+function Write-DesktopRegFile([string[]]$valueLines) {
+  $lines = @('Windows Registry Editor Version 5.00', '', '[HKEY_CURRENT_USER\SOFTWARE\Policies\Claude]') + $valueLines
+  [IO.File]::WriteAllText($DesktopRegFile, (($lines -join "`r`n") + "`r`n"), [Text.Encoding]::Unicode)
+}
+function Import-RegElevated {
+  try {
+    $p = Start-Process -FilePath 'reg.exe' -ArgumentList @('import', ('"' + $DesktopRegFile + '"')) -Verb RunAs -Wait -PassThru -WindowStyle Hidden
+    return ($p.ExitCode -eq 0)
+  } catch { return $false }
+}
+function Get-DesktopValue([string]$name) {
+  try { return [string](Get-ItemProperty -Path $DesktopPolicyKey -Name $name -ErrorAction Stop).$name } catch { return $null }
+}
+
 function Invoke-SetupDesktop {
   if (-not $OnWindows) { Die 'setup-desktop configures Claude Desktop on Windows only' }
   Require-Config
@@ -671,18 +689,24 @@ function Invoke-SetupDesktop {
     Say 'HKLM\SOFTWARE\Policies\Claude exists (machine policy) - Claude Desktop ignores the user policy; ask IT to deploy these values instead'
   }
   $vals = Get-DesktopValues
+  $key = $DesktopPolicyKey -replace ':', ''
   try {
     if (-not (Test-Path $DesktopPolicyKey)) { New-Item -Path $DesktopPolicyKey -Force | Out-Null }
     foreach ($k in $vals.Keys) { New-ItemProperty -Path $DesktopPolicyKey -Name $k -Value $vals[$k] -PropertyType String -Force | Out-Null }
-    Out "OK Claude Desktop -> Bedrock ($($DesktopPolicyKey -replace ':', ''): inferenceProvider=bedrock, profile=$AwsProfileName)"
-    Out '  quit and reopen Claude Desktop; undo: cc-bedrock-local unsetup-desktop'
   } catch {
-    # HKCU\SOFTWARE\Policies is often admin-only; hand over a .reg file instead.
-    $lines = @('Windows Registry Editor Version 5.00', '', '[HKEY_CURRENT_USER\SOFTWARE\Policies\Claude]')
-    foreach ($k in $vals.Keys) { $lines += ('"{0}"="{1}"' -f $k, ($vals[$k].Replace('\', '\\').Replace('"', '\"'))) }
-    [IO.File]::WriteAllText($DesktopRegFile, (($lines -join "`r`n") + "`r`n"), [Text.Encoding]::Unicode)
-    Say "no write access to $($DesktopPolicyKey -replace ':', '') ($($_.Exception.Message))"
-    Out "  wrote $DesktopRegFile - import it from an elevated prompt (reg import `"$DesktopRegFile`") or ask IT to deploy it, then reopen Claude Desktop"
+    Say "no write access to $key ($($_.Exception.Message)) - asking Windows for permission (UAC)"
+    $valueLines = @()
+    foreach ($k in $vals.Keys) { $valueLines += ('"{0}"="{1}"' -f $k, ($vals[$k].Replace('\', '\\').Replace('"', '\"'))) }
+    Write-DesktopRegFile $valueLines
+    [void](Import-RegElevated)
+  }
+  $ok = $true
+  foreach ($k in $vals.Keys) { if ((Get-DesktopValue $k) -cne [string]$vals[$k]) { $ok = $false } }
+  if ($ok) {
+    Out "OK Claude Desktop -> Bedrock ($key`: inferenceProvider=bedrock, profile=$AwsProfileName)"
+    Out '  quit Claude Desktop from the tray and reopen it; undo: cc-bedrock-local unsetup-desktop'
+  } else {
+    Out "  not applied - double-click $DesktopRegFile (answer Yes to UAC) or ask IT to deploy it, then reopen Claude Desktop"
   }
 }
 
@@ -691,7 +715,18 @@ function Invoke-UnsetupDesktop {
   if (Test-Path $DesktopPolicyKey) {
     foreach ($k in $DesktopValueNames) { Remove-ItemProperty -Path $DesktopPolicyKey -Name $k -ErrorAction SilentlyContinue }
   }
-  Out "OK removed Claude Desktop Bedrock policy values (reopen Claude Desktop)"
+  $left = @($DesktopValueNames | Where-Object { $null -ne (Get-DesktopValue $_) })
+  if ($left.Count) {
+    Say "no write access to $($DesktopPolicyKey -replace ':', '') - asking Windows for permission (UAC)"
+    Write-DesktopRegFile @($left | ForEach-Object { ('"{0}"=-' -f $_) })
+    [void](Import-RegElevated)
+    $left = @($DesktopValueNames | Where-Object { $null -ne (Get-DesktopValue $_) })
+  }
+  if ($left.Count) {
+    Out "  not removed - double-click $DesktopRegFile (answer Yes to UAC), then reopen Claude Desktop"
+  } else {
+    Out 'OK removed Claude Desktop Bedrock policy values (reopen Claude Desktop)'
+  }
 }
 
 # --- set-model / models / status / config -------------------

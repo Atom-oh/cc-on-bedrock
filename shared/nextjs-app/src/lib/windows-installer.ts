@@ -7,8 +7,10 @@ import { LOCAL_CLAUDE_MODELS as M } from "@/lib/local-models";
 //   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://<dashboard>/api/install/windows | iex"
 //
 // The script:
-//   1. Drops cc-bedrock-local.ps1 (+ a .cmd shim) into %USERPROFILE%\.local\bin and
-//      adds it to the user PATH
+//   1. Drops cc-bedrock-local.ps1 into %USERPROFILE%\.local\lib\cc-bedrock and a .cmd
+//      shim into %USERPROFILE%\.local\bin, which it adds to the user PATH (only the
+//      shim is on PATH: PowerShell would otherwise pick the .ps1 and refuse it under
+//      the default execution policy)
 //   2. Writes %USERPROFILE%\.config\cc-bedrock\config (owner-only ACL) with the
 //      Cognito values baked in here
 //   3. Runs `cc-bedrock-local setup` (Claude Code CLI + Claude Desktop Code tab via
@@ -43,10 +45,14 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $CfgDir = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.config/cc-bedrock'))
 $CfgFile = Join-Path $CfgDir 'config'
 $BinDir = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.local/bin'))
-$Cli = Join-Path $BinDir 'cc-bedrock-local.ps1'
+# The .ps1 lives outside PATH: PowerShell resolves a bare name to a .ps1 before a
+# .cmd, and the default execution policy refuses to run it. PATH holds only the shim.
+$LibDir = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.local/lib/cc-bedrock'))
+$Cli = Join-Path $LibDir 'cc-bedrock-local.ps1'
+$OldCli = Join-Path $BinDir 'cc-bedrock-local.ps1'
 $Shim = Join-Path $BinDir 'cc-bedrock-local.cmd'
 
-New-Item -ItemType Directory -Force -Path $CfgDir, $BinDir | Out-Null
+New-Item -ItemType Directory -Force -Path $CfgDir, $BinDir, $LibDir | Out-Null
 # Owner-only: the directory will hold the Cognito refresh token and STS keys.
 $Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 & icacls.exe $CfgDir /inheritance:r /grant:r ('*' + $Sid + ':(OI)(CI)F') | Out-Null
@@ -54,7 +60,9 @@ $Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 Write-Host "[1/4] downloading cc-bedrock-local to $Cli"
 Invoke-WebRequest -UseBasicParsing -Uri ($DashboardUrl + '/api/install/cli-ps1') -OutFile $Cli
 Unblock-File -LiteralPath $Cli -ErrorAction SilentlyContinue
-$ShimText = '@echo off' + $CRLF + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0cc-bedrock-local.ps1" %*' + $CRLF
+# An older install put the .ps1 in the PATH dir; it would shadow the shim.
+if (Test-Path -LiteralPath $OldCli) { Remove-Item -LiteralPath $OldCli -Force }
+$ShimText = '@echo off' + $CRLF + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0../lib/cc-bedrock/cc-bedrock-local.ps1" %*' + $CRLF
 [IO.File]::WriteAllText($Shim, $ShimText, [Text.Encoding]::ASCII)
 
 Write-Host "[2/4] writing config to $CfgFile"

@@ -27,6 +27,12 @@ describe("Windows installer (/api/install/windows)", () => {
   it("downloads the PowerShell CLI, runs setup + login, and keeps desktop mode opt-in", () => {
     const s = windowsInstallerScript(env);
     expect(s).toContain("/api/install/cli-ps1");
+    // Only the .cmd shim is on PATH; the .ps1 lives in lib and an old bin copy is removed.
+    expect(s).toContain("'.local/lib/cc-bedrock'");
+    expect(s).toContain("$Cli = Join-Path $LibDir 'cc-bedrock-local.ps1'");
+    expect(s).toContain("Remove-Item -LiteralPath $OldCli -Force");
+    // Forward slashes: backslashes would be eaten by the template literal (\l, \c).
+    expect(s).toContain('-File "%~dp0../lib/cc-bedrock/cc-bedrock-local.ps1" %*');
     expect(s).toContain("Invoke-Cli setup");
     expect(s).toContain("Invoke-Cli login");
     // Claude Desktop third-party mode replaces claude.ai sign-in: default No.
