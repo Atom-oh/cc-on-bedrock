@@ -641,7 +641,7 @@ function Invoke-Unsetup {
 # Opt-in: inferenceProvider=bedrock switches the whole app from claude.ai sign-in
 # to Bedrock. Credentials come from the named profile (credential_process above);
 # the app needs AWS CLI v2 to read it. Values are REG_SZ directly under the key.
-$DesktopValueNames = @('inferenceProvider', 'inferenceBedrockRegion', 'inferenceBedrockProfile', 'inferenceBedrockAwsCliPath', 'inferenceModels')
+$DesktopValueNames = @('inferenceProvider', 'inferenceBedrockRegion', 'inferenceBedrockProfile', 'inferenceBedrockAwsCliPath', 'inferenceModels', 'coworkEgressAllowedHosts')
 
 function Get-DesktopValues {
   $list = @(
@@ -657,6 +657,13 @@ function Get-DesktopValues {
   $aws = Get-Command aws -ErrorAction SilentlyContinue
   if ($aws) { $v['inferenceBedrockAwsCliPath'] = $aws.Source }
   $v['inferenceModels'] = (ConvertTo-Json -InputObject $list -Depth 4 -Compress)
+  # Chat/Cowork refuse every web fetch while coworkEgressAllowedHosts is unset or
+  # empty ("your organization's network settings block this website"). Owner
+  # decision 2026-11-03: allow all hosts by default; DESKTOP_EGRESS_HOSTS in the
+  # config narrows it (comma-separated: docs.aws.amazon.com,*.github.com).
+  $hosts = @((Cfg 'DESKTOP_EGRESS_HOSTS' '*').Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  if (-not $hosts.Count) { $hosts = @('*') }
+  $v['coworkEgressAllowedHosts'] = (ConvertTo-Json -InputObject $hosts -Compress)
   return $v
 }
 

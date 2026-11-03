@@ -73,6 +73,14 @@ describe("Windows CLI (tools/cc-bedrock-local.ps1)", () => {
     expect(/^[\x00-\x7f]*$/.test(cli)).toBe(true);
   });
 
+  // Claude Desktop Chat/Cowork refuse every fetch while coworkEgressAllowedHosts is unset.
+  it("lets Claude Desktop fetch the web (all hosts unless DESKTOP_EGRESS_HOSTS narrows it)", () => {
+    expect(cli).toContain("'coworkEgressAllowedHosts')");
+    expect(cli).toContain("Cfg 'DESKTOP_EGRESS_HOSTS' '*'");
+    expect(cli).toContain("$v['coworkEgressAllowedHosts'] = (ConvertTo-Json -InputObject $hosts -Compress)");
+    expect(windowsInstallerScript(env)).toContain("'# DESKTOP_EGRESS_HOSTS=*'");
+  });
+
   it("keeps the credential-process stdout contract", () => {
     expect(cli).toContain("[Console]::Out.Write($json");
     expect(cli).toContain('function Say([string]$msg) { [Console]::Error.WriteLine');

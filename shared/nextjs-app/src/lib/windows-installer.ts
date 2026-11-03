@@ -98,7 +98,11 @@ $Cfg = @(
   'CLAUDE_CODE_SUBAGENT_MODEL=${M.subagent}',
   '',
   '# Codex (ADR-014): OpenAI on Bedrock. Must be a global./us. profile.',
-  ('CODEX_MODEL=' + $CodexModel)
+  ('CODEX_MODEL=' + $CodexModel),
+  '',
+  '# Claude Desktop (setup-desktop): hosts Chat/Cowork may fetch. Unset = all (*).',
+  '# Example: DESKTOP_EGRESS_HOSTS=docs.aws.amazon.com,*.github.com',
+  '# DESKTOP_EGRESS_HOSTS=*'
 )
 [IO.File]::WriteAllText($CfgFile, (($Cfg -join $LF) + $LF), $Utf8NoBom)
 
