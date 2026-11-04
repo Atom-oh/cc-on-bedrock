@@ -4,6 +4,22 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ## [Unreleased]
 
+### Local Mode on Windows (ADR-006 amendment 2026-11-03, #148)
+- **Windows Local CLI.**
+  - `tools/cc-bedrock-local.ps1` (Windows PowerShell 5.1 / pwsh 7, no bash or Python) is installed by `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <dashboard>/api/install/windows | iex"` and served by `/api/install/cli-ps1`.
+  - It writes the same managed keys as the bash CLI, so the Claude Code CLI, the Claude Desktop Code tab, the Codex CLI and the Codex app all use the per-user role.
+  - The config directory gets an owner-only ACL (`icacls /reset`, then a grant to the owner only). Install and setup stop when the ACL cannot be applied.
+  - The installer stops before sign-in when `setup` fails.
+- **Claude Desktop Cowork/Chat on Bedrock (opt-in).**
+  - `cc-bedrock-local setup-desktop` writes the third-party policy values under `HKCU\SOFTWARE\Policies\Claude`, with a `.reg` import through a UAC prompt as fallback.
+  - Web fetch is allowed for every host by default; `DESKTOP_EGRESS_HOSTS` narrows the list, and `none` blocks it.
+  - Pilot-PC verification is still pending.
+- **Codex provider ownership.** Both CLIs decide ownership of the `amazon-bedrock` provider per provider, and they recognise quoted TOML headers (`[model_providers."amazon-bedrock".aws]`). With a mantle grant, mantle is the Codex default (ADR-014 §9 amendment). Setup and status report the provider that was actually applied.
+
+### Default Claude models 5.5 (#148)
+- The Local installers, the CLI fallbacks, the Claude Desktop `inferenceModels` and the EC2 DevEnv env now default to `global.anthropic.claude-{opus,sonnet,haiku}-5-5`. The Terraform `opus_model_id` / `sonnet_model_id` defaults moved too.
+- No Terraform resource reads those two variables; per-user roles allow `anthropic.claude-*` by wildcard. So `apply` replaces no resource. The 5.5 `global.` inference profiles must be enabled in the target account and region; users can keep an older model with `cc-bedrock-local set-model`.
+
 ### Local Mode: plain `claude` / `codex`
 - `curl …/api/install | bash` now configures the tools themselves instead of adding the `cc()` / `ccx()` shell functions (and removes the block older installs added). New `cc-bedrock-local setup` writes `~/.claude/settings.json` (`CLAUDE_CODE_USE_BEDROCK`, region and model env, `awsCredentialExport` = `cc-bedrock-local credential-process`, so Claude Code fetches and renews the per-user STS keys itself; Claude Code accepts the flat `credential_process` JSON there as well as `{"Credentials":…}`, verified with `claude -p` on Bedrock) and `~/.codex/config.toml` (`amazon-bedrock-runtime` provider with `aws.profile` = the `credential_process` profile). The CLI's credential cache (`~/.config/cc-bedrock`: refresh token, STS keys) is kept away from Claude Code's Read tool and from Codex's sandboxed commands (not a hard boundary for other Claude tools such as Bash): Claude Code gets `permissions.deny` `Read(~/.config/cc-bedrock/**)`, Codex gets a `cc-bedrock` permission profile (`extends = ":workspace"`, that directory `deny`) as `default_permissions`, skipped with a warning when the user already set `sandbox_mode`/`default_permissions`. `setup` warns when `AWS_BEARER_TOKEN_BEDROCK` is set (it outranks the profile in both tools). `set-model` keeps both files in sync; `unsetup` removes only the managed keys. The first edit keeps a `*.cc-bedrock.bak` backup.
 - Not carried over from the `cc` wrapper: `--dangerously-skip-permissions` and the optional `cc-otel-code-metrics` session/git events. Usage metering and budgets come from Bedrock invocation logs and are unchanged. `cc-bedrock-local claude` / `codex` remain for wrapped runs.

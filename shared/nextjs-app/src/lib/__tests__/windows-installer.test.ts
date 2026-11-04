@@ -45,6 +45,14 @@ describe("Windows installer (/api/install/windows)", () => {
     expect(s).not.toContain("`");
   });
 
+  it("stops before sign-in when setup fails, without closing the user's window", () => {
+    const s = windowsInstallerScript(env);
+    expect(s).toMatch(/if \(\(Invoke-Cli setup\) -ne 0\) \{[^}]*return\s*\}/);
+    expect(s.indexOf("Invoke-Cli setup")).toBeLessThan(s.indexOf("Invoke-Cli login"));
+    // Under irm | iex the script runs in the user's own session: exit would close it.
+    expect(s).not.toMatch(/^\s*exit\b/m);
+  });
+
   it("restricts the config directory to the owner", () => {
     expect(windowsInstallerScript(env)).toContain("/inheritance:r /grant:r");
   });
@@ -83,8 +91,9 @@ describe("Windows CLI (tools/cc-bedrock-local.ps1)", () => {
 
   // The unelevated Windows sandbox cannot enforce a denied read path; Codex refuses the profile.
   it("writes no Codex permission profile on native Windows", () => {
-    const i = cli.indexOf("if ($OnWindows) {\n      if (-not $quiet) { Say \"Windows: no Codex read-deny");
+    const i = cli.indexOf("if ($OnWindows) {\n      # Reported by Invoke-Setup");
     expect(i).toBeGreaterThan(0);
+    expect(cli).toContain("Out \"! Windows: Codex gets no read-deny for $CfgDir");
     expect(cli.indexOf('$head.Add("default_permissions', i)).toBeGreaterThan(cli.indexOf("} elseif ($own.Count) {", i));
   });
 
