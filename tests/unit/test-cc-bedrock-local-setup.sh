@@ -155,6 +155,20 @@ run setup
 [[ "$(count '^region = "mine"$')" == 1 ]] || fail "dropped the user's own amazon-bedrock table"
 [[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "duplicate amazon-bedrock table"
 [[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "own table must keep runtime the default"
+env -i HOME="${H}" PATH="/usr/bin:/bin" "${CLI}" status 2>/dev/null | grep -q "codex -p mantle only" \
+  || fail "status must not call mantle the default when runtime stayed the default"
+# Captured first: grep -q would close the pipe early (SIGPIPE under pipefail).
+setup_out="$(env -i HOME="${H}" PATH="/usr/bin:/bin" "${CLI}" setup 2>/dev/null)"
+grep -q '^✓ codex  → Bedrock (.*: amazon-bedrock-runtime,' <<<"${setup_out}" || fail "setup must report the provider it applied"
+# Mixed: a managed-keys-only aws table next to the user's own headers table. The
+# provider is the user's as a whole: neither table is touched, runtime stays default.
+cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"
+printf '\n[model_providers.amazon-bedrock.aws]\nregion = "us-west-2"\n\n[model_providers.amazon-bedrock.http_headers]\nX-Mine = "1"\n' >> "${H}/.codex/config.toml"
+run setup
+[[ "$(count '^region = "us-west-2"$')" == 1 ]] || fail "mixed: stripped the user's aws table"
+[[ "$(count '^X-Mine = "1"$')" == 1 ]] || fail "mixed: stripped the user's headers table"
+[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "mixed: duplicate aws table"
+[[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "mixed: runtime must stay the default"
 cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"
 # A leftover unmarked table with only managed keys (a manual `region = "us-east-1"`
 # mantle setup, seen on a Mac) is replaced: mantle becomes the default, one table.
@@ -199,10 +213,12 @@ try: import tomllib
 except ImportError: sys.exit(0)
 tomllib.load(open(sys.argv[1], "rb"))' "${H}/.codex/config.toml" || fail "quiet re-sync produced invalid TOML"
 
-# The user's own amazon-bedrock provider tables are not ours to strip from config.toml.
-printf '[model_providers.amazon-bedrock.aws]\nprofile = "mine"\nservice = "custom"\n' > "${H}/.codex/config.toml"
+# The user's own amazon-bedrock provider tables are not ours to strip from config.toml,
+# even with only keys we also manage, while there is no mantle grant.
+printf '[model_providers.amazon-bedrock.aws]\nprofile = "mine"\n' > "${H}/.codex/config.toml"
 run setup
-[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "stripped the user's own amazon-bedrock table"
+[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]$')" == 1 ]] || fail "stripped the user's own amazon-bedrock table"
+[[ "$(count '^profile = "mine"$')" == 1 ]] || fail "rewrote the user's own amazon-bedrock table"
 
 # A UTF-8 BOM (Windows editors) is ignored, as the PowerShell CLI does: the first-line
 # `model =` is still replaced (no duplicate key) and a BOM'd settings.json still parses.

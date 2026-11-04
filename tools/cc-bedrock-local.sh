@@ -667,25 +667,32 @@ except Exception:
 m_ours = not os.path.exists(m_path) or mark in open(m_path).read()
 r_ours = not os.path.exists(r_path) or mark in open(r_path).read()
 want_mantle = mode == "add" and mantle.get("enabled") and mantle.get("projectId")
-# The amazon-bedrock tables are ours when marked, or when unmarked but holding only
-# keys we manage (aws: profile/region; headers: OpenAI-Project) - e.g. a leftover
-# `region = "us-east-1"` from a manual mantle setup - so they are replaced. A table
-# with any other key is the user's own and stays; then mantle is not made the
-# default (a second table would be invalid TOML).
+# Ownership of the amazon-bedrock provider is decided for the provider as a whole.
+# Marked tables are ours. Unmarked ones are the user's and are never touched, except
+# while a grant is present and every unmarked amazon-bedrock table is the aws or
+# headers table holding only keys we manage (aws: profile/region; headers:
+# OpenAI-Project) - e.g. a leftover `region = "us-east-1"` from a manual mantle
+# setup - then they are replaced. Otherwise the user's provider stays whole and
+# mantle is not made the default (a second table would be invalid TOML).
 hdr = lambda l: l.split("#", 1)[0].strip()
 M_KEYS = {M_AWS: {"profile", "region"}, M_HDR: {"OpenAI-Project"}}
-def m_table_ours(i):
-    if mark in lines[i]:
-        return True
+is_m = lambda h: h == "[model_providers.amazon-bedrock]" or h.startswith("[model_providers.amazon-bedrock.")
+def managed_keys_only(i):
+    keys = M_KEYS.get(hdr(lines[i]))
+    if keys is None:
+        return False
     for l in lines[i + 1:]:
         if l.strip().startswith("["):
             break
         k = hdr(l).split("=", 1)[0].strip().strip('"')
-        if k and k not in M_KEYS[hdr(lines[i])]:
+        if k and k not in keys:
             return False
     return True
-m_ours_at = {i for i, l in enumerate(lines) if hdr(l) in M_KEYS and m_table_ours(i)}
-own_m = any(hdr(l) in M_KEYS and i not in m_ours_at for i, l in enumerate(lines))
+m_marked = {i for i, l in enumerate(lines) if is_m(hdr(l)) and mark in l}
+m_unmarked = {i for i, l in enumerate(lines) if is_m(hdr(l)) and mark not in l}
+replace_unmarked = bool(want_mantle) and all(managed_keys_only(i) for i in m_unmarked)
+m_ours_at = m_marked | (m_unmarked if replace_unmarked else set())
+own_m = bool(m_unmarked) and not replace_unmarked
 default_mantle = want_mantle and not own_m
 if want_mantle and own_m and not quiet:
     sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml has its own [model_providers.amazon-bedrock.*]; "
@@ -775,22 +782,40 @@ os.replace(tmp, path)
 PY
 }
 
+# "<provider> <model>" that config.toml actually defaults to (our managed keys;
+# empty before setup), so messages report what was applied, not what was granted.
+codex_default() {
+  [[ -f "${CODEX_CONFIG_FILE}" ]] || return 0
+  sed -nE 's/^(model_provider|model) = "([^"]*)"  # managed by cc-bedrock-local$/\2/p' "${CODEX_CONFIG_FILE}" | paste -sd' ' -
+}
+
 mantle_note() {  # one line describing the mantle grant in state.json (empty when none)
   [[ -f "${STATE_FILE}" ]] || return 0
-  python3 - "${STATE_FILE}" <<'PY' 2>/dev/null || true
+  python3 - "${STATE_FILE}" "$(codex_default)" <<'PY' 2>/dev/null || true
 import json, sys
 m = json.load(open(sys.argv[1])).get("mantle") or {}
 if m.get("enabled"):
-    print(f"mantle ({m.get('model')}, {m.get('region')}): DEFAULT for codex + the Codex app — web search; "
-          "NOT counted in usage or budget; metered runtime: codex -p runtime; available while your cost is unlimited")
+    if sys.argv[2].split(" ")[0] == "amazon-bedrock":
+        print(f"mantle ({m.get('model')}, {m.get('region')}): DEFAULT for codex + the Codex app — web search; "
+              "NOT counted in usage or budget; metered runtime: codex -p runtime; available while your cost is unlimited")
+    else:
+        print(f"mantle ({m.get('model')}, {m.get('region')}): codex -p mantle — web search; NOT counted in usage or budget; "
+              "not the codex default (config.toml has its own amazon-bedrock provider, or setup has not run); "
+              "available while your cost is unlimited")
 PY
 }
 
 # After new credentials: keep the Codex mantle profile in step with the grant
-# (it appears/disappears as an admin removes/sets cost caps). Files + stderr only.
+# (it appears/disappears as an admin removes/sets cost caps). Gated on our own
+# Codex keys, not on Claude's settings, so a revocation always reverts Codex.
+# Files + stderr only.
 sync_codex_mantle() {
-  clients_configured || return 0
+  codex_configured || return 0
   CC_BEDROCK_QUIET=1 configure_codex add || say "could not update ${CODEX_CONFIG_FILE}"
+}
+
+codex_configured() {
+  [[ -f "${CODEX_CONFIG_FILE}" ]] && grep -qF "${CODEX_MARK}" "${CODEX_CONFIG_FILE}"
 }
 
 clients_configured() {
@@ -813,7 +838,8 @@ do_setup() {
     configure_claude "$(printf '%q' "${self}") credential-process"
   configure_codex add
   echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport)"
-  echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: amazon-bedrock-runtime, profile=${AWS_PROFILE_NAME}, model=${CODEX_MODEL})"
+  local applied; applied="$(codex_default)"
+  echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: ${applied%% *}, profile=${AWS_PROFILE_NAME}, model=${applied#* })"
   local note; note="$(mantle_note)"
   [[ -z "${note}" ]] || echo "! ${note}"
   # A Bedrock API key outranks the profile in both tools and would bypass the
@@ -881,6 +907,11 @@ do_set_model() {
     printf -v "${key}" '%s' "${val}"
     do_setup >/dev/null
     echo "✓ claude/codex settings updated"
+    # With a mantle grant the default codex model comes from the grant (mantle IDs
+    # differ from bedrock-runtime ones); CODEX_MODEL drives the metered runtime path.
+    if [[ "${key}" == CODEX_MODEL && "$(codex_default)" == amazon-bedrock\ * ]]; then
+      echo "  codex default is mantle ($(codex_default | cut -d' ' -f2-), from your grant); CODEX_MODEL applies to codex -p runtime"
+    fi
   fi
 }
 
@@ -912,7 +943,7 @@ do_status() {
     echo "no session — run 'cc-bedrock-local login'"
     return 1
   fi
-  python3 - "${STATE_FILE}" "${TOKEN_CACHE}" "${EMAIL:-}" <<'PY'
+  python3 - "${STATE_FILE}" "${TOKEN_CACHE}" "${EMAIL:-}" "$(codex_default)" <<'PY'
 import json, sys, datetime, os
 state = json.load(open(sys.argv[1]))
 creds = state.get("credentials", {})
@@ -930,7 +961,9 @@ except Exception:
 print(f"deny active   : {limit.get('denyActive', False)}")
 mantle = state.get("mantle") or {}
 if mantle.get("enabled"):
-    print(f"mantle        : enabled, codex default (runtime: codex -p runtime; {mantle.get('model')}, {mantle.get('region')}, "
+    where = ("codex default (runtime: codex -p runtime" if sys.argv[4].split(" ")[0] == "amazon-bedrock"
+             else "codex -p mantle only (codex default stays bedrock-runtime")
+    print(f"mantle        : enabled, {where}; {mantle.get('model')}, {mantle.get('region')}, "
           f"project {mantle.get('projectId')}) — NOT counted in usage or budget")
 else:
     print("mantle        : off (available only while your cost is unlimited)")

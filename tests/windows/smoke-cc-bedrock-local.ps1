@@ -92,6 +92,10 @@ try {
   [Console]::WriteLine("Home:  $H")
   [Console]::WriteLine('')
 
+  # An explicit ACE from before the install (BUILTIN\Users read, by SID so it works on
+  # any Windows language) must be gone after setup: /inheritance:r alone would keep it.
+  & icacls.exe $CfgDir /grant '*S-1-5-32-545:(OI)(CI)R' | Out-Null
+
   # 1. setup
   $r = RunCli @('setup')
   Check 'setup exits 0' ($r.Code -eq 0) ("exit=$($r.Code) stderr=$($r.Err)")
@@ -163,6 +167,10 @@ try {
   $acl = (& icacls.exe $CfgDir) -join "`n"
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   Check 'config dir ACL: only the owner (no inherited ACEs)' (($acl -notmatch '\(I\)') -and ($acl.Contains($me))) $acl
+  $sids = @((Get-Acl -LiteralPath $CfgDir).Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })
+  Check 'config dir ACL: earlier explicit Users grant removed' (-not ($sids -contains 'S-1-5-32-545')) ($sids -join ', ')
+  $r = RunCli @('setup')
+  Check 'setup reports the applied Codex provider (mantle default here)' ($r.Out -cmatch 'codex  -> Bedrock \(.*: amazon-bedrock, ') $r.Out
 
   # 9. set-model
   $r = RunCli @('set-model', 'opus=global.anthropic.claude-opus-5')

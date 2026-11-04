@@ -75,8 +75,15 @@ function Protect-Path([string]$path) {
   if (-not (Test-Path -LiteralPath $path)) { return }
   if ($OnWindows) {
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $grant = if ((Get-Item -LiteralPath $path) -is [IO.DirectoryInfo]) { "*${sid}:(OI)(CI)F" } else { "*${sid}:F" }
-    & icacls.exe $path /inheritance:r /grant:r $grant 2>&1 | Out-Null
+    $isDir = (Get-Item -LiteralPath $path) -is [IO.DirectoryInfo]
+    $grant = if ($isDir) { "*${sid}:(OI)(CI)F" } else { "*${sid}:F" }
+    # Reset first: /inheritance:r alone keeps explicit ACEs someone added earlier.
+    # A directory's children are reset too, so they inherit the owner-only ACE.
+    $reset = if ($isDir) { @('/reset', '/T', '/C', '/Q') } else { @('/reset', '/Q') }
+    $o = & icacls.exe $path @reset 2>&1
+    if ($LASTEXITCODE -eq 0) { $o = & icacls.exe $path /inheritance:r /grant:r $grant 2>&1 }
+    # Fail closed: the directory holds the refresh token and STS keys.
+    if ($LASTEXITCODE -ne 0) { Die "could not restrict access to $path (icacls: $(($o | Out-String).Trim()))" }
   } else {
     $mode = if ((Get-Item -LiteralPath $path) -is [IO.DirectoryInfo]) { '700' } else { '600' }
     & chmod $mode $path 2>&1 | Out-Null
@@ -508,29 +515,34 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   }
   # ADR-014 section 9 (amended 2026-11-03): with a mantle grant, bedrock-mantle is the
   # default provider (plain codex + the Codex app get web search); the metered runtime
-  # path is 'codex -p runtime'. The amazon-bedrock tables are ours when marked, or when
-  # unmarked but holding only keys we manage (aws: profile/region; headers:
-  # OpenAI-Project), e.g. a leftover manual region = "us-east-1"; those are replaced.
-  # A table with any other key is the user's own, stays, and keeps runtime the default
-  # (a second table is invalid TOML).
+  # path is 'codex -p runtime'. Ownership of the amazon-bedrock provider is decided for
+  # the provider as a whole: marked tables are ours; unmarked ones are the user's and
+  # are never touched, except while a grant is present and every unmarked
+  # amazon-bedrock table is the aws or headers table holding only keys we manage
+  # (aws: profile/region; headers: OpenAI-Project), e.g. a leftover manual
+  # region = "us-east-1"; then they are replaced. Otherwise the user's provider stays
+  # whole and keeps runtime the default (a second table is invalid TOML).
   # Ordinal (case-sensitive) like TOML and the bash CLI.
   $mKeys = New-Object Collections.Hashtable ([StringComparer]::Ordinal)
   $mKeys[$mAws] = @('profile', 'region'); $mKeys[$mHdr] = @('OpenAI-Project')
   $mOursAt = @{}
-  $ownM = $false
+  $unmarked = New-Object Collections.Generic.List[int]
+  $allManaged = $true
   for ($i = 0; $i -lt $lines.Count; $i++) {
     $h = $lines[$i].Split('#')[0].Trim()
-    if (-not $mKeys.ContainsKey($h)) { continue }
-    $isOurs = $true
-    if (-not $lines[$i].Contains($CodexMark)) {
-      for ($j = $i + 1; $j -lt $lines.Count; $j++) {
-        if ($lines[$j].Trim().StartsWith('[')) { break }
-        $k = $lines[$j].Split('#')[0].Split('=')[0].Trim().Trim('"')
-        if ($k -and ($mKeys[$h] -cnotcontains $k)) { $isOurs = $false; break }
-      }
+    if (-not ($h -ceq '[model_providers.amazon-bedrock]' -or $h.StartsWith('[model_providers.amazon-bedrock.', [StringComparison]::Ordinal))) { continue }
+    if ($lines[$i].Contains($CodexMark)) { $mOursAt[$i] = $true; continue }
+    $unmarked.Add($i)
+    if (-not $mKeys.ContainsKey($h)) { $allManaged = $false; continue }
+    for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+      if ($lines[$j].Trim().StartsWith('[')) { break }
+      $k = $lines[$j].Split('#')[0].Split('=')[0].Trim().Trim('"')
+      if ($k -and ($mKeys[$h] -cnotcontains $k)) { $allManaged = $false; break }
     }
-    if ($isOurs) { $mOursAt[$i] = $true } else { $ownM = $true }
   }
+  $replaceUnmarked = [bool]$wantMantle -and $allManaged
+  if ($replaceUnmarked) { foreach ($i in $unmarked) { $mOursAt[$i] = $true } }
+  $ownM = ($unmarked.Count -gt 0) -and -not $replaceUnmarked
   $defaultMantle = $wantMantle -and -not $ownM
   if ($wantMantle -and $ownM -and -not $quiet) {
     Say "$CodexConfigFile has its own [model_providers.amazon-bedrock.*]; codex stays on bedrock-runtime by default (mantle: codex -p mantle)"
@@ -627,18 +639,33 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   Write-TextFile $CodexConfigFile $body
 }
 
+# @(provider, model) that config.toml actually defaults to (our managed keys; empty
+# before setup), so messages report what was applied, not what was granted.
+function Get-CodexDefault {
+  $r = @('', '')
+  foreach ($l in ((Read-TextFile $CodexConfigFile) -split "`r?`n")) {
+    if ($l -cmatch '^model_provider = "([^"]*)"  # managed by cc-bedrock-local$') { $r[0] = $Matches[1] }
+    elseif ($l -cmatch '^model = "([^"]*)"  # managed by cc-bedrock-local$') { $r[1] = $Matches[1] }
+  }
+  return $r
+}
+
 function Get-MantleNote {
   $s = Read-State
   if ($s -and $s.Contains('mantle') -and $s['mantle'] -and $s['mantle']['enabled']) {
     $m = $s['mantle']
-    return "mantle ($($m['model']), $($m['region'])): DEFAULT for codex + the Codex app - web search; NOT counted in usage or budget; metered runtime: codex -p runtime; available while your cost is unlimited"
+    if ((Get-CodexDefault)[0] -ceq 'amazon-bedrock') {
+      return "mantle ($($m['model']), $($m['region'])): DEFAULT for codex + the Codex app - web search; NOT counted in usage or budget; metered runtime: codex -p runtime; available while your cost is unlimited"
+    }
+    return "mantle ($($m['model']), $($m['region'])): codex -p mantle - web search; NOT counted in usage or budget; not the codex default (config.toml has its own amazon-bedrock provider, or setup has not run); available while your cost is unlimited"
   }
   return ''
 }
 
-# After new credentials keep the Codex mantle profile in step with the grant.
+# After new credentials keep the Codex mantle profile in step with the grant. Gated
+# on our own Codex keys, not on Claude's settings, so a revocation always reverts Codex.
 function Sync-CodexMantle {
-  if (-not (Test-ClientsConfigured)) { return }
+  if (-not (Read-TextFile $CodexConfigFile).Contains($CodexMark)) { return }
   try { Set-CodexConfig 'add' $true } catch { Say "could not update $CodexConfigFile" }
 }
 
@@ -651,10 +678,11 @@ function Invoke-Setup([bool]$quietOutput = $false) {
   Set-CodexConfig 'add'
   if (-not $quietOutput) {
     Out "OK claude -> Bedrock (${ClaudeSettingsFile}: env + awsCredentialExport) - Claude Code CLI and the Claude Desktop Code tab"
-    Out "OK codex  -> Bedrock (${CodexConfigFile}: amazon-bedrock-runtime, profile=$AwsProfileName, model=$($Models['CODEX_MODEL'])) - Codex CLI and the Codex app"
+    $applied = Get-CodexDefault
+    Out "OK codex  -> Bedrock (${CodexConfigFile}: $($applied[0]), profile=$AwsProfileName, model=$($applied[1])) - Codex CLI and the Codex app"
     Out '  restart Claude Desktop / the Codex app so they reload their settings'
     $note = Get-MantleNote
-    if ($note) { Out "! $note (CLI only)" }
+    if ($note) { Out "! $note" }
   }
   # A Bedrock API key outranks the profile in both tools and would bypass the
   # per-user role (metering, budget deny).
@@ -793,6 +821,12 @@ function Invoke-SetModel([string[]]$argv) {
   if (Test-ClientsConfigured) {
     Invoke-Setup $true
     Out 'OK claude/codex settings updated'
+    # With a mantle grant the default codex model comes from the grant (mantle IDs
+    # differ from bedrock-runtime ones); CODEX_MODEL drives the metered runtime path.
+    $applied = Get-CodexDefault
+    if ($key -ceq 'CODEX_MODEL' -and $applied[0] -ceq 'amazon-bedrock') {
+      Out "  codex default is mantle ($($applied[1]), from your grant); CODEX_MODEL applies to codex -p runtime"
+    }
   }
   if ($OnWindows -and (Test-Path $DesktopPolicyKey) -and (Get-ItemProperty -Path $DesktopPolicyKey -Name inferenceModels -ErrorAction SilentlyContinue)) {
     Out '  Claude Desktop keeps its model list until you re-run setup-desktop'
@@ -837,7 +871,8 @@ function Invoke-Status {
     Out "  reset_at    : $($limit['resetAt'])"
   }
   $note = Get-MantleNote
-  Out "mantle        : $(if ($note) { 'enabled, codex default (runtime: codex -p runtime) - NOT counted in usage or budget' } else { 'off (available only while your cost is unlimited)' })"
+  $where = if ((Get-CodexDefault)[0] -ceq 'amazon-bedrock') { 'codex default (runtime: codex -p runtime)' } else { 'codex -p mantle only (codex default stays bedrock-runtime)' }
+  Out "mantle        : $(if ($note) { "enabled, $where - NOT counted in usage or budget" } else { 'off (available only while your cost is unlimited)' })"
   if (Test-Path -LiteralPath $TokenCache) {
     $t = ConvertFrom-JsonText (Read-TextFile $TokenCache)
     $age = (Get-EpochNow) - [long]$t['obtainedAt']

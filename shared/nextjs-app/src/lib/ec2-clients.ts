@@ -601,7 +601,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       ...otelEnvUserData(input.username, input.department),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       // Model defaults (Bedrock canonical, per AWS docs): opusplan = Opus for
-      // planning, Sonnet 5 for execution; fast → Haiku 4.5, subagents → Sonnet 5.
+      // planning, Sonnet 5.5 for execution; fast → Haiku 5.5, subagents → Sonnet 5.5.
       `echo "ANTHROPIC_MODEL=opusplan" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5-5" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-5-5" >> /etc/environment`,
@@ -1154,7 +1154,7 @@ export async function restoreFromSnapshot(
       ...otelEnvUserData(record?.username ?? "", record?.department ?? "default"),
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       // Model defaults (Bedrock canonical, per AWS docs): opusplan = Opus for
-      // planning, Sonnet 5 for execution; fast → Haiku 4.5, subagents → Sonnet 5.
+      // planning, Sonnet 5.5 for execution; fast → Haiku 5.5, subagents → Sonnet 5.5.
       `echo "ANTHROPIC_MODEL=opusplan" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-5-5" >> /etc/environment`,
       `echo "ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-5-5" >> /etc/environment`,

@@ -50,27 +50,43 @@ The installer drops `tools/cc-bedrock-local.ps1` into
 `%USERPROFILE%\.local\lib\cc-bedrock` and a `cc-bedrock-local.cmd` shim into
 `%USERPROFILE%\.local\bin` (added to the user PATH; only the shim is on PATH, since
 PowerShell would pick a `.ps1` there first and the default execution policy refuses
-it), removes a `.ps1` an older install left in the bin dir, restricts
-`%USERPROFILE%\.config\cc-bedrock` to the user's ACL, then runs `setup` and
+it), removes a `.ps1` an older install left in the bin dir, resets
+`%USERPROFILE%\.config\cc-bedrock` to an owner-only ACL (the install stops if
+that fails), then runs `setup` and
 `login`. The PowerShell CLI writes the same keys as the bash CLI, so:
 
 - Claude Code CLI and the Claude Desktop **Code** tab read
   `%USERPROFILE%\.claude\settings.json` (Bedrock env + `awsCredentialExport`).
 - Codex CLI and the **Codex app** read `%USERPROFILE%\.codex\config.toml`
-  (`amazon-bedrock-runtime` on profile `cc-bedrock`). `codex -p mantle` is
-  CLI-only; the app has no profile selection.
+  (`amazon-bedrock-runtime` on profile `cc-bedrock`). For a user with a mantle
+  grant (unlimited cost), the default is bedrock-mantle with web search instead,
+  which is not counted in usage or budget (ADR-014 §9 amendment 2026-11-03). The
+  metered runtime path is then `codex -p runtime`, which only the CLI can use,
+  since the app has no profile selection. If the user's config already defines
+  its own `amazon-bedrock` provider, runtime stays the default. `setup` and
+  `status` print the provider that was actually applied. Native Windows gets no
+  Codex read-deny permission profile, because the Windows sandbox cannot enforce
+  one.
 - `~/.aws/config` gets `credential_process = powershell.exe -NoProfile
-  -NonInteractive -ExecutionPolicy Bypass -File "<path>" credential-process`.
+  -NonInteractive -ExecutionPolicy Bypass -File <path> credential-process`, with
+  no double quotes, because Codex hands the line to `cmd.exe /C`. If the path
+  contains whitespace, `-EncodedCommand` is used instead.
 
 Restart Claude Desktop and the Codex app after setup. Claude Desktop
 **Cowork/Chat** stays on claude.ai sign-in unless the user opts in with
 `cc-bedrock-local setup-desktop` (the installer asks, default No). That writes
 the third-party policy `HKCU\SOFTWARE\Policies\Claude` (`inferenceProvider=bedrock`,
-`inferenceBedrockProfile=cc-bedrock`, region, `inferenceModels`). Claude Desktop
-reads the named profile through AWS CLI v2, which must be installed. If the
-policy key is not writable or a machine policy exists under `HKLM`, the CLI
-writes `%USERPROFILE%\.config\cc-bedrock\claude-desktop-bedrock.reg` for an
-elevated `reg import` or IT deployment. `unsetup-desktop` removes the values.
+`inferenceBedrockProfile=cc-bedrock`, region, `inferenceModels`,
+`coworkEgressAllowedHosts`). Claude Desktop reads the named profile through AWS
+CLI v2, which must be installed. Web fetch from Chat/Cowork is allowed for every
+host by default. To narrow it, set `DESKTOP_EGRESS_HOSTS=host1,*.example.com`
+in `%USERPROFILE%\.config\cc-bedrock\config`; `none` blocks every fetch.
+Re-run `setup-desktop` after changing it (ADR-006 amendment 2026-11-03). If the
+policy key is not writable, the CLI writes
+`%USERPROFILE%\.config\cc-bedrock\claude-desktop-bedrock.reg` and imports it
+through a UAC prompt. If the user declines the prompt, the file is left for IT.
+A machine policy under `HKLM` overrides these values, and the CLI warns when one
+exists. `unsetup-desktop` removes the values.
 The `credential_process` path through Claude Desktop's AWS CLI lookup is not
 documented by Anthropic; verify it on a pilot PC before rolling it out.
 

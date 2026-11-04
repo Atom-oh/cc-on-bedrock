@@ -55,7 +55,11 @@ $Shim = Join-Path $BinDir 'cc-bedrock-local.cmd'
 New-Item -ItemType Directory -Force -Path $CfgDir, $BinDir, $LibDir | Out-Null
 # Owner-only: the directory will hold the Cognito refresh token and STS keys.
 $Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& icacls.exe $CfgDir /inheritance:r /grant:r ('*' + $Sid + ':(OI)(CI)F') | Out-Null
+# Reset first (/inheritance:r alone keeps explicit ACEs added earlier), then fail
+# closed before any token is written.
+& icacls.exe $CfgDir /reset /T /C /Q | Out-Null
+if ($LASTEXITCODE -eq 0) { & icacls.exe $CfgDir /inheritance:r /grant:r ('*' + $Sid + ':(OI)(CI)F') | Out-Null }
+if ($LASTEXITCODE -ne 0) { throw ('could not restrict access to ' + $CfgDir + ' (icacls exit ' + $LASTEXITCODE + ')') }
 
 Write-Host "[1/4] downloading cc-bedrock-local to $Cli"
 Invoke-WebRequest -UseBasicParsing -Uri ($DashboardUrl + '/api/install/cli-ps1') -OutFile $Cli
