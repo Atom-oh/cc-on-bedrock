@@ -20,7 +20,8 @@ COGNITO_CLIENT_ID=client
 EMAIL=user@example.com
 CODEX_MODEL=global.openai.gpt-6.1-sol
 EOF
-echo '{"permissions":{"allow":["Bash(ls)"]},"env":{"FOO":"1"}}' > "${H}/.claude/settings.json"
+USER_HOOKS='{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}],"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"true"}]}]}'
+echo '{"permissions":{"allow":["Bash(ls)"]},"env":{"FOO":"1"},"hooks":'"${USER_HOOKS}"'}' > "${H}/.claude/settings.json"
 cat > "${H}/.codex/config.toml" <<'EOF'
 model = "gpt-5"
 approval_policy = "never"
@@ -46,6 +47,12 @@ run setup
 [[ "$(json 'd["awsCredentialExport"]')" == "${CLI} credential-process" ]] || fail "awsCredentialExport"
 [[ "$(json '"AWS_PROFILE" in d["env"]')" == False ]] || fail "AWS_PROFILE must not leak into Claude's subprocesses"
 [[ "$(json 'd["permissions"]["deny"]')" == "['Read(~/.config/cc-bedrock/**)']" ]] || fail "claude read deny on credential cache"
+# Session-report Stop hook: appended as its own group; the user's hooks stay.
+[[ "$(json 'd["hooks"]["Stop"][-1]')" == "{'hooks': [{'type': 'command', 'command': '${CLI} session-report --quiet', 'timeout': 30}]}" ]] \
+  || fail "Stop hook not installed: $(json 'd["hooks"]')"
+[[ "$(json 'd["hooks"]["Stop"][0]')" == "{'hooks': [{'type': 'command', 'command': 'echo mine'}]}" ]] || fail "user Stop hook lost"
+[[ "$(json 'len(d["hooks"]["Stop"])')" == 2 ]] || fail "unexpected Stop groups"
+[[ "$(json 'd["hooks"]["PreToolUse"][0]["matcher"]')" == Bash ]] || fail "user PreToolUse hook lost"
 
 [[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "model_provider"
 top_models="$(awk '/^\[/{exit} /^model = /{n++} END{print n+0}' "${H}/.codex/config.toml")"
@@ -98,6 +105,25 @@ run setup
 
 run unsetup
 [[ "$(json 'd["env"]')" == "{'FOO': '1'}" ]] || fail "unsetup left managed env keys"
+python3 -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["hooks"] != json.loads(sys.argv[2]))' \
+  "${H}/.claude/settings.json" "${USER_HOOKS}" || fail "unsetup must leave exactly the user's hooks: $(json 'd["hooks"]')"
+# Only our hook in settings.json: unsetup drops the containers it leaves empty.
+python3 - "${H}/.claude/settings.json" <<'PY2'
+import json, sys
+d = json.load(open(sys.argv[1])); d.pop("hooks"); json.dump(d, open(sys.argv[1], "w"))
+PY2
+run setup
+[[ "$(json 'len(d["hooks"]["Stop"])')" == 1 ]] || fail "Stop hook missing without user hooks"
+run unsetup
+[[ "$(json '"hooks" in d')" == False ]] || fail "unsetup left an empty hooks object"
+# SESSION_REPORT=off: setup installs no hook (and drops ours from an earlier setup).
+run setup
+echo 'SESSION_REPORT=off' >> "${H}/.config/cc-bedrock/config"
+run setup
+[[ "$(json '"hooks" in d')" == False ]] || fail "SESSION_REPORT=off still installed the Stop hook"
+[[ "$(json '"awsCredentialExport" in d')" == True ]] || fail "SESSION_REPORT=off must not affect the rest of setup"
+sed -i.bak '/^SESSION_REPORT=off$/d' "${H}/.config/cc-bedrock/config" && rm -f "${H}/.config/cc-bedrock/config.bak"
+run unsetup
 [[ "$(json '"awsCredentialExport" in d')" == False ]] || fail "unsetup left awsCredentialExport"
 [[ "$(count 'managed by cc-bedrock-local|amazon-bedrock-runtime|^profile = ')" == 0 ]] || fail "unsetup left codex keys"
 [[ "$(count '^approval_policy = "never"')" == 1 ]] || fail "unsetup dropped user codex key"

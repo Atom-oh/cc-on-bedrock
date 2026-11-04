@@ -219,6 +219,36 @@ variable "enable_mantle" {
   default     = true
 }
 
+# Session insights: per-session cost/turns reported by the Local CLI (insight only,
+# never enforced) plus a daily Haiku analysis of the top users (aggregate numbers only).
+variable "enable_session_insights" {
+  description = "Create the sessions table, accept Local CLI session reports and run the daily session insights Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "session_insights_model_id" {
+  description = "Bedrock model or cross-Region inference profile id used by the daily session insights (Converse)"
+  type        = string
+  default     = "global.anthropic.claude-haiku-5-5"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9.:-]{0,127}$", var.session_insights_model_id))
+    error_message = "session_insights_model_id must be a Bedrock model or inference profile id, e.g. global.anthropic.claude-haiku-5-5."
+  }
+}
+
+variable "session_insights_language" {
+  description = "Language of the generated session insights (e.g. ko, en)"
+  type        = string
+  default     = "ko"
+
+  validation {
+    condition     = can(regex("^[A-Za-z][A-Za-z -]{1,31}$", var.session_insights_language))
+    error_message = "session_insights_language must be a short language name or code, e.g. ko or en."
+  }
+}
+
 variable "codex_mantle_model_id" {
   description = "Model for the Codex mantle profile (us-east-1 bedrock-mantle model id, no CRIS prefix)"
   type        = string

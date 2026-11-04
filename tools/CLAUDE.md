@@ -26,6 +26,7 @@ cc-bedrock-local claude [args]       # ensure session + exec claude
 cc-bedrock-local codex [args]        # ensure session + exec codex on Bedrock
 cc-bedrock-local set-model K=V       # sonnet | opus | haiku | subagent | pin | codex
 cc-bedrock-local config              # print active config
+cc-bedrock-local session-report [--sweep] [--quiet]   # session insights upload (normally run by the Stop hook)
 
 # Windows (PowerShell or cmd)
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://<dashboard_subdomain>.<domain>/api/install/windows | iex"
@@ -40,6 +41,15 @@ The default `dashboard_subdomain` is `cconbedrock-dashboard`.
 - Config `~/.config/cc-bedrock/config` and state `~/.config/cc-bedrock/state.json` (last credentials + limit status), both mode 600.
 - AWS profile: `~/.aws/config [profile cc-bedrock]` using `credential_process`.
 - Env overrides win: `CC_BEDROCK_DASHBOARD_URL`, `CC_BEDROCK_EMAIL`, `AWS_PROFILE_NAME`, `AWS_REGION`.
+- Token cache `cognito-tokens.json` holds the refresh token plus the access token and `accessExpiresAt` (JWT `exp`); `session-report` reuses the access token until < 5 min remain, then refreshes silently.
+- Session insights: `sessions-state.json` (per-file byte offset, mtime, size, last 64 assistant message ids, per-file buckets, sent digests, `lastSweepAt`) and `session-report.log` (last 200 lines), both owner-only. `SESSION_REPORT=off` in the config disables reporting: `setup` installs no Stop hook (and removes ours), the subcommand and background sweeps are no-ops.
+
+## Session report (session insights)
+- `session-report` reads local Claude Code transcripts (`<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<proj>/<sessionId>.jsonl` and `<sessionId>/subagents/*.jsonl`) and Codex rollouts (`<CODEX_HOME or ~/.codex>/sessions/**/rollout-*.jsonl`) and POSTs cumulative `(tool, sessionId, UTC date)` buckets (turns + per-model requests/tokens) to `${DASHBOARD_URL}/api/local/sessions` with the Cognito access token, at most 100 per request, 10 s timeout. Only complete lines after the saved offset are parsed; a file smaller than its offset restarts from 0; state for files untouched for 45 days is dropped. Counting rules (turns, dedupe by `message.id` with max usage, Codex `token_count` math) follow the session-insights contract. Insight only: budgets and metering stay on Bedrock invocation logs (ADR-005).
+- Buckets whose totals changed since the last successful POST are sent; state is saved only when every chunk succeeds (a validation rejection, HTTP 400/413/422, is logged and recorded so it does not block later saves). Buckets without a model or dated outside the last 35 days are not sent.
+- `setup` adds a Claude Code `Stop` hook to `settings.json`: `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"<CLI cmd> session-report --quiet","timeout":30}]}]}}`. `<CLI cmd>` is the same prefix as `awsCredentialExport` (PS1: the `powershell.exe ... -File` form, or `-EncodedCommand` for a path with whitespace). Ours is the entry whose command ends in ` session-report --quiet` (PS1 also decodes `-EncodedCommand`); other hooks are kept, `unsetup` removes only ours and the containers that leaves empty.
+- Hook mode (`--quiet`, payload `{session_id, transcript_path}` on stdin) parses that transcript and its `subagents/` files, then starts a detached full sweep at most every 10 minutes. `--sweep` parses every Claude/Codex file modified in the last 3 days. `--quiet` never writes stdout and always exits 0; failures go to the log. A detached sweep with all output discarded also runs after `setup`, `login` and a `credential-process` refresh (not a cache hit; stdout stays one JSON line), only when a token cache exists.
+- Test hooks: hidden `--dry-run` prints `{"buckets":[...]}` it would send (no POST, no state save); `CC_BEDROCK_SESSION_ENDPOINT` overrides the POST URL (`tests/unit/test-cc-bedrock-local-session-report.sh` points it at a local stub).
 
 ## Behavior to preserve
 - The CLI logs into Cognito directly through the public CLI app client and sends the Cognito access token to `/api/local/credentials`.

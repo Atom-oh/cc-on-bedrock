@@ -3,14 +3,14 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
-import {
-  CognitoIdentityProviderClient,
-  GetUserCommand,
-} from "@aws-sdk/client-cognito-identity-provider";
 import { createHash } from "crypto";
-import { pinnedIdentity, requireAnyRoleGroup } from "@/lib/role-admin";
-import { requiresRoleGroup } from "@/lib/roles";
-import { userPoolId } from "@/lib/aws-clients";
+import {
+  bearerToken,
+  freshCallerChecks,
+  isCognitoJwt,
+  resolveCognitoAccessToken,
+  type ResolvedCaller,
+} from "@/lib/cli-auth";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode credentials API.
 //
@@ -27,33 +27,10 @@ import { userPoolId } from "@/lib/aws-clients";
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const STS_ISSUER_FUNCTION = process.env.STS_ISSUER_FUNCTION_NAME ?? "cc-on-bedrock-sts-issuer";
 const CLI_TOKENS_TABLE = process.env.CLI_TOKENS_TABLE ?? "cc-on-bedrock-cli-tokens";
-// ADR-006 (legacy ADR-014): only access tokens issued by the cc-bedrock-local CLI public client
-// are accepted on the JWT Bearer path. Any other client in the same user pool
-// (admin tools, future federated apps, misconfigured public clients) MUST NOT
-// be able to call /api/local/credentials via Cognito access tokens.
-const COGNITO_CLI_CLIENT_ID = process.env.COGNITO_CLI_CLIENT_ID ?? "";
+// The Cognito access-token path (CLI public client only) lives in lib/cli-auth.ts.
 
 const lambda = new LambdaClient({ region });
 const ddb = new DynamoDBClient({ region });
-const cognito = new CognitoIdentityProviderClient({ region });
-
-interface UserIdentity {
-  sub: string;
-  username: string;
-  email?: string;
-  department: string;
-  project: string;
-  /** Shared pool only: the pinned `custom:subdomain` that names the Local role. */
-  subdomain?: string;
-  /** Shared pool only: scopes the role's `sub` binding (`sub:<pool>` tag). */
-  pool?: string;
-}
-
-/** Identity for the STS Issuer plus the Cognito username used for the fresh role-group check. */
-interface ResolvedCaller {
-  identity: UserIdentity;
-  cognitoUsername?: string;
-}
 
 async function resolveBearerToken(token: string): Promise<ResolvedCaller | null> {
   const hash = createHash("sha256").update(token).digest("hex");
@@ -84,85 +61,16 @@ async function resolveBearerToken(token: string): Promise<ResolvedCaller | null>
   }
 }
 
-// Decode (NOT verify) a Cognito JWT payload. Signature verification is delegated
-// to cognito-idp:GetUser downstream — it rejects tokens that aren't signed by
-// the user pool's keys. We pre-validate `client_id` and `token_use` so that
-// access tokens from *other* clients in the same user pool don't pass through
-// (GetUser would otherwise accept any valid pool token).
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  try {
-    const payload = Buffer.from(parts[1], "base64url").toString("utf8");
-    const parsed = JSON.parse(payload);
-    return typeof parsed === "object" && parsed !== null ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-async function resolveCognitoAccessToken(token: string): Promise<ResolvedCaller | null> {
-  // H2 fix: pre-validate JWT claims before paying for a Cognito API call.
-  // Access tokens carry `client_id` (not `aud`, which lives on ID tokens).
-  const claims = decodeJwtPayload(token);
-  if (!claims) {
-    console.warn("[cognito-token] rejected: token is not a decodable JWT");
-    return null;
-  }
-  if (claims.token_use !== "access") {
-    console.warn(`[cognito-token] rejected: token_use=${String(claims.token_use)} (expected "access")`);
-    return null;
-  }
-  if (!COGNITO_CLI_CLIENT_ID) {
-    // Misconfiguration: refuse to fall back to "any client" semantics. Failing
-    // closed here surfaces the missing env var instead of silently accepting
-    // tokens from the dashboard app client (which uses NextAuth, not Bearer).
-    console.error("[cognito-token] rejected: COGNITO_CLI_CLIENT_ID env var is empty");
-    return null;
-  }
-  if (claims.client_id !== COGNITO_CLI_CLIENT_ID) {
-    console.warn(`[cognito-token] rejected: client_id=${String(claims.client_id)} (expected CLI public client)`);
-    return null;
-  }
-
-  try {
-    const r = await cognito.send(new GetUserCommand({ AccessToken: token }));
-    const attrs = Object.fromEntries(
-      (r.UserAttributes ?? []).map((a) => [a.Name ?? "", a.Value ?? ""]),
-    );
-    const sub = attrs["sub"] || r.Username || "";
-    if (!sub) return null;
-    return {
-      identity: {
-        sub,
-        username: attrs["custom:subdomain"] || attrs["email"] || r.Username || sub,
-        email: attrs["email"] || undefined,
-        department: attrs["custom:department"] || "default",
-        project: "default",
-      },
-      // The token is verified by GetUser; groups are read fresh, never from its claims.
-      cognitoUsername: r.Username || attrs["email"] || undefined,
-    };
-  } catch (e) {
-    console.error("[cognito-token] GetUser failed:", e instanceof Error ? e.message : e);
-    return null;
-  }
-}
-
 async function resolveIdentity(req: NextRequest): Promise<ResolvedCaller | null> {
-  const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
-  if (authHeader?.toLowerCase().startsWith("bearer ")) {
-    const token = authHeader.slice(7).trim();
-    if (token) {
-      // Two Bearer flavors:
-      //   1. ccb_<...>   — long-lived CLI token persisted in cc-on-bedrock-cli-tokens
-      //   2. JWT (Cognito access token from CLI USER_PASSWORD_AUTH login)
-      // Cognito JWTs always start with "eyJ" (base64 of `{"a` JSON header).
-      if (token.startsWith("eyJ")) {
-        return resolveCognitoAccessToken(token);
-      }
-      return resolveBearerToken(token);
+  const token = bearerToken(req);
+  if (token) {
+    // Two Bearer flavors:
+    //   1. ccb_<...>   — long-lived CLI token persisted in cc-on-bedrock-cli-tokens
+    //   2. JWT (Cognito access token from CLI USER_PASSWORD_AUTH login)
+    if (isCognitoJwt(token)) {
+      return resolveCognitoAccessToken(token);
     }
+    return resolveBearerToken(token);
   }
   const session = await getServerSession(authOptions);
   if (!session?.user) return null;
@@ -184,30 +92,10 @@ export async function POST(req: NextRequest) {
   if (!caller) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
-  const { identity } = caller;
-  // Disabled user, or no cc role group in a shared pool → 403; lookup failure → 503.
-  const access = await requireAnyRoleGroup(caller.cognitoUsername);
-  if (!access.ok) return access.response;
-  // Shared pool (ADR-016): users can change their own email there, and the STS issuer
-  // otherwise derives the role from the email. Pin the role to custom:subdomain so an
-  // email change cannot mint a fresh role and budget identity (ensure_role refuses a
-  // role owned by another email). Fails closed.
-  if (requiresRoleGroup()) {
-    try {
-      const fresh = await pinnedIdentity(caller.cognitoUsername as string);
-      // The session/token copies can be stale (8h JWT, stored CLI token row): the record
-      // looked up must be the caller's own, and ensure_role gets only its fresh values.
-      if (fresh.sub !== identity.sub) {
-        return NextResponse.json({ error: "Identity mismatch" }, { status: 403 });
-      }
-      identity.subdomain = fresh.subdomain;
-      identity.email = fresh.email;
-      identity.pool = userPoolId;
-    } catch (err) {
-      console.error("[local/credentials] subdomain pin failed:", err instanceof Error ? err.message : err);
-      return NextResponse.json({ error: "Identity check unavailable" }, { status: 503 });
-    }
-  }
+  // Fresh enabled / role-group checks and the shared-pool subdomain pin (lib/cli-auth).
+  const checked = await freshCallerChecks(caller);
+  if (!checked.ok) return checked.response;
+  const { identity } = checked;
 
   try {
     const resp = await lambda.send(new InvokeCommand({

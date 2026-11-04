@@ -140,6 +140,45 @@ try {
   $a = Text $AwsConfig
   Check '~/.aws/config credential_process' ($a.Contains("credential_process = $cmd")) $a
 
+  # 4b. Session-report Stop hook (same command form as awsCredentialExport)
+  $stopGroups = @()
+  if ($s.PSObject.Properties['hooks'] -and $s.hooks.PSObject.Properties['Stop']) { $stopGroups = @($s.hooks.Stop) }
+  $hookCmd = ''; $hookTimeout = 0
+  if ($stopGroups.Count -eq 1) { $hookCmd = [string]$stopGroups[0].hooks[0].command; $hookTimeout = [int]$stopGroups[0].hooks[0].timeout }
+  $hookPlain = $hookCmd
+  if ($hookCmd -cmatch '-EncodedCommand (\S+)$') { $hookPlain = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) }
+  Check 'setup installs the Stop hook (session-report --quiet, timeout 30)' ($hookPlain.Contains('session-report --quiet') -and $hookPlain.Contains(($CliCopy -replace '\\', '/')) -and $hookTimeout -eq 30) $hookCmd
+  Check 'Stop hook has no double quotes' (-not $hookCmd.Contains('"')) $hookCmd
+
+  # 4c. session-report dry run over a tiny fixture transcript (no network, no state)
+  $day = [DateTime]::UtcNow.AddDays(-1).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+  $tr = Join-Path $H '.claude\projects\smoke-proj\smoke-sess.jsonl'
+  $u1 = '{"type":"user","sessionId":"smoke-sess","timestamp":"' + $day + 'T10:00:00.000Z","message":{"role":"user","content":"hi"}}'
+  $u2 = '{"type":"user","sessionId":"smoke-sess","timestamp":"' + $day + 'T10:00:01.000Z","isMeta":true,"message":{"role":"user","content":"meta"}}'
+  $a1 = '{"type":"assistant","sessionId":"smoke-sess","timestamp":"' + $day + 'T10:00:02.000Z","message":{"id":"msg_1","model":"claude-test","usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":5,"cache_creation_input_tokens":6}}}'
+  $a2 = '{"type":"assistant","sessionId":"smoke-sess","timestamp":"' + $day + 'T10:00:03.000Z","message":{"id":"msg_1","model":"claude-test","usage":{"input_tokens":3,"output_tokens":9,"cache_read_input_tokens":5,"cache_creation_input_tokens":6}}}'
+  Put $tr (($u1, $u2, $a1, $a2) -join "`n")   # last line incomplete (no newline): not counted yet
+  $r = RunCli @('session-report', '--dry-run', '--sweep')
+  $dr = $null
+  try { $dr = $r.Out | ConvertFrom-Json } catch { }
+  $okA = $false
+  if ($dr -and @($dr.buckets).Count -eq 1) {
+    $bk = @($dr.buckets)[0]; $row = $bk.models.'claude-test'
+    $okA = ($bk.tool -ceq 'claude') -and ($bk.sessionId -ceq 'smoke-sess') -and ($bk.turns -eq 1) -and ($row.requests -eq 1) -and ($row.outputTokens -eq 4) -and ($row.inputTokens -eq 3) -and ($row.cacheReadTokens -eq 5) -and ($row.cacheWriteTokens -eq 6)
+  }
+  Check 'session-report --dry-run parses the fixture transcript' (($r.Code -eq 0) -and $okA) ("exit=$($r.Code) stdout=$($r.Out) stderr=$($r.Err)")
+  Put $tr ((($u1, $u2, $a1, $a2) -join "`n") + "`n")
+  $r = RunCli @('session-report', '--dry-run', '--sweep')
+  $dr = $null
+  try { $dr = $r.Out | ConvertFrom-Json } catch { }
+  $okB = $false
+  if ($dr -and @($dr.buckets).Count -eq 1) { $row = @($dr.buckets)[0].models.'claude-test'; $okB = ($row.requests -eq 1) -and ($row.outputTokens -eq 9) }
+  Check 'session-report dedupes a repeated message id (max usage)' (($r.Code -eq 0) -and $okB) ("stdout=$($r.Out) stderr=$($r.Err)")
+  Check 'session-report --dry-run saves no state' (-not (Test-Path -LiteralPath (Join-Path $CfgDir 'sessions-state.json')))
+  $r = Run 'cmd.exe' @('/d', '/s', '/c', "`"$hookCmd`"")
+  Check 'Stop hook command exits 0 without a Cognito session' ($r.Code -eq 0) ("exit=$($r.Code) stderr=$($r.Err)")
+  Check 'Stop hook command writes nothing to stdout' (-not $r.Out) $r.Out
+
   # 5. idempotent
   $before = (Text $CodexFile) + (Text $SettingsFile) + (Text $AwsConfig)
   $r = RunCli @('setup')
@@ -189,6 +228,7 @@ try {
   Check 'unsetup exits 0' ($r.Code -eq 0) $r.Err
   $s = ((Text $SettingsFile) | ConvertFrom-Json | ConvertTo-Json -Depth 10 -Compress)
   Check 'unsetup restores settings.json' ($s -ceq $OrigSettings) $s
+  Check 'unsetup removes the Stop hook' (-not $s.Contains('session-report')) $s
   $t = Text $CodexFile
   Check 'unsetup removes managed Codex keys' (($t -notmatch 'cc-bedrock') -and ($t -cmatch '(?m)^\[profiles\.work\]')) $t
   Check 'unsetup removes mantle.config.toml' (-not (Test-Path -LiteralPath $MantleFile))

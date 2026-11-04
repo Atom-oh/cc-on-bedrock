@@ -97,3 +97,21 @@ variable "enable_mantle" {
   type        = bool
   default     = false
 }
+
+variable "enable_session_insights" {
+  description = "Session insights: sessions table, tracker cc.session-report writes and the daily Haiku insights Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "session_insights_model_id" {
+  description = "Bedrock model or cross-Region inference profile id for the daily session insights (Converse)"
+  type        = string
+  default     = "global.anthropic.claude-haiku-5-5"
+}
+
+variable "session_insights_language" {
+  description = "Language the session insights are written in (e.g. ko, en)"
+  type        = string
+  default     = "ko"
+}

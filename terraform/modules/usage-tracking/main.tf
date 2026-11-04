@@ -326,6 +326,8 @@ locals {
     ec2_idle_stop = "ec2-idle-stop.py"
     audit_logger  = "audit-logger.py"
     gateway_mgr   = "gateway-manager.py"
+    # session-insights.tf (gated on enable_session_insights; packaging is local-only)
+    session_insights = "session-insights.py"
   }
 }
 
@@ -437,6 +439,8 @@ resource "aws_lambda_function" "tracker" {
       ECS_CLUSTER_NAME     = var.ecs_cluster_name
       COGNITO_USER_POOL_ID = var.user_pool_id
       MANTLE_REGION        = var.enable_mantle ? "us-east-1" : "" # ADR-014 §9 estimate
+      # cc.session-report target; empty = session insights disabled (reports rejected)
+      SESSIONS_TABLE_NAME = var.enable_session_insights ? aws_dynamodb_table.sessions[0].name : ""
     }
   }
 

@@ -18,6 +18,10 @@ Terraform HCL is the canonical IaC for this repository.
   native OTEL code-activity rollup (ADR-009): raw OTLP S3 bucket with `otlp-metrics/`+`otlp-logs/`
   lifecycle + S3 notifications triggering the rollup Lambda (per-user daily KPI → DynamoDB; needs
   `dynamodb:TransactWriteItems` for per-chunk idempotent markers).
+  Session insights (`enable_session_insights`, default true; `session-insights.tf`): sessions table,
+  tracker `cc.session-report` writes, daily Haiku insights Lambda (`session_insights_model_id`,
+  `session_insights_language`). Root passes the table/function names to the dashboard runtime env
+  (`SESSIONS_TABLE`, `SESSION_INSIGHTS_FUNCTION_NAME`, `USAGE_TRACKER_FUNCTION_NAME`; empty when off).
 - `modules/local-governance/` - STS issuer, token-limit enforcer, limit reset.
 - `modules/dashboard/` - Dashboard EC2 ASG, internal ALB behind a CloudFront VPC origin, CloudFront, and Docker runtime.
 - `modules/waf/` - CloudFront-scope WAF.

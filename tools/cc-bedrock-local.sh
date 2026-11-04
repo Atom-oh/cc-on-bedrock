@@ -34,6 +34,12 @@
 #   models        print current model env + suggested ids
 #   run -- <cmd>  generic wrapper: ensure session, exec <cmd> (no claude env)
 #   config        print current config / file paths
+#   session-report [--sweep] [--quiet]
+#                 report per-session turn/token totals of local Claude Code
+#                 transcripts and Codex rollouts to the dashboard (insight only;
+#                 metering stays on Bedrock invocation logs, ADR-005). Run by the
+#                 Claude Code Stop hook that 'setup' installs; SESSION_REPORT=off
+#                 in the config disables it.
 #
 # Config file: ~/.config/cc-bedrock/config (mode 600). Required keys:
 #   DASHBOARD_URL, COGNITO_REGION, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, EMAIL
@@ -49,6 +55,8 @@ AWS_CREDS_FILE="${HOME}/.aws/credentials"
 AWS_CONFIG_FILE="${HOME}/.aws/config"
 CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
 CODEX_CONFIG_FILE="${CODEX_HOME:-${HOME}/.codex}/config.toml"
+SESSIONS_STATE_FILE="${CFG_DIR}/sessions-state.json"
+SESSION_LOG_FILE="${CFG_DIR}/session-report.log"
 
 mkdir -p "${CFG_DIR}" && chmod 700 "${CFG_DIR}" 2>/dev/null || true  # owner-only: refresh token + STS keys
 
@@ -81,6 +89,8 @@ CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claud
 # Codex CLI model (ADR-014) — must be a cross-Region OpenAI profile (global./us.):
 # the bedrock-runtime Responses API rejects foundation-model IDs.
 CODEX_MODEL="${CODEX_MODEL:-global.openai.gpt-6.1-sol}"
+# Session insights (session-report + the Claude Code Stop hook); "off" disables both.
+SESSION_REPORT="${SESSION_REPORT:-on}"
 
 die() { echo "cc-bedrock-local: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -196,12 +206,22 @@ print(json.dumps({
 }
 
 cache_tokens() {  # cache_tokens <access> <refresh>
+  # accessExpiresAt comes from the JWT exp claim (fallback: 1h, Cognito's default);
+  # session-report reuses the access token until < 5 min remain.
   python3 -c "
-import json, sys, time
+import base64, json, sys, time
+now = int(time.time())
+def jwt_exp(tok):
+    try:
+        p = tok.split('.')[1]
+        return int(json.loads(base64.urlsafe_b64decode(p + '=' * (-len(p) % 4)))['exp'])
+    except Exception:
+        return now + 3600
 json.dump({
   'accessToken': sys.argv[1],
+  'accessExpiresAt': jwt_exp(sys.argv[1]),
   'refreshToken': sys.argv[2],
-  'obtainedAt': int(time.time()),
+  'obtainedAt': now,
 }, open(sys.argv[3], 'w'))
 " "$1" "$2" "${TOKEN_CACHE}"
   chmod 600 "${TOKEN_CACHE}"
@@ -305,6 +325,7 @@ do_login() {
   cache_tokens "${access_token}" "${refresh_token}"
   echo "✓ login OK"
   issue_sts "${access_token}"
+  spawn_session_sweep
 }
 
 # ─── refresh (silent) ───────────────────────────────────────
@@ -413,7 +434,10 @@ do_credential_process() {
   fi
   save_state "${sts_resp}"
   sync_codex_mantle >&2
-  emit_credentials_json "${STATE_FILE}"
+  emit_credentials_json "${STATE_FILE}" || return 1
+  # Refresh path only (not a cache hit): report sessions in the background,
+  # detached with all output discarded so stdout stays exactly one JSON line.
+  spawn_session_sweep
 }
 
 # ─── logout (clear cache + state) ───────────────────────────
@@ -611,6 +635,48 @@ configure_claude() {  # configure_claude <credential-export command>
 import json, os, sys
 path, export_cmd, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
 CRED_RULE = "Read(~/.config/cc-bedrock/**)"
+# Session-report Stop hook: ours ends in " session-report --quiet". An empty
+# CC_BEDROCK_SESSION_HOOK removes ours (unsetup, SESSION_REPORT=off); the user's
+# other hooks and groups are never touched.
+def sync_stop_hook(settings, hook_cmd):
+    hooks = settings.get("hooks")
+    if hooks is None and hook_cmd:
+        hooks = settings["hooks"] = {}
+    if not isinstance(hooks, dict):
+        if hooks is not None:
+            sys.stderr.write("cc-bedrock-local: settings.json 'hooks' is not an object; Stop hook left alone\n")
+        return
+    stop = hooks.get("Stop")
+    if stop is None and hook_cmd:
+        stop = hooks["Stop"] = []
+    if not isinstance(stop, list):
+        if stop is not None:
+            sys.stderr.write("cc-bedrock-local: settings.json hooks.Stop is not a list; Stop hook left alone\n")
+        return
+    placed = removed = False
+    for g in list(stop):
+        hs = g.get("hooks") if isinstance(g, dict) else None
+        if not isinstance(hs, list):
+            continue
+        before = len(hs)
+        for h in list(hs):
+            if not (isinstance(h, dict) and str(h.get("command", "")).endswith(" session-report --quiet")):
+                continue
+            if hook_cmd and not placed:
+                h["type"], h["command"], h["timeout"] = "command", hook_cmd, 30
+                placed = True
+            else:
+                hs.remove(h)
+                removed = True
+        if not hs and before:
+            stop.remove(g)
+    if hook_cmd and not placed:
+        stop.append({"hooks": [{"type": "command", "command": hook_cmd, "timeout": 30}]})
+    # Drop only the empty containers our removal left behind.
+    if not stop and removed:
+        hooks.pop("Stop", None)
+        if not hooks:
+            settings.pop("hooks", None)
 try:
     settings = json.load(open(path, encoding="utf-8-sig")) if os.path.exists(path) and os.path.getsize(path) else {}
 except ValueError as e:
@@ -627,6 +693,7 @@ settings["awsCredentialExport"] = export_cmd
 deny = settings.setdefault("permissions", {}).setdefault("deny", [])
 if CRED_RULE not in deny:
     deny.append(CRED_RULE)
+sync_stop_hook(settings, os.environ.get("CC_BEDROCK_SESSION_HOOK", ""))
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(settings, f, indent=2)
@@ -835,16 +902,22 @@ PY
 do_setup() {
   require_config
   setup_aws_profile
-  local self
+  local self hook_cmd=""
   self="$(script_abspath)"
+  session_report_enabled && hook_cmd="$(printf '%q' "${self}") session-report --quiet"
   CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION="${AWS_REGION}" ANTHROPIC_MODEL="${ANTHROPIC_MODEL}" \
     ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL}" \
     ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL}" \
     ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL}" \
     CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL}" \
+    CC_BEDROCK_SESSION_HOOK="${hook_cmd}" \
     configure_claude "$(printf '%q' "${self}") credential-process"
   configure_codex add
-  echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport)"
+  if [[ -n "${hook_cmd}" ]]; then
+    echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport + Stop hook session-report)"
+  else
+    echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport; SESSION_REPORT=off, no Stop hook)"
+  fi
   local applied; applied="$(codex_default)"
   echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: ${applied%% *}, profile=${AWS_PROFILE_NAME}, model=${applied#* })"
   local note; note="$(mantle_note)"
@@ -855,6 +928,7 @@ do_setup() {
     say "AWS_BEARER_TOKEN_BEDROCK is set — claude/codex would use that key instead of your cc-bedrock role; unset it (shell rc too)"
   have claude || say "claude not found — install: npm install -g @anthropic-ai/claude-code"
   have codex  || say "codex not found — install: npm install -g @openai/codex@0.163.0"
+  spawn_session_sweep
 }
 
 do_unsetup() {
@@ -863,6 +937,49 @@ do_unsetup() {
 import json, os, sys
 path, keys = sys.argv[1], sys.argv[2:]
 settings = json.load(open(path, encoding="utf-8-sig"))
+# Session-report Stop hook: ours ends in " session-report --quiet". An empty
+# CC_BEDROCK_SESSION_HOOK removes ours (unsetup, SESSION_REPORT=off); the user's
+# other hooks and groups are never touched.
+def sync_stop_hook(settings, hook_cmd):
+    hooks = settings.get("hooks")
+    if hooks is None and hook_cmd:
+        hooks = settings["hooks"] = {}
+    if not isinstance(hooks, dict):
+        if hooks is not None:
+            sys.stderr.write("cc-bedrock-local: settings.json 'hooks' is not an object; Stop hook left alone\n")
+        return
+    stop = hooks.get("Stop")
+    if stop is None and hook_cmd:
+        stop = hooks["Stop"] = []
+    if not isinstance(stop, list):
+        if stop is not None:
+            sys.stderr.write("cc-bedrock-local: settings.json hooks.Stop is not a list; Stop hook left alone\n")
+        return
+    placed = removed = False
+    for g in list(stop):
+        hs = g.get("hooks") if isinstance(g, dict) else None
+        if not isinstance(hs, list):
+            continue
+        before = len(hs)
+        for h in list(hs):
+            if not (isinstance(h, dict) and str(h.get("command", "")).endswith(" session-report --quiet")):
+                continue
+            if hook_cmd and not placed:
+                h["type"], h["command"], h["timeout"] = "command", hook_cmd, 30
+                placed = True
+            else:
+                hs.remove(h)
+                removed = True
+        if not hs and before:
+            stop.remove(g)
+    if hook_cmd and not placed:
+        stop.append({"hooks": [{"type": "command", "command": hook_cmd, "timeout": 30}]})
+    # Drop only the empty containers our removal left behind.
+    if not stop and removed:
+        hooks.pop("Stop", None)
+        if not hooks:
+            settings.pop("hooks", None)
+sync_stop_hook(settings, "")
 env = settings.get("env", {})
 for k in keys:
     env.pop(k, None)
@@ -886,6 +1003,500 @@ PY
   fi
   configure_codex remove
   echo "✓ removed Bedrock settings from ${CLAUDE_SETTINGS_FILE} and ${CODEX_CONFIG_FILE}"
+}
+
+# ─── session-report (session insights, client side) ─────────
+# Reads local Claude Code transcripts (~/.claude/projects/<proj>/<sessionId>.jsonl
+# + <sessionId>/subagents/*.jsonl) and Codex rollouts (~/.codex/sessions/**/
+# rollout-*.jsonl), sums turns and per-model tokens per (tool, sessionId, UTC
+# date) bucket and POSTs the cumulative buckets that changed to
+# /api/local/sessions. Insight only: budgets and metering stay on Bedrock
+# invocation logs (ADR-005). Incremental: sessions-state.json keeps per-file byte
+# offsets, so a run parses only what was appended since the last one.
+# Never prompts. With --quiet (the Stop hook) it writes nothing to stdout, logs
+# failures to session-report.log and always exits 0.
+session_report_enabled() {
+  case "${SESSION_REPORT}" in off|OFF|Off) return 1 ;; esac
+  return 0
+}
+
+sr_trim_log() {
+  [[ -f "${SESSION_LOG_FILE}" ]] || return 0
+  local n
+  n="$(wc -l < "${SESSION_LOG_FILE}" 2>/dev/null || echo 0)"
+  if (( n > 200 )); then
+    tail -n 200 "${SESSION_LOG_FILE}" > "${SESSION_LOG_FILE}.tmp" 2>/dev/null &&
+      mv -f "${SESSION_LOG_FILE}.tmp" "${SESSION_LOG_FILE}" 2>/dev/null || true
+  fi
+  chmod 600 "${SESSION_LOG_FILE}" 2>/dev/null || true
+}
+
+sr_log() {
+  ( umask 077; printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "${SESSION_LOG_FILE}" ) 2>/dev/null || true
+  sr_trim_log
+}
+
+# Detached background sweep (after setup, login and a credential-process refresh).
+# Skipped when session reporting is off or there is no Cognito session to send with.
+spawn_session_sweep() {
+  session_report_enabled || return 0
+  [[ -f "${TOKEN_CACHE}" ]] || return 0
+  local self
+  self="$(script_abspath 2>/dev/null)" || return 0
+  [[ -x "${self}" ]] || return 0
+  if have setsid; then
+    setsid "${self}" session-report --sweep --quiet </dev/null >/dev/null 2>&1 &
+  else
+    ( "${self}" session-report --sweep --quiet ) </dev/null >/dev/null 2>&1 &
+  fi
+  disown 2>/dev/null || true
+  return 0
+}
+
+# Cached Cognito access token while > 5 min remain, else a silent refresh from the
+# cached refresh token (re-cached). Prints the token; returns 1 when there is none.
+session_access_token() {
+  [[ -f "${TOKEN_CACHE}" ]] || return 1
+  local tok refresh resp
+  tok="$(python3 - "${TOKEN_CACHE}" <<'PY' 2>/dev/null
+import json, sys, time
+t = json.load(open(sys.argv[1]))
+a = t.get("accessToken") or ""
+if a and int(t.get("accessExpiresAt") or 0) - time.time() > 300:
+    print(a)
+PY
+)" || tok=""
+  if [[ -n "${tok}" ]]; then echo "${tok}"; return 0; fi
+  refresh=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("refreshToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
+  [[ -n "${refresh}" && -n "${COGNITO_CLIENT_ID}" ]] || return 1
+  resp="$(cognito_refresh_request "${refresh}" 2>/dev/null)" || return 1
+  tok=$(echo "${resp}" | parse_cognito_token "AccessToken" 2>/dev/null || echo "")
+  [[ -n "${tok}" ]] || return 1
+  cache_tokens "${tok}" "${refresh}"
+  echo "${tok}"
+}
+
+session_report_main() {  # uses sr_sweep sr_quiet sr_dry sr_hook_input from do_session_report
+  have python3 || die "python3 is required"
+  local token="" endpoint="" rc=0
+  if (( ! sr_dry )); then
+    require_config
+    token="$(session_access_token)" || token=""
+    if [[ -z "${token}" ]]; then
+      sr_log "no Cognito session - nothing sent (run 'cc-bedrock-local login')"
+      (( sr_quiet )) || say "no Cognito session - run 'cc-bedrock-local login'"
+      return 0
+    fi
+    endpoint="${CC_BEDROCK_SESSION_ENDPOINT:-${DASHBOARD_URL%/}/api/local/sessions}"
+  fi
+  CC_SR_TOKEN="${token}" CC_SR_HOOK_INPUT="${sr_hook_input}" python3 - \
+    "$( (( sr_sweep )) && echo sweep || echo hook)" "${sr_dry}" "${sr_quiet}" \
+    "${SESSIONS_STATE_FILE}" "${SESSION_LOG_FILE}" \
+    "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}" "${CODEX_HOME:-${HOME}/.codex}" "${endpoint}" <<'PY' || rc=$?
+import datetime as dt, fcntl, hashlib, json, os, re, subprocess, sys, tempfile, time
+
+mode, dry, quiet, state_path, log_path, claude_dir, codex_dir, endpoint = sys.argv[1:9]
+dry, quiet = dry == "1", quiet == "1"
+NOW = time.time()
+TODAY = dt.datetime.fromtimestamp(NOW, dt.timezone.utc).date()
+SWEEP_WINDOW, SWEEP_EVERY, PRUNE_AFTER = 3 * 86400, 600, 45 * 86400
+MAX_IDS, CHUNK, MAX_MODELS = 64, 100, 20
+MIN_DATE = (TODAY - dt.timedelta(days=34)).isoformat()   # server accepts the last 35 days
+MAX_DATE = (TODAY + dt.timedelta(days=1)).isoformat()
+SID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+SKIP_TEXT = re.compile(r"^<(local-command-|command-(stdout|caveat))")
+TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d)(?:\.(\d+))?Z$")
+FIELDS = ("inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens")
+os.umask(0o077)
+
+def log(msg):
+    try:
+        lines = open(log_path).read().splitlines()[-199:] if os.path.exists(log_path) else []
+        lines.append(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + msg)
+        with open(log_path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        os.chmod(log_path, 0o600)
+    except OSError:
+        pass
+    if not quiet:
+        sys.stderr.write("cc-bedrock-local: " + msg + "\n")
+
+def n(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+
+def stamp(ts):  # -> (ISO-8601 UTC with ms, YYYY-MM-DD) or None
+    if not isinstance(ts, str):
+        return None
+    m = TS_RE.match(ts)
+    if m:
+        return "%sT%s.%sZ" % (m.group(1), m.group(2), ((m.group(3) or "") + "000")[:3]), m.group(1)
+    try:
+        d = dt.datetime.fromisoformat(re.sub(r"(\.\d{6})\d+", r"\1", ts))
+    except ValueError:
+        return None
+    d = (d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)).astimezone(dt.timezone.utc)
+    return d.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (d.microsecond // 1000), d.strftime("%Y-%m-%d")
+
+def new_bucket():
+    return {"firstAt": None, "lastAt": None, "turns": 0, "models": {}}
+
+def touch(b, iso):
+    if not b["firstAt"] or iso < b["firstAt"]:
+        b["firstAt"] = iso
+    if not b["lastAt"] or iso > b["lastAt"]:
+        b["lastAt"] = iso
+
+def model_row(b, model):
+    return b["models"].setdefault(model, dict({"requests": 0}, **{f: 0 for f in FIELDS}))
+
+def bucket(fs, key):
+    return fs["buckets"].setdefault(key, new_bucket())
+
+# --- Claude Code transcript line -------------------------------------------
+def claude_line(fs, d, is_sub):
+    t = d.get("type")
+    sid = d.get("sessionId")
+    if t not in ("user", "assistant") or not isinstance(sid, str) or not SID_RE.match(sid):
+        return
+    st = stamp(d.get("timestamp"))
+    if not st:
+        return
+    iso, date = st
+    key = "claude|%s|%s" % (sid, date)
+    msg = d.get("message") if isinstance(d.get("message"), dict) else {}
+    if t == "user":
+        if is_sub or d.get("isMeta") or d.get("isCompactSummary") or d.get("isSidechain"):
+            return
+        c = msg.get("content")
+        if isinstance(c, str):
+            text = c
+        elif isinstance(c, list):
+            blocks = [x for x in c if isinstance(x, dict)]
+            types = [x.get("type") for x in blocks]
+            if "tool_result" in types or "text" not in types:
+                return
+            text = next(x.get("text") for x in blocks if x.get("type") == "text")
+            text = text if isinstance(text, str) else ""
+        else:
+            return
+        if SKIP_TEXT.match(text.lstrip()):
+            return
+        b = bucket(fs, key)
+        b["turns"] += 1
+        touch(b, iso)
+        return
+    model = msg.get("model")
+    if not isinstance(model, str) or not model or model == "<synthetic>" or len(model) > 128:
+        return
+    u = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+    vals = [n(u.get(k)) for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
+    mid = msg.get("id") if isinstance(msg.get("id"), str) else ""
+    if mid:
+        # One API response is written as several lines with the same message.id:
+        # count it once, keeping the max of each usage field.
+        for e in fs["recentIds"]:
+            if e["id"] == mid:
+                b = fs["buckets"].get(e["k"])
+                if b is not None:
+                    row = model_row(b, e["m"])
+                    for i, f in enumerate(FIELDS):
+                        if vals[i] > e["u"][i]:
+                            row[f] += vals[i] - e["u"][i]
+                            e["u"][i] = vals[i]
+                return
+    b = bucket(fs, key)
+    row = model_row(b, model)
+    row["requests"] += 1
+    for i, f in enumerate(FIELDS):
+        row[f] += vals[i]
+    touch(b, iso)
+    if mid:
+        fs["recentIds"].append({"id": mid, "k": key, "m": model, "u": vals})
+        del fs["recentIds"][:-MAX_IDS]
+
+# --- Codex rollout line ----------------------------------------------------
+def codex_line(fs, d):
+    t = d.get("type")
+    p = d.get("payload") if isinstance(d.get("payload"), dict) else {}
+    ctx = fs["ctx"]
+    if t == "session_meta":
+        sid = p.get("id")
+        if isinstance(sid, str) and SID_RE.match(sid):
+            ctx["sid"] = sid
+        return
+    if t == "turn_context":
+        m = p.get("model")
+        if isinstance(m, str) and 0 < len(m) <= 128:
+            ctx["model"] = m
+        return
+    if t != "event_msg" or not ctx.get("sid"):
+        return
+    pt = p.get("type")
+    if pt not in ("task_started", "token_count"):
+        return
+    st = stamp(d.get("timestamp"))
+    if not st:
+        return
+    iso, date = st
+    key = "codex|%s|%s" % (ctx["sid"], date)
+    if pt == "task_started":
+        ta = p.get("turn_attribution")
+        trig = ta.get("turn_trigger") if isinstance(ta, dict) else None
+        if trig not in (None, "user"):
+            return
+        b = bucket(fs, key)
+        b["turns"] += 1
+        touch(b, iso)
+        return
+    info = p.get("info")
+    last = info.get("last_token_usage") if isinstance(info, dict) else None
+    if not isinstance(last, dict):
+        return
+    inp, cr, cw = n(last.get("input_tokens")), n(last.get("cached_input_tokens")), n(last.get("cache_write_input_tokens"))
+    b = bucket(fs, key)
+    row = model_row(b, ctx.get("model") or "unknown")
+    row["requests"] += 1
+    row["inputTokens"] += max(0, inp - cr - cw)
+    row["outputTokens"] += n(last.get("output_tokens"))
+    row["cacheReadTokens"] += cr
+    row["cacheWriteTokens"] += cw
+    touch(b, iso)
+
+CLAUDE_HINTS = (b'"type":"user"', b'"type":"assistant"', b'"type": "user"', b'"type": "assistant"')
+CODEX_HINTS = (b"session_meta", b"turn_context", b"task_started", b"token_count")
+
+def process(state, path, tool, is_sub=False):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return 0
+    fs = state["files"].get(path)
+    if not isinstance(fs, dict) or st.st_size < fs.get("offset", 0):
+        fs = {"offset": 0, "recentIds": [], "buckets": {}, "ctx": {}}   # new, truncated or rotated
+        state["files"][path] = fs
+    fs["mtime"], fs["size"] = int(st.st_mtime), st.st_size
+    if st.st_size == fs["offset"]:
+        return 0
+    hints = CLAUDE_HINTS if tool == "claude" else CODEX_HINTS
+    with open(path, "rb") as f:
+        f.seek(fs["offset"])
+        for line in f:
+            if not line.endswith(b"\n"):
+                break   # incomplete last line: picked up next time
+            fs["offset"] += len(line)
+            if not any(h in line for h in hints):
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(d, dict):
+                claude_line(fs, d, is_sub) if tool == "claude" else codex_line(fs, d)
+    return 1
+
+def claude_files(since):
+    for dp, _, fns in os.walk(os.path.join(claude_dir, "projects")):
+        for fn in fns:
+            p = os.path.join(dp, fn)
+            if fn.endswith(".jsonl") and mtime(p) >= since:
+                yield p, os.path.basename(dp) == "subagents"
+
+def codex_files(since):
+    for dp, _, fns in os.walk(os.path.join(codex_dir, "sessions")):
+        for fn in fns:
+            p = os.path.join(dp, fn)
+            if fn.startswith("rollout-") and fn.endswith(".jsonl") and mtime(p) >= since:
+                yield p
+
+def mtime(p):
+    try:
+        return os.stat(p).st_mtime
+    except OSError:
+        return -1
+
+def load_state():
+    try:
+        s = json.load(open(state_path))
+        if isinstance(s, dict) and isinstance(s.get("files"), dict) and isinstance(s.get("sent"), dict):
+            return s
+        log("sessions-state.json has an unknown shape - starting over")
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as e:
+        log("sessions-state.json unreadable (%s) - starting over" % e)
+    return {"version": 1, "files": {}, "sent": {}, "lastSweepAt": 0}
+
+def save_state(s):
+    for p in list(s["files"]):
+        if mtime(p) < NOW - PRUNE_AFTER:
+            del s["files"][p]
+    cutoff = (TODAY - dt.timedelta(days=45)).isoformat()
+    s["sent"] = {k: v for k, v in s["sent"].items() if k.rsplit("|", 1)[-1] >= cutoff}
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(state_path), prefix=".sessions-state.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(s, f, separators=(",", ":"))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, state_path)
+
+def aggregate(s):  # main + subagent files of one session add up to one bucket
+    agg = {}
+    for fs in s["files"].values():
+        for key, b in fs.get("buckets", {}).items():
+            a = agg.setdefault(key, new_bucket())
+            a["turns"] += b["turns"]
+            for iso in (b["firstAt"], b["lastAt"]):
+                if iso:
+                    touch(a, iso)
+            for m, r in b["models"].items():
+                row = model_row(a, m)
+                for f in ("requests",) + FIELDS:
+                    row[f] += r.get(f, 0)
+    out = {}
+    for key, a in agg.items():
+        tool, sid, date = key.split("|")
+        if not a["models"] or not (MIN_DATE <= date <= MAX_DATE):
+            continue   # the API needs >= 1 model; older buckets are rejected anyway
+        top = sorted(a["models"].items(), key=lambda kv: (-kv[1]["requests"], kv[0]))[:MAX_MODELS]
+        out[key] = {"tool": tool, "sessionId": sid, "date": date, "firstAt": a["firstAt"],
+                    "lastAt": a["lastAt"], "turns": a["turns"], "models": dict(sorted(top))}
+    return out
+
+def digest(b):
+    return hashlib.sha1(json.dumps(b, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:20]
+
+def post(chunk, token):
+    fd, body = tempfile.mkstemp(dir=os.path.dirname(state_path), prefix=".sessions-post.")
+    resp = body + ".resp"
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"buckets": chunk}, f, separators=(",", ":"))
+        # Token via curl config on stdin, not argv (process list).
+        r = subprocess.run(["curl", "-sS", "--max-time", "10", "-o", resp, "-w", "%{http_code}",
+                            "-X", "POST", "-H", "Content-Type: application/json",
+                            "--data-binary", "@" + body, "-K", "-", endpoint],
+                           input=('header = "Authorization: Bearer %s"\n' % token).encode(),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        code = r.stdout.decode(errors="replace").strip()
+        if r.returncode == 0 and code.startswith("2"):
+            return "ok"
+        detail = ""
+        try:
+            detail = open(resp, errors="replace").read(200)
+        except OSError:
+            pass
+        log("POST %s failed (curl exit %d, HTTP %s) %s %s" % (endpoint, r.returncode, code or "-",
+            r.stderr.decode(errors="replace").strip()[:200], detail.strip()))
+        # A validation rejection would repeat forever and block every state save:
+        # record those buckets as handled (re-sent once they change). Anything else
+        # (network, auth, 5xx) keeps the state unsaved so the same buckets go again.
+        return "rejected" if r.returncode == 0 and code in ("400", "413", "422") else "fail"
+    finally:
+        for p in (body, resp):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+lock = None
+if not dry:
+    lock = open(state_path + ".lock", "a")
+    deadline = NOW + (25 if mode == "hook" else 300)
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.time() > deadline:
+                log("another session-report is running - skipped")
+                sys.exit(2)
+            time.sleep(0.2)
+
+state = load_state()
+hook = {}
+if mode == "hook":
+    try:
+        hook = json.loads(os.environ.get("CC_SR_HOOK_INPUT") or "{}")
+    except ValueError:
+        hook = {}
+    if not isinstance(hook, dict) or not isinstance(hook.get("transcript_path"), str):
+        mode = "sweep"   # run by hand (no hook payload)
+parsed = 0
+sweep_due = False
+if mode == "hook":
+    tp = hook["transcript_path"]
+    if tp.endswith(".jsonl") and os.path.isfile(tp):
+        parsed += process(state, tp, "claude")
+        sub = os.path.join(tp[:-len(".jsonl")], "subagents")
+        if os.path.isdir(sub):
+            for fn in sorted(os.listdir(sub)):
+                if fn.endswith(".jsonl"):
+                    parsed += process(state, os.path.join(sub, fn), "claude", True)
+    if NOW - (state.get("lastSweepAt") or 0) >= SWEEP_EVERY:
+        sweep_due = True
+        state["lastSweepAt"] = NOW
+else:
+    since = NOW - SWEEP_WINDOW
+    for p, is_sub in claude_files(since):
+        parsed += process(state, p, "claude", is_sub)
+    for p in codex_files(since):
+        parsed += process(state, p, "codex")
+    state["lastSweepAt"] = NOW
+
+buckets = aggregate(state)
+dirty = [buckets[k] for k in sorted(buckets) if state["sent"].get(k) != digest(buckets[k])]
+if dry:
+    print(json.dumps({"buckets": dirty}, separators=(",", ":")))
+    sys.exit(0)
+token = os.environ.get("CC_SR_TOKEN", "")
+if dirty and not re.match(r"^[A-Za-z0-9._~+/=-]+$", token):
+    log("access token has unexpected characters - nothing sent")
+    sys.exit(2)
+rejected = 0
+for i in range(0, len(dirty), CHUNK):
+    res = post(dirty[i:i + CHUNK], token)
+    if res == "fail":
+        sys.exit(2)   # state not saved: the same buckets are sent next time
+    if res == "rejected":
+        rejected += len(dirty[i:i + CHUNK])
+for b in dirty:
+    state["sent"]["%s|%s|%s" % (b["tool"], b["sessionId"], b["date"])] = digest(b)
+save_state(state)
+if not quiet:
+    print("session-report: %d file(s) parsed, %d session bucket(s) sent" % (parsed, len(dirty) - rejected)
+          + (", %d rejected (see %s)" % (rejected, log_path) if rejected else ""))
+sys.exit(10 if sweep_due else 0)
+PY
+  case "${rc}" in
+    0) return 0 ;;
+    10) spawn_session_sweep; return 0 ;;   # hook mode: full sweep due (at most every 10 min)
+    2) (( sr_quiet )) && return 0; return 1 ;;   # already logged
+    *) return 1 ;;
+  esac
+}
+
+do_session_report() {
+  local sr_sweep=0 sr_quiet=0 sr_dry=0 sr_hook_input="" a
+  for a in "$@"; do
+    case "${a}" in
+      --sweep) sr_sweep=1 ;;
+      --quiet) sr_quiet=1 ;;
+      --dry-run) sr_dry=1 ;;   # hidden (tests): print the buckets it would send; no POST, no state save
+      *) (( sr_quiet )) && return 0; die "usage: cc-bedrock-local session-report [--sweep] [--quiet]" ;;
+    esac
+  done
+  session_report_enabled || return 0
+  umask 077
+  # Stop hook payload ({"session_id","transcript_path",...}) on stdin.
+  if (( ! sr_sweep )) && [[ ! -t 0 ]]; then
+    sr_hook_input="$(cat 2>/dev/null || true)"
+  fi
+  if (( sr_quiet )); then
+    # Hook / background mode: never fail Claude Code, never write stdout.
+    ( session_report_main ) >/dev/null 2>>"${SESSION_LOG_FILE}" || sr_log "session-report failed"
+    sr_trim_log
+    return 0
+  fi
+  session_report_main
 }
 
 # ─── set-model (update config) ──────────────────────────────
@@ -999,6 +1610,7 @@ EMAIL              : ${EMAIL:-(unset)}
 AWS_PROFILE        : ${AWS_PROFILE_NAME}
 AWS_REGION         : ${AWS_REGION}
 OTEL endpoint      : ${OTEL_EXPORTER_OTLP_ENDPOINT:-(unset)}
+SESSION_REPORT     : ${SESSION_REPORT} (state ${SESSIONS_STATE_FILE}, log ${SESSION_LOG_FILE})
 EOF
 }
 
@@ -1027,6 +1639,11 @@ Subcommands:
   models                      show current model env + valid keys
   run -- <cmd> [args]         generic: ensure session, exec <cmd> (no claude env)
   config                      print config / file paths
+  session-report [--sweep] [--quiet]
+                              report session turns/tokens from local Claude Code
+                              transcripts + Codex rollouts (insight only; run by
+                              the Stop hook 'setup' installs; SESSION_REPORT=off
+                              in the config disables it)
 
 Config file: ${CFG_FILE}
 EOF
@@ -1046,6 +1663,7 @@ case "${sub}" in
   setup)        do_setup ;;
   unsetup)      do_unsetup ;;
   set-model|set_model) do_set_model "$@" ;;
+  session-report|session_report) do_session_report "$@" ;;
   models)       do_models ;;
   config)       do_config ;;
   ""|-h|--help|help) do_usage ;;

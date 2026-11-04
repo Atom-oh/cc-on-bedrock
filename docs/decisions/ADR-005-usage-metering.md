@@ -10,7 +10,7 @@ consolidates: [ADR-011, ADR-019, ADR-031, ADR-025]
 > 통합 ADR. 흡수: ADR-011(IAM cost allocation) · ADR-019(model-ID normalization) · ADR-031(email canonical key) · ~~ADR-025~~(superseded). 옛 본문 → git tag `adr-legacy-2026-06-23`, 매핑 `../history/ADR-MAPPING.md`.
 
 ## Status / 상태
-Accepted (2026-06-23). Supersedes archived ADR-025 (Cognito-sub canonical key).
+Accepted (2026-06-23). Supersedes archived ADR-025 (Cognito-sub canonical key). Amended 2026-11-04 (client-reported session insight, not metering).
 
 ## Context / 배경
 
@@ -58,6 +58,40 @@ EN — Per-user Bedrock usage must be metered near-real-time as the single input
 - 이메일 변경 시 재분할(조직상 재직 중 불변 전제; 변경 시 수동 reconcile).
 - 정규화는 silent·lossy — 새 family(`claude-opus-5`)나 vendor prefix 출시 시 rule 수동 갱신.
 - CUR 2.0 보조 채널 ~24h 지연 — 실시간 대시보드 부적합(커스텀 시스템이 그 역할).
+
+## Amendment 2026-11-04: client-reported session insight (not metering)
+
+**Context.** Admins want per-session cost, turn count and cost per turn, plus a daily
+analysis of the top users. Invocation logs cannot provide these. The tracker aggregates
+them per user, day and model. Request bodies are not delivered
+(`text_data_delivery_enabled = false`), so the logs carry no session or prompt boundary.
+
+**Decision (owner, 2026-11-04).**
+- The Local CLIs (`cc-bedrock-local session-report`) read the local Claude Code
+  transcripts and Codex rollout files incrementally. Claude Code calls it from a `Stop`
+  hook installed by `setup`. A background sweep after credential renewal, `setup` and
+  `login` catches Codex sessions and any missed hooks. The CLI reports per
+  (tool, session, UTC date) bucket only the turn count, request count and token counts per
+  model, never prompt or response text. It posts them to `POST /api/local/sessions` with
+  the CLI's Cognito access token.
+- The usage tracker prices each bucket with the same `PRICING` table used for metering and
+  writes rows to `cc-on-bedrock-sessions`. Usage rows are never touched.
+- A daily Lambda (`session-insights`, 09:00 KST) aggregates the previous UTC day and its
+  7-day baseline per user, compares them with the metered cost, and asks Claude Haiku 5.5
+  (`session_insights_model_id`) for findings. Haiku receives only aggregate numbers, with
+  users pseudonymized as `U1..U10`. The result is shown on the admin Overview page, and an
+  admin can regenerate it on demand.
+- **Insight only.** Session numbers are client-reported and estimated. Budgets, token limits
+  and the usage dashboards keep using invocation logs (this ADR's decision), and nothing in
+  ADR-008 reads the sessions table. The Overview shows the share of metered cost that the
+  reported sessions cover.
+
+**Consequences.**
+- Coverage depends on users running an updated CLI. EC2 DevEnv sessions are not reported
+  yet (follow-up). A user can omit or alter reports, which affects only their insight rows.
+- The insights Lambda's Haiku calls run on its own role and are not in the per-user usage
+  pipeline. They are a small platform cost.
+- `SESSION_REPORT=off` in the CLI config turns reporting off on a PC.
 
 ## Consolidates / 통합 출처
 

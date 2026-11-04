@@ -20,22 +20,25 @@ locals {
     CODEX_MODEL_ID        = var.codex_model_id
     # DevEnv edge auth reads the dashboard session cookie, then strips NextAuth
     # cookies before forwarding to user-controlled origins.
-    COOKIE_DOMAIN               = ".${var.domain_name}"
-    DASHBOARD_URL               = "https://${local.dashboard_domain}"
-    DEPLOYMENT_MODE             = var.deployment_mode
-    DEV_SUBDOMAIN               = var.dev_subdomain
-    DNS_FIREWALL_RULE_GROUP_ID  = var.dns_firewall_rule_group_id
-    DOMAIN_NAME                 = var.domain_name
-    INSTANCE_TABLE              = var.instance_table_name
-    LAUNCH_TEMPLATE             = var.devenv_launch_template_name
-    NEXTAUTH_URL                = "https://${local.dashboard_domain}"
-    OTEL_EXPORTER_OTLP_ENDPOINT = var.otel_collector_endpoint
-    PRIVATE_SUBNET_IDS          = join(",", var.private_subnet_ids)
-    ROUTING_TABLE               = var.routing_table_name
-    SG_DEVENV_LOCKED            = var.devenv_sg_locked_id
-    SG_DEVENV_OPEN              = var.devenv_sg_open_id
-    SG_DEVENV_RESTRICTED        = var.devenv_sg_restricted_id
-    VPC_ID                      = var.vpc_id
+    COOKIE_DOMAIN                  = ".${var.domain_name}"
+    DASHBOARD_URL                  = "https://${local.dashboard_domain}"
+    DEPLOYMENT_MODE                = var.deployment_mode
+    DEV_SUBDOMAIN                  = var.dev_subdomain
+    DNS_FIREWALL_RULE_GROUP_ID     = var.dns_firewall_rule_group_id
+    DOMAIN_NAME                    = var.domain_name
+    INSTANCE_TABLE                 = var.instance_table_name
+    LAUNCH_TEMPLATE                = var.devenv_launch_template_name
+    NEXTAUTH_URL                   = "https://${local.dashboard_domain}"
+    OTEL_EXPORTER_OTLP_ENDPOINT    = var.otel_collector_endpoint
+    PRIVATE_SUBNET_IDS             = join(",", var.private_subnet_ids)
+    ROUTING_TABLE                  = var.routing_table_name
+    SESSIONS_TABLE                 = var.sessions_table_name
+    SESSION_INSIGHTS_FUNCTION_NAME = var.session_insights_function_name
+    SG_DEVENV_LOCKED               = var.devenv_sg_locked_id
+    SG_DEVENV_OPEN                 = var.devenv_sg_open_id
+    SG_DEVENV_RESTRICTED           = var.devenv_sg_restricted_id
+    USAGE_TRACKER_FUNCTION_NAME    = var.usage_tracker_function_name
+    VPC_ID                         = var.vpc_id
   }
   runtime_env_file = join("\n", [for key, value in local.runtime_env : "${key}=${value}"])
 }

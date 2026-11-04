@@ -18,6 +18,7 @@ fi
 echo "== Local CLI (cc-bedrock-local): syntax check =="
 bash -n tools/cc-bedrock-local.sh
 bash tests/unit/test-cc-bedrock-local-setup.sh
+bash tests/unit/test-cc-bedrock-local-session-report.sh
 bash tests/unit/test-cc-bedrock-local-ps1.sh   # Windows CLI parity; skips without pwsh
 
 if [ -f tests/unit/test-build-ami-datavol.sh ]; then

@@ -69,6 +69,12 @@ import json, sys
 b, p = (json.load(open(f)) for f in sys.argv[1:3])
 assert p["awsCredentialExport"].endswith(" credential-process"), p["awsCredentialExport"]
 b.pop("awsCredentialExport"); p.pop("awsCredentialExport")
+# The session-report Stop hook embeds the same per-CLI command prefix.
+for d in (b, p):
+    for g in d.get("hooks", {}).get("Stop", []):
+        for h in g.get("hooks", []):
+            if h.get("command", "").endswith(" session-report --quiet"):
+                h["command"] = "<cli> session-report --quiet"
 assert b == p, (b, p)
 PY
 
