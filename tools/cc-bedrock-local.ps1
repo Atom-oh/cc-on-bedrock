@@ -14,6 +14,8 @@
 # Subcommands:
 #   login | refresh | credential-process | logout | change-email | status
 #   setup | unsetup | setup-desktop | unsetup-desktop | set-model K=V | models | config | help
+#   session-report [--sweep] [--quiet]  per-session turn/token totals of local Claude Code
+#                transcripts + Codex rollouts -> dashboard (insight only; Stop hook)
 #
 # Requires Windows PowerShell 5.1 or PowerShell 7. Nothing else.
 
@@ -41,6 +43,8 @@ $CodexDir = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HomeDir '
 $CodexConfigFile = Join-Path $CodexDir 'config.toml'
 $DesktopPolicyKey = 'HKCU:\SOFTWARE\Policies\Claude'
 $DesktopRegFile = Join-Path $CfgDir 'claude-desktop-bedrock.reg'
+$SessionsStateFile = Join-Path $CfgDir 'sessions-state.json'
+$SessionLogFile = Join-Path $CfgDir 'session-report.log'
 
 # --- output (stdout is reserved for credential-process JSON) -
 function Say([string]$msg) { [Console]::Error.WriteLine("cc-bedrock-local: $msg") }
@@ -77,7 +81,8 @@ function Read-TextFile([string]$path) {
 }
 
 # Owner-only access: Windows ACL (inheritable on the directory) or chmod elsewhere.
-function Protect-Path([string]$path) {
+# $soft: throw instead of Die (session-report must never exit non-zero from a hook).
+function Protect-Path([string]$path, [bool]$soft = $false) {
   if (-not (Test-Path -LiteralPath $path)) { return }
   if ($OnWindows) {
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -89,7 +94,11 @@ function Protect-Path([string]$path) {
     $o = & icacls.exe $path @reset 2>&1
     if ($LASTEXITCODE -eq 0) { $o = & icacls.exe $path /inheritance:r /grant:r $grant 2>&1 }
     # Fail closed: the directory holds the refresh token and STS keys.
-    if ($LASTEXITCODE -ne 0) { Die "could not restrict access to $path (icacls: $(($o | Out-String).Trim()))" }
+    if ($LASTEXITCODE -ne 0) {
+      $msg = "could not restrict access to $path (icacls: $(($o | Out-String).Trim()))"
+      if ($soft) { throw $msg }
+      Die $msg
+    }
   } else {
     $mode = if ((Get-Item -LiteralPath $path) -is [IO.DirectoryInfo]) { '700' } else { '600' }
     & chmod $mode $path 2>&1 | Out-Null
@@ -185,6 +194,9 @@ $Models = [ordered]@{
   CLAUDE_CODE_SUBAGENT_MODEL     = Cfg 'CLAUDE_CODE_SUBAGENT_MODEL' 'global.anthropic.claude-sonnet-5-5'
   CODEX_MODEL                    = Cfg 'CODEX_MODEL' 'global.openai.gpt-6.1-sol'
 }
+# Session insights (session-report + the Claude Code Stop hook); 'off' disables both.
+$SessionReport = Cfg 'SESSION_REPORT' 'on'
+function Test-SessionReportEnabled { return -not (@('off', 'OFF', 'Off') -ccontains $SessionReport) }
 
 function Require-Config {
   if (-not $DashboardUrl) { Die "DASHBOARD_URL not set (edit $CfgFile)" }
@@ -204,10 +216,10 @@ function Set-ConfigValue([string]$key, [string]$val) {
 }
 
 # --- HTTP (HttpClient: exact Content-Type, error bodies kept) -
-function Invoke-Post([string]$uri, [string]$body, [string]$contentType, [hashtable]$headers = @{}) {
+function Invoke-Post([string]$uri, [string]$body, [string]$contentType, [hashtable]$headers = @{}, [int]$timeoutSec = 30) {
   if ($PSVersionTable.PSVersion.Major -lt 6) { Add-Type -AssemblyName System.Net.Http }
   $client = New-Object System.Net.Http.HttpClient
-  $client.Timeout = [TimeSpan]::FromSeconds(30)
+  $client.Timeout = [TimeSpan]::FromSeconds($timeoutSec)
   try {
     $req = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Post, $uri)
     foreach ($k in $headers.Keys) { [void]$req.Headers.TryAddWithoutValidation($k, [string]$headers[$k]) }
@@ -231,8 +243,20 @@ function Invoke-Cognito([hashtable]$authParams, [string]$flow) {
   throw "cognito error: $err"
 }
 
+# exp claim of a Cognito JWT (fallback: 1h from now, Cognito's default lifetime).
+function Get-JwtExp([string]$tok) {
+  try {
+    $p = $tok.Split('.')[1].Replace('-', '+').Replace('_', '/')
+    switch ($p.Length % 4) { 2 { $p += '==' } 3 { $p += '=' } }
+    $c = ConvertFrom-JsonText ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)))
+    if ($c -and $c.Contains('exp')) { return [long]$c['exp'] }
+  } catch { }
+  return (Get-EpochNow) + 3600
+}
+
+# accessExpiresAt lets session-report reuse the access token until < 5 min remain.
 function Save-Tokens([string]$access, [string]$refresh) {
-  $json = ConvertTo-JsonText ([ordered]@{ accessToken = $access; refreshToken = $refresh; obtainedAt = (Get-EpochNow) })
+  $json = ConvertTo-JsonText ([ordered]@{ accessToken = $access; accessExpiresAt = (Get-JwtExp $access); refreshToken = $refresh; obtainedAt = (Get-EpochNow) })
   Write-TextFile $TokenCache $json
   Protect-Path $TokenCache
 }
@@ -291,19 +315,31 @@ function Get-SelfPath {
 # ("failed to load AWS credentials"). A path without whitespace needs no quotes; one
 # with whitespace or a cmd metacharacter (& ^ % ( ) !) goes through -EncodedCommand.
 # Claude Code (Node shell) and the AWS CLI accept both forms.
-function Get-CredentialCommand {
+function Get-CliCommand([string]$subArgs) {
   $self = Get-SelfPath
   $ps = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass'
   if ($OnWindows) {
-    if ($self -notmatch '[\s&^%()!"]') { return "$ps -File $self credential-process" }
-    $script = "& '" + $self.Replace("'", "''") + "' credential-process; exit `$LASTEXITCODE"
+    if ($self -notmatch '[\s&^%()!"]') { return "$ps -File $self $subArgs" }
+    $script = "& '" + $self.Replace("'", "''") + "' $subArgs; exit `$LASTEXITCODE"
     return "$ps -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
   }
-  return "pwsh -NoProfile -NonInteractive -File `"$self`" credential-process"
+  return "pwsh -NoProfile -NonInteractive -File `"$self`" $subArgs"
 }
+function Get-CredentialCommand { return Get-CliCommand 'credential-process' }
+# Claude Code Stop hook (session insights); same command forms as above.
+function Get-SessionHookCommand { return Get-CliCommand 'session-report --quiet' }
 # Ours: any -File form (older quoted lines included) or this install's encoded form.
 function Test-OurCredentialCommand([string]$v) {
   return ($v.EndsWith(' credential-process') -or ($v -ceq (Get-CredentialCommand)))
+}
+# Ours: any command ending in ' session-report --quiet', or an -EncodedCommand form
+# (any install path) whose script runs session-report --quiet.
+function Test-OurSessionHook([string]$v) {
+  if ($v.EndsWith(' session-report --quiet', [StringComparison]::Ordinal) -or ($v -ceq (Get-SessionHookCommand))) { return $true }
+  if ($v -cmatch '-EncodedCommand (\S+)$') {
+    try { return [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])).Contains("' session-report --quiet; exit") } catch { }
+  }
+  return $false
 }
 
 # ADR-029: [profile X] gets credential_process (the SDK re-invokes us before
@@ -360,6 +396,7 @@ function Invoke-Login {
   $raw = Request-Sts $auth['AccessToken']
   if (-not $raw) { Die 'dashboard refused STS issue' }
   Complete-Sts $raw
+  Start-SessionSweep
 }
 
 function Invoke-Refresh {
@@ -429,6 +466,8 @@ function Invoke-CredentialProcess {
     Save-State $raw
     Sync-CodexMantle
     Write-CredentialsJson (ConvertFrom-JsonText $raw)
+    # Refresh path only (not a cache hit): detached, hidden, no wait, no stdout.
+    Start-SessionSweep
   } catch {
     Say $_.Exception.Message
     exit 1
@@ -463,7 +502,54 @@ function Set-ClaudeSettings {
   if (-not $s.Contains('permissions') -or $null -eq $s['permissions']) { $s['permissions'] = [ordered]@{} }
   if (-not $s['permissions'].Contains('deny') -or $null -eq $s['permissions']['deny']) { $s['permissions']['deny'] = New-Object Collections.ArrayList }
   if (-not ($s['permissions']['deny'] -contains $ClaudeCredRule)) { [void]$s['permissions']['deny'].Add($ClaudeCredRule) }
+  $hookCmd = ''
+  if (Test-SessionReportEnabled) { $hookCmd = Get-SessionHookCommand }
+  Sync-StopHook $s $hookCmd
   Write-ClaudeSettings $s
+}
+
+# Session-report Stop hook in settings.json (same edit as sync_stop_hook in the bash
+# CLI): ours is updated in place or appended as its own group; an empty $cmd removes
+# ours (unsetup, SESSION_REPORT=off). The user's hooks and groups are never touched,
+# and only containers our removal emptied are dropped.
+function Sync-StopHook($s, [string]$cmd) {
+  if (-not $s.Contains('hooks') -or $null -eq $s['hooks']) {
+    if (-not $cmd) { return }
+    $s['hooks'] = [ordered]@{}
+  }
+  $hooks = $s['hooks']
+  if (-not ($hooks -is [Collections.IDictionary])) { Say "$ClaudeSettingsFile 'hooks' is not an object; Stop hook left alone"; return }
+  if (-not $hooks.Contains('Stop') -or $null -eq $hooks['Stop']) {
+    if (-not $cmd) { return }
+    $hooks['Stop'] = New-Object Collections.ArrayList
+  }
+  $stop = $hooks['Stop']
+  if (-not ($stop -is [Collections.IList])) { Say "$ClaudeSettingsFile hooks.Stop is not a list; Stop hook left alone"; return }
+  $placed = $false; $removed = $false
+  foreach ($g in @($stop)) {
+    if (-not ($g -is [Collections.IDictionary]) -or -not $g.Contains('hooks') -or -not ($g['hooks'] -is [Collections.IList])) { continue }
+    $hs = $g['hooks']
+    $before = $hs.Count
+    foreach ($hk in @($hs)) {
+      if (-not ($hk -is [Collections.IDictionary]) -or -not $hk.Contains('command') -or -not (Test-OurSessionHook ([string]$hk['command']))) { continue }
+      if ($cmd -and -not $placed) {
+        $hk['type'] = 'command'; $hk['command'] = $cmd; $hk['timeout'] = 30
+        $placed = $true
+      } else {
+        $hs.Remove($hk); $removed = $true
+      }
+    }
+    if ($hs.Count -eq 0 -and $before -gt 0) { $stop.Remove($g) }
+  }
+  if ($cmd -and -not $placed) {
+    $list = New-Object Collections.ArrayList
+    [void]$list.Add([ordered]@{ type = 'command'; command = $cmd; timeout = 30 })
+    [void]$stop.Add([ordered]@{ hooks = $list })
+  }
+  if ($stop.Count -eq 0 -and $removed) {
+    $hooks.Remove('Stop')
+    if ($hooks.Count -eq 0) { $s.Remove('hooks') }
+  }
 }
 
 function Remove-ClaudeSettings {
@@ -480,6 +566,7 @@ function Remove-ClaudeSettings {
     if ($deny.Count -eq 0) { $s['permissions'].Remove('deny') }
     if ($s['permissions'].Count -eq 0) { $s.Remove('permissions') }
   }
+  Sync-StopHook $s ''
   Write-ClaudeSettings $s
 }
 
@@ -699,7 +786,8 @@ function Invoke-Setup([bool]$quietOutput = $false) {
   Set-ClaudeSettings
   Set-CodexConfig 'add'
   if (-not $quietOutput) {
-    Out "OK claude -> Bedrock (${ClaudeSettingsFile}: env + awsCredentialExport) - Claude Code CLI and the Claude Desktop Code tab"
+    $hookNote = if (Test-SessionReportEnabled) { ' + Stop hook session-report' } else { '; SESSION_REPORT=off, no Stop hook' }
+    Out "OK claude -> Bedrock (${ClaudeSettingsFile}: env + awsCredentialExport${hookNote}) - Claude Code CLI and the Claude Desktop Code tab"
     $applied = Get-CodexDefault
     Out "OK codex  -> Bedrock (${CodexConfigFile}: $($applied[0]), profile=$AwsProfileName, model=$($applied[1])) - Codex CLI and the Codex app"
     Out '  restart Claude Desktop / the Codex app so they reload their settings'
@@ -716,6 +804,7 @@ function Invoke-Setup([bool]$quietOutput = $false) {
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { Say 'claude not found - install Claude Code (https://code.claude.com/docs/en/setup) or use Claude Desktop' }
     if (-not (Get-Command codex -ErrorAction SilentlyContinue)) { Say 'codex not found - install: npm install -g @openai/codex@0.163.0, or use the Codex app' }
   }
+  Start-SessionSweep
 }
 
 function Invoke-Unsetup {
@@ -825,6 +914,508 @@ function Invoke-UnsetupDesktop {
   }
 }
 
+# --- session-report (session insights, client side) ---------
+# Same contract as session_report_main in the bash CLI: reads local Claude Code
+# transcripts (~\.claude\projects\<proj>\<sessionId>.jsonl + <sessionId>\subagents\*.jsonl)
+# and Codex rollouts (~\.codex\sessions\**\rollout-*.jsonl), sums turns and per-model
+# tokens per (tool, sessionId, UTC date) bucket, and POSTs the cumulative buckets that
+# changed to /api/local/sessions. Insight only: budgets and metering stay on Bedrock
+# invocation logs (ADR-005). sessions-state.json keeps per-file byte offsets, so a run
+# parses only what was appended. Never prompts; --quiet (the Stop hook) writes nothing
+# to stdout, logs failures to session-report.log and always exits 0.
+$SrSidRe = '^[A-Za-z0-9._:-]{1,128}$'
+$SrFields = @('inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens')
+$SrJsonDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')
+$SrInv = [Globalization.CultureInfo]::InvariantCulture
+
+function Write-SessionLog([string]$msg, [bool]$quiet = $true) {
+  try {
+    $lines = New-Object Collections.Generic.List[string]
+    if (Test-Path -LiteralPath $SessionLogFile) { $lines.AddRange([string[]]([IO.File]::ReadAllLines($SessionLogFile))) }
+    $lines.Add([DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", $SrInv) + ' ' + $msg)
+    if ($lines.Count -gt 200) { $lines.RemoveRange(0, $lines.Count - 200) }
+    $new = -not (Test-Path -LiteralPath $SessionLogFile)
+    [IO.File]::WriteAllText($SessionLogFile, (($lines -join "`n") + "`n"), $Utf8NoBom)
+    if ($new) { Protect-Path $SessionLogFile $true }
+  } catch { }
+  if (-not $quiet) { Say $msg }
+}
+
+# Detached background sweep (after setup, login and a credential-process refresh):
+# hidden, no wait, stdout/stderr not shared with the caller. Skipped when session
+# reporting is off or there is no Cognito session to send with.
+function Start-SessionSweep {
+  try {
+    if (-not (Test-SessionReportEnabled) -or -not (Test-Path -LiteralPath $TokenCache)) { return }
+    $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'), 'session-report', '--sweep', '--quiet')
+    if ($OnWindows) {
+      Start-Process -FilePath 'powershell.exe' -ArgumentList $a -WindowStyle Hidden | Out-Null
+    } else {
+      Start-Process -FilePath 'pwsh' -ArgumentList $a -RedirectStandardOutput '/dev/null' -RedirectStandardError (Join-Path $CfgDir 'session-sweep.err') | Out-Null
+    }
+  } catch { }
+}
+
+# Cached Cognito access token while > 5 min remain, else a silent refresh from the
+# cached refresh token (re-cached). '' when there is none. Never prompts.
+function Get-SessionAccessToken {
+  if (-not (Test-Path -LiteralPath $TokenCache)) { return '' }
+  try {
+    $t = ConvertFrom-JsonText (Read-TextFile $TokenCache)
+    if ($t -and $t.Contains('accessToken') -and $t['accessToken'] -and $t.Contains('accessExpiresAt') -and (([long]$t['accessExpiresAt']) - (Get-EpochNow) -gt 300)) {
+      return [string]$t['accessToken']
+    }
+  } catch { }
+  $refresh = Get-CachedRefreshToken
+  if (-not $refresh -or -not $CognitoClientId) { return '' }
+  try { $auth = Invoke-Cognito @{ REFRESH_TOKEN = $refresh } 'REFRESH_TOKEN_AUTH' } catch { return '' }
+  if (-not $auth['AccessToken']) { return '' }
+  Save-Tokens $auth['AccessToken'] $refresh
+  return [string]$auth['AccessToken']
+}
+
+# Property of a parsed JSON line (PSCustomObject), $null when absent (StrictMode-safe).
+function Get-P($o, [string]$name) {
+  if ($null -eq $o -or $o.GetType().FullName -ne 'System.Management.Automation.PSCustomObject') { return $null }
+  $p = $o.PSObject.Properties[$name]
+  if ($null -eq $p) { return $null }
+  return , $p.Value
+}
+
+function ConvertFrom-JsonLine([string]$text) {
+  try {
+    if ($SrJsonDateKind) { return ($text | ConvertFrom-Json -DateKind String) }
+    return ($text | ConvertFrom-Json)
+  } catch { return $null }
+}
+
+function Get-Count($v) {
+  if (($v -is [int] -or $v -is [long]) -and $v -gt 0) { return [long]$v }
+  return [long]0
+}
+
+# @(ISO-8601 UTC with ms, YYYY-MM-DD) or $null. PS 7 < 7.5 turns ISO strings into DateTime.
+function Get-Stamp($v) {
+  if ($v -is [datetime]) {
+    $d = $v.ToUniversalTime()
+  } elseif ($v -is [string] -and $v -cmatch '^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d)(?:\.(\d+))?Z$') {
+    $frac = ([string]$Matches[3] + '000').Substring(0, 3)
+    return @(($Matches[1] + 'T' + $Matches[2] + '.' + $frac + 'Z'), $Matches[1])
+  } elseif ($v -is [string]) {
+    try { $d = [DateTimeOffset]::Parse($v, $SrInv, [Globalization.DateTimeStyles]::AssumeUniversal).UtcDateTime } catch { return $null }
+  } else {
+    return $null
+  }
+  return @($d.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", $SrInv), $d.ToString('yyyy-MM-dd', $SrInv))
+}
+
+function New-SrBucket { return [ordered]@{ firstAt = $null; lastAt = $null; turns = [long]0; models = [ordered]@{} } }
+
+function Get-SrBucket($fs, [string]$key) {
+  if (-not $fs['buckets'].Contains($key)) { $fs['buckets'][$key] = New-SrBucket }
+  return $fs['buckets'][$key]
+}
+
+function Update-SrTimes($b, [string]$iso) {
+  if (-not $b['firstAt'] -or [string]::CompareOrdinal($iso, [string]$b['firstAt']) -lt 0) { $b['firstAt'] = $iso }
+  if (-not $b['lastAt'] -or [string]::CompareOrdinal($iso, [string]$b['lastAt']) -gt 0) { $b['lastAt'] = $iso }
+}
+
+function Get-SrModelRow($b, [string]$model) {
+  if (-not $b['models'].Contains($model)) {
+    $b['models'][$model] = [ordered]@{ requests = [long]0; inputTokens = [long]0; outputTokens = [long]0; cacheReadTokens = [long]0; cacheWriteTokens = [long]0 }
+  }
+  return $b['models'][$model]
+}
+
+function Add-ClaudeLine($fs, $d, [bool]$isSub) {
+  $t = Get-P $d 'type'
+  if ($t -cne 'user' -and $t -cne 'assistant') { return }
+  $sid = Get-P $d 'sessionId'
+  if (-not ($sid -is [string]) -or $sid -cnotmatch $SrSidRe) { return }
+  $st = Get-Stamp (Get-P $d 'timestamp')
+  if (-not $st) { return }
+  $key = 'claude|' + $sid + '|' + $st[1]
+  $msg = Get-P $d 'message'
+  if ($t -ceq 'user') {
+    if ($isSub -or [bool](Get-P $d 'isMeta') -or [bool](Get-P $d 'isCompactSummary') -or [bool](Get-P $d 'isSidechain')) { return }
+    $c = Get-P $msg 'content'
+    $text = $null
+    if ($c -is [string]) {
+      $text = $c
+    } elseif ($c -is [array]) {
+      $hasResult = $false
+      foreach ($x in $c) {
+        $xt = Get-P $x 'type'
+        if ($xt -ceq 'tool_result') { $hasResult = $true }
+        elseif ($xt -ceq 'text' -and $null -eq $text) {
+          $tx = Get-P $x 'text'
+          $text = if ($tx -is [string]) { $tx } else { '' }
+        }
+      }
+      if ($hasResult -or $null -eq $text) { return }
+    } else {
+      return
+    }
+    if ($text.TrimStart() -cmatch '^<(local-command-|command-(stdout|caveat))') { return }
+    $b = Get-SrBucket $fs $key
+    $b['turns'] = [long]$b['turns'] + 1
+    Update-SrTimes $b $st[0]
+    return
+  }
+  $model = Get-P $msg 'model'
+  if (-not ($model -is [string]) -or -not $model -or $model -ceq '<synthetic>' -or $model.Length -gt 128) { return }
+  $u = Get-P $msg 'usage'
+  $vals = @((Get-Count (Get-P $u 'input_tokens')), (Get-Count (Get-P $u 'output_tokens')),
+    (Get-Count (Get-P $u 'cache_read_input_tokens')), (Get-Count (Get-P $u 'cache_creation_input_tokens')))
+  $mid = Get-P $msg 'id'
+  if (-not ($mid -is [string])) { $mid = '' }
+  if ($mid) {
+    # One API response is written as several lines with the same message.id: count it
+    # once, keeping the max of each usage field.
+    foreach ($e in $fs['recentIds']) {
+      if ([string]$e['id'] -cne $mid) { continue }
+      if ($fs['buckets'].Contains([string]$e['k'])) {
+        $row = Get-SrModelRow $fs['buckets'][[string]$e['k']] ([string]$e['m'])
+        for ($i = 0; $i -lt 4; $i++) {
+          if ($vals[$i] -gt [long]$e['u'][$i]) {
+            $row[$SrFields[$i]] = [long]$row[$SrFields[$i]] + $vals[$i] - [long]$e['u'][$i]
+            $e['u'][$i] = $vals[$i]
+          }
+        }
+      }
+      return
+    }
+  }
+  $b = Get-SrBucket $fs $key
+  $row = Get-SrModelRow $b $model
+  $row['requests'] = [long]$row['requests'] + 1
+  for ($i = 0; $i -lt 4; $i++) { $row[$SrFields[$i]] = [long]$row[$SrFields[$i]] + $vals[$i] }
+  Update-SrTimes $b $st[0]
+  if ($mid) {
+    $ul = New-Object Collections.ArrayList
+    foreach ($v in $vals) { [void]$ul.Add($v) }
+    [void]$fs['recentIds'].Add([ordered]@{ id = $mid; k = $key; m = $model; u = $ul })
+    while ($fs['recentIds'].Count -gt 64) { $fs['recentIds'].RemoveAt(0) }
+  }
+}
+
+function Add-CodexLine($fs, $d) {
+  $t = Get-P $d 'type'
+  $p = Get-P $d 'payload'
+  $ctx = $fs['ctx']
+  if ($t -ceq 'session_meta') {
+    $sid = Get-P $p 'id'
+    if ($sid -is [string] -and $sid -cmatch $SrSidRe) { $ctx['sid'] = $sid }
+    return
+  }
+  if ($t -ceq 'turn_context') {
+    $m = Get-P $p 'model'
+    if ($m -is [string] -and $m.Length -gt 0 -and $m.Length -le 128) { $ctx['model'] = $m }
+    return
+  }
+  if ($t -cne 'event_msg' -or -not $ctx.Contains('sid') -or -not $ctx['sid']) { return }
+  $pt = Get-P $p 'type'
+  if ($pt -cne 'task_started' -and $pt -cne 'token_count') { return }
+  $st = Get-Stamp (Get-P $d 'timestamp')
+  if (-not $st) { return }
+  $key = 'codex|' + [string]$ctx['sid'] + '|' + $st[1]
+  if ($pt -ceq 'task_started') {
+    $trig = Get-P (Get-P $p 'turn_attribution') 'turn_trigger'
+    if ($null -ne $trig -and $trig -cne 'user') { return }
+    $b = Get-SrBucket $fs $key
+    $b['turns'] = [long]$b['turns'] + 1
+    Update-SrTimes $b $st[0]
+    return
+  }
+  $last = Get-P (Get-P $p 'info') 'last_token_usage'
+  if ($null -eq $last -or $last.GetType().FullName -ne 'System.Management.Automation.PSCustomObject') { return }
+  $inp = Get-Count (Get-P $last 'input_tokens')
+  $cr = Get-Count (Get-P $last 'cached_input_tokens')
+  $cw = Get-Count (Get-P $last 'cache_write_input_tokens')
+  $model = 'unknown'
+  if ($ctx.Contains('model') -and $ctx['model']) { $model = [string]$ctx['model'] }
+  $b = Get-SrBucket $fs $key
+  $row = Get-SrModelRow $b $model
+  $row['requests'] = [long]$row['requests'] + 1
+  $row['inputTokens'] = [long]$row['inputTokens'] + [Math]::Max([long]0, $inp - $cr - $cw)
+  $row['outputTokens'] = [long]$row['outputTokens'] + (Get-Count (Get-P $last 'output_tokens'))
+  $row['cacheReadTokens'] = [long]$row['cacheReadTokens'] + $cr
+  $row['cacheWriteTokens'] = [long]$row['cacheWriteTokens'] + $cw
+  Update-SrTimes $b $st[0]
+}
+
+function Get-SrMtime([string]$path) {
+  try {
+    if (-not [IO.File]::Exists($path)) { return [long]-1 }
+    return ([DateTimeOffset][IO.File]::GetLastWriteTimeUtc($path)).ToUnixTimeSeconds()
+  } catch { return [long]-1 }
+}
+
+# Parse the complete lines appended since the saved offset. Returns 1 when it read.
+function Update-SessionFile($state, [string]$path, [string]$tool, [bool]$isSub) {
+  if (-not [IO.File]::Exists($path)) { return 0 }
+  $size = (New-Object IO.FileInfo($path)).Length
+  $fs = $null
+  if ($state['files'].Contains($path)) { $fs = $state['files'][$path] }
+  if ($null -eq $fs -or -not ($fs -is [Collections.IDictionary]) -or $size -lt [long]$fs['offset']) {
+    # New, truncated or rotated file: start over.
+    $fs = [ordered]@{ offset = [long]0; mtime = [long]0; size = [long]0; recentIds = (New-Object Collections.ArrayList); buckets = [ordered]@{}; ctx = [ordered]@{} }
+    $state['files'][$path] = $fs
+  }
+  foreach ($k in @('recentIds', 'buckets', 'ctx')) {
+    if (-not $fs.Contains($k) -or $null -eq $fs[$k]) { if ($k -ceq 'recentIds') { $fs[$k] = New-Object Collections.ArrayList } else { $fs[$k] = [ordered]@{} } }
+  }
+  $fs['mtime'] = Get-SrMtime $path
+  $fs['size'] = [long]$size
+  if ($size -eq [long]$fs['offset']) { return 0 }
+  if ($tool -ceq 'claude') { $hints = @('"type":"user"', '"type":"assistant"', '"type": "user"', '"type": "assistant"') }
+  else { $hints = @('session_meta', 'turn_context', 'task_started', 'token_count') }
+  $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+  try {
+    [void]$stream.Seek([long]$fs['offset'], [IO.SeekOrigin]::Begin)
+    $buf = New-Object byte[] 1048576
+    $acc = New-Object IO.MemoryStream
+    while (($n = $stream.Read($buf, 0, $buf.Length)) -gt 0) {
+      $start = 0
+      while ($start -lt $n) {
+        $nl = [Array]::IndexOf($buf, [byte]10, $start, $n - $start)
+        if ($nl -lt 0) { $acc.Write($buf, $start, $n - $start); break }
+        $acc.Write($buf, $start, $nl - $start + 1)
+        $start = $nl + 1
+        $len = $acc.Length
+        $line = $Utf8NoBom.GetString($acc.GetBuffer(), 0, [int]$len)
+        $acc.SetLength(0)
+        $fs['offset'] = [long]$fs['offset'] + $len
+        $hit = $false
+        foreach ($hint in $hints) { if ($line.Contains($hint)) { $hit = $true; break } }
+        if (-not $hit) { continue }
+        $d = ConvertFrom-JsonLine $line
+        if ($null -eq $d -or $d.GetType().FullName -ne 'System.Management.Automation.PSCustomObject') { continue }
+        if ($tool -ceq 'claude') { Add-ClaudeLine $fs $d $isSub } else { Add-CodexLine $fs $d }
+      }
+    }
+    # Bytes left in $acc are an incomplete last line: picked up next time.
+  } finally {
+    $stream.Dispose()
+  }
+  return 1
+}
+
+function Get-SrFiles([string]$root, [string]$prefix, [long]$since) {
+  $out = New-Object Collections.Generic.List[string]
+  if (-not [IO.Directory]::Exists($root)) { return , $out }
+  try {
+    foreach ($f in [IO.Directory]::EnumerateFiles($root, '*.jsonl', [IO.SearchOption]::AllDirectories)) {
+      $name = [IO.Path]::GetFileName($f)
+      if ($name.EndsWith('.jsonl', [StringComparison]::Ordinal) -and $name.StartsWith($prefix, [StringComparison]::Ordinal) -and (Get-SrMtime $f) -ge $since) { $out.Add($f) }
+    }
+  } catch { Write-SessionLog "could not list $root ($($_.Exception.Message))" }
+  return , $out
+}
+
+function Read-SessionsState {
+  if (Test-Path -LiteralPath $SessionsStateFile) {
+    try {
+      $s = ConvertFrom-JsonText (Read-TextFile $SessionsStateFile)
+      if ($s -is [Collections.IDictionary] -and $s.Contains('files') -and $s['files'] -is [Collections.IDictionary] -and $s.Contains('sent') -and $s['sent'] -is [Collections.IDictionary]) { return $s }
+      Write-SessionLog 'sessions-state.json has an unknown shape - starting over'
+    } catch { Write-SessionLog "sessions-state.json unreadable ($($_.Exception.Message)) - starting over" }
+  }
+  return [ordered]@{ version = 1; files = [ordered]@{}; sent = [ordered]@{}; lastSweepAt = [long]0 }
+}
+
+function Save-SessionsState($s, [long]$now) {
+  foreach ($p in @($s['files'].Keys)) { if ((Get-SrMtime $p) -lt $now - 45 * 86400) { $s['files'].Remove($p) } }
+  $cutoff = [DateTimeOffset]::FromUnixTimeSeconds($now).UtcDateTime.AddDays(-45).ToString('yyyy-MM-dd', $SrInv)
+  foreach ($k in @($s['sent'].Keys)) {
+    $date = ([string]$k).Substring(([string]$k).LastIndexOf('|') + 1)
+    if ([string]::CompareOrdinal($date, $cutoff) -lt 0) { $s['sent'].Remove($k) }
+  }
+  Write-TextFile $SessionsStateFile ($s | ConvertTo-Json -Depth 32 -Compress)
+  Protect-Path $SessionsStateFile $true
+}
+
+# Main + subagent files of a session add up to one bucket. Returns key -> API bucket
+# for buckets the API accepts (>= 1 model, date within the last 35 days).
+function Get-SrAggregate($s, [string]$minDate, [string]$maxDate) {
+  $agg = [ordered]@{}
+  foreach ($fs in $s['files'].Values) {
+    if (-not ($fs -is [Collections.IDictionary]) -or -not $fs.Contains('buckets') -or $null -eq $fs['buckets']) { continue }
+    foreach ($key in @($fs['buckets'].Keys)) {
+      $b = $fs['buckets'][$key]
+      if (-not $agg.Contains($key)) { $agg[$key] = New-SrBucket }
+      $a = $agg[$key]
+      $a['turns'] = [long]$a['turns'] + [long]$b['turns']
+      foreach ($iso in @($b['firstAt'], $b['lastAt'])) { if ($iso) { $st = Get-Stamp $iso; if ($st) { Update-SrTimes $a $st[0] } } }
+      foreach ($m in @($b['models'].Keys)) {
+        $row = Get-SrModelRow $a ([string]$m)
+        foreach ($f in (@('requests') + $SrFields)) { if ($b['models'][$m].Contains($f)) { $row[$f] = [long]$row[$f] + [long]$b['models'][$m][$f] } }
+      }
+    }
+  }
+  $out = [ordered]@{}
+  $keys = [string[]]@($agg.Keys)
+  [Array]::Sort($keys, [StringComparer]::Ordinal)
+  foreach ($key in $keys) {
+    $a = $agg[$key]
+    $parts = $key.Split('|')
+    if ($parts.Count -ne 3 -or $a['models'].Count -eq 0) { continue }
+    if ([string]::CompareOrdinal($parts[2], $minDate) -lt 0 -or [string]::CompareOrdinal($parts[2], $maxDate) -gt 0) { continue }
+    $names = [string[]]@($a['models'].Keys)
+    if ($names.Count -gt 20) {
+      $names = [string[]]@($names | Sort-Object -Property @{ Expression = { [long]$a['models'][$_]['requests'] }; Descending = $true }, @{ Expression = { $_ } } | Select-Object -First 20)
+    }
+    [Array]::Sort($names, [StringComparer]::Ordinal)
+    $models = [ordered]@{}
+    foreach ($m in $names) { $models[$m] = $a['models'][$m] }
+    $out[$key] = [ordered]@{ tool = $parts[0]; sessionId = $parts[1]; date = $parts[2]; firstAt = $a['firstAt']; lastAt = $a['lastAt']; turns = [long]$a['turns']; models = $models }
+  }
+  return $out
+}
+
+function Get-SrDigest($b) {
+  $sha = [Security.Cryptography.SHA1]::Create()
+  try {
+    $bytes = $sha.ComputeHash($Utf8NoBom.GetBytes(($b | ConvertTo-Json -Depth 8 -Compress)))
+    return ([BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()).Substring(0, 20)
+  } finally { $sha.Dispose() }
+}
+
+# 'ok' | 'rejected' (validation error: would repeat forever) | 'fail'
+function Send-SessionChunk([string]$endpoint, [string]$token, $chunk) {
+  $list = New-Object Collections.ArrayList
+  foreach ($b in $chunk) { [void]$list.Add($b) }
+  $body = ([ordered]@{ buckets = $list } | ConvertTo-Json -Depth 8 -Compress)
+  try {
+    $r = Invoke-Post $endpoint $body 'application/json' @{ Authorization = "Bearer $token" } 10
+  } catch {
+    Write-SessionLog "POST $endpoint failed ($($_.Exception.Message))"
+    return 'fail'
+  }
+  if ($r.Status -ge 200 -and $r.Status -lt 300) { return 'ok' }
+  $detail = [string]$r.Body
+  if ($detail.Length -gt 200) { $detail = $detail.Substring(0, 200) }
+  Write-SessionLog "POST $endpoint failed (HTTP $($r.Status)) $detail"
+  if (@(400, 413, 422) -contains $r.Status) { return 'rejected' }
+  return 'fail'
+}
+
+# 0 ok, 2 failure (logged, state unsaved), 10 ok and a full sweep is due (hook mode).
+function Invoke-SessionReportCore([bool]$sweep, [bool]$quiet, [bool]$dry, [string]$hookInput) {
+  $token = ''; $endpoint = ''
+  if (-not $dry) {
+    if (-not $DashboardUrl -or -not $CognitoClientId) { Write-SessionLog "DASHBOARD_URL / COGNITO_CLIENT_ID not set (edit $CfgFile)" $quiet; return 2 }
+    $token = Get-SessionAccessToken
+    if (-not $token) { Write-SessionLog "no Cognito session - nothing sent (run 'cc-bedrock-local login')" $quiet; return 0 }
+    $endpoint = if ($env:CC_BEDROCK_SESSION_ENDPOINT) { $env:CC_BEDROCK_SESSION_ENDPOINT } else { $DashboardUrl.TrimEnd('/') + '/api/local/sessions' }
+  }
+  $now = Get-EpochNow
+  $today = [DateTimeOffset]::FromUnixTimeSeconds($now).UtcDateTime.Date
+  $minDate = $today.AddDays(-34).ToString('yyyy-MM-dd', $SrInv)
+  $maxDate = $today.AddDays(1).ToString('yyyy-MM-dd', $SrInv)
+  $lock = $null
+  if (-not $dry) {
+    $deadline = $now + $(if ($sweep) { 300 } else { 25 })
+    while ($null -eq $lock) {
+      try { $lock = [IO.File]::Open("$SessionsStateFile.lock", [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+      catch {
+        if ((Get-EpochNow) -gt $deadline) { Write-SessionLog 'another session-report is running - skipped' $quiet; return 2 }
+        Start-Sleep -Milliseconds 200
+      }
+    }
+  }
+  try {
+    $state = Read-SessionsState
+    $mode = if ($sweep) { 'sweep' } else { 'hook' }
+    $tp = $null
+    if ($mode -ceq 'hook') {
+      try { $hk = ConvertFrom-JsonText $hookInput } catch { $hk = $null }
+      if ($hk -is [Collections.IDictionary] -and $hk.Contains('transcript_path') -and $hk['transcript_path'] -is [string]) { $tp = [string]$hk['transcript_path'] }
+      else { $mode = 'sweep' }   # run by hand (no hook payload)
+    }
+    $parsed = 0; $sweepDue = $false
+    if ($mode -ceq 'hook') {
+      if ($tp.EndsWith('.jsonl', [StringComparison]::Ordinal) -and [IO.File]::Exists($tp)) {
+        $parsed += Update-SessionFile $state $tp 'claude' $false
+        $sub = Join-Path $tp.Substring(0, $tp.Length - 6) 'subagents'
+        if ([IO.Directory]::Exists($sub)) {
+          $subs = [string[]]@([IO.Directory]::GetFiles($sub, '*.jsonl'))
+          [Array]::Sort($subs, [StringComparer]::Ordinal)
+          foreach ($f in $subs) { $parsed += Update-SessionFile $state $f 'claude' $true }
+        }
+      }
+      $lastSweep = [long]0
+      if ($state.Contains('lastSweepAt') -and $state['lastSweepAt']) { $lastSweep = [long]$state['lastSweepAt'] }
+      if ($now - $lastSweep -ge 600) { $sweepDue = $true; $state['lastSweepAt'] = $now }
+    } else {
+      $since = $now - 3 * 86400
+      foreach ($f in (Get-SrFiles (Join-Path $ClaudeDir 'projects') '' $since)) {
+        $isSub = [IO.Path]::GetFileName([IO.Path]::GetDirectoryName($f)) -ceq 'subagents'
+        $parsed += Update-SessionFile $state $f 'claude' $isSub
+      }
+      foreach ($f in (Get-SrFiles (Join-Path $CodexDir 'sessions') 'rollout-' $since)) { $parsed += Update-SessionFile $state $f 'codex' $false }
+      $state['lastSweepAt'] = $now
+    }
+    $buckets = Get-SrAggregate $state $minDate $maxDate
+    $dirty = New-Object Collections.ArrayList
+    $digests = @{}
+    foreach ($key in @($buckets.Keys)) {
+      $dg = Get-SrDigest $buckets[$key]
+      $digests[$key] = $dg
+      if (-not ($state['sent'].Contains($key) -and [string]$state['sent'][$key] -ceq $dg)) { [void]$dirty.Add($buckets[$key]) }
+    }
+    if ($dry) {
+      Out ([ordered]@{ buckets = $dirty } | ConvertTo-Json -Depth 8 -Compress)
+      return 0
+    }
+    $rejected = 0
+    for ($i = 0; $i -lt $dirty.Count; $i += 100) {
+      $chunk = $dirty.GetRange($i, [Math]::Min(100, $dirty.Count - $i))
+      $res = Send-SessionChunk $endpoint $token $chunk
+      if ($res -ceq 'fail') { return 2 }   # state not saved: the same buckets are sent next time
+      if ($res -ceq 'rejected') { $rejected += $chunk.Count }
+    }
+    foreach ($b in $dirty) { $k = [string]$b['tool'] + '|' + [string]$b['sessionId'] + '|' + [string]$b['date']; $state['sent'][$k] = $digests[$k] }
+    Save-SessionsState $state $now
+    if (-not $quiet) {
+      $msg = "session-report: $parsed file(s) parsed, $($dirty.Count - $rejected) session bucket(s) sent"
+      if ($rejected) { $msg += ", $rejected rejected (see $SessionLogFile)" }
+      Out $msg
+    }
+    if ($sweepDue) { return 10 }
+    return 0
+  } finally {
+    if ($lock) { $lock.Dispose() }
+  }
+}
+
+function Invoke-SessionReport([string[]]$argv) {
+  $sweep = $false; $quiet = $false; $dry = $false
+  foreach ($a in $argv) {
+    switch -CaseSensitive ($a) {
+      '--sweep' { $sweep = $true }
+      '--quiet' { $quiet = $true }
+      '--dry-run' { $dry = $true }   # hidden (tests): print the buckets it would send; no POST, no state save
+      default { if ($argv -ccontains '--quiet') { exit 0 }; Die 'usage: cc-bedrock-local session-report [--sweep] [--quiet]' }
+    }
+  }
+  if (-not (Test-SessionReportEnabled)) { exit 0 }
+  # Stop hook payload ({"session_id","transcript_path",...}) on stdin.
+  $hookInput = ''
+  if (-not $sweep) { try { if ([Console]::IsInputRedirected) { $hookInput = [Console]::In.ReadToEnd() } } catch { } }
+  $code = 2
+  try {
+    $code = Invoke-SessionReportCore $sweep $quiet $dry $hookInput
+  } catch {
+    Write-SessionLog "session-report failed: $($_.Exception.Message)" $quiet
+  }
+  if ($code -eq 10) { Start-SessionSweep; $code = 0 }
+  # Hook / background mode: never fail Claude Code.
+  if ($quiet -or $code -eq 0) { exit 0 }
+  exit 1
+}
+
 # --- set-model / models / status / config -------------------
 function Invoke-SetModel([string[]]$argv) {
   if (-not $argv -or -not $argv[0]) { Die 'usage: set-model <key>=<value>  OR  set-model <key> <value>' }
@@ -918,6 +1509,7 @@ function Invoke-Config {
   Out "AWS_REGION         : $AwsRegion"
   Out "claude settings    : $ClaudeSettingsFile"
   Out "codex config       : $CodexConfigFile"
+  Out "SESSION_REPORT     : $SessionReport (state $SessionsStateFile, log $SessionLogFile)"
 }
 
 function Invoke-Usage {
@@ -938,6 +1530,10 @@ Subcommands:
   set-model KEY=VAL     change model (sonnet|opus|haiku|subagent|pin|codex)
   models                show current model env
   config                print config / file paths
+  session-report [--sweep] [--quiet]
+                        report session turns/tokens from local Claude Code transcripts and
+                        Codex rollouts (insight only; run by the Stop hook 'setup' installs;
+                        SESSION_REPORT=off in the config disables it)
 
 Config file: $CfgFile
 "@
@@ -958,6 +1554,7 @@ switch ($sub) {
   'setup-desktop' { Invoke-SetupDesktop }
   'unsetup-desktop' { Invoke-UnsetupDesktop }
   { $_ -in 'set-model', 'set_model' } { Invoke-SetModel $rest }
+  { $_ -in 'session-report', 'session_report' } { Invoke-SessionReport $rest }
   'models' { Invoke-Models }
   'config' { Invoke-Config }
   { $_ -in '', '-h', '--help', 'help' } { Invoke-Usage }

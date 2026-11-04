@@ -16,6 +16,13 @@ collector and EC2 schedules depend on `devenv_enabled`.
   because application inference profiles are unsupported.
 - The audit EventBridge path is distinct and account-wide.
 
+Session insights (`session-insights.tf`, all gated on `enable_session_insights`):
+`cc-on-bedrock-sessions` (PK/SK, sparse GSI `date-index` = `gsiDate`/`PK`, TTL,
+PITR, CMK; no `prevent_destroy`), tracker `SESSIONS_TABLE_NAME` + PutItem, and the
+daily `cc-on-bedrock-session-insights` Lambda whose Bedrock grant is only the
+configured profile in this Region plus its foundation model pinned by
+`bedrock:InferenceProfileArn`. Outputs are empty strings when disabled.
+
 ## Change constraints
 
 USD budget windows use UTC; normalized-token periods use KST. Keep model rates

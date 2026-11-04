@@ -18,7 +18,7 @@ import base64
 import re
 import boto3
 from botocore.exceptions import ClientError
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 # Subdomain shape per Cognito naming: lowercase alphanumerics + hyphens, 3-32 chars total.
@@ -42,6 +42,9 @@ cognito_client = boto3.client("cognito-idp")
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 # ADR-014 §9: region of the bedrock-mantle projects; empty = mantle estimate off.
 MANTLE_REGION = os.environ.get("MANTLE_REGION", "")
+# Session insights: client-reported session buckets (cc.session-report). Insight only;
+# budgets and metering keep using invocation logs (ADR-005).
+SESSIONS_TABLE_NAME = os.environ.get("SESSIONS_TABLE_NAME", "cc-on-bedrock-sessions")
 
 # Bedrock pricing (USD per 1M tokens, Standard tier, Global cross-Region inference,
 # short context). Sources (verified 2026-10-18): AWS Price List API
@@ -696,10 +699,152 @@ def meter_mantle(now: datetime | None = None) -> dict:
     return {"rows": len(totals)}
 
 
+# ─── Session reports (cc.session-report) ────────────────────────────────────
+# The dashboard's POST /api/local/sessions authenticates the Local CLI, then invokes
+# this Lambda synchronously with {"source": "cc.session-report", email, department,
+# subdomain, buckets}. A bucket = (tool, sessionId, UTC date) with CUMULATIVE totals,
+# so each row is written with PutItem (overwrite = idempotent re-send). Rows go to the
+# sessions table only; usage rows (budgets/metering) are never touched. The dashboard
+# validates first; this re-validates (defense in depth) and drops invalid buckets.
+
+SESSION_TOOLS = ("claude", "codex")
+SESSION_MAX_BUCKETS = 100
+SESSION_MAX_MODELS = 20
+SESSION_MAX_AGE_DAYS = 35
+SESSION_TTL_DAYS = 180
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_EMAIL_RE = re.compile(r"^[^@\s]{1,128}@[^@\s]{1,255}$")
+_SESSION_COUNT_FIELDS = ("requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens")
+_SESSION_COUNT_MAX = 10**13  # sanity ceiling, far above any real session
+
+_sessions_table = None
+
+
+def _get_sessions_table():
+    global _sessions_table
+    if _sessions_table is None:
+        _sessions_table = dynamodb.Table(SESSIONS_TABLE_NAME)
+    return _sessions_table
+
+
+def _count(v) -> int | None:
+    """A non-negative integer count, or None (bools are not counts)."""
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0 or v > _SESSION_COUNT_MAX:
+        return None
+    return v
+
+
+def _iso_ts(v) -> str | None:
+    if not isinstance(v, str) or not 1 <= len(v) <= 40:
+        return None
+    try:
+        datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return v
+
+
+def _validate_session_bucket(b, today) -> dict | None:
+    """Normalized bucket, or None if it violates the contract."""
+    if not isinstance(b, dict):
+        return None
+    tool, sid, date = b.get("tool"), b.get("sessionId"), b.get("date")
+    if tool not in SESSION_TOOLS or not isinstance(sid, str) or not _SESSION_ID_RE.match(sid):
+        return None
+    if not isinstance(date, str) or not _DATE_RE.match(date):
+        return None
+    try:
+        d = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if d > today + timedelta(days=1) or d < today - timedelta(days=SESSION_MAX_AGE_DAYS):
+        return None
+    first_at, last_at, turns = _iso_ts(b.get("firstAt")), _iso_ts(b.get("lastAt")), _count(b.get("turns"))
+    if first_at is None or last_at is None or turns is None:
+        return None
+    models = b.get("models")
+    if not isinstance(models, dict) or not 1 <= len(models) <= SESSION_MAX_MODELS:
+        return None
+    clean_models = {}
+    for model, m in models.items():
+        if not isinstance(model, str) or not 1 <= len(model) <= 128 or not isinstance(m, dict):
+            return None
+        counts = {f: _count(m.get(f, 0)) for f in _SESSION_COUNT_FIELDS}
+        if any(c is None for c in counts.values()):
+            return None
+        clean_models[model] = counts
+    return {"tool": tool, "sessionId": sid, "date": date, "firstAt": first_at,
+            "lastAt": last_at, "turns": turns, "models": clean_models}
+
+
+def session_bucket_row(email: str, department: str, subdomain: str, b: dict, now: datetime) -> dict:
+    """DynamoDB item for a validated bucket; per-model cost from the PRICING table."""
+    totals = {f: 0 for f in _SESSION_COUNT_FIELDS}
+    total_cost = 0.0
+    models_out = {}
+    for model, m in b["models"].items():
+        cost = estimate_cost(model, m["inputTokens"], m["outputTokens"],
+                             m["cacheReadTokens"], m["cacheWriteTokens"])
+        total_cost += cost
+        for f in _SESSION_COUNT_FIELDS:
+            totals[f] += m[f]
+        models_out[model] = {**m, "estimatedCost": round(cost, 6)}
+    return {
+        "PK": f"USER#{email}",
+        "SK": f"SESSION#{b['tool']}#{b['sessionId']}#{b['date']}",
+        "email": email,
+        "department": department,
+        "subdomain": subdomain,
+        "tool": b["tool"],
+        "sessionId": b["sessionId"],
+        "date": b["date"],
+        "firstAt": b["firstAt"],
+        "lastAt": b["lastAt"],
+        "turns": b["turns"],
+        **totals,
+        "estimatedCost": Decimal(str(round(total_cost, 6))),
+        "models": json.dumps(models_out, separators=(",", ":"), sort_keys=True),
+        "updatedAt": now.replace(tzinfo=None).isoformat(),
+        "ttl": int(now.timestamp()) + SESSION_TTL_DAYS * 86400,
+        "gsiDate": b["date"],
+    }
+
+
+def process_session_report(event: dict, now: datetime | None = None) -> dict:
+    now = now or datetime.now(timezone.utc)
+    if not SESSIONS_TABLE_NAME:  # Terraform sets "" when enable_session_insights = false
+        return {"accepted": 0, "rejected": 0, "error": "session insights disabled"}
+    email = str(event.get("email") or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        print("[SESSIONS] rejected: missing/invalid email")
+        return {"accepted": 0, "rejected": 0, "error": "invalid email"}
+    department = str(event.get("department") or "default")[:128]
+    subdomain = str(event.get("subdomain") or "")[:64]
+    buckets = event.get("buckets")
+    if not isinstance(buckets, list) or len(buckets) > SESSION_MAX_BUCKETS:
+        print(f"[SESSIONS] rejected: buckets must be a list of <= {SESSION_MAX_BUCKETS}")
+        return {"accepted": 0, "rejected": 0, "error": "invalid buckets"}
+    today = now.date()
+    table_s = _get_sessions_table()
+    accepted = rejected = 0
+    for raw in buckets:
+        b = _validate_session_bucket(raw, today)
+        if b is None:
+            rejected += 1
+            continue
+        table_s.put_item(Item=session_bucket_row(email, department, subdomain, b, now))
+        accepted += 1
+    print(f"[SESSIONS] email={email} accepted={accepted} rejected={rejected}")
+    return {"accepted": accepted, "rejected": rejected}
+
+
 def handler(event, context):
     """Handle events from CloudWatch Logs Subscription or EventBridge."""
     if event.get("source") == "cc.mantle-meter":  # scheduled (usage-tracking mantle-audit.tf)
         return meter_mantle()
+    if event.get("source") == "cc.session-report":  # dashboard /api/local/sessions (sync invoke)
+        return process_session_report(event)
     processed = 0
 
     # Source 1: CloudWatch Logs Subscription (Bedrock Invocation Logging — primary, has tokens)

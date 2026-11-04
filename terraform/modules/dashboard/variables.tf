@@ -154,3 +154,21 @@ variable "cognito_group_prefix" {
   type        = string
   default     = ""
 }
+
+variable "sessions_table_name" {
+  description = "Session insights table (usage-tracking module); empty when session insights are disabled"
+  type        = string
+  default     = ""
+}
+
+variable "session_insights_function_name" {
+  description = "Session insights Lambda name (usage-tracking module); empty when session insights are disabled"
+  type        = string
+  default     = ""
+}
+
+variable "usage_tracker_function_name" {
+  description = "Usage tracker Lambda that ingests Local CLI session reports (cc.session-report)"
+  type        = string
+  default     = "cc-on-bedrock-usage-tracker"
+}

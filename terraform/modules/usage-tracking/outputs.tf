@@ -66,3 +66,24 @@ output "otel_metrics_raw_bucket" {
 output "otel_nlb_security_group_id" {
   value = one(aws_security_group.otel_nlb[*].id)
 }
+
+output "tracker_function_name" {
+  value = aws_lambda_function.tracker.function_name
+}
+
+# Session insights (empty strings when enable_session_insights = false)
+output "sessions_table_name" {
+  value = var.enable_session_insights ? aws_dynamodb_table.sessions[0].name : ""
+}
+
+output "sessions_table_arn" {
+  value = var.enable_session_insights ? aws_dynamodb_table.sessions[0].arn : ""
+}
+
+output "session_insights_function_name" {
+  value = var.enable_session_insights ? aws_lambda_function.session_insights[0].function_name : ""
+}
+
+output "session_insights_function_arn" {
+  value = var.enable_session_insights ? aws_lambda_function.session_insights[0].arn : ""
+}

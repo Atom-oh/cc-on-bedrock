@@ -4,6 +4,17 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ## [Unreleased]
 
+### Session insights (ADR-005 amendment 2026-11-04)
+- **Per-session cost, turns and cost per turn.** Both Local CLIs gain `cc-bedrock-local session-report`.
+  - It reads Claude Code transcripts and Codex rollout files incrementally and reports counts and tokens per (tool, session, UTC day) to `POST /api/local/sessions`. No prompt or response text is sent.
+  - It runs from a Claude Code `Stop` hook that `setup` installs, and from a background sweep after credential renewal, `setup` and `login`.
+  - The usage tracker prices each bucket with the metering price table and stores it in `cc-on-bedrock-sessions`.
+  - Insight only: budgets and metering still come from invocation logs. `SESSION_REPORT=off` turns reporting off on a PC.
+- **Daily Haiku 5.5 analysis.** The `session-insights` Lambda runs at 09:00 KST. It sends pseudonymized aggregates for the previous UTC day and a 7-day baseline to `session_insights_model_id`.
+- **Admin Overview.** A new panel shows session stats, the top users, the share of metered cost that reported sessions cover, and the Haiku findings. Admins can regenerate the analysis on demand.
+- **Terraform.** New variables `enable_session_insights` (default `true`), `session_insights_model_id` and `session_insights_language` (default `ko`). Applying this adds a DynamoDB table and a Lambda, and changes the dashboard runtime env, which starts a dashboard instance refresh.
+- **Not covered yet:** EC2 DevEnv sessions.
+
 ### Local Mode on Windows (ADR-006 amendment 2026-11-03, #148)
 - **Windows Local CLI.**
   - `tools/cc-bedrock-local.ps1` (Windows PowerShell 5.1 / pwsh 7, no bash or Python) is installed by `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <dashboard>/api/install/windows | iex"` and served by `/api/install/cli-ps1`.

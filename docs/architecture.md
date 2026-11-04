@@ -81,7 +81,12 @@ graph LR
    (the Responses API rejects application inference profiles). Rows carry `tool`
    (`claude-code`|`codex`|`other`); cost uses explicit per-model rates incl. cache read/write
    (ADR-014). Audit: CloudTrail management events → `audit-logger` → `cc-prompt-audit` with
-   `client_tool` from the userAgent.
+   `client_tool` from the userAgent. Session insight (ADR-005 amendment 2026-11-04): Local
+   CLIs report per-session turns and tokens read from local transcripts to
+   `/api/local/sessions`. The tracker prices them into `cc-on-bedrock-sessions`, and a daily
+   `session-insights` Lambda asks Haiku 5.5 for a pseudonymized top-user analysis shown on
+   the admin Overview. This data is client-reported and insight only; it is never used for
+   metering or budgets.
 5. **Shared credential model.** EC2 and Local attribute usage through the **same Application Inference
    Profile**; they do **not** share one literal IAM role (share policy shape, permission boundary,
    tags, inference-profile attribution). Exception: Codex (ADR-014) cannot use application

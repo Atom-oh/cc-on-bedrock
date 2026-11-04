@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { ContainerInfo, ApiResponse } from "@/lib/types";
 import StatCard from "@/components/cards/stat-card";
+import SessionInsightsPanel from "@/components/insights/session-insights-panel";
 import { cn } from "@/lib/utils";
 import { useDeploymentMode } from "@/components/deployment-mode-provider";
 
@@ -322,6 +323,9 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           </div>
         </motion.div>
       </div>
+
+      {/* Session insights (admin only; client-reported sessions + daily Haiku analysis) */}
+      {isAdmin && <SessionInsightsPanel />}
 
       {/* Cluster Detail Section (cluster metrics are DevEnv-only) */}
       <div className={`grid grid-cols-1 ${devenv ? "lg:grid-cols-2" : ""} gap-8`}>

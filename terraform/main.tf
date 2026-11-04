@@ -100,6 +100,10 @@ module "usage_tracking" {
   vpc_cidr           = module.network.vpc_cidr
   private_subnet_ids = module.network.private_subnet_ids
   enable_mantle      = var.enable_mantle
+  # Session insights (sessions table + daily Haiku analysis)
+  enable_session_insights   = var.enable_session_insights
+  session_insights_model_id = var.session_insights_model_id
+  session_insights_language = var.session_insights_language
 
   providers = {
     aws           = aws
@@ -171,6 +175,9 @@ module "dashboard" {
   codex_model_id                      = var.codex_model_id
   deployment_mode                     = local.deployment_mode
   ccdash_url                          = var.ccdash_url
+  sessions_table_name                 = module.usage_tracking.sessions_table_name
+  session_insights_function_name      = module.usage_tracking.session_insights_function_name
+  usage_tracker_function_name         = module.usage_tracking.tracker_function_name
 }
 
 # ---- 06 WAF ------------------------------------------------------------------
