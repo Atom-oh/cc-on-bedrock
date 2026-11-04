@@ -144,15 +144,29 @@ run setup
 [[ ! -e "${R}" ]] || fail "revoked runtime profile left behind"
 [[ "$(count 'amazon-bedrock\.|OpenAI-Project')" == 0 ]] || fail "revoked mantle left in config.toml"
 [[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "revoke must restore the runtime default"
-# A user's own amazon-bedrock table stays, and keeps runtime the default.
+# A user's own amazon-bedrock table (a key we don't manage) stays, and keeps runtime the default.
 cp "${H}/.codex/config.toml" "${TMPDIR:-/tmp}/ccbl-own.$$"
-printf '\n[model_providers.amazon-bedrock.aws]\nregion = "mine"\n' >> "${H}/.codex/config.toml"
+printf '\n[model_providers.amazon-bedrock.aws]\nregion = "mine"\nservice = "custom"\n' >> "${H}/.codex/config.toml"
 echo '{"credentials":{},"mantle":{"enabled":true,"projectId":"proj_abc"}}' > "${H}/.config/cc-bedrock/state.json"
 run setup
 [[ "$(count '^region = "mine"$')" == 1 ]] || fail "dropped the user's own amazon-bedrock table"
 [[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "duplicate amazon-bedrock table"
 [[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "own table must keep runtime the default"
-cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"; rm -f "${TMPDIR:-/tmp}/ccbl-own.$$" "${M}"
+cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"
+# A leftover unmarked table with only managed keys (a manual `region = "us-east-1"`
+# mantle setup, seen on a Mac) is replaced: mantle becomes the default, one table.
+printf 'sandbox_mode = "workspace-write"\n\n[model_providers.amazon-bedrock.aws]\nregion = "us-east-1"\n\n[tui]\nx = true\n' > "${H}/.codex/config.toml"
+run setup
+[[ "$(count '^model_provider = "amazon-bedrock"  # managed by cc-bedrock-local$')" == 1 ]] || fail "leftover table must not block the mantle default"
+[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "leftover table duplicated"
+[[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]  # managed by cc-bedrock-local$')" == 1 ]] || fail "leftover table not replaced by ours"
+[[ "$(count '^OpenAI-Project = "proj_abc"$')" == 1 ]] || fail "mantle header missing after replacing leftover"
+[[ "$(count '^sandbox_mode = "workspace-write"$')" == 1 ]] || fail "user sandbox_mode lost"
+python3 -c 'import sys
+try: import tomllib
+except ImportError: sys.exit(0)
+tomllib.load(open(sys.argv[1], "rb"))' "${H}/.codex/config.toml" || fail "leftover replacement produced invalid TOML"
+cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"; rm -f "${TMPDIR:-/tmp}/ccbl-own.$$" "${M}" "${R}"
 echo '{"credentials":{},"mantle":{"enabled":false}}' > "${H}/.config/cc-bedrock/state.json"
 run setup
 printf 'model = "mine"\n' > "${M}"
@@ -183,7 +197,7 @@ except ImportError: sys.exit(0)
 tomllib.load(open(sys.argv[1], "rb"))' "${H}/.codex/config.toml" || fail "quiet re-sync produced invalid TOML"
 
 # The user's own amazon-bedrock provider tables are not ours to strip from config.toml.
-printf '[model_providers.amazon-bedrock.aws]\nprofile = "mine"\n' > "${H}/.codex/config.toml"
+printf '[model_providers.amazon-bedrock.aws]\nprofile = "mine"\nservice = "custom"\n' > "${H}/.codex/config.toml"
 run setup
 [[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "stripped the user's own amazon-bedrock table"
 

@@ -666,21 +666,35 @@ except Exception:
 m_ours = not os.path.exists(m_path) or mark in open(m_path).read()
 r_ours = not os.path.exists(r_path) or mark in open(r_path).read()
 want_mantle = mode == "add" and mantle.get("enabled") and mantle.get("projectId")
-# The amazon-bedrock tables are ours only when marked; a user's own copy stays,
-# and then mantle is not made the default (a second table would be invalid TOML).
+# The amazon-bedrock tables are ours when marked, or when unmarked but holding only
+# keys we manage (aws: profile/region; headers: OpenAI-Project) - e.g. a leftover
+# `region = "us-east-1"` from a manual mantle setup - so they are replaced. A table
+# with any other key is the user's own and stays; then mantle is not made the
+# default (a second table would be invalid TOML).
 hdr = lambda l: l.split("#", 1)[0].strip()
-own_m = any(hdr(l) in (M_AWS, M_HDR) and mark not in l for l in lines)
+M_KEYS = {M_AWS: {"profile", "region"}, M_HDR: {"OpenAI-Project"}}
+def m_table_ours(i):
+    if mark in lines[i]:
+        return True
+    for l in lines[i + 1:]:
+        if l.strip().startswith("["):
+            break
+        k = hdr(l).split("=", 1)[0].strip().strip('"')
+        if k and k not in M_KEYS[hdr(lines[i])]:
+            return False
+    return True
+m_ours_at = {i for i, l in enumerate(lines) if hdr(l) in M_KEYS and m_table_ours(i)}
+own_m = any(hdr(l) in M_KEYS and i not in m_ours_at for i, l in enumerate(lines))
 default_mantle = want_mantle and not own_m
 if want_mantle and own_m and not quiet:
     sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml has its own [model_providers.amazon-bedrock.*]; "
                      "codex stays on bedrock-runtime by default (mantle: codex -p mantle)\n")
 top_key = re.compile(r"^\s*(model_provider|model|web_search)\s*=")
 out, in_top, in_ours = [], True, False
-for line in lines:
+for idx, line in enumerate(lines):
     if line.strip().startswith("["):
         in_top = False
-        in_ours = hdr(line) in (TABLE, PERMS, PERMS_FS, M_PROFILE) or (
-            hdr(line) in (M_AWS, M_HDR) and mark in line)
+        in_ours = hdr(line) in (TABLE, PERMS, PERMS_FS, M_PROFILE) or idx in m_ours_at
         if in_ours:
             continue
     if in_ours or mark in line or (in_top and top_key.match(line)):

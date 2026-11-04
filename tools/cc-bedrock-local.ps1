@@ -497,11 +497,26 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   }
   # ADR-014 section 9 (amended 2026-11-03): with a mantle grant, bedrock-mantle is the
   # default provider (plain codex + the Codex app get web search); the metered runtime
-  # path is 'codex -p runtime'. The amazon-bedrock tables are ours only when marked; a
-  # user's own copy stays and keeps runtime the default (a second table is invalid TOML).
+  # path is 'codex -p runtime'. The amazon-bedrock tables are ours when marked, or when
+  # unmarked but holding only keys we manage (aws: profile/region; headers:
+  # OpenAI-Project), e.g. a leftover manual region = "us-east-1"; those are replaced.
+  # A table with any other key is the user's own, stays, and keeps runtime the default
+  # (a second table is invalid TOML).
+  $mKeys = @{ $mAws = @('profile', 'region'); $mHdr = @('OpenAI-Project') }
+  $mOursAt = @{}
   $ownM = $false
-  foreach ($line in $lines) {
-    if ((@($mAws, $mHdr) -contains $line.Split('#')[0].Trim()) -and -not $line.Contains($CodexMark)) { $ownM = $true }
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $h = $lines[$i].Split('#')[0].Trim()
+    if (-not $mKeys.ContainsKey($h)) { continue }
+    $isOurs = $true
+    if (-not $lines[$i].Contains($CodexMark)) {
+      for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+        if ($lines[$j].Trim().StartsWith('[')) { break }
+        $k = $lines[$j].Split('#')[0].Split('=')[0].Trim().Trim('"')
+        if ($k -and ($mKeys[$h] -cnotcontains $k)) { $isOurs = $false; break }
+      }
+    }
+    if ($isOurs) { $mOursAt[$i] = $true } else { $ownM = $true }
   }
   $defaultMantle = $wantMantle -and -not $ownM
   if ($wantMantle -and $ownM -and -not $quiet) {
@@ -510,11 +525,12 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   $topKey = '^\s*(model_provider|model|web_search)\s*='
   $out = New-Object Collections.Generic.List[string]
   $inTop = $true; $inOurs = $false
-  foreach ($line in $lines) {
+  for ($idx = 0; $idx -lt $lines.Count; $idx++) {
+    $line = $lines[$idx]
     if ($line.Trim().StartsWith('[')) {
       $inTop = $false
       $h = $line.Split('#')[0].Trim()
-      $inOurs = (@($table, $perms, $permsFs, $mProfile) -contains $h) -or ((@($mAws, $mHdr) -contains $h) -and $line.Contains($CodexMark))
+      $inOurs = (@($table, $perms, $permsFs, $mProfile) -contains $h) -or $mOursAt.ContainsKey($idx)
       if ($inOurs) { continue }
     }
     if ($inOurs -or $line.Contains($CodexMark) -or ($inTop -and $line -cmatch $topKey)) { continue }
