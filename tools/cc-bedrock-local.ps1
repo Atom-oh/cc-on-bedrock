@@ -54,6 +54,12 @@ function Write-TextFile([string]$path, [string]$text) {
   # Unique temp name: Claude and Codex may run credential-process concurrently.
   $tmp = "$path.$PID.tmp"
   [IO.File]::WriteAllText($tmp, $text, $Utf8NoBom)
+  # The rename would give the file the temp file's inherited ACL; keep the
+  # original one (an owner-only file must stay owner-only). Best effort: files
+  # holding secrets are also passed through Protect-Path, which fails closed.
+  if ($OnWindows -and (Test-Path -LiteralPath $path)) {
+    try { Set-Acl -LiteralPath $tmp -AclObject (Get-Acl -LiteralPath $path) } catch { }
+  }
   # Windows refuses to replace a file another process has open (a concurrent
   # credential-process reading state.json); retry briefly instead of failing.
   for ($try = 1; ; $try++) {
@@ -262,8 +268,9 @@ function Save-State([string]$raw) {
   Protect-Path $StateFile
 }
 
-function Get-StateExpiryEpoch {
-  $s = Read-State
+# Pass the state you will emit, so the expiry check and the emitted credentials come
+# from the same snapshot (a concurrent refresh may rewrite state.json in between).
+function Get-StateExpiryEpoch($s = (Read-State)) {
   if (-not $s -or -not $s.Contains('credentials')) { return 0 }
   return ConvertTo-Epoch (Format-Iso $s['credentials']['expiration'])
 }
@@ -271,7 +278,8 @@ function Get-StateExpiryEpoch {
 # --- credential command line --------------------------------
 # Run by the AWS SDK (cmd.exe /C on Windows) and by Claude Code's
 # awsCredentialExport. Forward slashes keep it valid in cmd, Git Bash and
-# PowerShell alike; the script path is quoted because profiles may contain spaces.
+# PowerShell alike. No double quotes (cmd.exe /C from the Rust SDK passes them to
+# PowerShell literally); a path with whitespace uses -EncodedCommand instead.
 function Get-SelfPath {
   $p = $PSCommandPath
   if ($OnWindows) { $p = $p -replace '\\', '/' }
@@ -311,7 +319,7 @@ function Install-AwsProfile {
   if (Test-Path -LiteralPath $AwsCredsFile) {
     $c = Read-TextFile $AwsCredsFile
     $cleaned = [regex]::Replace($c, "(?ms)^\[$([regex]::Escape($AwsProfileName))\].*?(?=^\[|\z)", '').TrimEnd() + "`n"
-    if ($cleaned -ne $c) { Write-TextFile $AwsCredsFile $cleaned }
+    if ($cleaned -ne $c) { Write-TextFile $AwsCredsFile $cleaned; Protect-Path $AwsCredsFile }
   }
   if ($created) { Protect-Path $AwsConfigFile }
 }
@@ -406,7 +414,7 @@ function Invoke-CredentialProcess {
     Require-Config
     # Cache hit while > 5 min remain (the SDK refreshes ahead of Expiration).
     $state = Read-State
-    if ($state -and $state.Contains('credentials') -and ((Get-StateExpiryEpoch) - (Get-EpochNow) -gt 300)) {
+    if ($state -and $state.Contains('credentials') -and ((Get-StateExpiryEpoch $state) - (Get-EpochNow) -gt 300)) {
       Write-CredentialsJson $state
       return
     }
@@ -483,6 +491,20 @@ function Test-ClientsConfigured {
   } catch { return $false }
 }
 
+# Table header with quoted segments and spacing normalized, so
+# [model_providers."amazon-bedrock".aws] matches [model_providers.amazon-bedrock.aws]
+# (bash: hdr). Non-header lines come back comment-stripped and trimmed.
+function Get-TomlHeader([string]$line) {
+  $h = $line.Split('#')[0].Trim()
+  if ($h.StartsWith('[') -and $h.EndsWith(']')) {
+    $inner = $h.TrimStart('[').TrimEnd(']').Replace('"', '').Replace("'", '')
+    $inner = [regex]::Replace($inner, '\s*\.\s*', '.').Trim()
+    $h = '[' + $inner + ']'
+    if ($line.Split('#')[0].Trim().StartsWith('[[')) { $h = '[' + $h + ']' }
+  }
+  return $h
+}
+
 function ConvertTo-TomlString([string]$v) { return '"' + $v.Replace('\', '\\').Replace('"', '\"') + '"' }
 
 # Same edit as configure_codex in cc-bedrock-local.sh: strip what we manage (and
@@ -529,7 +551,7 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   $unmarked = New-Object Collections.Generic.List[int]
   $allManaged = $true
   for ($i = 0; $i -lt $lines.Count; $i++) {
-    $h = $lines[$i].Split('#')[0].Trim()
+    $h = Get-TomlHeader $lines[$i]
     if (-not ($h -ceq '[model_providers.amazon-bedrock]' -or $h.StartsWith('[model_providers.amazon-bedrock.', [StringComparison]::Ordinal))) { continue }
     if ($lines[$i].Contains($CodexMark)) { $mOursAt[$i] = $true; continue }
     $unmarked.Add($i)
@@ -554,7 +576,7 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
     $line = $lines[$idx]
     if ($line.Trim().StartsWith('[')) {
       $inTop = $false
-      $h = $line.Split('#')[0].Trim()
+      $h = Get-TomlHeader $line
       $inOurs = (@($table, $perms, $permsFs, $mProfile) -ccontains $h) -or $mOursAt.ContainsKey($idx)
       if ($inOurs) { continue }
     }
@@ -599,7 +621,7 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
     # broke Codex at start; a copy from an older install is stripped above.
     $own = @($clean | Where-Object { $_ -cmatch '^\s*(default_permissions|sandbox_mode)\s*=' -or $_.Split('#')[0].Trim() -eq '[sandbox_workspace_write]' })
     if ($OnWindows) {
-      if (-not $quiet) { Say "Windows: no Codex read-deny for $CfgDir (the Windows sandbox cannot enforce it); commands Codex runs can read that folder" }
+      # Reported by Invoke-Setup on stdout (the setup summary), not here.
     } elseif ($own.Count) {
       if (-not $quiet) { Say "$CodexConfigFile sets its own sandbox; add a read deny for $CfgDir yourself (see Codex permissions docs)" }
     } else {
@@ -683,6 +705,7 @@ function Invoke-Setup([bool]$quietOutput = $false) {
     Out '  restart Claude Desktop / the Codex app so they reload their settings'
     $note = Get-MantleNote
     if ($note) { Out "! $note" }
+    if ($OnWindows) { Out "! Windows: Codex gets no read-deny for $CfgDir (the Windows sandbox cannot enforce it), so commands Codex runs can read your session keys there (ADR-014)" }
   }
   # A Bedrock API key outranks the profile in both tools and would bypass the
   # per-user role (metering, budget deny).

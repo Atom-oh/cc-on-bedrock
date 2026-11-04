@@ -171,6 +171,7 @@ try {
   Check 'config dir ACL: earlier explicit Users grant removed' (-not ($sids -contains 'S-1-5-32-545')) ($sids -join ', ')
   $r = RunCli @('setup')
   Check 'setup reports the applied Codex provider (mantle default here)' ($r.Out -cmatch 'codex  -> Bedrock \(.*: amazon-bedrock, ') $r.Out
+  Check 'setup tells Windows users Codex has no read-deny' ($r.Out.Contains('Windows: Codex gets no read-deny')) $r.Out
 
   # 9. set-model
   $r = RunCli @('set-model', 'opus=global.anthropic.claude-opus-5')

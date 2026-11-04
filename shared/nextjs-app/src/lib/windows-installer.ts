@@ -135,7 +135,13 @@ Write-Host '    ~/.codex/config.toml (Codex CLI + Codex app); undo: cc-bedrock-l
 $Reply = Read-Host -Prompt '   '
 if (-not $Reply) { $Reply = 'y' }
 if ($Reply -match '^[Yy]') {
-  [void](Invoke-Cli setup)
+  # A failed setup (e.g. an invalid settings.json) leaves the tools unconfigured:
+  # stop here rather than sign in and report Done. 'return' leaves this script
+  # block only; 'exit' would close the user's PowerShell window under irm | iex.
+  if ((Invoke-Cli setup) -ne 0) {
+    Write-Host '  setup failed (see the message above) - fix it, then run: cc-bedrock-local setup; cc-bedrock-local login'
+    return
+  }
   Write-Host ''
   Write-Host 'Signing in once (the session then renews itself for 30 days):'
   if ((Invoke-Cli login) -ne 0) { Write-Host '  sign-in failed - retry with: cc-bedrock-local login' }

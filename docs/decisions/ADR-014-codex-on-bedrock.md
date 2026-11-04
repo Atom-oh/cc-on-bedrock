@@ -231,6 +231,7 @@ semantic:
     context_files:
       - shared/nextjs-app/src/lib/ec2-clients.ts
       - tools/cc-bedrock-local.sh
+      - tools/cc-bedrock-local.ps1
       - lambda/bedrock-usage-tracker.py
 
 # runtime:

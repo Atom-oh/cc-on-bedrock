@@ -170,6 +170,25 @@ run setup
 [[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "mixed: duplicate aws table"
 [[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "mixed: runtime must stay the default"
 cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"
+# Quoted headers are the same tables: the user's own quoted table (custom key) keeps
+# runtime the default with no second unquoted copy; a quoted managed-keys-only
+# leftover is replaced. Both must stay valid TOML.
+toml_ok() { python3 -c 'import sys
+try: import tomllib
+except ImportError: sys.exit(0)
+tomllib.load(open(sys.argv[1], "rb"))' "${H}/.codex/config.toml"; }
+printf '\n[model_providers."amazon-bedrock".aws]\nregion = "mine"\nservice = "custom"\n' >> "${H}/.codex/config.toml"
+run setup
+[[ "$(count 'amazon-bedrock.?\.aws\]')" == 1 ]] || fail "quoted own table: duplicate aws table"
+[[ "$(count '^model_provider = "amazon-bedrock-runtime"')" == 1 ]] || fail "quoted own table: runtime must stay the default"
+toml_ok || fail "quoted own table produced invalid TOML"
+cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"
+printf '\n[ model_providers . "amazon-bedrock" . aws ]\nregion = "us-east-1"\n' >> "${H}/.codex/config.toml"
+run setup
+[[ "$(count 'amazon-bedrock.?\.aws\]')" == 1 ]] || fail "quoted leftover: duplicate aws table"
+[[ "$(count '^model_provider = "amazon-bedrock"  # managed by cc-bedrock-local$')" == 1 ]] || fail "quoted leftover must be replaced"
+toml_ok || fail "quoted leftover produced invalid TOML"
+cp "${TMPDIR:-/tmp}/ccbl-own.$$" "${H}/.codex/config.toml"
 # A leftover unmarked table with only managed keys (a manual `region = "us-east-1"`
 # mantle setup, seen on a Mac) is replaced: mantle becomes the default, one table.
 printf 'sandbox_mode = "workspace-write"\n\n[model_providers.amazon-bedrock.aws]\nregion = "us-east-1"\n\n[tui]\nx = true\n' > "${H}/.codex/config.toml"

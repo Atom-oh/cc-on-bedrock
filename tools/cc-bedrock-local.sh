@@ -674,7 +674,14 @@ want_mantle = mode == "add" and mantle.get("enabled") and mantle.get("projectId"
 # OpenAI-Project) - e.g. a leftover `region = "us-east-1"` from a manual mantle
 # setup - then they are replaced. Otherwise the user's provider stays whole and
 # mantle is not made the default (a second table would be invalid TOML).
-hdr = lambda l: l.split("#", 1)[0].strip()
+def hdr(l):
+    # Comment-stripped line; table headers also get quoted segments and spacing
+    # normalized, so [model_providers."amazon-bedrock".aws] matches ours (PS1: Get-TomlHeader).
+    h = l.split("#", 1)[0].strip()
+    if h.startswith("[") and h.endswith("]"):
+        inner = re.sub(r"\s*\.\s*", ".", h.strip("[]").replace('"', "").replace("'", "")).strip()
+        h = ("[[%s]]" if h.startswith("[[") else "[%s]") % inner
+    return h
 M_KEYS = {M_AWS: {"profile", "region"}, M_HDR: {"OpenAI-Project"}}
 is_m = lambda h: h == "[model_providers.amazon-bedrock]" or h.startswith("[model_providers.amazon-bedrock.")
 def managed_keys_only(i):
