@@ -49,8 +49,9 @@ Evidence (samples account, ap-northeast-2, 2026-10-18):
 ## Decision
 
 **Codex calls Bedrock through `amazon-bedrock-runtime` by default and shares Claude Code's
-per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is used only as
-the opt-in `codex -p mantle` profile for users whose cost is unlimited (§9, amended 2026-10-26).**
+per-user roles, usage pipeline, budget deny and audit path. bedrock-mantle is used only by
+users whose cost is unlimited (§9, amended 2026-10-26); for them it is the Local CLI's
+default Codex provider, with runtime kept as `codex -p runtime` (§9, amended 2026-11-03).**
 
 1. **IAM (extends ADR-007).** Every per-user Bedrock allow-list and the permission
    boundary add `foundation-model/*openai.gpt-*`, `inference-profile/*openai.gpt-*` and
@@ -80,6 +81,10 @@ the opt-in `codex -p mantle` profile for users whose cost is unlimited (§9, ame
    (`extends = ":workspace"`) that denies `~/.config/cc-bedrock` (refresh token, STS
    keys) to sandboxed commands — skipped with a warning when the user already chose a
    `sandbox_mode`/`default_permissions`. Each line is marked `# managed by cc-bedrock-local`.
+   *Amended 2026-11-03:* the Windows CLI (`cc-bedrock-local.ps1`) does not write the
+   profile: the unelevated Windows sandbox does not support denied read paths, Codex
+   refuses such a profile at start, so on native Windows the folder is readable by
+   commands Codex runs (same exposure as Claude Code without the sandbox).
    Plain `codex` then signs with the per-user role (verified with codex-cli 0.163). Claude Code's
    `awsCredentialExport` runs the same `credential-process` subcommand: it accepts the flat
    `credential_process` shape (`Version`/`AccessKeyId`/…/`Expiration`) as well as
@@ -135,8 +140,21 @@ the opt-in `codex -p mantle` profile for users whose cost is unlimited (§9, ame
      region, model}` read from the grant; `cc-bedrock-local` writes / removes
      `~/.codex/mantle.config.toml` (Codex 0.163 loads `-p <name>` from `<name>.config.toml`
      and rejects `[profiles.<name>]` in config.toml) on login, credential renewal and setup.
-     Plain `codex` stays on bedrock-runtime (Seoul). GPT models exist on mantle only in
-     **us-east-1** (Codex refuses Seoul mantle client-side), so mantle data is processed there.
+     GPT models exist on mantle only in **us-east-1** (Codex refuses Seoul mantle
+     client-side), so mantle data is processed there.
+   - *Default provider (amended 2026-11-03, owner decision).* While the grant is reported,
+     `cc-bedrock-local setup` (bash and Windows) makes bedrock-mantle the default in
+     `~/.codex/config.toml` (`model_provider = "amazon-bedrock"`, `web_search = "live"`,
+     the `amazon-bedrock` aws + `OpenAI-Project` header tables), because the Codex app has
+     no profile selection and plain `codex` is what users run; without it web search is
+     unreachable from the app. The metered path stays available as `codex -p runtime`
+     (`runtime.config.toml`), and `codex -p mantle` keeps working. Without a grant, or when
+     the user's own config.toml already defines an `amazon-bedrock` provider table, runtime
+     stays the default. Trade-off accepted: an unlimited user's default Codex traffic is
+     not metered (display-only estimate above). On revocation the config flips back to
+     runtime at the next credential renewal (≤ 1 h, `credential-process` re-issues when
+     TTL < 5 min); until then mantle calls are denied by IAM, not silently metered
+     elsewhere. EC2 DevEnv still defaults to runtime.
    - *Audit:* a us-east-1 trail logs mantle data events (`AWS::BedrockMantle::Project`,
      ~$0.10 / 100k calls) to its own bucket (90 days); an EventBridge rule forwards
      `CreateInference` to the home-region bus, where `audit-logger` records it with
@@ -209,7 +227,7 @@ files:
       - "model_provider=\"amazon-bedrock-runtime\""
 
 semantic:
-  - claim: "Codex defaults to the bedrock-runtime Responses API (amazon-bedrock-runtime provider), so invocation-log metering, the IAM deny and audit cover it; bedrock-mantle is granted only to unlimited-cost users, scoped to their own project, revoked when any cap appears, and audited via CloudTrail data events."
+  - claim: "Codex defaults to the bedrock-runtime Responses API (amazon-bedrock-runtime provider), so invocation-log metering, the IAM deny and audit cover it; bedrock-mantle is granted only to unlimited-cost users, scoped to their own project, revoked when any cap appears, and audited via CloudTrail data events. For a granted Local user, cc-bedrock-local makes mantle the config.toml default and keeps runtime as `codex -p runtime`; it reverts to runtime when the grant is gone."
     context_files:
       - shared/nextjs-app/src/lib/ec2-clients.ts
       - tools/cc-bedrock-local.sh

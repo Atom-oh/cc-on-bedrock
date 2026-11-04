@@ -11,7 +11,7 @@ consolidates: [ADR-014, ADR-029]
 > 옛 본문은 git tag `adr-legacy-2026-06-23` 및 `../history/ADR-MAPPING.md`로 보존.
 
 ## Status / 상태
-Accepted (2026-06-23). Consolidates ADR-014, ADR-029. Amended 2026-10-23 (deployment profiles).
+Accepted (2026-06-23). Consolidates ADR-014, ADR-029. Amended 2026-10-23 (deployment profiles) and 2026-11-03 (Windows Local CLI, Claude Desktop third-party mode).
 
 ## Context / 배경
 
@@ -131,6 +131,54 @@ variable `deployment_mode`:
   environments until devenv is re-enabled.
 - Local Mode has no OTEL productivity rollup (the collector is internal to the VPC); Bedrock
   token and cost metering is unaffected because it comes from invocation logs (ADR-005).
+
+## Amendment 2026-11-03: Windows Local CLI and Claude Desktop third-party mode
+
+**Context.** Local Mode shipped only as a bash CLI (`curl … | bash`), so Windows PCs could
+not use it. On Windows, Claude Code is mostly used from Claude Desktop (Code tab, Chat,
+Cowork) and Codex from the Codex app, and both apps run the credential command themselves
+from a plain Windows process. Bash or WSL cannot serve them.
+
+**Decision.**
+- **Windows Local CLI.** `tools/cc-bedrock-local.ps1` (Windows PowerShell 5.1 or pwsh 7,
+  ASCII-only) uses the same §2–§3 flow and the same config, state and managed keys as the
+  bash CLI. It is installed by `/api/install/windows` and served by `/api/install/cli-ps1`.
+  `credential_process` and `awsCredentialExport` run it through `powershell.exe`. The Claude
+  Desktop Code tab reads `~\.claude\settings.json`, and the Codex app reads
+  `~\.codex\config.toml`, so both use the per-user role with the same metering and budget
+  deny. The config directory is reset to an owner-only ACL, and install or setup fails when
+  that cannot be applied.
+- **Claude Desktop Cowork/Chat on Bedrock (opt-in).** `setup-desktop` writes Claude Desktop's
+  third-party policy values under `HKCU\SOFTWARE\Policies\Claude`:
+  - `inferenceProvider = bedrock`, plus the region and the `cc-bedrock` profile name;
+  - the AWS CLI path, because the app reads the profile through AWS CLI v2;
+  - `inferenceModels`, built from the Local model defaults.
+
+  It is opt-in because it switches the whole app from claude.ai sign-in to Bedrock. When the
+  key is not writable, the CLI imports a generated `.reg` file through a UAC prompt and
+  verifies the values; otherwise it leaves the file for the user or IT. A machine policy
+  under `HKLM` takes precedence over these values, and the CLI warns when one exists.
+  `unsetup-desktop` removes the values.
+- **Desktop web fetch (`DESKTOP_EGRESS_HOSTS`).** Desktop refuses every Chat/Cowork web fetch
+  while `coworkEgressAllowedHosts` is unset. The owner decided (2026-11-03) that the default is
+  `["*"]`, so fetch works the same way it does with claude.ai sign-in. The config key
+  `DESKTOP_EGRESS_HOSTS` narrows the list (comma-separated hosts). `none`, or any explicit
+  value that yields no host, writes `[]` and blocks every fetch. An explicit value never
+  widens to `*`.
+
+**Consequences.**
+- Windows users reach Bedrock through the same per-user role, so usage, budget denies and
+  audit are unchanged (ADR-005, ADR-008).
+- With the default egress, Desktop Chat/Cowork can fetch any host. Admins who need a
+  narrower list set `DESKTOP_EGRESS_HOSTS` in the installed config, or deploy the policy
+  value through IT.
+- Not yet verified on a pilot PC, because the vendor documentation does not state these
+  points:
+  - which shell Claude Code on Windows uses to run `awsCredentialExport`;
+  - whether Desktop third-party mode honors a `credential_process` profile;
+  - whether Desktop accepts `global.` model IDs.
+
+  `tests/windows/smoke-cc-bedrock-local.ps1` covers only the offline file contract.
 
 ## Cross-references / 교차 참조
 - **005 사용량 집계** — 동일 Application Inference Profile + Invocation Log → DynamoDB(email canonical key).

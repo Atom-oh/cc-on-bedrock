@@ -50,7 +50,7 @@ AWS_CONFIG_FILE="${HOME}/.aws/config"
 CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
 CODEX_CONFIG_FILE="${CODEX_HOME:-${HOME}/.codex}/config.toml"
 
-mkdir -p "${CFG_DIR}"
+mkdir -p "${CFG_DIR}" && chmod 700 "${CFG_DIR}" 2>/dev/null || true  # owner-only: refresh token + STS keys
 
 if [[ -f "${CFG_FILE}" ]]; then
   # shellcheck disable=SC1090
@@ -69,14 +69,15 @@ OTEL_HELPER="${OTEL_HELPER:-${HOME}/.local/bin/cc-otel-code-metrics}"
 
 # Model env — Bedrock inference profile IDs mapped to Claude Code's model slots.
 # Defaults: ANTHROPIC_MODEL=opusplan backs "Default" (Opus for planning, Sonnet for
-# execution), Haiku 4.5 backs "Haiku"/background. Set ANTHROPIC_MODEL to a raw model
+# execution), Haiku 5.5 backs "Haiku"/background. Set ANTHROPIC_MODEL to a raw model
 # id instead to pin /model to "Custom".
-ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-opusplan}"
-ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-5}"
-ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-4-8}"
+# `pin=` writes an empty ANTHROPIC_MODEL= to unset it: only an absent key defaults.
+ANTHROPIC_MODEL="${ANTHROPIC_MODEL-opusplan}"
+ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-5-5}"
+ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-5-5}"
 # ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
-ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${ANTHROPIC_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}}"
-CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-5}"
+ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${ANTHROPIC_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-5-5}}"
+CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-global.anthropic.claude-sonnet-5-5}"
 # Codex CLI model (ADR-014) — must be a cross-Region OpenAI profile (global./us.):
 # the bedrock-runtime Responses API rejects foundation-model IDs.
 CODEX_MODEL="${CODEX_MODEL:-global.openai.gpt-6.1-sol}"
@@ -611,7 +612,7 @@ import json, os, sys
 path, export_cmd, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
 CRED_RULE = "Read(~/.config/cc-bedrock/**)"
 try:
-    settings = json.load(open(path)) if os.path.exists(path) and os.path.getsize(path) else {}
+    settings = json.load(open(path, encoding="utf-8-sig")) if os.path.exists(path) and os.path.getsize(path) else {}
 except ValueError as e:
     sys.exit(f"cc-bedrock-local: {path} is not valid JSON ({e}); fix it and re-run 'setup'")
 env = settings.setdefault("env", {})
@@ -643,29 +644,65 @@ configure_codex() {  # configure_codex add|remove
   python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" "${CFG_DIR}" "${STATE_FILE}" "${CC_BEDROCK_QUIET:-}" <<'PY'
 import json, os, re, sys
 path, mode, mark, model, profile, region, cfg_dir, state_file, quiet = sys.argv[1:10]
-lines = open(path).read().splitlines() if os.path.exists(path) else []
+lines = open(path, encoding="utf-8-sig").read().splitlines() if os.path.exists(path) else []
 TABLE = "[model_providers.amazon-bedrock-runtime.aws]"
 PERMS = "[permissions.cc-bedrock]"
 PERMS_FS = "[permissions.cc-bedrock.filesystem]"
-# ADR-014: bedrock-mantle profile (`codex -p mantle`), written only while the
-# dashboard reports a mantle grant (unlimited-cost users; NOT metered). Codex
-# loads `-p <name>` from <CODEX_HOME>/<name>.config.toml and rejects a
-# [profiles.<name>] table in config.toml, so the profile is its own file.
+# ADR-014 §9 (amended 2026-11-03): while the dashboard reports a mantle grant
+# (unlimited-cost users; NOT metered) bedrock-mantle is the DEFAULT provider in
+# config.toml, so plain `codex` and the Codex app get web search; the metered
+# runtime path stays available as `codex -p runtime`, and `codex -p mantle` keeps
+# working. Without a grant, runtime is the default as before. Codex loads
+# `-p <name>` from <CODEX_HOME>/<name>.config.toml and rejects a
+# [profiles.<name>] table in config.toml, so each profile is its own file.
 M_PROFILE = "[profiles.mantle]"  # stripped only (never written)
 M_AWS = "[model_providers.amazon-bedrock.aws]"
 M_HDR = "[model_providers.amazon-bedrock.http_headers]"
 m_path = os.path.join(os.path.dirname(path), "mantle.config.toml")
+r_path = os.path.join(os.path.dirname(path), "runtime.config.toml")
 try:
     mantle = json.load(open(state_file)).get("mantle") or {}
 except Exception:
     mantle = {}
 m_ours = not os.path.exists(m_path) or mark in open(m_path).read()
+r_ours = not os.path.exists(r_path) or mark in open(r_path).read()
+want_mantle = mode == "add" and mantle.get("enabled") and mantle.get("projectId")
+# Ownership of the amazon-bedrock provider is decided for the provider as a whole.
+# Marked tables are ours. Unmarked ones are the user's and are never touched, except
+# while a grant is present and every unmarked amazon-bedrock table is the aws or
+# headers table holding only keys we manage (aws: profile/region; headers:
+# OpenAI-Project) - e.g. a leftover `region = "us-east-1"` from a manual mantle
+# setup - then they are replaced. Otherwise the user's provider stays whole and
+# mantle is not made the default (a second table would be invalid TOML).
+hdr = lambda l: l.split("#", 1)[0].strip()
+M_KEYS = {M_AWS: {"profile", "region"}, M_HDR: {"OpenAI-Project"}}
+is_m = lambda h: h == "[model_providers.amazon-bedrock]" or h.startswith("[model_providers.amazon-bedrock.")
+def managed_keys_only(i):
+    keys = M_KEYS.get(hdr(lines[i]))
+    if keys is None:
+        return False
+    for l in lines[i + 1:]:
+        if l.strip().startswith("["):
+            break
+        k = hdr(l).split("=", 1)[0].strip().strip('"')
+        if k and k not in keys:
+            return False
+    return True
+m_marked = {i for i, l in enumerate(lines) if is_m(hdr(l)) and mark in l}
+m_unmarked = {i for i, l in enumerate(lines) if is_m(hdr(l)) and mark not in l}
+replace_unmarked = bool(want_mantle) and all(managed_keys_only(i) for i in m_unmarked)
+m_ours_at = m_marked | (m_unmarked if replace_unmarked else set())
+own_m = bool(m_unmarked) and not replace_unmarked
+default_mantle = want_mantle and not own_m
+if want_mantle and own_m and not quiet:
+    sys.stderr.write("cc-bedrock-local: ~/.codex/config.toml has its own [model_providers.amazon-bedrock.*]; "
+                     "codex stays on bedrock-runtime by default (mantle: codex -p mantle)\n")
 top_key = re.compile(r"^\s*(model_provider|model|web_search)\s*=")
 out, in_top, in_ours = [], True, False
-for line in lines:
+for idx, line in enumerate(lines):
     if line.strip().startswith("["):
         in_top = False
-        in_ours = line.split("#", 1)[0].strip() in (TABLE, PERMS, PERMS_FS, M_PROFILE)
+        in_ours = hdr(line) in (TABLE, PERMS, PERMS_FS, M_PROFILE) or idx in m_ours_at
         if in_ours:
             continue
     if in_ours or mark in line or (in_top and top_key.match(line)):
@@ -677,12 +714,26 @@ while out and not out[0].strip():
     out.pop(0)
 while out and not out[-1].strip():
     out.pop()
+q = lambda v: '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+m_model = mantle.get("model") or "openai.gpt-6.1-sol"
+m_region = mantle.get("region") or "us-east-1"
+# The mantle provider tables (profile, region, and the OpenAI-Project header: IAM
+# allows only the user's own project, so without it the call lands in
+# project/default and is denied).
+m_tables = ["", f"{M_AWS}  {mark}", f"profile = {q(profile)}", f"region = {q(m_region)}",
+            "", f"{M_HDR}  {mark}", f"OpenAI-Project = {q(mantle.get('projectId') or '')}"]
 if mode == "add":
-    q = lambda v: '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    head = [f'model_provider = "amazon-bedrock-runtime"  {mark}',
-            f"model = {q(model)}  {mark}",
-            f'web_search = "disabled"  {mark}']
+    if default_mantle:
+        head = [f'model_provider = "amazon-bedrock"  {mark}',
+                f"model = {q(m_model)}  {mark}",
+                f'web_search = "live"  {mark}']
+    else:
+        head = [f'model_provider = "amazon-bedrock-runtime"  {mark}',
+                f"model = {q(model)}  {mark}",
+                f'web_search = "disabled"  {mark}']
     tail = ["", f"{TABLE}  {mark}", f"profile = {q(profile)}", f"region = {q(region)}"]
+    if default_mantle:
+        tail += m_tables
     # Keep commands Codex runs away from the cached refresh token and STS keys:
     # a permission profile on top of :workspace that denies the CLI's directory
     # (enforced by the sandbox; Codex's own credential_process call is not
@@ -699,26 +750,30 @@ if mode == "add":
         tail += ["", f"{PERMS}  {mark}", 'extends = ":workspace"',
                  "", f"{PERMS_FS}  {mark}", f'{q(cfg_dir)} = "deny"']
     out = head + ([""] + out if out else []) + tail
-want_mantle = mode == "add" and mantle.get("enabled") and mantle.get("projectId")
+def write_profile(p, body):
+    p_tmp = f"{p}.{os.getpid()}.tmp"
+    with open(p_tmp, "w") as f:
+        f.write("\n".join(body) + "\n")
+    os.replace(p_tmp, p)
 if want_mantle and m_ours:
-    m = [f"{mark} — bedrock-mantle (web search). NOT counted in usage or budget;",
-         "# granted only while your cost is unlimited. Use: codex -p mantle",
-         'model_provider = "amazon-bedrock"',
-         f"model = {q(mantle.get('model') or 'openai.gpt-6.1-sol')}",
-         'web_search = "live"',
-         "", M_AWS, f"profile = {q(profile)}",
-         f"region = {q(mantle.get('region') or 'us-east-1')}",
-         # IAM allows only the user's own project: without the header the call
-         # lands in project/default and is denied.
-         "", M_HDR, f"OpenAI-Project = {q(mantle['projectId'])}"]
-    m_tmp = f"{m_path}.{os.getpid()}.tmp"
-    with open(m_tmp, "w") as f:
-        f.write("\n".join(m) + "\n")
-    os.replace(m_tmp, m_path)
+    write_profile(m_path, [
+        f"{mark} — bedrock-mantle (web search). NOT counted in usage or budget;",
+        "# granted only while your cost is unlimited. Use: codex -p mantle",
+        'model_provider = "amazon-bedrock"', f"model = {q(m_model)}", 'web_search = "live"',
+        *[l.replace(f"  {mark}", "") for l in m_tables]])
 elif want_mantle and not quiet:
     sys.stderr.write(f"cc-bedrock-local: {m_path} is your own file — not adding the mantle profile\n")
 elif m_ours and os.path.exists(m_path):
     os.remove(m_path)
+if default_mantle and r_ours:
+    write_profile(r_path, [
+        f"{mark} — bedrock-runtime (metered: counted in usage and budget, no web search).",
+        "# Use: codex -p runtime",
+        'model_provider = "amazon-bedrock-runtime"', f"model = {q(model)}", 'web_search = "disabled"'])
+elif default_mantle and not quiet:
+    sys.stderr.write(f"cc-bedrock-local: {r_path} is your own file — not adding the runtime profile\n")
+elif r_ours and os.path.exists(r_path):
+    os.remove(r_path)
 # Unique tmp: credential-process (claude + codex) may refresh concurrently.
 tmp = f"{path}.{os.getpid()}.tmp"
 with open(tmp, "w") as f:
@@ -727,28 +782,46 @@ os.replace(tmp, path)
 PY
 }
 
+# "<provider> <model>" that config.toml actually defaults to (our managed keys;
+# empty before setup), so messages report what was applied, not what was granted.
+codex_default() {
+  [[ -f "${CODEX_CONFIG_FILE}" ]] || return 0
+  sed -nE 's/^(model_provider|model) = "([^"]*)"  # managed by cc-bedrock-local$/\2/p' "${CODEX_CONFIG_FILE}" | paste -sd' ' -
+}
+
 mantle_note() {  # one line describing the mantle grant in state.json (empty when none)
   [[ -f "${STATE_FILE}" ]] || return 0
-  python3 - "${STATE_FILE}" <<'PY' 2>/dev/null || true
+  python3 - "${STATE_FILE}" "$(codex_default)" <<'PY' 2>/dev/null || true
 import json, sys
 m = json.load(open(sys.argv[1])).get("mantle") or {}
 if m.get("enabled"):
-    print(f"mantle (codex -p mantle, {m.get('model')}, {m.get('region')}): enabled — web search; "
-          "NOT counted in usage or budget; available while your cost is unlimited")
+    if sys.argv[2].split(" ")[0] == "amazon-bedrock":
+        print(f"mantle ({m.get('model')}, {m.get('region')}): DEFAULT for codex + the Codex app — web search; "
+              "NOT counted in usage or budget; metered runtime: codex -p runtime; available while your cost is unlimited")
+    else:
+        print(f"mantle ({m.get('model')}, {m.get('region')}): codex -p mantle — web search; NOT counted in usage or budget; "
+              "not the codex default (config.toml has its own amazon-bedrock provider, or setup has not run); "
+              "available while your cost is unlimited")
 PY
 }
 
 # After new credentials: keep the Codex mantle profile in step with the grant
-# (it appears/disappears as an admin removes/sets cost caps). Files + stderr only.
+# (it appears/disappears as an admin removes/sets cost caps). Gated on our own
+# Codex keys, not on Claude's settings, so a revocation always reverts Codex.
+# Files + stderr only.
 sync_codex_mantle() {
-  clients_configured || return 0
+  codex_configured || return 0
   CC_BEDROCK_QUIET=1 configure_codex add || say "could not update ${CODEX_CONFIG_FILE}"
+}
+
+codex_configured() {
+  [[ -f "${CODEX_CONFIG_FILE}" ]] && grep -qF "${CODEX_MARK}" "${CODEX_CONFIG_FILE}"
 }
 
 clients_configured() {
   [[ -f "${CLAUDE_SETTINGS_FILE}" ]] && python3 - "${CLAUDE_SETTINGS_FILE}" <<'PY' 2>/dev/null
 import json, sys
-sys.exit(0 if str(json.load(open(sys.argv[1])).get("awsCredentialExport", "")).endswith(" credential-process") else 1)
+sys.exit(0 if str(json.load(open(sys.argv[1], encoding="utf-8-sig")).get("awsCredentialExport", "")).endswith(" credential-process") else 1)
 PY
 }
 
@@ -765,7 +838,8 @@ do_setup() {
     configure_claude "$(printf '%q' "${self}") credential-process"
   configure_codex add
   echo "✓ claude → Bedrock (${CLAUDE_SETTINGS_FILE}: env + awsCredentialExport)"
-  echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: amazon-bedrock-runtime, profile=${AWS_PROFILE_NAME}, model=${CODEX_MODEL})"
+  local applied; applied="$(codex_default)"
+  echo "✓ codex  → Bedrock (${CODEX_CONFIG_FILE}: ${applied%% *}, profile=${AWS_PROFILE_NAME}, model=${applied#* })"
   local note; note="$(mantle_note)"
   [[ -z "${note}" ]] || echo "! ${note}"
   # A Bedrock API key outranks the profile in both tools and would bypass the
@@ -781,7 +855,7 @@ do_unsetup() {
     python3 - "${CLAUDE_SETTINGS_FILE}" "${CLAUDE_MANAGED_ENV[@]}" <<'PY'
 import json, os, sys
 path, keys = sys.argv[1], sys.argv[2:]
-settings = json.load(open(path))
+settings = json.load(open(path, encoding="utf-8-sig"))
 env = settings.get("env", {})
 for k in keys:
     env.pop(k, None)
@@ -833,6 +907,11 @@ do_set_model() {
     printf -v "${key}" '%s' "${val}"
     do_setup >/dev/null
     echo "✓ claude/codex settings updated"
+    # With a mantle grant the default codex model comes from the grant (mantle IDs
+    # differ from bedrock-runtime ones); CODEX_MODEL drives the metered runtime path.
+    if [[ "${key}" == CODEX_MODEL && "$(codex_default)" == amazon-bedrock\ * ]]; then
+      echo "  codex default is mantle ($(codex_default | cut -d' ' -f2-), from your grant); CODEX_MODEL applies to codex -p runtime"
+    fi
   fi
 }
 
@@ -848,10 +927,10 @@ Current model env (from ${CFG_FILE} or defaults):
   CODEX_MODEL                    = ${CODEX_MODEL}   # codex (OpenAI on Bedrock)
 
 Examples:
-  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5'
-  cc-bedrock-local set-model opus   'global.anthropic.claude-opus-4-8'
-  cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-4-5-20251001-v1:0
-  cc-bedrock-local set-model pin    global.anthropic.claude-opus-4-8   # force Custom slot
+  cc-bedrock-local set-model sonnet 'global.anthropic.claude-sonnet-5-5'
+  cc-bedrock-local set-model opus   'global.anthropic.claude-opus-5-5'
+  cc-bedrock-local set-model haiku  global.anthropic.claude-haiku-5-5
+  cc-bedrock-local set-model pin    global.anthropic.claude-opus-5-5   # force Custom slot
   cc-bedrock-local set-model codex  global.openai.gpt-6.1-sol          # codex default
   cc-bedrock-local set-model codex  global.openai.gpt-6-luna           # cheaper codex
 
@@ -864,7 +943,7 @@ do_status() {
     echo "no session — run 'cc-bedrock-local login'"
     return 1
   fi
-  python3 - "${STATE_FILE}" "${TOKEN_CACHE}" "${EMAIL:-}" <<'PY'
+  python3 - "${STATE_FILE}" "${TOKEN_CACHE}" "${EMAIL:-}" "$(codex_default)" <<'PY'
 import json, sys, datetime, os
 state = json.load(open(sys.argv[1]))
 creds = state.get("credentials", {})
@@ -882,7 +961,9 @@ except Exception:
 print(f"deny active   : {limit.get('denyActive', False)}")
 mantle = state.get("mantle") or {}
 if mantle.get("enabled"):
-    print(f"mantle        : enabled (codex -p mantle, {mantle.get('model')}, {mantle.get('region')}, "
+    where = ("codex default (runtime: codex -p runtime" if sys.argv[4].split(" ")[0] == "amazon-bedrock"
+             else "codex -p mantle only (codex default stays bedrock-runtime")
+    print(f"mantle        : enabled, {where}; {mantle.get('model')}, {mantle.get('region')}, "
           f"project {mantle.get('projectId')}) — NOT counted in usage or budget")
 else:
     print("mantle        : off (available only while your cost is unlimited)")
@@ -891,7 +972,7 @@ if limit.get("denyActive"):
     print(f"  reset_at    : {limit.get('resetAt')}")
 if os.path.exists(sys.argv[2]):
     tk = json.load(open(sys.argv[2]))
-    age = int(datetime.datetime.utcnow().timestamp() - tk.get("obtainedAt", 0))
+    age = int(datetime.datetime.now(datetime.timezone.utc).timestamp() - tk.get("obtainedAt", 0))
     print(f"cognito cache : present (age {age // 60}m)")
 else:
     print("cognito cache : (absent — next refresh will prompt for password)")
@@ -931,8 +1012,9 @@ Subcommands:
   codex [args]                ensure session, exec OpenAI codex on Bedrock (ADR-014)
   setup                       configure plain 'claude' + 'codex' for Bedrock
                               (~/.claude/settings.json, ~/.codex/config.toml);
-                              unlimited-cost users also get 'codex -p mantle'
-                              (bedrock-mantle, web search — NOT metered)
+                              unlimited-cost users get bedrock-mantle as the
+                              codex default (web search — NOT metered);
+                              metered runtime: 'codex -p runtime'
   unsetup                     remove those settings again
   set-model KEY=VAL           change model env in config (alias keys: sonnet|opus|haiku|subagent|pin|codex)
   models                      show current model env + valid keys

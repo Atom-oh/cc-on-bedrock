@@ -19,8 +19,8 @@ domain_name   = "example.com"
 dev_subdomain = "dev"
 
 # Models
-opus_model_id   = "global.anthropic.claude-opus-4-8"
-sonnet_model_id = "global.anthropic.claude-sonnet-5"
+opus_model_id   = "global.anthropic.claude-opus-5-5"
+sonnet_model_id = "global.anthropic.claude-sonnet-5-5"
 codex_model_id  = "global.openai.gpt-6.1-sol" # Codex CLI (ADR-014)
 # enable_mantle         = true                 # Codex -p mantle (web search) for unlimited-cost users; NOT metered (ADR-014)
 # shared_user_pool_name = "<existing-pool-name>" # ADR-016: use another stack's Cognito pool; access = cc-* role group membership

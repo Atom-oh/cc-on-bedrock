@@ -21,7 +21,7 @@ The deprecated `governance_only` bool overrides `deployment_mode` when set (`tru
 - Compute: per-user EC2 DevEnv (ADR-002); the dashboard runs on an EC2 Auto Scaling group that pulls the Next.js container from a Terraform-managed ECR repo (ADR-011); the nginx router and OTel collectors run on ECS Fargate.
 - Frontend: Next.js 14 (App Router), Tailwind CSS, Recharts. Auth: Cognito + NextAuth (ADR-004).
 - Data: DynamoDB for usage, routing, instances and limits. Usage comes from Application Inference Profiles + Bedrock Invocation Logs (ADR-005), not account-wide CloudWatch metrics.
-- Models (Terraform defaults in `terraform/variables.tf`): Opus `global.anthropic.claude-opus-4-8`, Sonnet `global.anthropic.claude-sonnet-5`; Codex uses `codex_model_id` (`global.openai.gpt-*`, ADR-014).
+- Models (Terraform defaults in `terraform/variables.tf`): Opus `global.anthropic.claude-opus-5-5`, Sonnet `global.anthropic.claude-sonnet-5-5`; Codex uses `codex_model_id` (`global.openai.gpt-*`, ADR-014).
 - Region: ap-northeast-2 by default, configurable.
 
 ## Layout

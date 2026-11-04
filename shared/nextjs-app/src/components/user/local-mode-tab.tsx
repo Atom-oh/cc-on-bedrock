@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import BudgetIncreaseRequest, { type BudgetLimits } from "@/components/budget/budget-increase-request";
 import MantleEstimatePanel from "@/components/mantle-estimate-panel";
+import { installCommands } from "@/lib/install-commands";
 
 // ADR-006 (legacy ADR-014): Local Governance Mode usage panel inside the user portal (/user tab).
 // Mirrors /local page but embedded as a tab — for users who log in via Cognito
@@ -64,7 +65,7 @@ export default function LocalModeTab() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const dashboardOrigin = typeof window !== "undefined" ? window.location.origin : "";
-  const installCommand = `curl -fsSL ${dashboardOrigin || "https://dashboard.example.com"}/api/install | bash`;
+  const { unix: installCommand, windows: windowsInstallCommand } = installCommands(dashboardOrigin);
 
   const refreshUsage = async () => {
     try {
@@ -266,12 +267,26 @@ export default function LocalModeTab() {
         <pre className="mt-3 p-3 bg-black/40 border border-gray-800 rounded overflow-auto text-xs text-gray-300">
           {installCommand}
         </pre>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div className="text-xs text-gray-400">
+            Windows (PowerShell 또는 cmd) — Claude Code·Claude Desktop Code 탭, Codex CLI·Codex 앱을 함께 설정합니다.
+          </div>
+          <button
+            onClick={() => copy(windowsInstallCommand, "install-windows")}
+            className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium whitespace-nowrap"
+          >
+            {copied === "install-windows" ? "Copied" : "Copy Windows"}
+          </button>
+        </div>
+        <pre className="mt-2 p-3 bg-black/40 border border-gray-800 rounded overflow-auto text-xs text-gray-300">
+          {windowsInstallCommand}
+        </pre>
         <div className="mt-3 text-xs text-gray-500 space-y-1">
           <div>
             설치 중 Cognito 비밀번호로 한 번 로그인하면 <code className="text-gray-300">claude</code>와 <code className="text-gray-300">codex</code>가 Bedrock 모드로 바로 실행됩니다.
           </div>
           <div>
-            비용 한도가 전혀 없는(무제한) 사용자는 <code className="text-gray-300">codex -p mantle</code>로 bedrock-mantle(웹 검색 포함, us-east-1)도 쓸 수 있습니다.{" "}
+            비용 한도가 전혀 없는(무제한) 사용자는 <code className="text-gray-300">codex</code>와 Codex 앱이 기본으로 bedrock-mantle(웹 검색 포함, us-east-1)을 씁니다. 집계되는 runtime 경로는 <code className="text-gray-300">codex -p runtime</code>입니다.{" "}
             <span className="text-amber-400">mantle 사용량은 예산에 포함되지 않습니다</span>(아래는 추정 비용) — 한도가 생기면 5분 안에 자동 회수됩니다.
             <MantleEstimatePanel scope="user" />
           </div>

@@ -69,12 +69,12 @@ variable "dev_subdomain" {
 # ---- Models ------------------------------------------------------------------
 variable "opus_model_id" {
   type    = string
-  default = "global.anthropic.claude-opus-4-8"
+  default = "global.anthropic.claude-opus-5-5"
 }
 
 variable "sonnet_model_id" {
   type    = string
-  default = "global.anthropic.claude-sonnet-5"
+  default = "global.anthropic.claude-sonnet-5-5"
 }
 
 # ADR-014 Codex on Bedrock: default OpenAI model for the Codex CLI. Must be a

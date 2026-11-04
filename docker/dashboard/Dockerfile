@@ -33,8 +33,10 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Copy tools/cc-bedrock-local.sh so /api/install/cli can serve it at runtime (ADR-006 (legacy ADR-014))
+# Copy the Local CLI so /api/install/cli (bash) and /api/install/cli-ps1 (Windows)
+# can serve it at runtime (ADR-006)
 COPY tools/cc-bedrock-local.sh ./public/tools/cc-bedrock-local.sh
+COPY tools/cc-bedrock-local.ps1 ./public/tools/cc-bedrock-local.ps1
 
 # Non-root user for security
 RUN addgroup --system --gid 1001 nodejs && \
