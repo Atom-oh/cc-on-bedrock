@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/ccbl-setup.XXXXXX")"
+_t="${TMPDIR:-/tmp}"; TMP="$(mktemp -d "${_t%/}/ccbl-setup.XXXXXX")"  # macOS TMPDIR ends in /
 trap 'rm -rf "${TMP}"' EXIT
 H="${TMP}/home"
 CLI="${TMP}/bin/cc-bedrock-local"
@@ -70,7 +70,7 @@ grep -qxF 'extends = ":workspace"' "${H}/.codex/config.toml" || fail "codex prof
 # One subcommand serves both ~/.aws/config credential_process and Claude Code's
 # awsCredentialExport: the flat credential_process JSON, which Claude Code accepts
 # too. Served from a valid cached state (no network).
-exp="$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+exp="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"  # portable (no GNU date -d on macOS)
 echo "{\"credentials\":{\"accessKeyId\":\"AKIDTEST\",\"secretAccessKey\":\"s\",\"sessionToken\":\"t\",\"expiration\":\"${exp}\"}}" \
   > "${H}/.config/cc-bedrock/state.json"
 cred="$(env -i HOME="${H}" PATH="/usr/bin:/bin" "${CLI}" credential-process 2>/dev/null)"
@@ -92,6 +92,9 @@ run set-model opus global.anthropic.claude-opus-5-5
 [[ "$(json 'd["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"]')" == global.anthropic.claude-opus-5-5 ]] || fail "set-model opus"
 run set-model pin=
 [[ "$(json '"ANTHROPIC_MODEL" in d["env"]')" == False ]] || fail "empty pin should unset ANTHROPIC_MODEL"
+# The unset must survive a new process (setup / credential sync re-reads the config).
+run setup
+[[ "$(json '"ANTHROPIC_MODEL" in d["env"]')" == False ]] || fail "pin= did not persist across a re-run"
 
 run unsetup
 [[ "$(json 'd["env"]')" == "{'FOO': '1'}" ]] || fail "unsetup left managed env keys"
@@ -200,6 +203,20 @@ tomllib.load(open(sys.argv[1], "rb"))' "${H}/.codex/config.toml" || fail "quiet 
 printf '[model_providers.amazon-bedrock.aws]\nprofile = "mine"\nservice = "custom"\n' > "${H}/.codex/config.toml"
 run setup
 [[ "$(count '^\[model_providers\.amazon-bedrock\.aws\]')" == 1 ]] || fail "stripped the user's own amazon-bedrock table"
+
+# A UTF-8 BOM (Windows editors) is ignored, as the PowerShell CLI does: the first-line
+# `model =` is still replaced (no duplicate key) and a BOM'd settings.json still parses.
+printf '\xef\xbb\xbfmodel = "mine"\n' > "${H}/.codex/config.toml"
+printf '\xef\xbb\xbf{"env":{"FOO":"1"}}' > "${H}/.claude/settings.json"
+run setup
+[[ "$(count '^model = ')" == 1 ]] || fail "BOM config.toml: duplicate model key"
+[[ "$(json 'd["env"]["FOO"]')" == 1 ]] || fail "BOM settings.json not parsed"
+# status reports the token cache age in UTC, whatever the local time zone.
+printf '{"refreshToken":"r","obtainedAt":%s}' "$(date +%s)" > "${H}/.config/cc-bedrock/cognito-tokens.json"
+echo "{\"credentials\":{\"expiration\":\"${exp}\"}}" > "${H}/.config/cc-bedrock/state.json"
+env -i HOME="${H}" PATH="/usr/bin:/bin" TZ=Asia/Seoul "${CLI}" status 2>/dev/null | grep -q "age 0m" \
+  || fail "status age is time-zone dependent"
+rm -f "${H}/.config/cc-bedrock/cognito-tokens.json" "${H}/.config/cc-bedrock/state.json"
 
 # A broken settings.json is reported, never overwritten.
 echo '{broken' > "${H}/.claude/settings.json"

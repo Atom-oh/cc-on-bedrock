@@ -104,7 +104,11 @@ try {
   Check 'settings.json env CLAUDE_CODE_USE_BEDROCK=1' ($s.env.CLAUDE_CODE_USE_BEDROCK -eq '1')
   Check 'settings.json denies Read of the cc-bedrock dir' (@($s.permissions.deny) -contains 'Read(~/.config/cc-bedrock/**)')
   $cmd = [string]$s.awsCredentialExport
-  Check 'awsCredentialExport calls this CLI' ($cmd -like '*credential-process' -and $cmd.Contains(($CliCopy -replace '\\', '/'))) $cmd
+  # A path with a space (this root) uses -EncodedCommand; decode it before checking.
+  $plain = $cmd
+  if ($cmd -cmatch '-EncodedCommand (\S+)$') { $plain = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) }
+  Check 'awsCredentialExport calls this CLI' ($plain.Contains('credential-process') -and $plain.Contains(($CliCopy -replace '\\', '/'))) $cmd
+  Check 'space in path uses -EncodedCommand' ($cmd.Contains(' -EncodedCommand ')) $cmd
   # The Rust AWS SDK (Codex) passes credential_process to cmd.exe /C as one escaped
   # argument; any double quote in it breaks the -File path.
   Check 'credential command has no double quotes (Codex on Windows)' (-not $cmd.Contains('"')) $cmd

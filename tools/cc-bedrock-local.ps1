@@ -54,7 +54,15 @@ function Write-TextFile([string]$path, [string]$text) {
   # Unique temp name: Claude and Codex may run credential-process concurrently.
   $tmp = "$path.$PID.tmp"
   [IO.File]::WriteAllText($tmp, $text, $Utf8NoBom)
-  Move-Item -LiteralPath $tmp -Destination $path -Force
+  # Windows refuses to replace a file another process has open (a concurrent
+  # credential-process reading state.json); retry briefly instead of failing.
+  for ($try = 1; ; $try++) {
+    try { Move-Item -LiteralPath $tmp -Destination $path -Force -ErrorAction Stop; break }
+    catch {
+      if ($try -ge 10) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw }
+      Start-Sleep -Milliseconds 100
+    }
+  }
 }
 
 function Read-TextFile([string]$path) {
@@ -113,7 +121,8 @@ function ConvertTo-Plain($o) {
 function ConvertTo-JsonText($o) { return ($o | ConvertTo-Json -Depth 32) }
 
 function Format-Iso($v) {
-  if ($v -is [datetime]) { return $v.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+  # Invariant culture: a culture whose time separator is not ':' would corrupt Expiration.
+  if ($v -is [datetime]) { return $v.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
   return [string]$v
 }
 
@@ -154,7 +163,9 @@ $AwsRegion = Cfg 'AWS_REGION' 'ap-northeast-2'
 # Model env - Bedrock inference profile IDs mapped to Claude Code's model slots
 # (defaults match the bash CLI; ANTHROPIC_MODEL=opusplan backs /model "Default").
 $Models = [ordered]@{
-  ANTHROPIC_MODEL                = Cfg 'ANTHROPIC_MODEL' 'opusplan'
+  # 'set-model pin=' writes an empty ANTHROPIC_MODEL= to unset it: only an absent key
+  # defaults (same as the bash CLI's ${ANTHROPIC_MODEL-opusplan}).
+  ANTHROPIC_MODEL                = if ($Config.Contains('ANTHROPIC_MODEL')) { [string]$Config['ANTHROPIC_MODEL'] } else { Cfg 'ANTHROPIC_MODEL' 'opusplan' }
   ANTHROPIC_DEFAULT_SONNET_MODEL = Cfg 'ANTHROPIC_DEFAULT_SONNET_MODEL' 'global.anthropic.claude-sonnet-5-5'
   ANTHROPIC_DEFAULT_OPUS_MODEL   = Cfg 'ANTHROPIC_DEFAULT_OPUS_MODEL' 'global.anthropic.claude-opus-5-5'
   ANTHROPIC_DEFAULT_HAIKU_MODEL  = Cfg 'ANTHROPIC_DEFAULT_HAIKU_MODEL' (Cfg 'ANTHROPIC_SMALL_FAST_MODEL' 'global.anthropic.claude-haiku-5-5')
@@ -263,13 +274,13 @@ function Get-SelfPath {
 # credential_process as one argument to `cmd.exe /C`, which Rust escapes as \"...\";
 # cmd does not undo that, so PowerShell would get -File with literal quotes and fail
 # ("failed to load AWS credentials"). A path without whitespace needs no quotes; one
-# with whitespace goes through -EncodedCommand (base64: no quotes, no spaces).
+# with whitespace or a cmd metacharacter (& ^ % ( ) !) goes through -EncodedCommand.
 # Claude Code (Node shell) and the AWS CLI accept both forms.
 function Get-CredentialCommand {
   $self = Get-SelfPath
   $ps = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass'
   if ($OnWindows) {
-    if ($self -notmatch '\s') { return "$ps -File $self credential-process" }
+    if ($self -notmatch '[\s&^%()!"]') { return "$ps -File $self credential-process" }
     $script = "& '" + $self.Replace("'", "''") + "' credential-process; exit `$LASTEXITCODE"
     return "$ps -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
   }
@@ -502,7 +513,9 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
   # OpenAI-Project), e.g. a leftover manual region = "us-east-1"; those are replaced.
   # A table with any other key is the user's own, stays, and keeps runtime the default
   # (a second table is invalid TOML).
-  $mKeys = @{ $mAws = @('profile', 'region'); $mHdr = @('OpenAI-Project') }
+  # Ordinal (case-sensitive) like TOML and the bash CLI.
+  $mKeys = New-Object Collections.Hashtable ([StringComparer]::Ordinal)
+  $mKeys[$mAws] = @('profile', 'region'); $mKeys[$mHdr] = @('OpenAI-Project')
   $mOursAt = @{}
   $ownM = $false
   for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -530,7 +543,7 @@ function Set-CodexConfig([string]$mode, [bool]$quiet = $false) {
     if ($line.Trim().StartsWith('[')) {
       $inTop = $false
       $h = $line.Split('#')[0].Trim()
-      $inOurs = (@($table, $perms, $permsFs, $mProfile) -contains $h) -or $mOursAt.ContainsKey($idx)
+      $inOurs = (@($table, $perms, $permsFs, $mProfile) -ccontains $h) -or $mOursAt.ContainsKey($idx)
       if ($inOurs) { continue }
     }
     if ($inOurs -or $line.Contains($CodexMark) -or ($inTop -and $line -cmatch $topKey)) { continue }
@@ -631,6 +644,8 @@ function Sync-CodexMantle {
 
 function Invoke-Setup([bool]$quietOutput = $false) {
   Require-Config
+  # Harden an existing CLI dir too (only a dir this CLI creates was protected).
+  Protect-Path $CfgDir
   Install-AwsProfile
   Set-ClaudeSettings
   Set-CodexConfig 'add'

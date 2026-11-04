@@ -50,7 +50,7 @@ AWS_CONFIG_FILE="${HOME}/.aws/config"
 CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
 CODEX_CONFIG_FILE="${CODEX_HOME:-${HOME}/.codex}/config.toml"
 
-mkdir -p "${CFG_DIR}"
+mkdir -p "${CFG_DIR}" && chmod 700 "${CFG_DIR}" 2>/dev/null || true  # owner-only: refresh token + STS keys
 
 if [[ -f "${CFG_FILE}" ]]; then
   # shellcheck disable=SC1090
@@ -71,7 +71,8 @@ OTEL_HELPER="${OTEL_HELPER:-${HOME}/.local/bin/cc-otel-code-metrics}"
 # Defaults: ANTHROPIC_MODEL=opusplan backs "Default" (Opus for planning, Sonnet for
 # execution), Haiku 5.5 backs "Haiku"/background. Set ANTHROPIC_MODEL to a raw model
 # id instead to pin /model to "Custom".
-ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-opusplan}"
+# `pin=` writes an empty ANTHROPIC_MODEL= to unset it: only an absent key defaults.
+ANTHROPIC_MODEL="${ANTHROPIC_MODEL-opusplan}"
 ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-5-5}"
 ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-5-5}"
 # ANTHROPIC_SMALL_FAST_MODEL is deprecated; migrate legacy config forward into DEFAULT_HAIKU.
@@ -611,7 +612,7 @@ import json, os, sys
 path, export_cmd, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
 CRED_RULE = "Read(~/.config/cc-bedrock/**)"
 try:
-    settings = json.load(open(path)) if os.path.exists(path) and os.path.getsize(path) else {}
+    settings = json.load(open(path, encoding="utf-8-sig")) if os.path.exists(path) and os.path.getsize(path) else {}
 except ValueError as e:
     sys.exit(f"cc-bedrock-local: {path} is not valid JSON ({e}); fix it and re-run 'setup'")
 env = settings.setdefault("env", {})
@@ -643,7 +644,7 @@ configure_codex() {  # configure_codex add|remove
   python3 - "${CODEX_CONFIG_FILE}" "$1" "${CODEX_MARK}" "${CODEX_MODEL}" "${AWS_PROFILE_NAME}" "${AWS_REGION}" "${CFG_DIR}" "${STATE_FILE}" "${CC_BEDROCK_QUIET:-}" <<'PY'
 import json, os, re, sys
 path, mode, mark, model, profile, region, cfg_dir, state_file, quiet = sys.argv[1:10]
-lines = open(path).read().splitlines() if os.path.exists(path) else []
+lines = open(path, encoding="utf-8-sig").read().splitlines() if os.path.exists(path) else []
 TABLE = "[model_providers.amazon-bedrock-runtime.aws]"
 PERMS = "[permissions.cc-bedrock]"
 PERMS_FS = "[permissions.cc-bedrock.filesystem]"
@@ -795,7 +796,7 @@ sync_codex_mantle() {
 clients_configured() {
   [[ -f "${CLAUDE_SETTINGS_FILE}" ]] && python3 - "${CLAUDE_SETTINGS_FILE}" <<'PY' 2>/dev/null
 import json, sys
-sys.exit(0 if str(json.load(open(sys.argv[1])).get("awsCredentialExport", "")).endswith(" credential-process") else 1)
+sys.exit(0 if str(json.load(open(sys.argv[1], encoding="utf-8-sig")).get("awsCredentialExport", "")).endswith(" credential-process") else 1)
 PY
 }
 
@@ -828,7 +829,7 @@ do_unsetup() {
     python3 - "${CLAUDE_SETTINGS_FILE}" "${CLAUDE_MANAGED_ENV[@]}" <<'PY'
 import json, os, sys
 path, keys = sys.argv[1], sys.argv[2:]
-settings = json.load(open(path))
+settings = json.load(open(path, encoding="utf-8-sig"))
 env = settings.get("env", {})
 for k in keys:
     env.pop(k, None)
@@ -938,7 +939,7 @@ if limit.get("denyActive"):
     print(f"  reset_at    : {limit.get('resetAt')}")
 if os.path.exists(sys.argv[2]):
     tk = json.load(open(sys.argv[2]))
-    age = int(datetime.datetime.utcnow().timestamp() - tk.get("obtainedAt", 0))
+    age = int(datetime.datetime.now(datetime.timezone.utc).timestamp() - tk.get("obtainedAt", 0))
     print(f"cognito cache : present (age {age // 60}m)")
 else:
     print("cognito cache : (absent — next refresh will prompt for password)")

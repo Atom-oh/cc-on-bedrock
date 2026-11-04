@@ -12,7 +12,7 @@ if ! command -v pwsh >/dev/null 2>&1; then
   exit 0
 fi
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/ccbl-ps1.XXXXXX")"
+_t="${TMPDIR:-/tmp}"; TMP="$(mktemp -d "${_t%/}/ccbl-ps1.XXXXXX")"  # macOS TMPDIR ends in /
 trap 'rm -rf "${TMP}"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
