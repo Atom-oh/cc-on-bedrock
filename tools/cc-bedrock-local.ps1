@@ -255,10 +255,13 @@ function Get-JwtExp([string]$tok) {
 }
 
 # accessExpiresAt lets session-report reuse the access token until < 5 min remain.
+# Protect-Path (two icacls runs) only for a new file: Write-TextFile keeps an existing
+# file's owner-only ACL, and credential-process must stay fast (SDK load timeouts).
 function Save-Tokens([string]$access, [string]$refresh) {
+  $new = -not (Test-Path -LiteralPath $TokenCache)
   $json = ConvertTo-JsonText ([ordered]@{ accessToken = $access; accessExpiresAt = (Get-JwtExp $access); refreshToken = $refresh; obtainedAt = (Get-EpochNow) })
   Write-TextFile $TokenCache $json
-  Protect-Path $TokenCache
+  if ($new) { Protect-Path $TokenCache }
 }
 
 function Get-CachedRefreshToken {
@@ -268,6 +271,62 @@ function Get-CachedRefreshToken {
     if ($t -and $t.Contains('refreshToken') -and $t['refreshToken']) { return [string]$t['refreshToken'] }
   } catch { }
   return ''
+}
+
+# Silent Cognito refresh from the cached refresh token, re-cached. Uses
+# GetTokensFromRefreshToken, not InitiateAuth REFRESH_TOKEN_AUTH: it works with and
+# without refresh-token rotation (Terraform cli_refresh_token_rotation), and with
+# rotation the response carries a new RefreshToken that replaces the cached one.
+# Returns @{ Kind = 'ok' | 'dead' | 'transient'; Access; Message }: 'dead' needs a
+# new sign-in (expired/revoked), 'transient' (network, Cognito outage) a retry.
+function Invoke-CognitoRefresh {
+  $refresh = Get-CachedRefreshToken
+  if (-not $refresh) { return @{ Kind = 'dead'; Access = ''; Message = "no cached session - run 'cc-bedrock-local login'" } }
+  $body = ConvertTo-JsonText ([ordered]@{ ClientId = $CognitoClientId; RefreshToken = $refresh })
+  try {
+    $r = Invoke-Post "https://cognito-idp.$CognitoRegion.amazonaws.com/" $body 'application/x-amz-json-1.1' @{ 'X-Amz-Target' = 'AWSCognitoIdentityProviderService.GetTokensFromRefreshToken' } 15
+  } catch {
+    return @{ Kind = 'transient'; Access = ''; Message = "could not reach Cognito ($($_.Exception.Message)) - check the network and retry" }
+  }
+  $d = $null
+  try { $d = ConvertFrom-JsonText $r.Body } catch { }
+  if ($d -and $d.Contains('AuthenticationResult') -and $d['AuthenticationResult'] -and $d['AuthenticationResult']['AccessToken']) {
+    $a = $d['AuthenticationResult']
+    $next = $refresh
+    if ($a.Contains('RefreshToken') -and $a['RefreshToken']) { $next = [string]$a['RefreshToken'] }
+    Save-Tokens ([string]$a['AccessToken']) $next
+    return @{ Kind = 'ok'; Access = [string]$a['AccessToken']; Message = '' }
+  }
+  $type = ''
+  if ($d -and $d.Contains('__type')) { $type = ([string]$d['__type']).Split('#')[-1] }
+  $msg = "HTTP $($r.Status)"
+  if ($d -and $d.Contains('message') -and $d['message']) { $msg = [string]$d['message'] } elseif ($type) { $msg = $type }
+  if (@('NotAuthorizedException', 'RefreshTokenReuseException', 'UserNotFoundException') -ccontains $type) {
+    return @{ Kind = 'dead'; Access = ''; Message = "sign-in expired or revoked ($msg) - run 'cc-bedrock-local login'" }
+  }
+  return @{ Kind = 'transient'; Access = ''; Message = "Cognito refresh failed ($msg) - retry later" }
+}
+
+# One refresher at a time: Claude Code, Codex, the Stop hook and the keep-alive task
+# can all find the credentials expired at once (after sleep or a reboot). A waiter
+# re-checks the cache the winner wrote. Past 25 s it proceeds unlocked. A process
+# that exits while holding the mutex abandons it, which the next waiter acquires.
+function Enter-RefreshLock {
+  try {
+    $m = New-Object Threading.Mutex($false, 'Local\cc-bedrock-refresh')
+    try { [void]$m.WaitOne(25000) } catch [Threading.AbandonedMutexException] { }
+    return $m
+  } catch { return $null }
+}
+
+function Exit-RefreshLock($m) {
+  if (-not $m) { return }
+  try { $m.ReleaseMutex() } catch { }
+  $m.Dispose()
+}
+
+function Test-StateFresh($state, [long]$minSeconds = 300) {
+  return [bool]($state -and $state.Contains('credentials') -and ((Get-StateExpiryEpoch $state) - (Get-EpochNow) -gt $minSeconds))
 }
 
 # Exchange a Cognito access token for STS credentials via the dashboard.
@@ -288,8 +347,9 @@ function Read-State {
 }
 
 function Save-State([string]$raw) {
+  $new = -not (Test-Path -LiteralPath $StateFile)
   Write-TextFile $StateFile $raw
-  Protect-Path $StateFile
+  if ($new) { Protect-Path $StateFile }
 }
 
 # Pass the state you will emit, so the expiry check and the emitted credentials come
@@ -401,15 +461,12 @@ function Invoke-Login {
 
 function Invoke-Refresh {
   Require-Config
-  $refresh = Get-CachedRefreshToken
-  if (-not $refresh) { Say "no cached session - run 'cc-bedrock-local login'"; exit 2 }
-  try {
-    $auth = Invoke-Cognito @{ REFRESH_TOKEN = $refresh } 'REFRESH_TOKEN_AUTH'
-  } catch { Say 'refresh token expired or rejected - re-login required'; exit 2 }
-  # Cognito does not rotate the refresh token by default.
-  Save-Tokens $auth['AccessToken'] $refresh
+  $lock = Enter-RefreshLock
+  try { $r = Invoke-CognitoRefresh } finally { Exit-RefreshLock $lock }
+  if ($r.Kind -eq 'dead') { Say $r.Message; exit 2 }
+  if ($r.Kind -ne 'ok') { Say $r.Message; exit 3 }
   Out 'OK silent refresh OK'
-  $raw = Request-Sts $auth['AccessToken']
+  $raw = Request-Sts $r.Access
   if (-not $raw) { Die 'dashboard refused STS issue' }
   Complete-Sts $raw
 }
@@ -451,27 +508,34 @@ function Invoke-CredentialProcess {
     Require-Config
     # Cache hit while > 5 min remain (the SDK refreshes ahead of Expiration).
     $state = Read-State
-    if ($state -and $state.Contains('credentials') -and ((Get-StateExpiryEpoch $state) - (Get-EpochNow) -gt 300)) {
-      Write-CredentialsJson $state
-      return
-    }
-    $refresh = Get-CachedRefreshToken
-    if (-not $refresh) { Say "no refresh token cached - run 'cc-bedrock-local login'"; exit 1 }
+    if (Test-StateFresh $state) { Write-CredentialsJson $state; return }
+    # Keep this path short: SDKs time out credential loading (the Codex app's Rust SDK
+    # after a few seconds), so the Codex mantle sync and the session sweep run in a
+    # detached process after the JSON is out.
+    $lock = Enter-RefreshLock
     try {
-      $auth = Invoke-Cognito @{ REFRESH_TOKEN = $refresh } 'REFRESH_TOKEN_AUTH'
-    } catch { Say "Cognito refresh token expired (30-day window) - run 'cc-bedrock-local login'"; exit 1 }
-    Save-Tokens $auth['AccessToken'] $refresh
-    $raw = Request-Sts $auth['AccessToken']
-    if (-not $raw) { Say "dashboard refused STS issue (token limit Deny active? check 'cc-bedrock-local status')"; exit 1 }
-    Save-State $raw
-    Sync-CodexMantle
+      $state = Read-State
+      if (Test-StateFresh $state) { Write-CredentialsJson $state; return }
+      $r = Invoke-CognitoRefresh
+      if ($r.Kind -ne 'ok') { Say $r.Message; exit 1 }
+      $raw = Request-Sts $r.Access
+      if (-not $raw) { Say "dashboard refused STS issue (token limit Deny active? check 'cc-bedrock-local status')"; exit 1 }
+      Save-State $raw
+    } finally {
+      Exit-RefreshLock $lock
+    }
     Write-CredentialsJson (ConvertFrom-JsonText $raw)
-    # Refresh path only (not a cache hit): detached, hidden, no wait, no stdout.
-    Start-SessionSweep
+    Start-Detached @('post-issue')
   } catch {
     Say $_.Exception.Message
     exit 1
   }
+}
+
+# Detached follow-up of a credential-process issue (hidden, no wait, no shared stdout).
+function Invoke-PostIssue {
+  try { Require-Config; Sync-CodexMantle } catch { }
+  Start-SessionSweep
 }
 
 # --- setup / unsetup (Claude Code + Codex, CLI and desktop) -
@@ -795,6 +859,13 @@ function Invoke-Setup([bool]$quietOutput = $false) {
     if ($note) { Out "! $note" }
     if ($OnWindows) { Out "! Windows: Codex gets no read-deny for $CfgDir (the Windows sandbox cannot enforce it), so commands Codex runs can read your session keys there (ADR-014)" }
   }
+  if ($OnWindows) {
+    $ka = Install-KeepAlive
+    if (-not $quietOutput) {
+      if ($ka) { Out "OK sign-in keep-alive ($ka); KEEPALIVE=off in the config disables it" }
+      elseif (-not (Test-KeepAliveEnabled)) { Out '  KEEPALIVE=off: no keep-alive task (sign in again with: cc-bedrock-local login)' }
+    }
+  }
   # A Bedrock API key outranks the profile in both tools and would bypass the
   # per-user role (metering, budget deny).
   $bearer = $env:AWS_BEARER_TOKEN_BEDROCK
@@ -810,6 +881,7 @@ function Invoke-Setup([bool]$quietOutput = $false) {
 function Invoke-Unsetup {
   Remove-ClaudeSettings
   Set-CodexConfig 'remove'
+  Remove-KeepAlive
   Out "OK removed Bedrock settings from $ClaudeSettingsFile and $CodexConfigFile"
 }
 
@@ -941,13 +1013,226 @@ function Write-SessionLog([string]$msg, [bool]$quiet = $true) {
   if (-not $quiet) { Say $msg }
 }
 
+# --- keep-alive + sign-in window (Windows) -------------------
+# Users never need a console: a hidden scheduled task (every 30 min; StartWhenAvailable
+# catches up after sleep) and a Startup entry (at logon) run 'keepalive', which renews
+# the STS credentials ahead of expiry. Claude Code, Codex and the desktop apps then
+# find fresh credentials in state.json, so their credential_process call is a cache
+# hit, far inside SDK load timeouts. When the sign-in itself expired it shows a
+# password window (at most every 4 h); the Start menu entry 'cc-bedrock sign in'
+# opens the same window on demand. KEEPALIVE=off in the config disables all of it.
+$KeepAlive = Cfg 'KEEPALIVE' 'on'
+# CC_BEDROCK_KEEPALIVE_NAME (tests only) renames the task, the Startup entry and the
+# Start menu entry, so a smoke run never replaces the user's own keep-alive.
+$KeepAliveTask = if ($env:CC_BEDROCK_KEEPALIVE_NAME) { $env:CC_BEDROCK_KEEPALIVE_NAME } else { 'cc-bedrock-keepalive' }
+$SignInName = if ($env:CC_BEDROCK_KEEPALIVE_NAME) { "$($env:CC_BEDROCK_KEEPALIVE_NAME) sign in" } else { 'cc-bedrock sign in' }
+$KeepAliveLog = Join-Path $CfgDir 'keepalive.log'
+$SignInStamp = Join-Path $CfgDir 'signin-prompted-at'
+$KeepAliveVbs = Join-Path (Split-Path -Parent $PSCommandPath) 'cc-bedrock-keepalive.vbs'
+$SignInVbs = Join-Path (Split-Path -Parent $PSCommandPath) 'cc-bedrock-signin.vbs'
+function Test-KeepAliveEnabled { return $OnWindows -and -not (@('off', 'OFF', 'Off') -ccontains $KeepAlive) }
+function Get-StartupEntry { return (Join-Path ([Environment]::GetFolderPath('Startup')) "$KeepAliveTask.vbs") }
+function Get-SignInShortcut { return (Join-Path ([Environment]::GetFolderPath('Programs')) "$SignInName.lnk") }
+
+function Write-KeepAliveLog([string]$msg) {
+  try {
+    $lines = New-Object Collections.Generic.List[string]
+    if (Test-Path -LiteralPath $KeepAliveLog) { $lines.AddRange([string[]]([IO.File]::ReadAllLines($KeepAliveLog))) }
+    $lines.Add([DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture) + ' ' + $msg)
+    if ($lines.Count -gt 200) { $lines.RemoveRange(0, $lines.Count - 200) }
+    $new = -not (Test-Path -LiteralPath $KeepAliveLog)
+    [IO.File]::WriteAllText($KeepAliveLog, (($lines -join "`n") + "`n"), $Utf8NoBom)
+    if ($new) { Protect-Path $KeepAliveLog $true }
+  } catch { }
+}
+
+# wscript runs PowerShell with no window at all (-WindowStyle Hidden alone still
+# flashes a console). UTF-16 with BOM so a non-ASCII profile path survives.
+# $wait: wscript waits for PowerShell, so the task's IgnoreNew and time limit apply to
+# the keep-alive itself (the Start menu sign-in returns at once).
+function Write-Launcher([string]$path, [string]$subArgs, [bool]$wait) {
+  $cmd = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""' + $PSCommandPath + '"" ' + $subArgs
+  $text = "' cc-bedrock-local launcher (managed by cc-bedrock-local; runs with no window)`r`n" +
+    'CreateObject("WScript.Shell").Run "' + $cmd + '", 0, ' + $(if ($wait) { 'True' } else { 'False' }) + "`r`n"
+  [IO.File]::WriteAllText($path, $text, [Text.Encoding]::Unicode)
+}
+
+function Register-KeepAliveTask {
+  $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"' + $KeepAliveVbs + '"')
+  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
+  # First run in a minute; a test run (renamed task) waits a day so it never fires
+  # against the real profile.
+  $at = if ($env:CC_BEDROCK_KEEPALIVE_NAME) { (Get-Date).AddDays(1) } else { (Get-Date).AddMinutes(1) }
+  $every = New-TimeSpan -Minutes 30
+  $desc = 'Keeps the cc-bedrock sign-in fresh for Claude Code and Codex (cc-bedrock-local keepalive).'
+  # Some Windows builds reject a long RepetitionDuration when the task is registered,
+  # others need one; try both.
+  try {
+    $trigger = New-ScheduledTaskTrigger -Once -At $at -RepetitionInterval $every -RepetitionDuration (New-TimeSpan -Days 3650)
+    Register-ScheduledTask -TaskName $KeepAliveTask -Action $action -Trigger $trigger -Settings $settings -Description $desc -Force -ErrorAction Stop | Out-Null
+  } catch {
+    $trigger = New-ScheduledTaskTrigger -Once -At $at -RepetitionInterval $every
+    Register-ScheduledTask -TaskName $KeepAliveTask -Action $action -Trigger $trigger -Settings $settings -Description $desc -Force -ErrorAction Stop | Out-Null
+  }
+}
+
+# Returns a one-line summary for setup.
+function Install-KeepAlive {
+  if (-not (Test-KeepAliveEnabled)) { Remove-KeepAlive; return '' }
+  Write-Launcher $KeepAliveVbs 'keepalive' $true
+  Write-Launcher $SignInVbs 'keepalive --sign-in' $false
+  $parts = New-Object Collections.Generic.List[string]
+  try { Register-KeepAliveTask; $parts.Add('scheduled task every 30 min') }
+  catch { Say "could not register the keep-alive task ($($_.Exception.Message)); sign-in still renews at logon and on use" }
+  try { Copy-Item -LiteralPath $KeepAliveVbs -Destination (Get-StartupEntry) -Force; $parts.Add('at logon') }
+  catch { Say "could not add the Startup entry ($($_.Exception.Message))" }
+  try {
+    $ws = New-Object -ComObject WScript.Shell
+    $lnk = $ws.CreateShortcut((Get-SignInShortcut))
+    $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
+    $lnk.Arguments = '"' + $SignInVbs + '"'
+    $lnk.Description = 'Sign in to cc-bedrock (Claude Code / Codex on Bedrock)'
+    $lnk.Save()
+    $parts.Add("Start menu '$SignInName'")
+  } catch { Say "could not add the Start menu entry ($($_.Exception.Message))" }
+  return ($parts -join ', ')
+}
+
+function Remove-KeepAlive {
+  if (-not $OnWindows) { return }
+  try { Unregister-ScheduledTask -TaskName $KeepAliveTask -Confirm:$false -ErrorAction Stop } catch { }
+  foreach ($f in @((Get-StartupEntry), (Get-SignInShortcut), $KeepAliveVbs, $SignInVbs)) {
+    Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Read-PasswordWindow([string]$message) {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  [Windows.Forms.Application]::EnableVisualStyles()
+  $f = New-Object Windows.Forms.Form
+  $f.Text = 'cc-bedrock sign in'
+  $f.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
+  $f.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
+  $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.TopMost = $true; $f.ShowInTaskbar = $true
+  $f.ClientSize = New-Object Drawing.Size(400, 150)
+  $l = New-Object Windows.Forms.Label
+  $l.Text = $message
+  $l.SetBounds(12, 10, 376, 50)
+  $t = New-Object Windows.Forms.TextBox
+  $t.UseSystemPasswordChar = $true
+  $t.SetBounds(12, 66, 376, 24)
+  $ok = New-Object Windows.Forms.Button
+  $ok.Text = 'Sign in'
+  $ok.DialogResult = [Windows.Forms.DialogResult]::OK
+  $ok.SetBounds(216, 108, 80, 28)
+  $no = New-Object Windows.Forms.Button
+  $no.Text = 'Cancel'
+  $no.DialogResult = [Windows.Forms.DialogResult]::Cancel
+  $no.SetBounds(308, 108, 80, 28)
+  $f.Controls.AddRange([Windows.Forms.Control[]]@($l, $t, $ok, $no))
+  $f.AcceptButton = $ok
+  $f.CancelButton = $no
+  $f.Add_Shown({ $f.Activate(); [void]$t.Focus() })
+  try {
+    if ($f.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) { return $t.Text }
+    return ''
+  } finally { $f.Dispose() }
+}
+
+function Show-Notice([string]$text, [bool]$isError = $false) {
+  try {
+    Add-Type -AssemblyName System.Windows.Forms
+    $icon = if ($isError) { [Windows.Forms.MessageBoxIcon]::Warning } else { [Windows.Forms.MessageBoxIcon]::Information }
+    [void][Windows.Forms.MessageBox]::Show($text, 'cc-bedrock sign in', [Windows.Forms.MessageBoxButtons]::OK, $icon)
+  } catch { }
+}
+
+# Password sign-in + STS issue without a console. Returns '' on success, else the error.
+function Invoke-PasswordSignIn([string]$password) {
+  try { $auth = Invoke-Cognito @{ USERNAME = $script:Email; PASSWORD = $password } 'USER_PASSWORD_AUTH' } catch { return $_.Exception.Message }
+  if (-not $auth['AccessToken']) { return 'Cognito did not return an access token' }
+  Save-Tokens $auth['AccessToken'] $auth['RefreshToken']
+  $raw = Request-Sts $auth['AccessToken']
+  if (-not $raw) { return 'the dashboard refused to issue credentials (budget limit? ask your admin)' }
+  Install-AwsProfile
+  Save-State $raw
+  try { Sync-CodexMantle } catch { }
+  return ''
+}
+
+# $onDemand: the Start menu entry (always shows). Otherwise at most every 4 h, so a
+# dismissed window does not return every 30 minutes.
+function Show-SignIn([bool]$onDemand) {
+  if (-not $OnWindows) { return }
+  if (-not $script:Email) { Show-Notice "EMAIL is not set in $CfgFile - run the installer again." $true; return }
+  if (-not $onDemand) {
+    if (Test-Path -LiteralPath $SignInStamp) {
+      $age = ([DateTime]::UtcNow - (Get-Item -LiteralPath $SignInStamp).LastWriteTimeUtc).TotalHours
+      if ($age -lt 4) { return }
+    }
+    [IO.File]::WriteAllText($SignInStamp, [string](Get-EpochNow), $Utf8NoBom)
+  }
+  $msg = "Your cc-bedrock sign-in has expired (it lasts 30 days).`r`nPassword for $($script:Email):"
+  if ($onDemand) { $msg = "Sign in to cc-bedrock (Claude Code / Codex on Bedrock).`r`nPassword for $($script:Email):" }
+  for ($try = 1; $try -le 3; $try++) {
+    $pw = Read-PasswordWindow $msg
+    if (-not $pw) { Write-KeepAliveLog 'sign-in window dismissed'; return }
+    $err = Invoke-PasswordSignIn $pw
+    if (-not $err) {
+      Write-KeepAliveLog 'signed in from the sign-in window'
+      Remove-Item -LiteralPath $SignInStamp -Force -ErrorAction SilentlyContinue
+      Show-Notice "Signed in as $($script:Email). Claude Code and Codex can be used again."
+      return
+    }
+    Write-KeepAliveLog "sign-in failed: $err"
+    $msg = "Sign-in failed: $err`r`nPassword for $($script:Email):"
+  }
+}
+
+function Invoke-KeepAlive([string[]]$argv) {
+  if (-not $DashboardUrl -or -not $CognitoClientId) { return }
+  if ($argv -contains '--sign-in') { Show-SignIn $true; return }
+  # More than 40 min left: nothing to do (the task runs every 30 min, creds last 1 h).
+  if (Test-StateFresh (Read-State) 2400) { return }
+  for ($try = 1; $try -le 5; $try++) {
+    $kind = ''
+    $lock = Enter-RefreshLock
+    try {
+      if (Test-StateFresh (Read-State) 2400) { return }
+      $r = Invoke-CognitoRefresh
+      $kind = $r.Kind
+      if ($kind -eq 'ok') {
+        $raw = $null
+        try { $raw = Request-Sts $r.Access } catch { Write-KeepAliveLog "dashboard unreachable ($($_.Exception.Message))" }
+        if ($raw) { Save-State $raw; Write-KeepAliveLog 'renewed credentials' }
+        else { $kind = 'transient'; Write-KeepAliveLog 'dashboard refused STS issue' }
+      } else {
+        Write-KeepAliveLog $r.Message
+      }
+    } finally {
+      Exit-RefreshLock $lock
+    }
+    if ($kind -eq 'ok') { try { Sync-CodexMantle } catch { }; return }
+    if ($kind -eq 'dead') { Show-SignIn $false; return }
+    # Right after logon or wake the network may not be up yet.
+    if ($try -lt 5) { Start-Sleep -Seconds (15 * $try) }
+  }
+}
+
 # Detached background sweep (after setup, login and a credential-process refresh):
 # hidden, no wait, stdout/stderr not shared with the caller. Skipped when session
 # reporting is off or there is no Cognito session to send with.
 function Start-SessionSweep {
+  if (-not (Test-SessionReportEnabled) -or -not (Test-Path -LiteralPath $TokenCache)) { return }
+  Start-Detached @('session-report', '--sweep', '--quiet')
+}
+
+# Run this CLI detached: hidden, no wait, and no handles shared with the caller
+# (an SDK reading credential-process stdout must see EOF when we exit).
+function Start-Detached([string[]]$cliArgs) {
   try {
-    if (-not (Test-SessionReportEnabled) -or -not (Test-Path -LiteralPath $TokenCache)) { return }
-    $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'), 'session-report', '--sweep', '--quiet')
+    $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"')) + $cliArgs
     if ($OnWindows) {
       Start-Process -FilePath 'powershell.exe' -ArgumentList $a -WindowStyle Hidden | Out-Null
     } else {
@@ -966,12 +1251,11 @@ function Get-SessionAccessToken {
       return [string]$t['accessToken']
     }
   } catch { }
-  $refresh = Get-CachedRefreshToken
-  if (-not $refresh -or -not $CognitoClientId) { return '' }
-  try { $auth = Invoke-Cognito @{ REFRESH_TOKEN = $refresh } 'REFRESH_TOKEN_AUTH' } catch { return '' }
-  if (-not $auth['AccessToken']) { return '' }
-  Save-Tokens $auth['AccessToken'] $refresh
-  return [string]$auth['AccessToken']
+  if (-not $CognitoClientId) { return '' }
+  $lock = Enter-RefreshLock
+  try { $r = Invoke-CognitoRefresh } catch { return '' } finally { Exit-RefreshLock $lock }
+  if ($r.Kind -ne 'ok') { return '' }
+  return $r.Access
 }
 
 # Property of a parsed JSON line (PSCustomObject), $null when absent (StrictMode-safe).
@@ -1494,6 +1778,11 @@ function Invoke-Status {
   } else {
     Out 'cognito cache : (absent - next refresh will prompt for password)'
   }
+  if ($OnWindows) {
+    $task = $null
+    try { $task = Get-ScheduledTask -TaskName $KeepAliveTask -ErrorAction Stop } catch { }
+    Out "keep-alive    : $(if ($task) { "scheduled task $($task.State)" } elseif (Test-KeepAliveEnabled) { 'not installed (run: cc-bedrock-local setup)' } else { 'off (KEEPALIVE=off)' })"
+  }
 }
 
 function Invoke-Config {
@@ -1534,6 +1823,9 @@ Subcommands:
                         report session turns/tokens from local Claude Code transcripts and
                         Codex rollouts (insight only; run by the Stop hook 'setup' installs;
                         SESSION_REPORT=off in the config disables it)
+  keepalive [--sign-in] renew credentials ahead of expiry, or show the sign-in window when
+                        the sign-in expired (run by the task 'setup' installs; KEEPALIVE=off
+                        in the config disables it)
 
 Config file: $CfgFile
 "@
@@ -1555,6 +1847,8 @@ switch ($sub) {
   'unsetup-desktop' { Invoke-UnsetupDesktop }
   { $_ -in 'set-model', 'set_model' } { Invoke-SetModel $rest }
   { $_ -in 'session-report', 'session_report' } { Invoke-SessionReport $rest }
+  'keepalive' { Invoke-KeepAlive $rest }
+  'post-issue' { Invoke-PostIssue }
   'models' { Invoke-Models }
   'config' { Invoke-Config }
   { $_ -in '', '-h', '--help', 'help' } { Invoke-Usage }

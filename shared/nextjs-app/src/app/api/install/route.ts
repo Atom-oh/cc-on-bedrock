@@ -131,7 +131,7 @@ fi
 if [[ "\${REPLY}" =~ ^[Yy] ]]; then
   "\${BIN_PATH}" setup
   echo
-  echo "Signing in once (the session then renews itself for 30 days):"
+  echo "Signing in once (the session then renews itself until the 30-day sign-in ends):"
   "\${BIN_PATH}" login || echo "  sign-in failed — retry with: cc-bedrock-local login"
 else
   echo "  Skipped. Later: cc-bedrock-local setup && cc-bedrock-local login"
@@ -143,7 +143,7 @@ echo "  claude                                   # Claude Code on Bedrock"
 echo "  codex                                    # OpenAI Codex on Bedrock (ADR-014)"
 echo "  cc-bedrock-local status                  # session + limit state"
 echo "  cc-bedrock-local set-model opus=<id>     # change a model (claude/codex settings follow)"
-echo "  cc-bedrock-local login                   # sign in again (after logout or 30 days idle)"
+echo "  cc-bedrock-local login                   # sign in again (after logout or when the 30-day sign-in ends)"
 echo "  cc-bedrock-local logout                  # clear cached session"
 `;
 }

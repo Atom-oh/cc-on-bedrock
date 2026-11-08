@@ -110,6 +110,28 @@ def inline_policy(department: str) -> dict:
     }
 
 
+def _same_doc(current, want: dict) -> bool:
+    """IAM returns policy documents decoded (boto3) or URL-encoded JSON; compare
+    them canonically. Anything unreadable counts as drift (the caller rewrites)."""
+    try:
+        if isinstance(current, str):
+            from urllib.parse import unquote
+            current = json.loads(unquote(current))
+        if not isinstance(current, dict):
+            return False
+        return json.dumps(current, sort_keys=True) == json.dumps(want, sort_keys=True)
+    except Exception:
+        return False
+
+
+def _inline_doc(name: str):
+    """Current BedrockInvokeInline document, or None when missing/unreadable."""
+    try:
+        return iam.get_role_policy(RoleName=name, PolicyName="BedrockInvokeInline")["PolicyDocument"]
+    except Exception:
+        return None
+
+
 def ensure_role(
     subdomain: str, email: str, department: str, project: str,
     sub: "str | None" = None, pool: "str | None" = None,
@@ -148,7 +170,7 @@ def ensure_role(
         tags.append({"Key": sub_key, "Value": sub_v})
     created = False
     try:
-        iam.get_role(RoleName=name)
+        role = iam.get_role(RoleName=name).get("Role") or {}
         # Uniqueness/collision guard: a pre-existing role owned by a different
         # email means two users derived the same subdomain — refuse rather than
         # hand the second user the first user's identity.
@@ -169,11 +191,18 @@ def ensure_role(
                 f"owner mismatch on {name}: role bound to another Cognito sub; "
                 f"refusing to hand it to a different user (ADR-016)."
             )
-        iam.update_assume_role_policy(
-            RoleName=name,
-            PolicyDocument=json.dumps(trust_policy()),
-        )
-        iam.tag_role(RoleName=name, Tags=tags)
+        # Write only on drift. The STS issuer calls this on every credential
+        # issue (hourly per client); unconditional IAM writes made each issue take
+        # ~3 s and concurrent issues collide with ConcurrentModification, which
+        # pushed the Windows credential_process past the Codex SDK's load timeout.
+        if not _same_doc(role.get("AssumeRolePolicyDocument"), trust_policy()):
+            iam.update_assume_role_policy(
+                RoleName=name,
+                PolicyDocument=json.dumps(trust_policy()),
+            )
+        have = {t["Key"]: t["Value"] for t in existing}
+        if any(have.get(t["Key"]) != t["Value"] for t in tags):
+            iam.tag_role(RoleName=name, Tags=tags)
     except iam.exceptions.NoSuchEntityException:
         iam.create_role(
             RoleName=name,
@@ -185,9 +214,11 @@ def ensure_role(
         )
         created = True
 
-    iam.put_role_policy(
-        RoleName=name,
-        PolicyName="BedrockInvokeInline",
-        PolicyDocument=json.dumps(inline_policy(department)),
-    )
+    want = inline_policy(department)
+    if created or not _same_doc(_inline_doc(name), want):
+        iam.put_role_policy(
+            RoleName=name,
+            PolicyName="BedrockInvokeInline",
+            PolicyDocument=json.dumps(want),
+        )
     return {"roleArn": f"arn:aws:iam::{ACCOUNT_ID}:role/{name}", "created": created}

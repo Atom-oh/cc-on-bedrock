@@ -69,7 +69,7 @@ Put $CodexFile "model = `"gpt-5`"`napproval_policy = `"never`"`n`n[profiles.work
 Put (Join-Path $CfgDir 'state.json') '{"credentials":{"accessKeyId":"AKIA","secretAccessKey":"SECRET","sessionToken":"TOKEN","expiration":"2099-01-01T00:00:00Z"},"mantle":{"enabled":true,"projectId":"proj_123","region":"us-east-1","model":"openai.gpt-6.1-sol"}}'
 
 # Child processes inherit this process's environment; redirect it, restore in finally.
-$EnvNames = @('USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'CC_BEDROCK_DASHBOARD_URL', 'CC_BEDROCK_EMAIL',
+$EnvNames = @('USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'CC_BEDROCK_DASHBOARD_URL', 'CC_BEDROCK_EMAIL', 'CC_BEDROCK_KEEPALIVE_NAME',
   'AWS_PROFILE_NAME', 'AWS_REGION', 'AWS_PROFILE', 'AWS_CONFIG_FILE', 'AWS_SHARED_CREDENTIALS_FILE')
 $Saved = @{}
 foreach ($n in $EnvNames) { $Saved[$n] = [Environment]::GetEnvironmentVariable($n, 'Process') }
@@ -87,6 +87,12 @@ function RunCli([string[]]$a) {
 try {
   foreach ($n in $EnvNames) { [Environment]::SetEnvironmentVariable($n, $null, 'Process') }
   $env:USERPROFILE = $H
+  # Keep-alive under a throwaway name: the task and the Startup/Start menu entries are
+  # per real user (not under USERPROFILE), and the user's own keep-alive must survive.
+  $KaName = 'ccbl-smoke-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+  $env:CC_BEDROCK_KEEPALIVE_NAME = $KaName
+  $KaStartup = Join-Path ([Environment]::GetFolderPath('Startup')) "$KaName.vbs"
+  $KaShortcut = Join-Path ([Environment]::GetFolderPath('Programs')) "$KaName sign in.lnk"
   [Console]::WriteLine("CLI:   $Cli")
   [Console]::WriteLine("Shell: $Shell $((& $Shell -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'))")
   [Console]::WriteLine("Home:  $H")
@@ -185,11 +191,33 @@ try {
   $after = (Text $CodexFile) + (Text $SettingsFile) + (Text $AwsConfig)
   Check 'second setup changes nothing' (($r.Code -eq 0) -and ($before -ceq $after))
 
+  # 5b. keep-alive: scheduled task + Startup entry + Start menu sign-in, all hidden launchers
+  $task = $null
+  try { $task = Get-ScheduledTask -TaskName $KaName -ErrorAction Stop } catch { }
+  Check 'setup registers the keep-alive task' ($null -ne $task)
+  if ($task) {
+    $act = @($task.Actions)[0]
+    Check 'keep-alive task runs wscript (no console window)' ($act.Execute -eq 'wscript.exe') "$($act.Execute) $($act.Arguments)"
+    Check 'keep-alive task repeats every 30 min' ((@($task.Triggers)[0].Repetition.Interval) -eq 'PT30M') (@($task.Triggers)[0].Repetition.Interval)
+  }
+  Check 'setup adds the Startup entry' (Test-Path -LiteralPath $KaStartup) $KaStartup
+  Check 'setup adds the Start menu sign-in entry' (Test-Path -LiteralPath $KaShortcut) $KaShortcut
+  $vbs = Join-Path $Bin "cc-bedrock-keepalive.vbs"
+  Check 'keep-alive launcher points at this CLI' ((Text $vbs).Contains($CliCopy) -and (Text $vbs).Contains(' keepalive", 0, True')) (Text $vbs)
+  # keepalive with fresh credentials (2099) does nothing and exits 0, no network
+  $r = RunCli @('keepalive')
+  Check 'keepalive with fresh credentials exits 0' ($r.Code -eq 0) ("exit=$($r.Code) stderr=$($r.Err)")
+
   # 6. credential-process exactly as the AWS SDK runs it (cmd.exe /C <command>)
   $want = '{"Version":1,"AccessKeyId":"AKIA","SecretAccessKey":"SECRET","SessionToken":"TOKEN","Expiration":"2099-01-01T00:00:00Z"}'
   $r = Run 'cmd.exe' @('/d', '/s', '/c', "`"$cmd`"")
   Check 'credential-process via cmd.exe: exit 0' ($r.Code -eq 0) $r.Err
   Check 'credential-process via cmd.exe: one JSON line on stdout' ($r.Out.TrimEnd("`r", "`n") -ceq $want) ("stdout=[$($r.Out)]")
+  # A cache hit must stay far inside SDK credential load timeouts (Codex: a few seconds).
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $r = Run 'cmd.exe' @('/d', '/s', '/c', "`"$cmd`"")
+  $sw.Stop()
+  Check 'credential-process cache hit under 5 s' (($r.Code -eq 0) -and $sw.Elapsed.TotalSeconds -lt 5) ("{0:N2} s" -f $sw.Elapsed.TotalSeconds)
 
   # 7. AWS CLI reads the profile (what Claude Desktop Cowork/Chat relies on)
   if (Get-Command aws -ErrorAction SilentlyContinue) {
@@ -233,8 +261,16 @@ try {
   Check 'unsetup removes managed Codex keys' (($t -notmatch 'cc-bedrock') -and ($t -cmatch '(?m)^\[profiles\.work\]')) $t
   Check 'unsetup removes mantle.config.toml' (-not (Test-Path -LiteralPath $MantleFile))
   Check 'unsetup removes runtime.config.toml' (-not (Test-Path -LiteralPath $RuntimeFile))
+  $task = $null
+  try { $task = Get-ScheduledTask -TaskName $KaName -ErrorAction Stop } catch { }
+  Check 'unsetup removes the keep-alive task' ($null -eq $task)
+  Check 'unsetup removes the Startup and Start menu entries' ((-not (Test-Path -LiteralPath $KaStartup)) -and (-not (Test-Path -LiteralPath $KaShortcut)))
 }
 finally {
+  if (Get-Variable -Name KaName -ErrorAction SilentlyContinue) {
+    try { Unregister-ScheduledTask -TaskName $KaName -Confirm:$false -ErrorAction Stop } catch { }
+    Remove-Item -LiteralPath $KaStartup, $KaShortcut -Force -ErrorAction SilentlyContinue
+  }
   foreach ($n in $EnvNames) { [Environment]::SetEnvironmentVariable($n, $Saved[$n], 'Process') }
   if ($Keep -or $script:Failed) { [Console]::WriteLine(''); [Console]::WriteLine("kept: $Root") }
   else { Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue }

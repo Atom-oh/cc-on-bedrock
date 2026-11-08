@@ -188,22 +188,75 @@ print(json.dumps({
     --data "${body}"
 }
 
+# GetTokensFromRefreshToken, not InitiateAuth REFRESH_TOKEN_AUTH: it works with and
+# without refresh-token rotation (Terraform cli_refresh_token_rotation), and with
+# rotation it returns a new RefreshToken that the caller must store.
 cognito_refresh_request() {  # cognito_refresh_request <refresh_token>
   local body
   body=$(python3 -c "
 import json, sys
-print(json.dumps({
-  'AuthFlow': 'REFRESH_TOKEN_AUTH',
-  'ClientId': sys.argv[1],
-  'AuthParameters': { 'REFRESH_TOKEN': sys.argv[2] },
-}))
+print(json.dumps({'ClientId': sys.argv[1], 'RefreshToken': sys.argv[2]}))
 " "${COGNITO_CLIENT_ID}" "$1")
-  curl -sS -X POST \
+  curl -sS --max-time 15 -X POST \
     -H 'Content-Type: application/x-amz-json-1.1' \
-    -H 'X-Amz-Target: AWSCognitoIdentityProviderService.InitiateAuth' \
+    -H 'X-Amz-Target: AWSCognitoIdentityProviderService.GetTokensFromRefreshToken' \
     "https://cognito-idp.${COGNITO_REGION}.amazonaws.com/" \
     --data "${body}"
 }
+
+# Silent Cognito refresh from the cached refresh token, re-cached (a rotated refresh
+# token replaces the old one). Prints the access token. Returns 2 when the session is
+# dead (expired/revoked: re-login needed), 3 on any other failure (network, Cognito
+# outage: retry later). The reason goes to stderr (callers run it in $(...)).
+cognito_refresh() {
+  local refresh resp out
+  refresh=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("refreshToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
+  if [[ -z "${refresh}" ]]; then say "no cached session - run 'cc-bedrock-local login'"; return 2; fi
+  if ! resp="$(cognito_refresh_request "${refresh}" 2>&1)"; then
+    say "could not reach Cognito (${resp:-network error}) - check the network and retry"
+    return 3
+  fi
+  out="$(python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    print("transient\tunexpected Cognito response"); sys.exit(0)
+a = d.get("AuthenticationResult") or {}
+if a.get("AccessToken"):
+    print("ok\t" + a["AccessToken"] + "\t" + (a.get("RefreshToken") or "")); sys.exit(0)
+t = str(d.get("__type", "")).split("#")[-1]
+msg = d.get("message") or t or "unknown error"
+dead = t in ("NotAuthorizedException", "RefreshTokenReuseException", "UserNotFoundException")
+print(("dead" if dead else "transient") + "\t" + msg)
+' "${resp}" 2>/dev/null)"
+  local kind="${out%%$'\t'*}" rest="${out#*$'\t'}"
+  case "${kind}" in
+    ok)
+      local access="${rest%%$'\t'*}" rotated="${rest#*$'\t'}"
+      cache_tokens "${access}" "${rotated:-${refresh}}"
+      echo "${access}"
+      return 0 ;;
+    dead) say "sign-in expired or revoked (${rest}) - run 'cc-bedrock-local login'"; return 2 ;;
+    *) say "Cognito refresh failed (${rest:-no response}) - retry later"; return 3 ;;
+  esac
+}
+
+# One refresher at a time: Claude Code, Codex, the session hook and a keep-alive may
+# all find the credentials expired at once (after sleep or a reboot). mkdir is atomic
+# everywhere (no flock on macOS); a lock older than 60 s is stale.
+REFRESH_LOCK="${CFG_DIR}/refresh.lock"
+refresh_lock() {
+  local i age
+  for (( i = 0; i < 125; i++ )); do
+    mkdir "${REFRESH_LOCK}" 2>/dev/null && return 0
+    age=$(python3 -c 'import os,sys,time; print(int(time.time()-os.stat(sys.argv[1]).st_mtime))' "${REFRESH_LOCK}" 2>/dev/null || echo 0)
+    (( age > 60 )) && rmdir "${REFRESH_LOCK}" 2>/dev/null
+    sleep 0.2
+  done
+  return 1  # proceed unlocked rather than fail
+}
+refresh_unlock() { rmdir "${REFRESH_LOCK}" 2>/dev/null || true; }
 
 cache_tokens() {  # cache_tokens <access> <refresh>
   # accessExpiresAt comes from the JWT exp claim (fallback: 1h, Cognito's default);
@@ -332,19 +385,11 @@ do_login() {
 do_refresh() {
   require_config
   [[ -f "${TOKEN_CACHE}" ]] || { say "no cached session — run 'cc-bedrock-local login'"; return 2; }
-  local refresh_token
-  refresh_token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("refreshToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
-  [[ -n "${refresh_token}" ]] || { say "no refresh token cached — run 'cc-bedrock-local login'"; return 2; }
-
-  local resp access_token
-  resp=$(cognito_refresh_request "${refresh_token}")
-  access_token=$(echo "${resp}" | parse_cognito_token "AccessToken" 2>/dev/null || echo "")
-  if [[ -z "${access_token}" ]]; then
-    say "refresh token expired or rejected — re-login required"
-    return 2
-  fi
-  # Refresh response keeps the same refresh token (Cognito doesn't rotate by default)
-  cache_tokens "${access_token}" "${refresh_token}"
+  local access_token rc=0
+  refresh_lock || true
+  access_token="$(cognito_refresh)" || rc=$?
+  refresh_unlock
+  (( rc == 0 )) || return "${rc}"
   echo "✓ silent refresh OK"
   issue_sts "${access_token}"
 }
@@ -389,54 +434,71 @@ print(json.dumps({
 PY
 }
 
+# Print cached creds while > 5 min remain (the SDK refreshes ahead of Expiration; the
+# margin only guards clock skew). Buffered so a corrupt state.json falls through to a
+# fresh issue instead of dying mid-emit (stdout must stay clean).
+serve_cached_credentials() {
+  [[ -f "${STATE_FILE}" ]] || return 1
+  local exp exp_e now_e cached_json
+  exp="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credentials"]["expiration"])' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ -n "${exp}" ]] || return 1
+  exp_e="$(iso_to_epoch "${exp}")"; now_e="$(epoch_now)"
+  (( exp_e - now_e > 300 )) || return 1
+  if cached_json="$(emit_credentials_json "${STATE_FILE}" 2>/dev/null)"; then
+    echo "${cached_json}"
+    return 0
+  fi
+  say "state.json unreadable — re-issuing credentials"
+  return 1
+}
+
 do_credential_process() {
   require_config
+  serve_cached_credentials && return 0
 
-  # 1) Cache hit: serve current creds while they have > 5 min left.
-  #    (5 min, not 10 — the SDK already refreshes ahead of Expiration; the
-  #    margin only guards clock skew between us, AWS, and the SDK.)
-  if [[ -f "${STATE_FILE}" ]]; then
-    local exp exp_e now_e cached_json
-    exp="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credentials"]["expiration"])' "${STATE_FILE}" 2>/dev/null || true)"
-    if [[ -n "${exp}" ]]; then
-      exp_e="$(iso_to_epoch "${exp}")"; now_e="$(epoch_now)"
-      if (( exp_e - now_e > 300 )); then
-        # Buffer before printing so a corrupt state.json falls through to a
-        # fresh re-issue instead of dying mid-emit (stdout must stay clean).
-        if cached_json="$(emit_credentials_json "${STATE_FILE}" 2>/dev/null)"; then
-          echo "${cached_json}"
-          return 0
-        fi
-        say "state.json unreadable — re-issuing credentials"
-      fi
-    fi
-  fi
-
-  # 2) Silent re-issue: Cognito refresh token → access token → STS exchange.
+  # Silent re-issue: Cognito refresh token → access token → STS exchange, one process
+  # at a time; a waiter re-checks the cache the winner just wrote. Keep this path
+  # short: SDKs time out credential loading (the Codex/Rust SDK after a few seconds),
+  # so the Codex mantle sync and the session sweep run detached after the JSON is out.
   [[ -f "${TOKEN_CACHE}" ]] || { say "no cached session — run 'cc-bedrock-local login'"; return 1; }
-  local refresh_token access_token resp sts_resp
-  refresh_token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("refreshToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
-  [[ -n "${refresh_token}" ]] || { say "no refresh token cached — run 'cc-bedrock-local login'"; return 1; }
-
-  resp=$(cognito_refresh_request "${refresh_token}")
-  access_token=$(echo "${resp}" | parse_cognito_token "AccessToken" 2>/dev/null || echo "")
-  if [[ -z "${access_token}" ]]; then
-    say "Cognito refresh token expired (30-day window) — run 'cc-bedrock-local login'"
-    return 1
-  fi
-  cache_tokens "${access_token}" "${refresh_token}"
+  refresh_lock || true
+  if serve_cached_credentials; then refresh_unlock; return 0; fi
+  local access_token sts_resp rc=0
+  access_token="$(cognito_refresh)" || rc=$?
+  if (( rc )); then refresh_unlock; return 1; fi
 
   sts_resp=$(sts_exchange "${access_token}")
   if ! echo "${sts_resp}" | python3 -c 'import json,sys; sys.exit(0 if "credentials" in json.loads(sys.stdin.read()) else 1)' 2>/dev/null; then
+    refresh_unlock
     echo "${sts_resp}" >&2
     say "dashboard refused STS issue (token limit Deny active? check 'cc-bedrock-local status')"
     return 1
   fi
   save_state "${sts_resp}"
-  sync_codex_mantle >&2
+  refresh_unlock
   emit_credentials_json "${STATE_FILE}" || return 1
-  # Refresh path only (not a cache hit): report sessions in the background,
-  # detached with all output discarded so stdout stays exactly one JSON line.
+  spawn_post_issue
+}
+
+# Detached follow-up of a credential-process issue: keep the Codex mantle profile in
+# step with the grant, then sweep sessions. All output discarded (stdout belongs to
+# the SDK); runs as the hidden 'post-issue' subcommand.
+spawn_post_issue() {
+  local self
+  self="$(script_abspath 2>/dev/null)" || return 0
+  [[ -x "${self}" ]] || return 0
+  if have setsid; then
+    setsid "${self}" post-issue </dev/null >/dev/null 2>&1 &
+  else
+    ( "${self}" post-issue ) </dev/null >/dev/null 2>&1 &
+  fi
+  disown 2>/dev/null || true
+  return 0
+}
+
+do_post_issue() {
+  require_config
+  sync_codex_mantle >&2 || true
   spawn_session_sweep
 }
 
@@ -1067,12 +1129,12 @@ if a and int(t.get("accessExpiresAt") or 0) - time.time() > 300:
 PY
 )" || tok=""
   if [[ -n "${tok}" ]]; then echo "${tok}"; return 0; fi
-  refresh=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("refreshToken","") or "")' "${TOKEN_CACHE}" 2>/dev/null || true)
-  [[ -n "${refresh}" && -n "${COGNITO_CLIENT_ID}" ]] || return 1
-  resp="$(cognito_refresh_request "${refresh}" 2>/dev/null)" || return 1
-  tok=$(echo "${resp}" | parse_cognito_token "AccessToken" 2>/dev/null || echo "")
-  [[ -n "${tok}" ]] || return 1
-  cache_tokens "${tok}" "${refresh}"
+  [[ -n "${COGNITO_CLIENT_ID}" ]] || return 1
+  local rc=0
+  refresh_lock || true
+  tok="$(cognito_refresh 2>/dev/null)" || rc=$?
+  refresh_unlock
+  (( rc == 0 )) && [[ -n "${tok}" ]] || return 1
   echo "${tok}"
 }
 
@@ -1654,6 +1716,7 @@ case "${sub}" in
   login)        do_login "$@" ;;
   refresh)      do_refresh "$@" ;;
   credential-process|credential_process) do_credential_process ;;
+  post-issue) do_post_issue ;;
   logout)       do_logout ;;
   change-email|change_email) do_change_email ;;
   status)       do_status "$@" ;;
