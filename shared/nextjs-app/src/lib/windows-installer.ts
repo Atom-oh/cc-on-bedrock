@@ -143,7 +143,7 @@ if ($Reply -match '^[Yy]') {
     return
   }
   Write-Host ''
-  Write-Host 'Signing in once (the session then renews itself for 30 days):'
+  Write-Host 'Signing in once (a hidden task keeps the session renewed; you are asked again only when the 30-day sign-in ends):'
   if ((Invoke-Cli login) -ne 0) { Write-Host '  sign-in failed - retry with: cc-bedrock-local login' }
 
   Write-Host ''
@@ -162,7 +162,7 @@ Write-Host '  claude                          # Claude Code on Bedrock (also the
 Write-Host '  codex                           # OpenAI Codex on Bedrock (also the Codex app)'
 Write-Host '  cc-bedrock-local status         # session + limit state'
 Write-Host '  cc-bedrock-local set-model opus=<id>'
-Write-Host '  cc-bedrock-local login          # sign in again (after logout or 30 days idle)'
+Write-Host '  cc-bedrock-local login          # sign in again (or Start menu: cc-bedrock sign in)'
 }
 `;
 }

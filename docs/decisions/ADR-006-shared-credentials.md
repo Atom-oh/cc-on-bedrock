@@ -11,7 +11,7 @@ consolidates: [ADR-014, ADR-029]
 > 옛 본문은 git tag `adr-legacy-2026-06-23` 및 `../history/ADR-MAPPING.md`로 보존.
 
 ## Status / 상태
-Accepted (2026-06-23). Consolidates ADR-014, ADR-029. Amended 2026-10-23 (deployment profiles) and 2026-11-03 (Windows Local CLI, Claude Desktop third-party mode).
+Accepted (2026-06-23). Consolidates ADR-014, ADR-029. Amended 2026-10-23 (deployment profiles) 2026-11-03 (Windows Local CLI, Claude Desktop third-party mode) and 2026-11-06 (silent renewal that survives reboots, sliding sign-in).
 
 ## Context / 배경
 
@@ -179,6 +179,52 @@ from a plain Windows process. Bash or WSL cannot serve them.
   - whether Desktop accepts `global.` model IDs.
 
   `tests/windows/smoke-cc-bedrock-local.ps1` covers only the offline file contract.
+
+## Amendment 2026-11-06: silent renewal that survives reboots, sliding sign-in
+
+**Context.** On Windows, the Codex app stopped working the morning after a sign-in (and
+after reboots) until the user ran a PowerShell command. After the 1 h STS credentials
+expire, the next `credential_process` call takes the full re-issue path, which was slow:
+- PowerShell start, then Cognito refresh;
+- the dashboard and the STS issuer, whose `ensure_role` rewrote the trust policy, tags and
+  inline policy on every issue (about 3 s; concurrent issues collided with IAM
+  `ConcurrentModification` and took 11–13 s);
+- `icacls`, then a `config.toml` rewrite.
+
+SDKs bound credential loading: the Rust SDK in Codex uses a load timeout, 5 s in older
+releases. Users who do not know PowerShell cannot recover. Separately, the refresh token
+expired 30 days after sign-in even for daily users, because the app client does not rotate
+refresh tokens.
+
+**Decision.**
+- **Fast issue path.** `ensure_role` writes IAM only on drift (trust policy, tags, inline
+  policy compared with what is attached). Both CLIs print the credential JSON first and run
+  the Codex mantle sync and the session sweep in a detached `post-issue` process. A refresh
+  lock (a mkdir lock in bash, a named mutex in PowerShell) lets one process re-issue while
+  concurrent callers wait and reuse its result.
+- **Windows keep-alive (default on).** `setup` registers a hidden per-user scheduled task
+  (every 30 minutes, `StartWhenAvailable`, run through `wscript` so no console appears) and
+  a Startup entry (at logon) that run `keepalive`. It renews the credentials while less than
+  40 minutes remain, so the apps' `credential_process` call is a cache hit. When the sign-in
+  itself has ended, it shows a password window (at most every 4 h). The Start menu entry
+  `cc-bedrock sign in` opens the same window on demand. `KEEPALIVE=off` in the config
+  disables all of it; `unsetup` removes it.
+- **Sliding sign-in (flag, default off).** Both CLIs refresh with `GetTokensFromRefreshToken`
+  and store a rotated refresh token when one is returned. Terraform
+  `cli_refresh_token_rotation = true` enables rotation on the CLI app client (60 s grace for
+  concurrent refreshes), so the 30 days count from the last use. It stays off until users
+  have reinstalled the CLI: with rotation on, Cognito rejects the older CLIs'
+  `REFRESH_TOKEN_AUTH`.
+- Refresh failures are reported by cause: a dead session asks for a sign-in, and a
+  network or Cognito failure asks for a retry.
+
+**Consequences.**
+- After a reboot or a night off, Claude Code and Codex keep working without a console;
+  only an ended sign-in asks for the password, in a window.
+- Existing PCs need one reinstall (`irm …/api/install/windows | iex` or `curl …/api/install | bash`).
+- The keep-alive issues credentials about twice an hour per PC while the PC is on.
+- The scheduled task, the sign-in window and the timing against the Codex app are verified
+  only by `tests/windows/smoke-cc-bedrock-local.ps1` on a real PC; no `pwsh` ran in CI.
 
 ## Cross-references / 교차 참조
 - **005 사용량 집계** — 동일 Application Inference Profile + Invocation Log → DynamoDB(email canonical key).

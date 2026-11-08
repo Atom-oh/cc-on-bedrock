@@ -139,3 +139,36 @@ def test_ensure_role_still_refuses_an_email_change_with_the_same_sub():
             assert False, "expected collision RuntimeError"
         except RuntimeError as e:
             assert "collision" in str(e).lower()
+
+
+def test_ensure_role_writes_nothing_when_role_is_up_to_date():
+    """Per-issue calls must not write IAM when nothing drifted (latency + ConcurrentModification)."""
+    import json as _json
+    want_tags = [
+        {"Key": "email", "Value": "alice@example.com"}, {"Key": "subdomain", "Value": "alice"},
+        {"Key": "username", "Value": "alice@example.com"}, {"Key": "department", "Value": "eng"},
+        {"Key": "project", "Value": "proj"}, {"Key": "mode", "Value": "local"},
+        {"Key": "managed_by", "Value": "cc-on-bedrock"},
+    ]
+    iam = _existing_role(want_tags)
+    iam.get_role.return_value = {"Role": {"AssumeRolePolicyDocument": rf.trust_policy()}}
+    # IAM may hand back URL-encoded JSON; both forms compare equal
+    from urllib.parse import quote
+    iam.get_role_policy.return_value = {"PolicyDocument": quote(_json.dumps(rf.inline_policy("eng")))}
+    with mock.patch.object(rf, "iam", iam):
+        res = rf.ensure_role("alice", "alice@example.com", "eng", "proj")
+    assert res["created"] is False
+    iam.update_assume_role_policy.assert_not_called()
+    iam.tag_role.assert_not_called()
+    iam.put_role_policy.assert_not_called()
+
+
+def test_ensure_role_rewrites_only_what_drifted():
+    iam = _existing_role([{"Key": "email", "Value": "alice@example.com"}])
+    iam.get_role.return_value = {"Role": {"AssumeRolePolicyDocument": rf.trust_policy()}}
+    iam.get_role_policy.return_value = {"PolicyDocument": {"Version": "2012-10-17", "Statement": []}}
+    with mock.patch.object(rf, "iam", iam):
+        rf.ensure_role("alice", "alice@example.com", "eng", "proj")
+    iam.update_assume_role_policy.assert_not_called()
+    iam.tag_role.assert_called_once()
+    assert iam.put_role_policy.call_args.kwargs["PolicyName"] == "BedrockInvokeInline"

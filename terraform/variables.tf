@@ -263,6 +263,12 @@ variable "codex_mantle_model_id" {
 # Shared identity: run cc on an existing Cognito user pool owned by another stack
 # (e.g. a sibling app), looked up by name. Keep the name in terraform.tfvars; the
 # repository must not carry pool names or IDs. Empty = cc's own pool.
+variable "cli_refresh_token_rotation" {
+  description = "Rotate the Local CLI's Cognito refresh token on every refresh, so the 30-day lifetime counts from the last use instead of from login. CLIs older than the GetTokensFromRefreshToken release cannot refresh while this is on (REFRESH_TOKEN_AUTH is rejected): enable it only after users have reinstalled the CLI."
+  type        = bool
+  default     = false
+}
+
 variable "shared_user_pool_name" {
   description = "Name of an existing Cognito user pool to share (empty = cc creates its own pool). The pool must already define cc's custom attributes and admin-only user creation."
   type        = string

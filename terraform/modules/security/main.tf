@@ -344,6 +344,17 @@ resource "aws_cognito_user_pool_client" "cli_public" {
   }
 
   prevent_user_existence_errors = "ENABLED"
+
+  # Sliding 30 days: each refresh returns a new refresh token (the CLI stores it) and
+  # the old one stays valid for the grace period, so concurrent refreshes from Claude
+  # Code, Codex and the keep-alive task do not lock each other out.
+  dynamic "refresh_token_rotation" {
+    for_each = var.cli_refresh_token_rotation ? [1] : []
+    content {
+      feature                    = "ENABLED"
+      retry_grace_period_seconds = 60
+    }
+  }
 }
 
 # Cognito role groups. In a shared pool they carry the "cc-" prefix and are the access

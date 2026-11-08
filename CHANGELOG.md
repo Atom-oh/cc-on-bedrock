@@ -4,6 +4,16 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ## [Unreleased]
 
+### Sign-in that survives reboots (ADR-006 amendment 2026-11-06)
+- **Fix: Codex (notably the Windows Codex app) failed after a reboot or overnight until a command was run.** Re-issuing expired credentials was slow enough to exceed the SDK's credential load timeout.
+  - The STS issuer's `ensure_role` now writes IAM only on drift. Before, every issue rewrote the trust policy, tags and inline policy, which took about 3 s and collided under concurrency.
+  - Both CLIs print the credential JSON first and move the Codex mantle sync and the session sweep to a detached `post-issue` process.
+  - A refresh lock makes concurrent callers reuse one re-issue.
+- **Windows keep-alive.** `setup` registers a hidden scheduled task (every 30 minutes) and a Startup entry that renew credentials ahead of expiry. When the 30-day sign-in ends, it shows a password window. A Start menu entry, `cc-bedrock sign in`, opens the same window. `KEEPALIVE=off` disables it.
+- **Refresh API.** Both CLIs refresh through `GetTokensFromRefreshToken` and store a rotated refresh token. New Terraform flag `cli_refresh_token_rotation` (default `false`) makes the 30 days count from the last use; enable it only after users have reinstalled the CLI.
+- Refresh errors now name the cause: a dead sign-in, or a network or Cognito failure (previously both read "refresh token expired").
+- Existing PCs need one reinstall of the CLI.
+
 ### Session insights (ADR-005 amendment 2026-11-04)
 - **Per-session cost, turns and cost per turn.** Both Local CLIs gain `cc-bedrock-local session-report`.
   - It reads Claude Code transcripts and Codex rollout files incrementally and reports counts and tokens per (tool, session, UTC day) to `POST /api/local/sessions`. No prompt or response text is sent.

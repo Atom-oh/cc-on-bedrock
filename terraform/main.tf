@@ -68,7 +68,8 @@ module "security" {
   devenv_enabled      = local.devenv_enabled
   enable_mantle       = var.enable_mantle
 
-  shared_user_pool_name = var.shared_user_pool_name
+  shared_user_pool_name      = var.shared_user_pool_name
+  cli_refresh_token_rotation = var.cli_refresh_token_rotation
 
   providers = {
     aws           = aws

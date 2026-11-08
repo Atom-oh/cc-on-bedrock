@@ -46,6 +46,12 @@ variable "enable_mantle" {
   default     = false
 }
 
+variable "cli_refresh_token_rotation" {
+  description = "Refresh token rotation on the Local CLI app client (see the root variable)."
+  type        = bool
+  default     = false
+}
+
 variable "shared_user_pool_name" {
   description = "Name of an existing Cognito user pool to share with another app (empty = cc's own pool). Keep it in terraform.tfvars, never in code."
   type        = string
