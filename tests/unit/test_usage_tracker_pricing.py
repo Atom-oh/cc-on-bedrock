@@ -67,6 +67,13 @@ def test_openai_gpt_models_priced_not_sonnet_default():
     # gpt-6.1-sol must not collide with gpt-6-sol (cache read differs: 0.10 vs 0.20)
     assert m.get_model_pricing("gpt-6-sol")["cache_read"] == 0.20
     assert m.get_model_pricing("global.openai.gpt-6-luna")["output"] == 0.50
+    # GPT-6.2 (AWS Price List, Global standard short-context rates)
+    arn62 = "arn:aws:bedrock:ap-northeast-2:111122223333:inference-profile/global.openai.gpt-6.2-sol"
+    assert m.normalize_model(arn62) == "gpt-6.2-sol"
+    assert m.get_model_pricing("gpt-6.2-sol") == {
+        "input": 2.0, "output": 10.0, "cache_read": 0.10, "cache_write": 2.5}
+    assert m.get_model_pricing("global.openai.gpt-6.2-astra") == {
+        "input": 8.0, "output": 40.0, "cache_read": 0.40, "cache_write": 10.0}
     assert m.get_model_pricing("us.openai.gpt-5.6-terra")["output"] == 12.0
     # Unknown future GPT tier falls back to a GPT family rate, never the Sonnet default.
     assert m.get_model_pricing("gpt-7-luna") == m.FAMILY_PRICING["luna"]

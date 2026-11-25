@@ -4,6 +4,9 @@ All notable changes to CC-on-Bedrock are documented in this file.
 
 ## [Unreleased]
 
+### Codex GPT-6.2 pricing
+- **GPT-6.2 Sol and GPT-6.2 Astra are priced at their own rates.** The usage tracker and the token-limit enforcer now carry the AWS Price List Global standard rates ($/1M tokens): Sol 2.0 in / 10.0 out / 0.10 cache read / 2.5 cache write, Astra 8.0 / 40.0 / 0.40 / 10.0. Before this, `gpt-6.2-*` fell back to the family rate (Astra was overcounted by 25%). IAM is unchanged: per-user roles already allow `*openai.gpt-*`.
+
 ### Sign-in that survives reboots (ADR-006 amendment 2026-11-06)
 - **Fix: Codex (notably the Windows Codex app) failed after a reboot or overnight until a command was run.** Re-issuing expired credentials was slow enough to exceed the SDK's credential load timeout.
   - The STS issuer's `ensure_role` now writes IAM only on drift. Before, every issue rewrote the trust policy, tags and inline policy, which took about 3 s and collided under concurrency.

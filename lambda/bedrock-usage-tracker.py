@@ -78,6 +78,8 @@ PRICING = {
     "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5},
     "claude-fable-5": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5},
     # OpenAI GPT (Codex CLI, ADR-014)
+    "gpt-6.2-astra": {"input": 8.0, "output": 40.0, "cache_read": 0.40, "cache_write": 10.0},
+    "gpt-6.2-sol": {"input": 2.0, "output": 10.0, "cache_read": 0.10, "cache_write": 2.5},
     "gpt-6.1-sol": {"input": 2.0, "output": 10.0, "cache_read": 0.10, "cache_write": 2.5},
     "gpt-6-astra": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5},
     "gpt-6-sol": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.5},
